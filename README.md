@@ -9,7 +9,8 @@ CLI is built on these modules.
 
 It is for Go developers who write agents, clients and tools for an nfltr
 relay. **Status:** both modules are pre-1.0 and versioned on their own
-(`proto/v0.17.x`, `client/v0.17.x`; see the tags). **In the nfltr stack:**
+(the newest `proto/vX.Y.Z` and `client/vX.Y.Z` on the
+[tags page](https://github.com/nfltr/relay/tags)). **In the nfltr stack:**
 [nfltr/link](https://github.com/nfltr/link) (the multiplexing layer, its
 `peerlink` carries the agent link) → this repository (SDK and protocol) →
 nfltr-relay (the relay, which
