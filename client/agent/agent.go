@@ -39,6 +39,7 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nfltr/relay/proto/wire/agentwire"
@@ -277,6 +278,13 @@ type Agent interface {
 	// Done returns a channel that is closed when the agent stops running.
 	Done() <-chan struct{}
 
+	// Connected reports whether the agent holds a connection the relay
+	// accepted: through a make-before-break move it stays true (the new
+	// connection is accepted before the old one ends). A flag set per
+	// WithConnected call and cleared by that connection's Done is not
+	// this: the old connection of a move ends last.
+	Connected() bool
+
 	// Err is why the agent stopped once Done is closed: nil when its
 	// context ended or Close was called, else the error that ended it
 	// (non-retryable, or WithConnected's).
@@ -375,6 +383,7 @@ type agent struct {
 
 	metadata  []string                          // WithMetadata
 	connected func(Connection) (*Tunnel, error) // WithConnected
+	live      atomic.Int32                      // accepted connections not yet ended (Connected)
 
 	errMu sync.Mutex
 	err   error // why the agent stopped (Err)
@@ -399,6 +408,7 @@ type agent struct {
 
 func (a *agent) AgentID() string       { return a.cfg.AgentID }
 func (a *agent) Done() <-chan struct{} { return a.done }
+func (a *agent) Connected() bool       { return a.live.Load() > 0 }
 
 func (a *agent) Err() error {
 	a.errMu.Lock()

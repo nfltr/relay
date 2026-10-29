@@ -82,18 +82,18 @@ type accepted struct {
 // accept hands a connection the relay accepted to WithConnected.
 func (a *agent) accept(stream pb.Dispatcher_ConnectHTTPClient, first bool) (accepted, error) {
 	acc := accepted{done: make(chan struct{})}
-	if a.connected == nil {
-		return acc, nil
+	if a.connected != nil {
+		header, _ := stream.Header()
+		t, err := a.connected(Connection{AgentID: a.cfg.AgentID, Header: header, First: first, HTTP: a.httpHandler, Done: acc.done})
+		if err != nil {
+			return acc, err
+		}
+		if t != nil && t.E2EE != nil {
+			a.e2eeTLS = t.E2EE.cfg // later connections announce its fingerprint
+		}
+		acc.tunnel = t
 	}
-	header, _ := stream.Header()
-	t, err := a.connected(Connection{AgentID: a.cfg.AgentID, Header: header, First: first, HTTP: a.httpHandler, Done: acc.done})
-	if err != nil {
-		return acc, err
-	}
-	if t != nil && t.E2EE != nil {
-		a.e2eeTLS = t.E2EE.cfg // later connections announce its fingerprint
-	}
-	acc.tunnel = t
+	a.live.Add(1) // until its cycle ends (runWithReconnect)
 	return acc, nil
 }
 
@@ -259,6 +259,7 @@ func (a *agent) runWithReconnect(
 		cycle := make(chan error, 1)
 		go func(conn io.Closer, stream pb.Dispatcher_ConnectHTTPClient, done chan struct{}, release func()) {
 			defer close(done)
+			defer a.live.Add(-1) // before done closes: Connected is current when Done is
 			defer release()
 			defer endTCP()
 			cycle <- superviseConnectionCycle(

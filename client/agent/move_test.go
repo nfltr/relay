@@ -382,3 +382,51 @@ func TestRelayLetGoConnectsBeforeClosing(t *testing.T) {
 		}
 	}
 }
+
+// TestAgentStaysConnectedAcrossAMove: Connected is true while the agent
+// holds an accepted connection, also after the relay ended the old one of a
+// make-before-break move (the new one was accepted first), and false once
+// the agent stopped. A flag set by each WithConnected call and cleared by
+// its Done read false here: the old connection's Done closes last.
+func TestAgentStaysConnectedAcrossAMove(t *testing.T) {
+	f := &moveRelay{
+		streams: make(chan grpc.BidiStreamingServer[pb.HTTPProxyResponse, pb.HTTPProxyRequest], 4),
+		ends:    make(chan chan struct{}, 4),
+		endErr:  status.Error(codes.Unavailable, "server restarting"),
+	}
+	addr, stop := startMoveRelay(t, f)
+	defer stop()
+	dones := make(chan (<-chan struct{}), 4)
+	a := New(Config{ServerAddr: addr, AgentID: "mover", Retries: 3, Logger: slog.New(slog.DiscardHandler)},
+		WithConnected(func(c Connection) (*Tunnel, error) { dones <- c.Done; return nil, nil }))
+	if a.Connected() {
+		t.Fatal("Connected before Connect")
+	}
+	if err := a.Connect(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !a.Connected() {
+		t.Fatal("not Connected after Connect")
+	}
+	old, oldEnd, oldDone := nextStream(t, f, "first connection"), <-f.ends, <-dones
+	if err := old.Send(&pb.HTTPProxyRequest{Move: pb.Move_MOVE_RECONNECT}); err != nil {
+		t.Fatal(err)
+	}
+	nextStream(t, f, "new connection")
+	if m, err := recvNonHeartbeat(t, old); err != nil || m.GetMove() != pb.Move_MOVE_CONNECTED {
+		t.Fatalf("old stream: got %v %v, want MOVE_CONNECTED", m, err)
+	}
+	close(oldEnd) // the old relay ends the stream, as a restarting one does
+	select {
+	case <-oldDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the old connection did not end")
+	}
+	if !a.Connected() {
+		t.Fatal("not Connected after the old connection of a move ended")
+	}
+	a.Close()
+	if a.Connected() {
+		t.Fatal("Connected after Close")
+	}
+}
