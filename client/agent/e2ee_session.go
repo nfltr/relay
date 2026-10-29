@@ -359,9 +359,9 @@ var edgeProxyHeaders = []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Hos
 
 // setEdgeForwarded sets h's forwarded headers as the HTTPS front that ends
 // an E2EE session's TLS: the host the client asked for, https, and the
-// client's address as the relay accepted its connection (client; none when
-// the relay named none, e.g. nfltr-relay before v0.33.0). It also
-// drops the hop-by-hop headers a reverse proxy drops (RFC 9110 7.6.1), but
+// client's address (X-Forwarded-For and X-Real-IP) as the relay accepted
+// its connection (client; none when the relay named none, e.g. nfltr-relay
+// before v0.33.0). It also drops the hop-by-hop headers a reverse proxy drops (RFC 9110 7.6.1), but
 // Connection and Upgrade: the stream path keeps the client's connection
 // semantics (close, a protocol upgrade) on its own backend connection.
 func setEdgeForwarded(h http.Header, host string, client netip.Addr) {
@@ -382,6 +382,7 @@ func setEdgeForwarded(h http.Header, host string, client netip.Addr) {
 	h.Set("X-Forwarded-Proto", "https")
 	if client.IsValid() {
 		h.Set("X-Forwarded-For", client.String())
+		h.Set("X-Real-Ip", client.String())
 	}
 	// A relay's key is for the relay, never a service: removed here as the
 	// relay removes it on the paths it reads.

@@ -73,6 +73,7 @@ func relayHeaders() http.Header {
 		"X-Forwarded-Host":  {publicHost},
 		"X-Forwarded-Proto": {"https"},
 		"X-Forwarded-For":   {"203.0.113.7"},
+		"X-Real-Ip":         {"203.0.113.7"},
 	}
 }
 
@@ -86,6 +87,7 @@ func TestTunnelForwardsHeadersAsReverseProxy(t *testing.T) {
 		want := map[string]string{
 			"Host": wantHost, "Origin": origin, "Referer": referer,
 			"X-Forwarded-Host": publicHost, "X-Forwarded-Proto": "https", "X-Forwarded-For": "203.0.113.7",
+			"X-Real-Ip": "203.0.113.7",
 		}
 		name := map[bool]string{false: "preserve", true: "rewrite"}[rewrite]
 		t.Run("grpc/"+name, func(t *testing.T) {
@@ -168,7 +170,7 @@ func TestE2EEForwardsHeadersAsReverseProxy(t *testing.T) {
 				"Host": wantHost, "Origin": origin, "Referer": referer,
 				"X-Forwarded-Host": publicHost, "X-Forwarded-Proto": "https",
 				// The relay's word for the visitor's address, never the visitor's own.
-				"X-Forwarded-For": tc.client, "Forwarded": "", "X-Real-Ip": "",
+				"X-Forwarded-For": tc.client, "X-Real-Ip": tc.client, "Forwarded": "",
 				"X-Hop": "", "Keep-Alive": "", "Proxy-Authorization": "", "Te": "", "X-End": "kept",
 				// The app's own token goes on; a relay key never reaches it.
 				"Authorization": "Bearer app-token",
