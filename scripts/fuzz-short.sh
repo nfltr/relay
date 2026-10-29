@@ -9,6 +9,7 @@
 # fix as a regression seed (it then runs in every plain `go test`).
 # FUZZ_OUT=<file> also writes one "<package> <target> <exit status>" line per
 # target.
+# FUZZPARALLEL caps the workers per target (default: GOMAXPROCS).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 TARGETS=(
@@ -29,7 +30,7 @@ for t in "${TARGETS[@]}"; do
 	read -r mod pkg name <<<"$t"
 	echo "── ${mod}/${pkg#./} ${name} (${FUZZTIME:-10s})"
 	rc=0
-	(cd "$mod" && go test -run '^$' -fuzz "^${name}\$" -fuzztime "${FUZZTIME:-10s}" -fuzzminimizetime 100x "${pkg}") || rc=$?
+	(cd "$mod" && go test -run '^$' -fuzz "^${name}\$" -fuzztime "${FUZZTIME:-10s}" -fuzzminimizetime 100x ${FUZZPARALLEL:+-parallel "${FUZZPARALLEL}"} "${pkg}") || rc=$?
 	[[ -n "${FUZZ_OUT:-}" ]] && echo "${mod}/${pkg#./} ${name} ${rc}" >>"${FUZZ_OUT}"
 	((rc == 0)) || failed=1
 done

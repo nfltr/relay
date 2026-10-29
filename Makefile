@@ -73,7 +73,7 @@ check-testknobs:
 test-linkdebug:
 	./scripts/test-linkdebug.sh client proto
 
-# test-race, test-linkdebug and fuzz-short in series (the CI step).
+# test-race, then test-linkdebug beside fuzz-short (the CI step).
 .PHONY: test-ci
 test-ci:
 	./scripts/test-ci.sh
