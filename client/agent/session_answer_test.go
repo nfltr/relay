@@ -87,9 +87,6 @@ func closedAddr(t *testing.T) string {
 // An E2EE tcp service is TLS with the agent's E2EE certificate, whose
 // SHA-256 the client pins, and passes half closes through.
 func TestLinkSessionAnswers(t *testing.T) {
-	old := targetDialTimeout
-	targetDialTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { targetDialTimeout = old })
 
 	echo := echoTarget(t)
 	tab, err := NewServiceTable([]Service{

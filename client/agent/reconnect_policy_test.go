@@ -10,10 +10,12 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/relayoutage"
 	"github.com/nfltr/relay/client/rpcclient"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentwire"
@@ -31,10 +33,16 @@ type scriptedRelay struct {
 	dials atomic.Int32
 	drop  chan struct{}
 	next  func() error
+
+	mu sync.Mutex
+	at []time.Time // when each stream came
 }
 
 func (s *scriptedRelay) ConnectHTTP(stream grpc.BidiStreamingServer[pb.HTTPProxyResponse, pb.HTTPProxyRequest]) error {
 	_ = stream.SendHeader(metadata.Pairs("x-resolved-agent-id", "resolved"))
+	s.mu.Lock()
+	s.at = append(s.at, time.Now())
+	s.mu.Unlock()
 	if s.dials.Add(1) == 1 {
 		select {
 		case <-s.drop:
@@ -81,7 +89,9 @@ func TestReconnectRedialsOnUnfamiliarErrors(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s, a, _ := startScripted(t, func() error { return err })
 			close(s.drop)
-			deadline := time.After(5 * time.Second)
+			// A hang guard only: an agent that stops ends a.Done at once,
+			// and a loaded machine takes about a second per redial.
+			deadline := time.After(30 * time.Second)
 			for s.dials.Load() < 3 {
 				select {
 				case <-a.Done():
@@ -144,15 +154,27 @@ func TestReconnectCancelStopsCleanly(t *testing.T) {
 }
 
 // A relay that fails every dial must not be hammered: redials follow the
-// bounded backoff (RedialBase 250 ms, flat for 8 redials).
+// bounded backoff (RedialBase 250 ms, flat for 8 redials), so no two
+// streams come closer than RedialBase however fast or loaded the machine
+// is, and the agent keeps redialling.
 func TestReconnectDoesNotSpin(t *testing.T) {
-	s, _, _ := startScripted(t, func() error { return status.Error(codes.Unknown, "boom") })
+	s, a, _ := startScripted(t, func() error { return status.Error(codes.Unknown, "boom") })
 	close(s.drop)
-	time.Sleep(2 * time.Second)
-	if n := s.dials.Load(); n > 10 {
-		t.Fatalf("%d dials in 2 s; want a bounded rate (<= 10)", n)
+	deadline := time.After(30 * time.Second) // a hang guard: about a second per redial when loaded
+	for s.dials.Load() < 6 {
+		select {
+		case <-a.Done():
+			t.Fatalf("agent stopped with %v after %d dials; want it to keep redialling", a.Err(), s.dials.Load())
+		case <-deadline:
+			t.Fatalf("%d dials in 30 s; want it to keep redialling", s.dials.Load())
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
-	if n := s.dials.Load(); n < 3 {
-		t.Fatalf("%d dials in 2 s; want it to keep redialling", n)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := 1; i < len(s.at); i++ {
+		if gap := s.at[i].Sub(s.at[i-1]); gap < relayoutage.RedialBase {
+			t.Fatalf("stream %d came %s after the one before; want at least RedialBase %s apart", i+1, gap, relayoutage.RedialBase)
+		}
 	}
 }

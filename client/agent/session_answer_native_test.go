@@ -28,9 +28,6 @@ func TestAgentLinkNativeAnswers(t *testing.T) {
 	if got := dataplane.AgentLinkALPNs()[0]; got != quiclink.ALPNChain {
 		t.Fatalf("AgentLinkALPNs()[0] = %q, want quiclink.ALPNChain %q", got, quiclink.ALPNChain)
 	}
-	old := targetDialTimeout
-	targetDialTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { targetDialTimeout = old })
 	echo := echoTarget(t)
 	tab, err := NewServiceTable([]Service{
 		{Name: "db", Kind: agentservices.TCP, Target: echo},

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -808,15 +809,23 @@ func TestProcessStream_SilenceLimitFromRelayHeartbeat(t *testing.T) {
 	})
 }
 
+// All requests are in flight at once: each backend call waits until every
+// one has arrived, which a processStream that served them one by one never
+// lets happen (the barrier is the check, not a wall-clock bound).
 func TestProcessStream_ConcurrentRequests(t *testing.T) {
-	t.Helper()
-
 	const numRequests = 10
 
-	// Start a slow local backend that adds a small delay so all requests
-	// overlap in flight — verifying that processStream handles them concurrently.
-	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(20 * time.Millisecond)
+	var arrived atomic.Int32
+	all := make(chan struct{})
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if arrived.Add(1) == numRequests {
+			close(all)
+		}
+		select {
+		case <-all:
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second): // one by one: the barrier never fills
+		}
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -828,7 +837,7 @@ func TestProcessStream_ConcurrentRequests(t *testing.T) {
 		t.Fatalf("parseRoutes: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	requests := make([]*pb.HTTPProxyRequest, numRequests)
@@ -839,14 +848,17 @@ func TestProcessStream_ConcurrentRequests(t *testing.T) {
 	stream := &mockStream{requests: requests}
 
 	cfg := Config{
-		RequestTimeout: 5,
+		RequestTimeout: 30,
 		Concurrency:    numRequests, // allow all requests in parallel
 	}
 
-	start := time.Now()
 	processStream(ctx, stream, "test-agent", routes, cfg, newBackendClient(cfg), slog.Default(), nil, nil, nil) //nolint:errcheck // context cancel is expected
 
-	elapsed := time.Since(start)
+	select {
+	case <-all:
+	default:
+		t.Errorf("only %d of %d requests were in flight at once; want all (concurrent execution)", arrived.Load(), numRequests)
+	}
 
 	stream.mu.Lock()
 	got := len(stream.sent)
@@ -865,11 +877,5 @@ func TestProcessStream_ConcurrentRequests(t *testing.T) {
 		if r.Response.StatusCode != int32(http.StatusOK) {
 			t.Errorf("response[%d]: status = %d, want %d", i, r.Response.StatusCode, http.StatusOK)
 		}
-	}
-
-	// With concurrency=10 and 20ms delay per request, total elapsed should be
-	// much less than the sequential bound of 10*20ms = 200ms.
-	if elapsed > 150*time.Millisecond {
-		t.Errorf("processStream took %v — expected concurrent execution (~20ms), got sequential-like timing", elapsed)
 	}
 }

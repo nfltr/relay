@@ -214,13 +214,35 @@ const maxRecvMessageSize = 8 << 20
 // redials themselves (relayoutage.RedialDelay): call it before the attempt.
 // Without it an attempt made during that backoff fails at once with the last
 // dial's error, so a client lagged a relay that was back by up to a second.
-// The reset takes effect asynchronously; this waits, at most redialSettle,
-// for the channel to leave TRANSIENT_FAILURE so the attempt sees the new dial.
+// The reset takes effect asynchronously, and a channel in TRANSIENT_FAILURE
+// stays there until its new dial is READY (pick_first's sticky failure,
+// gRPC A62): this waits, at most redialSettle, for that, so the attempt sees
+// the new dial. A reset reaches only a backoff in progress: a dial in flight
+// at the reset (started before the relay was back) fails into a fresh
+// backoff of up to 1.2 s, so the reset is repeated every redialRecheck.
+// Guard: TestRedialNowOutlivesADialInFlight.
 func RedialNow(ctx context.Context, conn *ClientConn) {
-	conn.ResetConnectBackoff()
 	ctx, cancel := context.WithTimeout(ctx, redialSettle)
 	defer cancel()
-	conn.WaitForStateChange(ctx, connectivity.TransientFailure)
+	for {
+		conn.ResetConnectBackoff()
+		step, stop := context.WithTimeout(ctx, redialRecheck)
+		changed := conn.WaitForStateChange(step, connectivity.TransientFailure)
+		stop()
+		if changed || ctx.Err() != nil {
+			return
+		}
+	}
 }
 
-const redialSettle = 100 * time.Millisecond
+// redialRecheck is the channel's own first backoff: a relay still down is
+// dialled no faster than a new channel dials it.
+var redialRecheck = relayReconnectParams.Backoff.BaseDelay
+
+// redialSettle covers a dial that reaches the relay: a TCP and TLS handshake
+// and the HTTP/2 preface, two or more round trips (100 ms, the bound before,
+// was shorter than one on a WAN or a loaded machine, so the attempt failed at
+// once with the last dial's error). A relay still down costs the wait; the
+// channel keeps redialling meanwhile and ends it when the relay is back.
+// Guard: TestRedialNowReachesARelayThatIsBack.
+const redialSettle = time.Second
