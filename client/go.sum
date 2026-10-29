@@ -30,8 +30,8 @@ github.com/nfltr/link/peerlink/quiclink v0.5.0 h1:3wXO4qGAW9s3ilp783hRXotyim+KP6
 github.com/nfltr/link/peerlink/quiclink v0.5.0/go.mod h1:Hn8HZexrol5Y8N5bQ/MH9udhyhcQBv4dghSxSxaRbv0=
 github.com/nfltr/quic-go v0.63.1-nfltr.2 h1:lO4X1/sAhQEyLcsSqDlw06gx3u8+3rb4LzZ9ROsbn6M=
 github.com/nfltr/quic-go v0.63.1-nfltr.2/go.mod h1:KlJwkQMVhFf/rlYdkm18TkxbgyKn1UO4AtWyo/hOj10=
-github.com/nfltr/relay/proto v0.19.4 h1:9FKqbi2WXBOSfZO8BCLow8lnu4N+eqyp9n99IKeIy90=
-github.com/nfltr/relay/proto v0.19.4/go.mod h1:JEKUOLaZXMlC0ayFRCEygWzZlVp4kcNMh39h8LHpkMs=
+github.com/nfltr/relay/proto v0.19.5 h1:zYPkNUGKcS0zLKxjLCUakwIfAoCrovLVgLsur1cydj8=
+github.com/nfltr/relay/proto v0.19.5/go.mod h1:ARJwQOOsfykyMj+c4j20DOyYCe0qQpTrKanJdCXSi04=
 github.com/pion/datachannel v1.6.3 h1:HZAYLpunVI0xi057ZiANl558d0uSpomcWw4UEPz3qXs=
 github.com/pion/datachannel v1.6.3/go.mod h1:oRmkXVVXxkUbqa8MatgdNHW29kvtQY3HUdjJQsfv2GE=
 github.com/pion/dtls/v3 v3.1.9 h1:rpeycmLIkc4krpk1IxP7+39o11QdCXbmV9+FGi9yZJ8=
