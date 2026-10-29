@@ -1,0 +1,36 @@
+# Copyright 2026 nfltr
+# SPDX-License-Identifier: Apache-2.0
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['client/v*', 'proto/v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: proto/go.mod
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+      - run: make check-no-legacy-name
+      - run: make build
+      - run: make vet
+      # test-race, test-linkdebug and fuzz-short side by side; make test
+      # (the same tests without -race) is not run: test-race runs them all.
+      - run: make test-ci
+      - run: make check-testknobs
+      - run: make check-linkvet

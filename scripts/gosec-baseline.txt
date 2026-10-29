@@ -1,0 +1,69 @@
+# gosec baseline (scripts/sast-baseline.py): accepted or false-positive
+# findings, triaged by rule.
+# Regenerate only after triaging every new finding:
+#   scripts/check-gosec.sh --update
+G102 client/p2p/connect.go 55e66725deb47514  # ln, err := net.Listen("tcp4", ":0")
+G104 client/agent/run.go bf160ffe13386785  # resp.Body.Close() //nolint:errcheck
+G104 client/p2p/connect.go 146c332f10fa7e38  # conn.Close() //nolint:errcheck
+G104 client/p2p/connect.go 2470a28eb9153690  # best.Close() //nolint:errcheck
+G104 client/p2p/connect.go b2e475f9146e119a  # conn.Close() //nolint:errcheck // could be an unrelated scanner
+G104 client/p2p/connect.go eae72c5a4fc7dfa7  # c.Close() //nolint:errcheck
+G104 client/p2p/connect.go eae72c5a4fc7dfa7  # c.Close() //nolint:errcheck
+G104 client/p2p/connect.go eae72c5a4fc7dfa7  # c.Close() //nolint:errcheck
+G104 client/p2p/datapath_tcp.go 629f0a66ac8e1e81  # c.Close() //nolint:errcheck // a path is already chosen
+G104 client/p2p/datapath_tcp.go eae72c5a4fc7dfa7  # c.Close() //nolint:errcheck
+G104 client/p2p/localserver.go 67e3d120fdda49a4  # ln.Close() //nolint:errcheck
+G104 client/p2p/rtcdata.go eae72c5a4fc7dfa7  # c.Close() //nolint:errcheck
+G104 client/p2p/transfer.go 17e5fa8d2a2fa4d1  # pr.Close() //nolint:errcheck
+G104 client/p2p/transfer.go 17e5fa8d2a2fa4d1  # pr.Close() //nolint:errcheck
+G104 client/p2p/transfer.go 17e5fa8d2a2fa4d1  # pr.Close() //nolint:errcheck
+G104 client/p2p/transfer.go 17e5fa8d2a2fa4d1  # pr.Close() //nolint:errcheck
+G104 client/p2p/transfer.go f9132deba48d9012  # f.Close() //nolint:errcheck
+G104 client/p2p/transfer.go f9132deba48d9012  # f.Close() //nolint:errcheck
+G110 client/p2p/transfer.go 50cb9bab1312fdd0  # if _, err := io.Copy(f, tr); err != nil {
+G115 client/agent/run.go 94053e50ea90345e  # StatusCode:    int32(resp.StatusCode),
+G115 client/agent/run.go 94053e50ea90345e  # StatusCode:    int32(resp.StatusCode),
+G115 client/agent/run.go 94053e50ea90345e  # StatusCode:    int32(resp.StatusCode),
+G115 client/agent/run.go 94053e50ea90345e  # StatusCode:    int32(resp.StatusCode),
+G115 client/agent/tcp.go 0ace0730f96d5102  # growth.want.Store(int32(min(n, tcpMaxStreams)))
+G115 client/agent/tcp.go 2cdc9754c89a7840  # t.growth.add(-int32(n))
+G115 client/mailboxclient/client.go 3c9a41d019c70689  # Limits: &mailboxv1.WebhookLimits{MaxEventsPerMinute: uint32(max(maxEventsPerMinu
+G115 client/mailboxclient/client.go 3c9a41d019c70689  # Limits: &mailboxv1.WebhookLimits{MaxEventsPerMinute: uint32(max(maxEventsPerMinu
+G115 client/mailboxclient/client.go d5a981eb38aa2080  # in := &mailboxv1.PullMessagesRequest{Mailbox: mailbox, AfterSeq: after, MaxMessa
+G115 client/p2p/e2e.go 4a4ca7483a12b8b7  # binary.BigEndian.PutUint32(rec, uint32(len(rec)-4))
+G115 client/p2p/transfer.go 2d6dbb3e604cd4d0  # binary.BigEndian.PutUint32(lenBuf[:], uint32(len(b)))
+G115 client/p2p/ws.go 4179aac8cc2fd499  # header[7] = byte(n >> 16)
+G115 client/p2p/ws.go b7909784d93179b9  # header[9] = byte(n)
+G115 client/p2p/ws.go e1bbdc468891fcb9  # header[6] = byte(n >> 24)
+G115 client/p2p/ws.go f2de7d8e8f8a5b14  # header[3] = byte(n)
+G115 client/p2p/ws.go f4f3fe55bd969a85  # header[8] = byte(n >> 8)
+G115 client/rpcclient/a2a.go 1a9da1053aebab97  # code := codes.Code(msg.GetStatusCode())
+G115 client/rpcclient/a2a.go 31d573c40dfd405a  # StatusCode:    int32(code),
+G115 client/rpcclient/a2a_e2ee_agent.go 31d573c40dfd405a  # StatusCode:    int32(code),
+G115 client/rpcclient/client_stream.go 1a9da1053aebab97  # code := codes.Code(msg.GetStatusCode())
+G115 client/rpcclient/client_stream.go 1a9da1053aebab97  # code := codes.Code(msg.GetStatusCode())
+G115 client/wg/forward_tun.go 03d3ac09c715f4ce  # ep:             channel.New(1024, uint32(mtu), ""),
+G115 proto/wire/grpccodec/codec.go e41f76adf6afbfd4  # head = protowire.AppendVarint(head, uint64(respLen))
+G115 proto/wire/wsframe/wsframe.go 819262fde2349646  # dst = append(dst, 0x80|op, m|byte(n))
+G122 client/p2p/transfer.go 5acad8ba210685ad  # f, err := os.Open(path)
+G204 client/p2p/browser.go 307ef71085ae2ae8  # cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+G204 client/p2p/browser.go 8aabb95800349151  # cmd = exec.Command("open", url)
+G204 client/p2p/browser.go affd36b3b59b5b85  # cmd = exec.Command("xdg-open", url)
+G301 client/p2p/transfer.go c318f6693297dcb7  # if err := os.MkdirAll(outPath, 0o755); err != nil {
+G301 client/p2p/transfer.go d4cb9f42b4919064  # if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
+G302 client/relayblob/relayblob.go 7e76fbbc60205a41  # f, err := os.OpenFile(part, os.O_CREATE|os.O_RDWR, 0o644)
+G304 client/grpcclient/mtls.go d4374a08c9ca4645  # caPEM, err := os.ReadFile(caFile)
+G304 client/p2p/transfer.go 2f7a2766ed8dfb39  # out, err := os.Create(outPath)
+G304 client/p2p/transfer.go 3154c5a1dc7f2feb  # f, err := os.Create(outPath)
+G304 client/p2p/transfer.go 5acad8ba210685ad  # f, err := os.Open(path)
+G304 client/p2p/transfer.go 5acad8ba210685ad  # f, err := os.Open(path)
+G304 client/relayblob/relayblob.go 5acad8ba210685ad  # f, err := os.Open(path)
+G304 client/relayblob/relayblob.go 7e76fbbc60205a41  # f, err := os.OpenFile(part, os.O_CREATE|os.O_RDWR, 0o644)
+G304 client/rpcclient/a2a_e2ee.go 40198b332da0a69d  # raw, err := os.ReadFile(path)
+G304 client/wg/keys.go 40198b332da0a69d  # raw, err := os.ReadFile(path)
+G401 client/p2p/ws.go ba2774768b423e0e  # h := sha1.New()
+G402 client/agent/http_tunnel.go 7bbd6a6edc0c064d  # tlsCfg = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // opt-in, dev onl
+G403 client/relaytrust/relaytrusttest/certs.go e7d5b68757efd78c  # weak, err := rsa.GenerateKey(rand.Reader, 1024)
+G404 client/relayoutage/redial.go bc7d74e7f1fc0233  # d += time.Duration(rand.Int64N(half + 1))
+G505 client/p2p/ws.go 20ceea208a1b0842  # "crypto/sha1"
+G505 proto/wire/turnwire/turnwire.go f2141ce84264b419  # "crypto/sha1" //nolint:gosec // HMAC-SHA1 is what the TURN REST API scheme (and 

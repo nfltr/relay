@@ -1,0 +1,76 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package nfltr.relay.v1;
+
+option go_package = "github.com/nfltr/relay/proto/nfltr/relay/v1;relayv1";
+
+// ErrorReason is the one machine-readable cause of a relay error.
+// It travels as the
+// reason of a google.rpc.ErrorInfo (domain "relay.nfltr.xyz") inside a
+// google.rpc.Status, on gRPC and as JSON on HTTP. Clients branch on it, never
+// on message text.
+enum ErrorReason {
+  // No reason given.
+  ERROR_REASON_UNSPECIFIED = 0;
+  // The caller presented no valid credential.
+  ERROR_REASON_UNAUTHENTICATED = 1;
+  // The agent is unknown, or not visible to the caller.
+  ERROR_REASON_AGENT_NOT_FOUND = 2;
+  // The agent is known but not connected (retryable).
+  ERROR_REASON_AGENT_OFFLINE = 3;
+  // 4 and 5 (session replaced / reconnected) were never sent: a replaced
+  // session ends with a gRPC status (rpcclient.IsSessionReplaced).
+  reserved 4, 5;
+  reserved "ERROR_REASON_SESSION_REPLACED", "ERROR_REASON_SESSION_RECONNECTED";
+  // The peer does not support the requested feature.
+  ERROR_REASON_FEATURE_UNSUPPORTED = 6;
+  // The agent refused the port or service, or its target refused the
+  // connection.
+  ERROR_REASON_TARGET_REFUSED = 7;
+  // The agent exposes no service of that name.
+  ERROR_REASON_UNKNOWN_SERVICE = 8;
+  // The share refuses the caller's IP address.
+  ERROR_REASON_SHARE_IP_REFUSED = 9;
+  // The share's policy cannot be enforced on this path.
+  ERROR_REASON_SHARE_POLICY_UNENFORCED = 10;
+  // A documented limit was exceeded (with a QuotaFailure naming it).
+  ERROR_REASON_LIMIT_EXCEEDED = 11;
+  // The relay is draining (with a RetryInfo).
+  ERROR_REASON_RELAY_DRAINING = 12;
+  // The name is reserved.
+  ERROR_REASON_RESERVED_NAME = 13;
+  // The mailbox holds as many messages as it may.
+  ERROR_REASON_MAILBOX_FULL = 14;
+  // Bytes did not match the SHA-256 (or size) they were sent under.
+  ERROR_REASON_BLOB_HASH_MISMATCH = 15;
+  // Unknown webhook id, or not the caller's.
+  ERROR_REASON_WEBHOOK_NOT_FOUND = 16;
+  // The relay is starting and cannot answer yet (retryable).
+  ERROR_REASON_RELAY_STARTING = 20;
+  // The relay cannot read its replica directory (which replica holds each
+  // agent), so it cannot tell where the agent is or whether it is
+  // connected (retryable).
+  ERROR_REASON_DIRECTORY_UNAVAILABLE = 21;
+  // No blob of that SHA-256 the caller may read (unknown, not its own, or
+  // the grant is invalid or expired).
+  ERROR_REASON_BLOB_NOT_FOUND = 24;
+  // An upload part starts beyond the bytes held; resume at Upload-Offset.
+  ERROR_REASON_BLOB_UPLOAD_GAP = 25;
+  // The call carries no Hello, or a protocol version the peer does not
+  // speak: the older side must update (session, 30-33).
+  ERROR_REASON_PROTOCOL_UNSUPPORTED = 30;
+  // The agent could not reach the target within its dial bound (a timeout,
+  // no route to it, an unknown host).
+  ERROR_REASON_TARGET_UNREACHABLE = 40;
+  // The request is malformed: an invalid agent name, port or service.
+  ERROR_REASON_INVALID_ARGUMENT = 41;
+  // The session must be end-to-end encrypted: its service or the relay's
+  // policy requires it.
+  ERROR_REASON_E2EE_REQUIRED = 42;
+  // The session asks for end-to-end encryption that its service, its
+  // agent or the relay's policy does not offer.
+  ERROR_REASON_E2EE_UNAVAILABLE = 43;
+}

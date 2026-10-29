@@ -1,0 +1,81 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package nfltr.blob.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nfltr/relay/proto/nfltr/blob/v1;blobv1";
+
+// BlobService is the metadata side of the relay's content-addressed blob
+// store. A blob is named
+// by the lowercase hex SHA-256 of its bytes and belongs to the account that
+// put it; no other identity reads it.
+//
+// Bytes travel as plain HTTP, not through these RPCs:
+//
+//   PUT /api/v1/blobs/{sha256}   one part of the object. Headers:
+//     Content-Range: bytes FIRST-LAST/TOTAL   the part's place and the
+//       object size; "bytes */TOTAL" with an empty body probes; omitted when
+//       the body is the whole object.
+//     Content-Digest: sha-256=:BASE64:   the part's SHA-256 (RFC 9530);
+//       optional when the body is the whole object (the path names it).
+//     Content-Length   at most Limits part size (64 MiB).
+//   Parts are verified, held durably, idempotent and resumable from any
+//   relay replica. The answer is an UploadStatus (JSON) plus the header
+//   Upload-Offset: the bytes held. When every byte is held the relay
+//   verifies the whole object against {sha256} and commits it. Putting a
+//   blob the caller already holds only refreshes its retention.
+//   Errors are google.rpc.Status JSON with an nfltr.relay.v1.ErrorReason:
+//   409 BLOB_HASH_MISMATCH, 409 BLOB_UPLOAD_GAP (resume at Upload-Offset),
+//   413 LIMIT_EXCEEDED.
+//
+//   GET|HEAD /api/v1/blobs/{sha256}   the bytes, Range supported, with
+//     ETag "{sha256}" and Repr-Digest: sha-256=:BASE64:. The owner reads with
+//     its credential. A blob the caller may not read is 404 BLOB_NOT_FOUND.
+service BlobService {
+  // StatBlob describes a blob the caller owns.
+  rpc StatBlob(StatBlobRequest) returns (StatBlobResponse) {
+    option (google.api.http) = {get: "/api/v1/blobs/{sha256}:stat"};
+  }
+}
+
+// Blob describes a committed blob.
+message Blob {
+  // Lowercase hex SHA-256 of the bytes (64 characters).
+  string sha256 = 1;
+  // Size of the bytes.
+  int64 size_bytes = 2;
+  // When the relay drops the caller's hold unless the caller puts it again
+  // (relay retention, refreshed by every PUT).
+  google.protobuf.Timestamp expires_at = 3;
+}
+
+// StatBlobRequest names a blob.
+message StatBlobRequest {
+  // Lowercase hex SHA-256 (64 characters).
+  string sha256 = 1;
+}
+
+// StatBlobResponse describes it.
+message StatBlobResponse {
+  // The blob.
+  Blob blob = 1;
+}
+
+// UploadStatus is the JSON body of every PUT answer.
+message UploadStatus {
+  // The object's SHA-256.
+  string sha256 = 1;
+  // The object's size.
+  int64 size_bytes = 2;
+  // Leading bytes durably held; equals size_bytes once complete.
+  int64 held_bytes = 3;
+  // The object is committed and held by the caller.
+  bool complete = 4;
+  // Set once complete: when the caller's hold lapses unless refreshed.
+  google.protobuf.Timestamp expires_at = 5;
+}

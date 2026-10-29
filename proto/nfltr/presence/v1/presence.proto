@@ -1,0 +1,137 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+// nfltr.presence.v1: who is connected to the relay, what each agent
+// advertises, and a change feed with a resume cursor.
+// The relay treats
+// labels and capabilities as opaque advertised data: it filters on exact
+// label values and never interprets a key.
+package nfltr.presence.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nfltr/relay/proto/nfltr/presence/v1;presencev1";
+
+// PresenceService answers inventory queries and the change feed for the
+// agents the caller may reach (its own agents, scoped by the relay's agent
+// reach rule). ListAgents and Watch are served over HTTP by the gateway;
+// UpdateLabels is an agent-to-agent request from a connected agent to the
+// relay's own agent (agent id "nfltr-relay"), so the relay applies it to the
+// stream it came from.
+service PresenceService {
+  // ListAgents returns the connected agents the caller may reach, plus the
+  // feed cursor taken before the snapshot (watch from it to miss nothing).
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse) {
+    option (google.api.http) = {get: "/api/v1/presence/agents"};
+  }
+  // Watch is a long-poll: it returns the changes after cursor that the
+  // caller may see, waiting up to wait_ms for the first one. An empty cursor
+  // returns the current cursor at once (the baseline).
+  rpc Watch(WatchRequest) returns (WatchResponse) {
+    option (google.api.http) = {get: "/api/v1/presence/events"};
+  }
+  // UpdateLabels replaces (or, with patch, merges into) the labels the
+  // calling agent advertises. Labels set at connect by the operator
+  // (machine facts) cannot be changed this way.
+  rpc UpdateLabels(UpdateLabelsRequest) returns (UpdateLabelsResponse);
+}
+
+// Agent is one connected agent as the relay lists it.
+message Agent {
+  // agent_id is the relay agent id (account-scoped, at most 256 bytes).
+  string agent_id = 1;
+  // labels are the agent's advertised labels (at most 256 entries).
+  map<string, string> labels = 2;
+  // capabilities are the agent's advertised capabilities (at most 64).
+  repeated string capabilities = 3;
+  // connected_at is when the relay accepted the agent's connection.
+  google.protobuf.Timestamp connected_at = 4;
+}
+
+// ListAgentsRequest filters the inventory.
+message ListAgentsRequest {
+  // selector keeps only agents whose labels equal every entry (at most 32
+  // entries); empty lists every reachable agent.
+  map<string, string> selector = 1;
+}
+
+// ListAgentsResponse is the inventory snapshot.
+message ListAgentsResponse {
+  // agents are the matching connected agents, ordered by agent_id.
+  repeated Agent agents = 1;
+  // cursor is the feed position taken before the snapshot.
+  string cursor = 2;
+}
+
+// WatchRequest asks for the changes after cursor.
+message WatchRequest {
+  // cursor is opaque (at most 128 bytes); empty asks for the baseline.
+  string cursor = 1;
+  // wait_ms bounds the wait for a first change (the relay caps it at
+  // 25000); 0 answers at once.
+  uint32 wait_ms = 2;
+}
+
+// WatchResponse carries the changes after the request cursor.
+message WatchResponse {
+  // cursor is the position to watch from next.
+  string cursor = 1;
+  // events are the visible changes after the request cursor, oldest first
+  // (at most 256).
+  repeated PresenceEvent events = 2;
+  // reset reports that the request cursor is older than the relay's history
+  // or from another relay process: changes may be missing, so re-list.
+  bool reset = 3;
+}
+
+// PresenceEvent is one change of one agent.
+message PresenceEvent {
+  // revision orders events within one relay process.
+  uint64 revision = 1;
+  // agent_id is the agent that changed.
+  string agent_id = 2;
+  // change is what happened.
+  oneof change {
+    // up: the agent connected.
+    AgentUp up = 3;
+    // down: the agent disconnected.
+    AgentDown down = 4;
+    // labels: the agent's advertised labels changed.
+    LabelsChanged labels = 5;
+  }
+}
+
+// AgentUp is an agent connecting.
+message AgentUp {
+  // labels the agent connected with.
+  map<string, string> labels = 1;
+  // capabilities the agent connected with.
+  repeated string capabilities = 2;
+}
+
+// AgentDown is an agent disconnecting.
+message AgentDown {}
+
+// LabelsChanged is an agent advertising new labels.
+message LabelsChanged {
+  // labels is the agent's full label set after the change.
+  map<string, string> labels = 1;
+}
+
+// UpdateLabelsRequest is the calling agent's new label set.
+message UpdateLabelsRequest {
+  // labels to advertise (at most 256 entries; keys and values at most 256
+  // bytes; empty keys or values are ignored).
+  map<string, string> labels = 1;
+  // patch merges labels into the current set instead of replacing it.
+  bool patch = 2;
+}
+
+// UpdateLabelsResponse is the label set now advertised.
+message UpdateLabelsResponse {
+  // labels is the agent's full label set after the update.
+  map<string, string> labels = 1;
+}

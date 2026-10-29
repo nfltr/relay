@@ -1,0 +1,14 @@
+# Test files that assign a package-level variable of their package (the knobs rule).
+# Format: <file_test.go>:<var> <reason and follow-up>. A stale entry fails make check-testknobs.
+client/agent/e2ee_session_timeout_test.go:e2eeHeaderTimeout unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
+client/agent/session_answer_native_test.go:targetDialTimeout unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
+client/agent/session_answer_test.go:targetDialTimeout unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
+client/agent/tcp_stuck_target_test.go:tcpSessionStall unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
+client/p2p/p2p_test.go:STUNServer exported SDK variable; follow-up: an option on the constructor
+client/p2p/rtcdata_test.go:RTCWait exported SDK variable; follow-up: an option on the constructor
+client/p2p/rtcdata_test.go:rtcNetworkTypes unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
+client/p2p/stun_conformance_test.go:STUNServer exported SDK variable; follow-up: an option on the constructor
+client/p2p/stun_test.go:STUNServer exported SDK variable; follow-up: an option on the constructor
+client/relayoutage/share_client_test.go:ShareClient exported SDK variable; follow-up: an option on the constructor
+client/rpcclient/a2a_handler_heartbeat_test.go:agentHeartbeatInterval unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
+client/rpcclient/a2a_stuck_handler_test.go:requestStall unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct

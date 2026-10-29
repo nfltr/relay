@@ -1,0 +1,350 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+// Durable per-owner mailboxes and the inbound webhooks that deliver into
+// them. The
+// relay stores opaque envelopes and decides nothing about their content.
+// Refusals are google.rpc.Status with an ErrorInfo whose reason is a
+// nfltr.relay.v1.ErrorReason name (MAILBOX_FULL, LIMIT_EXCEEDED,
+// UNAUTHENTICATED, WEBHOOK_NOT_FOUND, FEATURE_UNSUPPORTED).
+package nfltr.mailbox.v1;
+
+import "google/api/annotations.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/nfltr/relay/proto/nfltr/mailbox/v1;mailboxv1";
+
+// MailboxService: a mailbox is named by its owner (the caller's account) and
+// a name (1-128 of letters, digits, `.`, `_`, `-`). Only the owner appends,
+// reads and acknowledges. Delivery is at least once: pull never
+// acknowledges, so a reader that loses an ack sees the envelopes again and
+// dedups by seq.
+service MailboxService {
+  // AppendMessage stores one envelope. A repeated idempotency_key from the
+  // same sender within 24 h returns the first seq (duplicate = true).
+  rpc AppendMessage(AppendMessageRequest) returns (AppendMessageResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/mailboxes/{mailbox}/messages"
+      body: "*"
+    };
+  }
+  // PullMessages returns unexpired envelopes after the cursor, oldest first,
+  // waiting up to wait (at most 25 s) while there are none.
+  rpc PullMessages(PullMessagesRequest) returns (PullMessagesResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/mailboxes/{mailbox}/messages:pull"
+      body: "*"
+    };
+  }
+  // AckMessages removes the envelopes up to and including through_seq.
+  rpc AckMessages(AckMessagesRequest) returns (AckMessagesResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/mailboxes/{mailbox}/messages:ack"
+      body: "*"
+    };
+  }
+  // ListMailboxes lists the caller's mailboxes whose name starts with prefix.
+  rpc ListMailboxes(ListMailboxesRequest) returns (ListMailboxesResponse) {
+    option (google.api.http) = {get: "/api/v1/mailboxes"};
+  }
+  // CreatePushSubscription registers a browser Web Push endpoint: an append
+  // with notify = true sends each subscriber one content-free push (at most
+  // one per 30 s per mailbox). Subscriptions live in relay memory; a page
+  // registers again when it loads.
+  rpc CreatePushSubscription(CreatePushSubscriptionRequest) returns (CreatePushSubscriptionResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/mailboxes/{mailbox}/push-subscriptions"
+      body: "*"
+    };
+  }
+  // DeletePushSubscription removes a subscriber's endpoint.
+  rpc DeletePushSubscription(DeletePushSubscriptionRequest) returns (DeletePushSubscriptionResponse) {
+    option (google.api.http) = {delete: "/api/v1/mailboxes/{mailbox}/push-subscriptions/{subscriber}"};
+  }
+  // GetPushKey returns the relay's VAPID public key (FEATURE_UNSUPPORTED when
+  // push is off).
+  rpc GetPushKey(GetPushKeyRequest) returns (GetPushKeyResponse) {
+    option (google.api.http) = {get: "/api/v1/push-key"};
+  }
+}
+
+// SenderKind is how the relay authenticated an envelope's sender.
+enum SenderKind {
+  // Never set on a stored envelope.
+  SENDER_KIND_UNSPECIFIED = 0;
+  // An API key (or agent credential) of the owner's account.
+  SENDER_KIND_API_KEY = 1;
+  // A signed-in dashboard (OAuth) session of the owner.
+  SENDER_KIND_SESSION = 2;
+  // A webhook of the owner; sender is the webhook id.
+  SENDER_KIND_WEBHOOK = 3;
+  // The relay's dev-only loopback trust mode.
+  SENDER_KIND_LOOPBACK_TRUST = 4;
+}
+
+// Envelope is one stored message.
+message Envelope {
+  // Relay-assigned, increasing per mailbox (the pull cursor and ack point).
+  uint64 seq = 1;
+  // The sender's idempotency key (at most 128 bytes printable ASCII), or "".
+  string idempotency_key = 2;
+  // The sender's replace key, or "".
+  string replace_key = 3;
+  // How the sender was authenticated.
+  SenderKind sender_kind = 4;
+  // The authenticated principal, or the webhook id.
+  string sender = 5;
+  // The sender's media type, or "".
+  string content_type = 6;
+  // Opaque bytes (at most 1 MiB); end-to-end encrypted or not.
+  bytes payload = 7;
+  // When the relay stored it.
+  google.protobuf.Timestamp appended_at = 8;
+  // When the relay drops it unacknowledged.
+  google.protobuf.Timestamp expires_at = 9;
+  // How many pulls returned it, this one included.
+  uint32 delivery_count = 10;
+  // Webhook senders only: POSTs of the webhook dropped (rate, full mailbox,
+  // too large) since its previous accepted envelope.
+  uint64 dropped_before = 11;
+}
+
+// AppendMessageRequest is one envelope to store.
+message AppendMessageRequest {
+  // Mailbox name.
+  string mailbox = 1;
+  // Optional; collapses the sender's retries (at most 128 bytes).
+  string idempotency_key = 2;
+  // Optional; removes the mailbox's unacknowledged envelopes with this key
+  // (newest wins; at most 128 bytes).
+  string replace_key = 3;
+  // Optional media type (at most 128 bytes).
+  string content_type = 4;
+  // Opaque bytes, at most 1 MiB.
+  bytes payload = 5;
+  // Lifetime unacknowledged; unset or 0 is the ceiling (7 days).
+  google.protobuf.Duration ttl = 6;
+  // Send the mailbox's push subscribers a content-free push.
+  bool notify = 7;
+}
+
+// AppendMessageResponse is the stored envelope's position.
+message AppendMessageResponse {
+  // The envelope's seq (the first append's for a duplicate).
+  uint64 seq = 1;
+  // The idempotency key was seen; nothing was stored.
+  bool duplicate = 2;
+  // The mailbox owner's canonical account identity.
+  string owner = 3;
+}
+
+// PullMessagesRequest names the cursor.
+message PullMessagesRequest {
+  // Mailbox name.
+  string mailbox = 1;
+  // Return envelopes with seq > after_seq.
+  uint64 after_seq = 2;
+  // At most this many (0 or over 100 is 100).
+  uint32 max_messages = 3;
+  // Long-poll while there are none; unset is no wait, at most 25 s.
+  google.protobuf.Duration wait = 4;
+}
+
+// PullMessagesResponse is the envelopes after the cursor.
+message PullMessagesResponse {
+  // Oldest first.
+  repeated Envelope envelopes = 1;
+  // The mailbox owner's canonical account identity.
+  string owner = 2;
+}
+
+// AckMessagesRequest acknowledges through a seq.
+message AckMessagesRequest {
+  // Mailbox name.
+  string mailbox = 1;
+  // Remove envelopes with seq <= through_seq.
+  uint64 through_seq = 2;
+}
+
+// AckMessagesResponse counts what was removed.
+message AckMessagesResponse {
+  // Envelopes removed.
+  uint32 removed = 1;
+}
+
+// ListMailboxesRequest filters by name prefix.
+message ListMailboxesRequest {
+  // Name prefix, or "" for all (at most 128 bytes).
+  string prefix = 1;
+}
+
+// MailboxInfo is one listed mailbox.
+message MailboxInfo {
+  // Mailbox name.
+  string name = 1;
+  // The newest seq ever assigned.
+  uint64 last_seq = 2;
+  // Unacknowledged, unexpired envelopes.
+  uint32 queued = 3;
+  // Their payload bytes.
+  uint64 queued_bytes = 4;
+}
+
+// ListMailboxesResponse is the caller's mailboxes, by name.
+message ListMailboxesResponse {
+  // By name.
+  repeated MailboxInfo mailboxes = 1;
+}
+
+// CreatePushSubscriptionRequest registers one subscriber.
+message CreatePushSubscriptionRequest {
+  // Mailbox name.
+  string mailbox = 1;
+  // The subscriber's own id (8-32 of letters, digits, _ -); at most 8 per
+  // mailbox.
+  string subscriber = 2;
+  // A browser push service URL (https, a known push service host).
+  string endpoint = 3;
+}
+
+// CreatePushSubscriptionResponse is empty.
+message CreatePushSubscriptionResponse {}
+
+// DeletePushSubscriptionRequest names the subscriber.
+message DeletePushSubscriptionRequest {
+  // Mailbox name.
+  string mailbox = 1;
+  // The subscriber's id.
+  string subscriber = 2;
+}
+
+// DeletePushSubscriptionResponse is empty.
+message DeletePushSubscriptionResponse {}
+
+// GetPushKeyRequest is empty.
+message GetPushKeyRequest {}
+
+// GetPushKeyResponse is the relay's VAPID key.
+message GetPushKeyResponse {
+  // base64url (no padding) P-256 uncompressed point.
+  string vapid_public_key = 1;
+}
+
+// WebhookService: inbound endpoints a caller outside the relay (CI, an
+// alerting webhook, GitHub) POSTs to; the relay authenticates each POST with
+// the webhook's secret and appends its body to the webhook's mailbox
+// (sender_kind WEBHOOK, sender = webhook id, idempotency key = the
+// X-GitHub-Delivery or Idempotency-Key header). Ingress is plain HTTP:
+// POST /api/v1/webhooks/{webhook_id}/deliveries.
+service WebhookService {
+  // CreateWebhook makes a webhook; its secret is in the response only.
+  rpc CreateWebhook(CreateWebhookRequest) returns (CreateWebhookResponse) {
+    option (google.api.http) = {
+      post: "/api/v1/webhooks"
+      body: "*"
+    };
+  }
+  // ListWebhooks lists the caller's webhooks.
+  rpc ListWebhooks(ListWebhooksRequest) returns (ListWebhooksResponse) {
+    option (google.api.http) = {get: "/api/v1/webhooks"};
+  }
+  // DeleteWebhook deletes a webhook and its unacknowledged deliveries; its
+  // POSTs are refused at once.
+  rpc DeleteWebhook(DeleteWebhookRequest) returns (DeleteWebhookResponse) {
+    option (google.api.http) = {delete: "/api/v1/webhooks/{webhook_id}"};
+  }
+}
+
+// WebhookAuth is how a webhook authenticates a POST.
+enum WebhookAuth {
+  // Invalid.
+  WEBHOOK_AUTH_UNSPECIFIED = 0;
+  // `Authorization: Bearer <secret>`; the relay keeps the SHA-256 only.
+  WEBHOOK_AUTH_BEARER = 1;
+  // `X-Hub-Signature-256: sha256=<hex HMAC-SHA256(secret, body)>`; the
+  // secret is derived from the relay's seal key and the id, never stored.
+  WEBHOOK_AUTH_GITHUB = 2;
+}
+
+// WebhookLimits are the creator's limits; 0 is the ceiling.
+message WebhookLimits {
+  // Accepted POSTs per minute (ceiling 600).
+  uint32 max_events_per_minute = 1;
+  // Body bytes (ceiling 64 KiB).
+  uint32 max_body_bytes = 2;
+}
+
+// WebhookCounters are a webhook's cumulative refusals.
+message WebhookCounters {
+  // Over the rate.
+  uint64 dropped_rate_limited = 1;
+  // The mailbox was full.
+  uint64 dropped_mailbox_full = 2;
+  // The body was too large.
+  uint64 rejected_too_large = 3;
+  // A delivery id seen within 24 h.
+  uint64 duplicates = 4;
+}
+
+// Webhook is one endpoint.
+message Webhook {
+  // `wh-` and 32 hex digits.
+  string webhook_id = 1;
+  // The mailbox it delivers into.
+  string mailbox = 2;
+  // How it authenticates.
+  WebhookAuth auth = 3;
+  // Effective limits.
+  WebhookLimits limits = 4;
+  // Creation time.
+  google.protobuf.Timestamp created_at = 5;
+  // Refusals so far.
+  WebhookCounters counters = 6;
+  // The ingress path on this relay.
+  string ingress_path = 7;
+}
+
+// CreateWebhookRequest names the mailbox and auth.
+message CreateWebhookRequest {
+  // Target mailbox (at most 16 webhooks each).
+  string mailbox = 1;
+  // How POSTs authenticate.
+  WebhookAuth auth = 2;
+  // Optional lower limits.
+  WebhookLimits limits = 3;
+}
+
+// CreateWebhookResponse carries the secret, shown once.
+message CreateWebhookResponse {
+  // The webhook.
+  Webhook webhook = 1;
+  // The secret (`nfltr_whk_`...).
+  string secret = 2;
+}
+
+// ListWebhooksRequest filters by mailbox.
+message ListWebhooksRequest {
+  // Mailbox name, or "" for all.
+  string mailbox = 1;
+}
+
+// ListWebhooksResponse is the caller's webhooks, oldest first.
+message ListWebhooksResponse {
+  // Oldest first.
+  repeated Webhook webhooks = 1;
+}
+
+// DeleteWebhookRequest names the webhook.
+message DeleteWebhookRequest {
+  // The webhook id.
+  string webhook_id = 1;
+}
+
+// DeleteWebhookResponse counts the discarded deliveries.
+message DeleteWebhookResponse {
+  // Unacknowledged deliveries removed with it.
+  uint32 discarded = 1;
+}

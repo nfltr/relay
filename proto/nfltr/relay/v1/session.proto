@@ -1,0 +1,60 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+syntax = "proto3";
+
+package nfltr.relay.v1;
+
+option go_package = "github.com/nfltr/relay/proto/nfltr/relay/v1;relayv1";
+
+import "nfltr/relay/v1/error_reason.proto";
+
+// ClientInfo names the client program of a call on the agent wire. Each
+// field is at most 64 bytes of [A-Za-z0-9._+()-]; the relay reads anything
+// else as "invalid".
+message ClientInfo {
+  // Program name: "nfltr", or the executable of an SDK user.
+  string name = 1;
+  // Program version (release or main module version).
+  string version = 2;
+  // VCS revision of the build.
+  string build = 3;
+}
+
+// Hello opens every call on the agent wire (rpcserver.Dispatcher). The client
+// sends it as the binary request metadata "nfltr-hello-bin" (credentials stay
+// in their own metadata). The relay refuses a call without it, or with a
+// protocol_version it does not speak, with ERROR_REASON_PROTOCOL_UNSUPPORTED:
+// a client older than protocol v1 is told to update.
+message Hello {
+  // The agent-wire protocol the client speaks: 1.
+  uint32 protocol_version = 1;
+  // The client program.
+  ClientInfo client = 2;
+}
+
+// Welcome answers Hello: the relay sends it as the binary response header
+// "nfltr-welcome-bin" on every call it accepts. A client that receives a
+// reply without it is talking to a relay older than protocol v1 and fails
+// closed.
+message Welcome {
+  // The agent-wire protocol the relay uses on this call: 1.
+  uint32 protocol_version = 1;
+  // The relay's release version.
+  string relay_version = 2;
+}
+
+// SessionAnswer is what the opener of a TCP session reads first from the
+// far side when its open asked for an answer (pb.TCPData.answer) on a leg
+// that answers in band (no link.FeatureChain: the frame streams, peers
+// released before it), framed as a 2-byte big-endian length and this
+// message (dataplane.WriteAnswer).
+// The agent answers once it has connected to the session's target (reason
+// UNSPECIFIED; the session's bytes follow) or refuses it; the relay answers
+// only its own refusals. A refused session ends after its answer.
+message SessionAnswer {
+  // UNSPECIFIED: the session is open; any other value: why it is not.
+  ErrorReason reason = 1;
+  // Human-readable detail of a refusal, at most 512 bytes; never branched on.
+  string message = 2;
+}

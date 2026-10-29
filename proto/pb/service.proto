@@ -1,0 +1,249 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+// service.proto defines the gRPC contract between the RPC server (dispatcher)
+// and on-premise agents.  Two communication patterns are supported:
+//
+//   - HTTP proxying  — ConnectHTTP bidi stream.
+//   - gRPC tunneling — AgentTunnel / RelayTunnel bidi streams.
+syntax = "proto3";
+
+package rpcserver;
+
+option go_package = "github.com/nfltr/relay/proto/pb;pb";
+
+// ---------------------------------------------------------------------------
+// Shared types
+// ---------------------------------------------------------------------------
+
+// HeaderValueList holds one or more values for a single HTTP header name,
+// mirroring Go's http.Header (map[string][]string).
+message HeaderValueList {
+  repeated string header_values = 1;
+}
+
+// Timestamps records Unix-epoch nanosecond timestamps at each hop of a
+// request/response round trip for latency diagnostics.
+message Timestamps {
+  int64 request_at_http_server  = 1; // HTTP proxy received the request.
+  int64 request_at_grpc_server  = 2; // gRPC dispatcher forwarded to agent.
+  int64 request_at_agent        = 3; // Agent received the request.
+  int64 response_at_agent       = 4; // Agent started sending the response.
+  int64 response_at_grpc_server = 5; // gRPC dispatcher received the response.
+  int64 response_at_http_server = 6; // HTTP proxy wrote the response.
+}
+
+// RoutingInfo carries routing and control information shared by both the HTTP
+// proxy path and the gRPC tunnel path.
+message RoutingInfo {
+  // agent_id is the On-Prem Host ID of the source agent.
+  string agent_id = 1;
+  // target_agent_id is the destination agent for agent-to-agent (A2A) calls.
+  // Empty for normal cloud→agent requests.
+  string target_agent_id = 2;
+  // deadline_ms is the absolute Unix-epoch deadline (milliseconds).
+  // The proxy enforces this as a context timeout for A2A transactions.
+  int64 deadline_ms = 3;
+  // initial_metadata carries key-value pairs analogous to gRPC response
+  // headers that the target agent sends before the first response body.
+  map<string, string> initial_metadata = 4;
+}
+
+// ---------------------------------------------------------------------------
+// HTTP proxying  (ConnectHTTP)
+// ---------------------------------------------------------------------------
+
+// HTTPRequest is a proxied HTTP request the agent must forward to a local
+// service.
+message HTTPRequest {
+  string method                         = 1; // HTTP verb (GET, POST, …).
+  string url                            = 2; // Original URL with path + query.
+  map<string, HeaderValueList> headers  = 3;
+  bytes  payload                        = 4; // Raw request body (may be empty).
+  string transaction_id                 = 5; // Correlates request ↔ response.
+  int64  deadline                       = 6; // Epoch ms; 504 after expiry.
+}
+
+// HTTPResponse is the agent's reply to a proxied HTTPRequest.
+message HTTPResponse {
+  string transaction_id                 = 1; // Must match the request.
+  map<string, HeaderValueList> headers  = 2;
+  bytes  payload                        = 3; // Raw response body.
+  int64  deadline                       = 4; // Echoed from the request.
+  int32  status_code                    = 5; // HTTP status (e.g. 200, 502).
+}
+
+// HTTPProxyResponse — agent → server on the ConnectHTTP stream.
+// Named for what it carries (the agent's HTTP response), not the stream
+// direction.
+message HTTPProxyResponse {
+  HTTPResponse response   = 1;
+  Timestamps   timestamps = 2;
+  RoutingInfo  routing    = 3;
+  // A move step from the agent (MOVE_CONNECTED), on a frame without response.
+  Move         move       = 4;
+}
+
+// HTTPProxyRequest — server → agent on the ConnectHTTP stream.
+// Named for what it carries (the proxied HTTP request), not the stream
+// direction.
+message HTTPProxyRequest {
+  HTTPRequest request    = 1;
+  Timestamps  timestamps = 2;
+  RoutingInfo routing    = 3;
+  // A move step from the relay (MOVE_RECONNECT, MOVE_DONE), on a frame
+  // without request.
+  Move        move       = 4;
+}
+
+// Move is the make-before-break move of an agent off a relay replica that is
+// leaving (a rolling restart), on the ConnectHTTP stream. An agent that can
+// move says so at connect (metadata x-agent-move, proto/wire/agentwire);
+// the relay sends the steps only to such an agent. A frame carrying a step
+// has no request or response, so a peer that predates it reads it as a
+// heartbeat.
+//
+//   relay -> agent  MOVE_RECONNECT  this replica is leaving: connect again
+//                                   (the new connection reaches another
+//                                   replica) and keep serving this stream
+//   agent -> relay  MOVE_CONNECTED  the new connection is up: route no new
+//                                   request to this stream
+//   relay -> agent  MOVE_DONE       no new request follows on this stream:
+//                                   close it once the requests already
+//                                   received are answered
+//
+// A relay that sees no MOVE_CONNECTED lets the agent go as it does any
+// other (the agent redials).
+enum Move {
+  MOVE_UNSPECIFIED = 0;
+  MOVE_RECONNECT   = 1;
+  MOVE_CONNECTED   = 2;
+  MOVE_DONE        = 3;
+}
+
+// ---------------------------------------------------------------------------
+// gRPC tunneling  (AgentTunnel / RelayTunnel)
+// ---------------------------------------------------------------------------
+
+// TunnelFrame is the envelope for the AgentTunnel and RelayTunnel RPCs.
+// It carries a single gRPC message payload together with routing and control
+// fields — all at the top level with no nested wrapper messages.
+//
+// An empty TunnelFrame (all fields zero) serves as a keepalive heartbeat.
+message TunnelFrame {
+  // --- payload ---
+
+  // payload is the raw proto-serialised gRPC request or response body.
+  bytes  payload      = 1;
+  // message_type is the fully-qualified protobuf type name, or a control
+  // sentinel: "error", "cancel", "a2a-status".
+  string message_type = 2;
+
+  // --- control ---
+
+  // transaction_id uniquely identifies the tunneled RPC session.
+  string      transaction_id = 3;
+  // timestamps tracks hop-by-hop latency for this frame.
+  Timestamps  timestamps     = 4;
+  // routing carries agent_id, target_agent_id, and deadline for this frame.
+  RoutingInfo routing        = 5;
+  // eom (end-of-message) is true on the final frame of a stream.
+  bool        eom            = 6;
+  // status_code is a gRPC status code (google.rpc.Code) on the final
+  // response of an A2A transaction.
+  int32       status_code    = 7;
+  // status_detail is an optional human-readable message for status_code.
+  string      status_detail  = 8;
+}
+
+// ---------------------------------------------------------------------------
+// TCP tunneling  (ConnectTCP)
+// ---------------------------------------------------------------------------
+
+// TCPData is the per-frame envelope for the ConnectTCP bidi stream.
+// Multiple independent TCP connections are multiplexed on a single gRPC
+// stream; each is identified by session_id.
+//
+// Lifecycle of a single TCP session:
+//   1. Server sends open=true  — agent dials target_addr.
+//   2. Both sides exchange data frames (data field non-empty).
+//   3. Either side sends close=true — TCP connection is torn down.
+message TCPData {
+  // session_id uniquely identifies one TCP connection within the stream.
+  string session_id  = 1;
+
+  // agent_id of the target agent (set by server on the open frame).
+  string agent_id       = 2;
+
+  // data is raw TCP payload bytes for this frame (empty on open/close frames).
+  bytes  data        = 3;
+
+  // target_addr is the backend address the agent should dial.
+  // Format: "host:port".  Present only when open=true.
+  // For LAN gateway use: any address reachable from the agent, e.g.
+  //   "192.168.1.42:22"  — SSH to a LAN machine via the gateway agent.
+  string target_addr = 4;
+
+  // open=true signals a new incoming TCP connection on the server side.
+  // The agent must dial target_addr and begin relaying bytes.
+  bool   open        = 5;
+
+  // close=true signals that the TCP connection has terminated.
+  // After sending/receiving close, no more frames are expected for session_id.
+  bool   close       = 6;
+
+  // e2ee=true signals that this session is an E2EE TLS passthrough.
+  // The agent should route incoming bytes to its local TLS listener for
+  // termination instead of dialing target_addr directly.  The server sets
+  // this on the open frame when the connection was routed via the SNI router.
+  bool   e2ee        = 7;
+
+  // half=true with close=true is a half close (shutdown(SHUT_WR)): the
+  // sender sends no more bytes for session_id but still takes the peer's.
+  // The session ends at a close without half from either side; a side that
+  // half-closed after the peer did sends a close without half. A receiver
+  // that does not know the field ends the session at the close, as before.
+  bool   half        = 8;
+
+  // answer=true on an open marks an owner's /connect session, whose opener
+  // waits for the far side's answer: once the agent has connected to the
+  // target, or why it could not. On a link leg that negotiated
+  // link.FeatureChain the answer is link's own (ACCEPT, or ABORT with code
+  // dataplane.AbortCode(reason)); on any other leg (the frame streams, a
+  // peer before FeatureChain) a nfltr.relay.v1.SessionAnswer as the first
+  // bytes it sends (dataplane.WriteAnswer), only from an agent that
+  // announced it does (dataplane.AnswerHeader).
+  bool   answer      = 9;
+
+  // client_addr, on an e2ee open, is the IP address of the visitor whose
+  // connection the relay accepted (the accepted connection's remote
+  // address, never anything the visitor sent). The agent, which ends that
+  // visitor's TLS, gives it to the backend as X-Forwarded-For. Empty from a
+  // relay that does not send it: the agent then sets no X-Forwarded-For.
+  string client_addr = 10;
+}
+
+// ---------------------------------------------------------------------------
+// Dispatcher service
+// ---------------------------------------------------------------------------
+
+// Dispatcher is the core gRPC service that agents connect to.
+service Dispatcher {
+  // ConnectHTTP is the HTTP proxying channel.  The agent opens this bidi
+  // stream on connect and keeps it alive for the connection lifetime.
+  // Multiple transactions are multiplexed, correlated by transaction_id.
+  rpc ConnectHTTP(stream HTTPProxyResponse) returns (stream HTTPProxyRequest) {}
+
+  // AgentTunnel is the agent-initiated gRPC tunnel.  Frames are routed by
+  // target_agent_id in routing info — to another agent (A2A) or processed
+  // locally.
+  rpc AgentTunnel(stream TunnelFrame) returns (stream TunnelFrame) {}
+
+  // ConnectTCP tunnels raw TCP over the gRPC bidi stream.
+  // Multiple independent TCP connections are multiplexed by session_id.
+  // The server sends open=true to establish a session; either side sends
+  // close=true to tear it down.  Used for SSH, RDP, database, and any
+  // non-HTTP protocol.  A single agent can forward to any host:port it can
+  // reach, enabling LAN-wide access via a single gateway agent.
+  rpc ConnectTCP(stream TCPData) returns (stream TCPData) {}
+}
