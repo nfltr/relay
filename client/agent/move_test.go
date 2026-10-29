@@ -134,6 +134,9 @@ func TestAgentMovesMakeBeforeBreak(t *testing.T) {
 	if m, err := recvNonHeartbeat(t, newStream); err != nil || string(m.GetResponse().GetPayload()) != "answered" {
 		t.Fatalf("new stream: got %v %v", m, err)
 	}
+	if r := a.Stats().Reconnects; r.Move != 1 || r.Lost+r.Drain != 0 {
+		t.Fatalf("reconnects %+v, want one move", r)
+	}
 }
 
 // TestAgentStaysWhenMoveFails: when the new connection cannot be made the

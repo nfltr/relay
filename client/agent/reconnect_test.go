@@ -77,6 +77,12 @@ func TestAgentReconnectsSoonAfterRelayRestart(t *testing.T) {
 		if took := waitConnected(t, f, 10*time.Second, "after restart"); took > 2*time.Second {
 			t.Errorf("retries=%d: reconnected %v after the relay came back; want under 2 s", retries, took)
 		}
+		if r := a.Stats().Reconnects; r.Lost+r.Drain+r.Move != 1 {
+			t.Errorf("retries=%d: reconnects %+v, want the one restart", retries, r)
+		}
+		if c := a.Stats().GRPC.Conns; c != 1 {
+			t.Errorf("retries=%d: relay connections %d, want 1", retries, c)
+		}
 		cancel()
 		<-a.Done()
 		stop()

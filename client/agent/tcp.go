@@ -120,6 +120,8 @@ type tcpStreamGrowth struct {
 	// the relay counts it (TCPDispatcher.LinkUp), so the agent answers the
 	// relay's heartbeats whenever the relay cannot see the link.
 	linkConns atomic.Int32
+	// stats is the agent's (Agent.Stats); nil counts nothing.
+	stats *stats
 }
 
 func (g *tcpStreamGrowth) maybeGrow() {
@@ -159,15 +161,6 @@ func (g *tcpStreamGrowth) linkConn(n int32) {
 		g.linkConns.Add(n)
 	}
 }
-
-// linkConnObserver counts a TCP agent link's bound connections.
-type linkConnObserver struct {
-	link.NopObserver
-	g *tcpStreamGrowth
-}
-
-func (o linkConnObserver) ConnUp(link.Identity)          { o.g.linkConn(1) }
-func (o linkConnObserver) ConnDown(link.Identity, error) { o.g.linkConn(-1) }
 
 func (g *tcpStreamGrowth) add(n int32) {
 	if g != nil {
@@ -500,7 +493,7 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 	}
 	growth.open = func() {
 		if data && dial.Data != nil && !noData.Load() {
-			err := serveDataConn(extraCtx, dial, token, serve)
+			err := serveDataConn(extraCtx, dial, token, serve, growth.st())
 			if err == nil {
 				return
 			}
@@ -774,7 +767,10 @@ func (t *tcpTunnel) streamCredit(stream tcpStream) *link.Credit {
 	if err != nil {
 		return nil
 	}
-	return link.NewCredit(tcpDataWindow, w, func(sid string, n int) { _ = t.enqueue(dataplane.WindowFrame(sid, n)) })
+	cr := link.NewCredit(tcpDataWindow, w, func(sid string, n int) { _ = t.enqueue(dataplane.WindowFrame(sid, n)) })
+	st := t.growth.st()
+	cr.SetObserver(st.observer(ObserveGRPC, st.grpcC(), nil, true))
+	return cr
 }
 
 // RunTCPTunnel opens a raw TCP sidecar stream for commands that already manage

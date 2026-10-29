@@ -240,6 +240,7 @@ func (a *agent) runWithReconnect(
 		if mv != nil {
 			growth = mv.tcp
 		}
+		growth.stats = a.stats
 		targets, e2ee, needed := a.tunnelTargets(acc.tunnel)
 		tcpCtx, tcpStreamCtx, cycleCtx, endTCP := drainContexts(ctx, streamCtx, a.cfg.Drain)
 		cycleClient := client // this cycle's: a move reassigns client while this cycle's TCP tunnel starts
@@ -305,6 +306,7 @@ func (a *agent) runWithReconnect(
 			select {
 			case streamErr = <-cycle:
 			case <-mv.reconnect:
+				a.stats.move.Add(1)
 				// Make before break: the new connection first, then the
 				// old one is told and closes once it has no request left.
 				nconn, nclient, nstream, nstreamCtx, nrelease, err := a.moveConnect(ctx)
@@ -365,6 +367,11 @@ func (a *agent) runWithReconnect(
 		// restarts is back within about a second, so the first redials are
 		// short, then they back off to maxReconnectBackoff.
 		graceful := streamErr == nil || isGracefulStopError(streamErr)
+		if graceful {
+			a.stats.drain.Add(1)
+		} else {
+			a.stats.lost.Add(1)
+		}
 		switch {
 		case streamErr == nil:
 			a.logger.Info("stream closed cleanly by server, reconnecting fast")
@@ -406,6 +413,7 @@ func (a *agent) runWithReconnect(
 				return
 			}
 			// Redial; never run a cycle on the failed attempt's nil stream.
+			a.stats.dialError.Add(1)
 			graceful, streamErr = false, reconnErr
 		}
 		a.logger.Info("reconnected successfully", "server", a.cfg.ServerAddr)

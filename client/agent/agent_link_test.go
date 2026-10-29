@@ -291,7 +291,8 @@ func TestAgentLinkSessions(t *testing.T) {
 			offer := dataplane.AgentLinkOffer{TCP: true, QUIC: true, QUICPort: r.udpAddr.Port}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			ls := &linkSessions{ctx: ctx, targets: sessionTargets{forwardAddr: echo, http: h}, logger: slog.Default()}
+			st := &stats{}
+			ls := &linkSessions{ctx: ctx, targets: sessionTargets{forwardAddr: echo, http: h}, logger: slog.Default(), growth: &tcpStreamGrowth{stats: st}}
 			served := make(chan bool, 1)
 			go func() { served <- runAgentLink(ctx, r.dialer(transport), testLinkToken, offer, ls, slog.Default()) }()
 			node := r.won(t)
@@ -337,6 +338,19 @@ func TestAgentLinkSessions(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("runAgentLink did not return after its primary ended")
 			}
+			// Stats: the transport that bound counted both sessions; QUIC
+			// its bytes too, kept after its Node ended.
+			got := st.snapshot(0)
+			bound := got.TCP
+			if node == r.quic {
+				bound = got.QUIC
+				if bound.BytesIn == 0 || bound.BytesOut == 0 {
+					t.Errorf("QUIC bytes %+v", bound)
+				}
+			}
+			if bound.SessionsOpened < 2 {
+				t.Errorf("sessions counted %+v", got)
+			}
 		})
 	}
 }
@@ -355,7 +369,8 @@ func TestAgentLinkUDPBlocked(t *testing.T) {
 	t.Cleanup(func() { udpFailures.Delete(key) })
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ls := &linkSessions{ctx: ctx, targets: sessionTargets{forwardAddr: echoServer(t)}, logger: slog.Default()}
+	st := &stats{}
+	ls := &linkSessions{ctx: ctx, targets: sessionTargets{forwardAddr: echoServer(t)}, logger: slog.Default(), growth: &tcpStreamGrowth{stats: st}}
 	start := time.Now()
 	go runAgentLink(ctx, r.dialer(TransportAuto), testLinkToken, offer, ls, slog.Default())
 	s := r.open(t, r.tcp, &pb.TCPData{TargetAddr: "x:1"})
@@ -376,6 +391,9 @@ func TestAgentLinkUDPBlocked(t *testing.T) {
 	}
 	if q, tc := r.dialer(TransportAuto).linkPlan(offer); !q || !tc {
 		t.Fatalf("plan %v %v", q, tc)
+	}
+	if f := st.snapshot(0).Fallbacks; f.QUICToTCP != 1 {
+		t.Errorf("fallbacks %+v, want one QUIC to TCP", f)
 	}
 }
 

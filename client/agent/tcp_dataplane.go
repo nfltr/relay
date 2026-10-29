@@ -59,7 +59,8 @@ const dataHelloTimeout = 10 * time.Second
 // serveDataConn opens a data connection with dial.Data, binds it to the primary stream with token and serves it
 // until it ends or ctx (the primary's) is done. It fails when the
 // connection or the binding fails.
-func serveDataConn(ctx context.Context, dial RelayDialer, token string, serve func(tcpStream) error) error {
+// st, when set, counts it (Stats.DataConn).
+func serveDataConn(ctx context.Context, dial RelayDialer, token string, serve func(tcpStream) error, st *stats) error {
 	dctx, cancel := context.WithTimeout(ctx, dataHelloTimeout)
 	defer cancel()
 	nc, err := dial.Data(dctx)
@@ -69,11 +70,16 @@ func serveDataConn(ctx context.Context, dial RelayDialer, token string, serve fu
 	defer nc.Close() //nolint:errcheck
 	dc, err := dataplane.Dial(dctx, nc, token, link.Config{
 		Window: tcpDataWindow, MaxSessions: tcpDataMaxSessions, Liveness: dial.Liveness,
+		Observer: st.observer(ObserveDataConn, nil, nil, false),
 	})
 	if err != nil {
 		return err
 	}
 	defer dc.Close() //nolint:errcheck
+	tc := st.dataConnC()
+	tc.conn(1)
+	defer tc.conn(-1)
+	defer tc.track(dc.Stats)()
 	stop := context.AfterFunc(ctx, func() { _ = dc.Close() })
 	defer stop()
 	_ = serve(dc)

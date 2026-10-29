@@ -303,6 +303,10 @@ type Agent interface {
 	// RotateE2EECertFromFiles loads a new E2EE TLS certificate from PEM
 	// files and notifies the server.  Returns the new fingerprint.
 	RotateE2EECertFromFiles(certFile, keyFile string) (string, error)
+
+	// Stats returns the agent's counters (Stats): read when called, for
+	// a metrics collector at scrape time.
+	Stats() Stats
 }
 
 // New creates a new Agent from the given Config and options.
@@ -326,6 +330,7 @@ func New(cfg Config, opts ...Option) Agent {
 		logger:       logger.With("agent_id", cfg.AgentID),
 		moveRetryFor: moveRetryFor,
 		done:         make(chan struct{}),
+		stats:        &stats{},
 	}
 	for _, opt := range opts {
 		opt(a)
@@ -384,6 +389,7 @@ type agent struct {
 	metadata  []string                          // WithMetadata
 	connected func(Connection) (*Tunnel, error) // WithConnected
 	live      atomic.Int32                      // accepted connections not yet ended (Connected)
+	stats     *stats                            // Stats
 
 	errMu sync.Mutex
 	err   error // why the agent stopped (Err)
@@ -409,6 +415,7 @@ type agent struct {
 func (a *agent) AgentID() string       { return a.cfg.AgentID }
 func (a *agent) Done() <-chan struct{} { return a.done }
 func (a *agent) Connected() bool       { return a.live.Load() > 0 }
+func (a *agent) Stats() Stats          { return a.stats.snapshot(int64(a.live.Load())) }
 
 func (a *agent) Err() error {
 	a.errMu.Lock()

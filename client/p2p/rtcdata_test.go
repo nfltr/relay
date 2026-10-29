@@ -68,6 +68,7 @@ func testBlob(t *testing.T, size int) string {
 
 type transferResult struct {
 	sendPath, recvPath string
+	sendRace           []RaceEntry
 	sendPair, recvPair string // the selected candidate pair, for failures
 	sendErr, recvErr   error
 	outDir             string
@@ -210,6 +211,7 @@ func transfer(t *testing.T, src string, mode xferMode, duringSend func(conn *Dat
 	}
 	res.sendPath = dp.Path
 	res.sendPair = pairDesc(dp)
+	res.sendRace = dp.Race
 	var progress ProgressFunc
 	if duringSend != nil {
 		progress = func(sent, _ int64) { duringSend(dp, sent) }
@@ -258,7 +260,22 @@ func TestFileOverDataChannel(t *testing.T) {
 	if r.sendPath != PathHost || r.recvPath != PathHost {
 		t.Fatalf("paths %q/%q, want %q (pairs: send %s; recv %s)", r.sendPath, r.recvPath, PathHost, r.sendPair, r.recvPair)
 	}
+	assertRace(t, r.sendRace, RaceWebRTC+"="+RaceWon, PathRelay+"="+RaceLate)
 	assertSameFile(t, src, filepath.Join(r.outDir, "blob.bin"))
+}
+
+// assertRace checks a sender's race, path=outcome per entry in order,
+// each with a time.
+func assertRace(t *testing.T, got []RaceEntry, want ...string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("race %+v, want %v", got, want)
+	}
+	for i, e := range got {
+		if e.Path+"="+e.Outcome != want[i] || e.After <= 0 {
+			t.Fatalf("race %+v, want %v with times", got, want)
+		}
+	}
 }
 
 func TestDirOverDataChannel(t *testing.T) {
@@ -321,6 +338,9 @@ func TestFileFallsBackToRelayWhenICEFindsNoPath(t *testing.T) {
 	if r.sendPath != PathRelay || r.recvPath != PathRelay {
 		t.Fatalf("paths %q/%q, want relay", r.sendPath, r.recvPath)
 	}
+	if len(r.sendRace) != 2 || r.sendRace[1].Outcome != RaceWon || r.sendRace[0].Outcome == RaceWon {
+		t.Fatalf("race %+v, want the relay won", r.sendRace)
+	}
 	assertSameFile(t, src, filepath.Join(r.outDir, "blob.bin"))
 }
 
@@ -334,6 +354,9 @@ func TestFileOverDirectTCPWhenItIsReadyFirst(t *testing.T) {
 	}
 	if r.sendPath != PathTCP || r.recvPath != PathTCP {
 		t.Fatalf("paths %q/%q, want %q", r.sendPath, r.recvPath, PathTCP)
+	}
+	if len(r.sendRace) != 3 || r.sendRace[0].Path != PathTCP || r.sendRace[0].Outcome != RaceWon {
+		t.Fatalf("race %+v, want TCP won", r.sendRace)
 	}
 	assertSameFile(t, src, filepath.Join(r.outDir, "blob.bin"))
 }
@@ -368,6 +391,9 @@ func TestFileForceRelay(t *testing.T) {
 	r := transfer(t, src, forceRelay, nil)
 	if r.sendErr != nil || r.recvErr != nil || r.sendPath != PathRelay || r.recvPath != PathRelay {
 		t.Fatalf("send: %v, recv: %v, paths %q/%q", r.sendErr, r.recvErr, r.sendPath, r.recvPath)
+	}
+	if r.sendRace != nil {
+		t.Fatalf("race %+v with force relay", r.sendRace)
 	}
 	assertSameFile(t, src, filepath.Join(r.outDir, "blob.bin"))
 }

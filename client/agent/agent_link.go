@@ -173,7 +173,7 @@ func dialAgentLink(ctx context.Context, dial RelayDialer, token string, offer da
 			Auth: dataplane.BindToken(token),
 		},
 		Pool:     link.PoolConfig{Min: 1, Backoff: linkBackoff},
-		Observer: func(string) link.Observer { return linkConnObserver{g: g} },
+		Observer: func(string) link.Observer { return g.st().observer(ObserveTCP, g.st().tcpC(), g, true) },
 	})
 	if err == nil {
 		l.quicNode, err = quiclink.New(quiclink.Config{
@@ -188,8 +188,14 @@ func dialAgentLink(ctx context.Context, dial RelayDialer, token string, offer da
 		transport, err = l.connect(ctx, quicOK, tcpOK)
 	}
 	if err != nil {
+		if st := g.st(); st != nil {
+			st.linkToGRPC.Add(1)
+		}
 		logger.Info("agent link unavailable; sessions stay on the gRPC streams", "error", err)
 		return nil, nil
+	}
+	if st := g.st(); st != nil && quicOK && transport == TransportTCP {
+		st.quicToTCP.Add(1)
 	}
 	logger.Info("agent link connected", "transport", transport)
 	if transport == TransportQUIC {
@@ -201,6 +207,9 @@ func dialAgentLink(ctx context.Context, dial RelayDialer, token string, offer da
 // serve serves node's sessions with accept until it is drained, then closes a
 // first connection its Node never took.
 func (l *agentLink) serve(node peerlink.Link, accept func(string, []byte, peerlink.Session)) {
+	if node == peerlink.Link(l.quicNode) {
+		defer l.growth.st().quicC().track(l.quicNode.Stats)()
+	}
 	_ = node.Serve(accept)
 	if nc := l.preTCP.Swap(nil); nc != nil {
 		_ = (*nc).Close()
@@ -668,6 +677,10 @@ func (l *agentLink) dialQUICNode(ctx context.Context, _ string, qc *quic.Config)
 	// ponytail: counted from the hello sent, not the relay's answer: a
 	// connection another replica refuses counts for its round trip.
 	l.growth.linkConn(1)
-	context.AfterFunc(q.Context(), func() { l.growth.linkConn(-1) })
+	l.growth.st().quicC().conn(1)
+	context.AfterFunc(q.Context(), func() {
+		l.growth.linkConn(-1)
+		l.growth.st().quicC().conn(-1)
+	})
 	return q, nil
 }

@@ -25,6 +25,7 @@ var ErrHandshakeFailed = errors.New("WireGuard handshake failed; check that --e2
 type PeerStatus struct {
 	LastHandshake time.Time // zero until a handshake completed
 	RxBytes       uint64    // every message received, handshake messages included
+	TxBytes       uint64    // every message sent, handshake messages included
 }
 
 // handshakePoll is how often AwaitHandshake looks.
@@ -88,9 +89,18 @@ func peerStatus(dev *device.Device, publicKey string) (PeerStatus, error) {
 	if err != nil {
 		return PeerStatus{}, fmt.Errorf("wg: read device: %w", err)
 	}
-	var st PeerStatus
+	st, found := parsePeerStatus(dump, peerHex)
+	if !found {
+		return PeerStatus{}, fmt.Errorf("wg: no peer %s", publicKey)
+	}
+	return st, nil
+}
+
+// parsePeerStatus reads the peer peerHex's status from a UAPI dump; found
+// is false when the dump has no such peer.
+func parsePeerStatus(dump, peerHex string) (st PeerStatus, found bool) {
 	var sec, nsec int64
-	found, inPeer := false, false
+	inPeer := false
 	for line := range strings.SplitSeq(dump, "\n") {
 		key, value, _ := strings.Cut(line, "=")
 		if key == "public_key" {
@@ -108,13 +118,12 @@ func peerStatus(dev *device.Device, publicKey string) (PeerStatus, error) {
 			nsec, _ = strconv.ParseInt(value, 10, 64)
 		case "rx_bytes":
 			st.RxBytes, _ = strconv.ParseUint(value, 10, 64)
+		case "tx_bytes":
+			st.TxBytes, _ = strconv.ParseUint(value, 10, 64)
 		}
-	}
-	if !found {
-		return PeerStatus{}, fmt.Errorf("wg: no peer %s", publicKey)
 	}
 	if sec != 0 || nsec != 0 {
 		st.LastHandshake = time.Unix(sec, nsec)
 	}
-	return st, nil
+	return st, found
 }

@@ -62,7 +62,31 @@ type DataPath struct {
 	Conn net.Conn
 	Path string // PathHost, PathSrflx, PathTURN or PathRelay
 	Pair string // selected ICE candidate pair ("srflx -> prflx"); empty on the relay
+	// Race is the sender's race, one entry per path it raced (the
+	// direct TCP channel when offered, the data channel, the relay),
+	// in that order; nil on the receiver, which follows the choice, and
+	// with forceRelay.
+	Race []RaceEntry
 }
+
+// RaceEntry is one path's part in the sender's race (DataPath.Race).
+type RaceEntry struct {
+	Path    string        // PathTCP, RaceWebRTC or PathRelay
+	Outcome string        // RaceWon, RaceLost, RaceFailed or RaceLate
+	After   time.Duration // since the race began: when the path was ready or failed, else when the choice was made
+}
+
+// RaceWebRTC is the data channel's RaceEntry.Path, whichever ICE path
+// (DataPath.Path) it took.
+const RaceWebRTC = "webrtc"
+
+// Race outcomes (RaceEntry.Outcome).
+const (
+	RaceWon    = "won"    // the path chosen
+	RaceLost   = "lost"   // ready, another chosen
+	RaceFailed = "failed" // failed before the choice
+	RaceLate   = "late"   // not ready when the choice was made
+)
 
 // rtcSignal is a FrameRTC's Text on a file transfer's SignalConn.
 type rtcSignal struct {
@@ -122,7 +146,12 @@ func openDataPath(ctx context.Context, sc *SignalConn, mux *RelayMux, ice ICECon
 	}
 	go s.signalLoop()
 	if initiator {
-		return s.choose(ctx, relay)
+		start := time.Now()
+		dp, err := s.choose(ctx, relay)
+		if dp != nil {
+			dp.Race = race(dp.Path, tcp != nil, s.tcpReady, s.rtcReady, s.rtcFailed, time.Since(start))
+		}
+		return dp, err
 	}
 	return s.follow(ctx, relay)
 }
@@ -144,6 +173,35 @@ type rtcSession struct {
 	sigDone  chan struct{}
 
 	tcp *tcpRace // nil when not racing the direct TCP channel
+
+	// The sender's race (choose): when each path was ready or failed,
+	// since the race began; zero for not.
+	tcpReady, rtcReady, rtcFailed time.Duration
+}
+
+// race is the sender's DataPath.Race: chosen is the path taken, tcp
+// whether the direct TCP channel raced, took the race's time.
+func race(chosen string, tcp bool, tcpReady, rtcReady, rtcFailed, took time.Duration) []RaceEntry {
+	entry := func(path string, won bool, ready, failed time.Duration) RaceEntry {
+		switch {
+		case won && ready > 0:
+			return RaceEntry{Path: path, Outcome: RaceWon, After: ready}
+		case won: // the relay: taken when the choice was made
+			return RaceEntry{Path: path, Outcome: RaceWon, After: took}
+		case ready > 0:
+			return RaceEntry{Path: path, Outcome: RaceLost, After: ready}
+		case failed > 0:
+			return RaceEntry{Path: path, Outcome: RaceFailed, After: failed}
+		}
+		return RaceEntry{Path: path, Outcome: RaceLate, After: took}
+	}
+	var out []RaceEntry
+	if tcp {
+		out = append(out, entry(PathTCP, chosen == PathTCP, tcpReady, 0))
+	}
+	onRTC := chosen != PathTCP && chosen != PathRelay
+	out = append(out, entry(RaceWebRTC, onRTC, rtcReady, rtcFailed))
+	return append(out, entry(PathRelay, chosen == PathRelay, 0, 0))
 }
 
 // rtcNetworkTypes are the kinds of ICE candidate gathered. A test that
@@ -322,12 +380,16 @@ func (s *rtcSession) applyRTC(m rtcSignal) error {
 func (s *rtcSession) choose(ctx context.Context, relay *DataPath) (*DataPath, error) {
 	timer := time.NewTimer(RTCWait)
 	defer timer.Stop()
+	start := time.Now()
 	select {
 	case c := <-s.tcpFirst():
+		s.tcpReady = time.Since(start)
 		return s.chooseTCP(c)
 	case rwc := <-s.opened:
+		s.rtcReady = time.Since(start)
 		select { // both ready: TCP is the faster of the two
 		case c := <-s.tcpFirst():
+			s.tcpReady = s.rtcReady
 			_ = rwc.Close()
 			return s.chooseTCP(c)
 		default:
@@ -340,6 +402,7 @@ func (s *rtcSession) choose(ctx context.Context, relay *DataPath) (*DataPath, er
 		}
 		return s.dcPath(rwc), nil
 	case <-s.failed:
+		s.rtcFailed = time.Since(start)
 	case <-timer.C:
 	case <-ctx.Done():
 		s.closePC()
