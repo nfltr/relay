@@ -77,11 +77,13 @@ func TestAgentReconnectsSoonAfterRelayRestart(t *testing.T) {
 		if took := waitConnected(t, f, 10*time.Second, "after restart"); took > 2*time.Second {
 			t.Errorf("retries=%d: reconnected %v after the relay came back; want under 2 s", retries, took)
 		}
-		if r := a.Stats().Reconnects; r.Lost+r.Drain+r.Move != 1 {
-			t.Errorf("retries=%d: reconnects %+v, want the one restart", retries, r)
+		// The relay sees the stream before the agent has its answer: wait
+		// for the agent's count.
+		for deadline := time.Now().Add(5 * time.Second); a.Stats().GRPC.Conns != 1 && time.Now().Before(deadline); {
+			time.Sleep(10 * time.Millisecond)
 		}
-		if c := a.Stats().GRPC.Conns; c != 1 {
-			t.Errorf("retries=%d: relay connections %d, want 1", retries, c)
+		if st := a.Stats(); st.Reconnects.Lost+st.Reconnects.Drain+st.Reconnects.Move != 1 || st.GRPC.Conns != 1 {
+			t.Errorf("retries=%d: reconnects %+v, relay connections %d: want the one restart, one connection", retries, st.Reconnects, st.GRPC.Conns)
 		}
 		cancel()
 		<-a.Done()
