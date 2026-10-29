@@ -469,10 +469,11 @@ func TestConnect_Loopback(t *testing.T) {
 	}
 
 	session := "test-session-1"
+	sigA, sigB := streamPair() // the signaling stream: A dials, B answers
 	connCh := make(chan net.Conn, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		conn, err := Connect(ctx, lnB, candidatesA, token, session, "responder")
+		conn, err := Connect(ctx, lnB, candidatesA, token, session, "responder", AwaitConn(sigB))
 		if err != nil {
 			errCh <- err
 			return
@@ -480,7 +481,7 @@ func TestConnect_Loopback(t *testing.T) {
 		connCh <- conn
 	}()
 
-	connA, err := Connect(ctx, lnA, candidatesB, token, session, "initiator")
+	connA, err := Connect(ctx, lnA, candidatesB, token, session, "initiator", AnnounceConn(sigA, session))
 	if err != nil {
 		t.Fatalf("Connect A: %v", err)
 	}

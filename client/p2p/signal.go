@@ -6,6 +6,7 @@ package p2p
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 
@@ -26,6 +27,11 @@ const (
 	// SignalConfirm is the initiator's key confirmation, the message after
 	// the answer (E2E.FinishOffer).
 	SignalConfirm SignalType = "confirm"
+	// SignalSelect is the dialing side's choice among the direct
+	// connections that authenticated (Conn: its ConnID), sent after the
+	// answer (AnnounceConn). A peer that predates it never sends it, and its
+	// peer then keeps its own pick.
+	SignalSelect SignalType = "select"
 	// SignalHangup terminates signaling before a direct connection is formed.
 	SignalHangup SignalType = "hangup"
 
@@ -73,6 +79,9 @@ type SignalMsg struct {
 	Meta *Meta `json:"meta,omitempty"`
 	// Error is set in a hangup message to describe the failure reason.
 	Error string `json:"error,omitempty"`
+	// Conn is the ConnID of the direct connection the dialing side keeps
+	// (SignalSelect).
+	Conn string `json:"conn,omitempty"`
 	// Proto is the sender's SignalProto (0 from a CLI that predates it).
 	Proto int `json:"proto,omitempty"`
 }
@@ -148,4 +157,56 @@ func SendRelay(stream rpcclient.ClientStream, sessionID string) error {
 		return fmt.Errorf("p2p: marshal relay: %w", err)
 	}
 	return stream.Send(b)
+}
+
+// ErrPeerRelay is Connect's error, with AwaitConn, when the dialing side
+// sent SignalRelay instead of a connection: the session continues on the
+// server relay (NewServerRelayConn).
+var ErrPeerRelay = errors.New("p2p: peer chose the server relay")
+
+// errNoSelection: the peer sent another signal than SignalSelect.
+var errNoSelection = errors.New("p2p: no connection selection")
+
+// ConnectOption configures Connect.
+type ConnectOption func(*connectConfig)
+
+type connectConfig struct {
+	announce func(connID string) error
+	await    func() (connID string, err error)
+}
+
+// AnnounceConn makes Connect, on the dialing side, send the connection it
+// keeps to the peer on the signaling stream (SignalSelect with Conn).
+func AnnounceConn(stream rpcclient.ClientStream, sessionID string) ConnectOption {
+	return func(c *connectConfig) {
+		c.announce = func(id string) error {
+			b, err := json.Marshal(&SignalMsg{Type: SignalSelect, Session: sessionID, Conn: id})
+			if err != nil {
+				return err
+			}
+			return stream.Send(b)
+		}
+	}
+}
+
+// AwaitConn makes Connect, on the other side, keep the connection the
+// dialing side announced (AnnounceConn), read from the signaling stream.
+// Another signal or the stream's end (a peer that predates SignalSelect)
+// leaves Connect keeping its own pick; SignalRelay makes it return
+// ErrPeerRelay.
+func AwaitConn(stream rpcclient.ServerStream) ConnectOption {
+	return func(c *connectConfig) {
+		c.await = func() (string, error) {
+			msg, err := RecvSignalServer(stream)
+			switch {
+			case err != nil:
+				return "", err
+			case msg.Type == SignalRelay:
+				return "", ErrPeerRelay
+			case msg.Type != SignalSelect || msg.Conn == "":
+				return "", errNoSelection
+			}
+			return msg.Conn, nil
+		}
+	}
 }

@@ -117,9 +117,14 @@ func dialAndAccept(ctx context.Context, ln *net.TCPListener, theirCandidates []s
 // candidates. Both sides run it concurrently with the listener from
 // GatherCandidates, the peer's candidates, the shared secret (E2E.DirectToken) and
 // the session ID (HMAC context); role ("initiator"/"responder") names the
-// side. Several connections can authenticate (several host IPs); both sides
-// keep the one with the highest ConnID, so they agree on the same physical
-// connection. myListener is closed before returning.
+// side. Several connections can authenticate (several host IPs), so the two
+// sides must keep the same one: the dialing side (AnnounceConn) keeps the
+// highest ConnID it saw within a short window of the first and tells the
+// other side (AwaitConn), which keeps exactly that connection. A side given
+// neither option, or whose peer announces nothing (a peer that predates
+// SignalSelect), keeps the highest ConnID it saw within that window, which
+// two loaded peers can pick differently. myListener is closed before
+// returning.
 func Connect(
 	ctx context.Context,
 	myListener *net.TCPListener,
@@ -127,7 +132,12 @@ func Connect(
 	token []byte,
 	sessionID string,
 	_ string,
+	opts ...ConnectOption,
 ) (net.Conn, error) {
+	var cfg connectConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	results := make(chan net.Conn)
@@ -141,44 +151,88 @@ func Connect(
 			}
 		})
 	}()
-
-	// Take the first authenticated connection, then wait a short window for
-	// others and keep the highest ConnID.
-	const collectWindow = 50 * time.Millisecond
-	var best net.Conn
-	var timer <-chan time.Time
-loop:
-	for {
-		select {
-		case c, ok := <-results:
-			if !ok {
-				break loop
-			}
-			if best != nil && ConnID(c) <= ConnID(best) {
-				c.Close() //nolint:errcheck
-				continue
-			}
-			if best != nil {
-				best.Close() //nolint:errcheck
-			}
-			best = c
-			if timer == nil {
-				timer = time.After(collectWindow)
-			}
-		case <-timer:
-			break loop
-		}
-	}
+	conn, err := pick(results, cfg.await)
 	cancel()
 	go func() { // late results
 		for c := range results {
 			c.Close() //nolint:errcheck
 		}
 	}()
-	if best != nil {
-		return best, nil
+	if err == nil && cfg.announce != nil {
+		_ = cfg.announce(ConnID(conn)) // unsent: the peer keeps its own pick
 	}
-	return nil, ErrNoRoute
+	return conn, err
+}
+
+// collectWindow is how long a side without an announced choice waits, after
+// the first authenticated connection, for others before keeping the highest
+// ConnID.
+const collectWindow = 50 * time.Millisecond
+
+// pick returns the connection to keep from results and closes every other
+// one it received. With await (the other side's announced ConnID), it keeps
+// that connection, waiting for it to authenticate here; when await fails
+// without ErrPeerRelay, or names a connection that never arrives, it keeps
+// the highest ConnID seen within collectWindow of the first.
+func pick(results <-chan net.Conn, await func() (string, error)) (net.Conn, error) {
+	type choice struct {
+		id  string
+		err error
+	}
+	var chosen chan choice
+	if await != nil {
+		chosen = make(chan choice, 1)
+		go func() {
+			id, err := await()
+			chosen <- choice{id, err}
+		}()
+	}
+	held := map[string]net.Conn{}
+	keep := func(k net.Conn, err error) (net.Conn, error) {
+		for _, c := range held {
+			if c != k {
+				c.Close() //nolint:errcheck
+			}
+		}
+		return k, err
+	}
+	var best net.Conn
+	var timer <-chan time.Time
+	want, windowOver := "", false
+	for results != nil || chosen != nil {
+		if c, ok := held[want]; ok && want != "" {
+			return keep(c, nil)
+		}
+		if chosen == nil && want == "" && windowOver {
+			break
+		}
+		select {
+		case c, ok := <-results:
+			if !ok {
+				results = nil
+				continue
+			}
+			held[ConnID(c)] = c
+			if best == nil || ConnID(c) > ConnID(best) {
+				best = c
+			}
+			if timer == nil {
+				timer = time.After(collectWindow)
+			}
+		case <-timer:
+			windowOver = true
+		case ch := <-chosen:
+			chosen = nil
+			if errors.Is(ch.err, ErrPeerRelay) {
+				return keep(nil, ErrPeerRelay)
+			}
+			want = ch.id
+		}
+	}
+	if best == nil {
+		return nil, ErrNoRoute
+	}
+	return keep(best, nil)
 }
 
 // handshake performs mutual HMAC-SHA256 authentication over a raw TCP
