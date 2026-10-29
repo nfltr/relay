@@ -82,3 +82,56 @@ func TestAgentReconnectsSoonAfterRelayRestart(t *testing.T) {
 		stop()
 	}
 }
+
+// tcpRelay is a fakeRelay that also holds every ConnectTCP stream open and
+// reports each one on tcp.
+type tcpRelay struct {
+	fakeRelay
+	tcp chan struct{}
+}
+
+func (f *tcpRelay) ConnectTCP(stream grpc.BidiStreamingServer[pb.TCPData, pb.TCPData]) error {
+	f.tcp <- struct{}{}
+	<-stream.Context().Done()
+	return nil
+}
+
+// TestAgentTCPTunnelFollowsReconnect: after a reconnect the TCP tunnel
+// runs on the new connection, not the closed one of the cycle before.
+func TestAgentTCPTunnelFollowsReconnect(t *testing.T) {
+	f := &tcpRelay{fakeRelay{connected: make(chan struct{}, 1000)}, make(chan struct{}, 1000)}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serve := func(ln net.Listener) func() {
+		srv := grpc.NewServer()
+		pb.RegisterDispatcherServer(srv, f)
+		go func() { _ = srv.Serve(ln) }()
+		return srv.Stop
+	}
+	stop := serve(ln)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := New(Config{ServerAddr: ln.Addr().String(), AgentID: "tcp-reconnect", TCPTunnel: true, Logger: slog.New(slog.DiscardHandler)})
+	if err := a.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, what := range []string{"first connection", "after the restart"} {
+		select {
+		case <-f.tcp:
+		case <-time.After(30 * time.Second): // a correctness bound: the stale client never gets one
+			t.Fatalf("%s: no ConnectTCP stream", what)
+		}
+		if what == "first connection" {
+			stop()
+			if ln, err = net.Listen("tcp", ln.Addr().String()); err != nil {
+				t.Fatal(err)
+			}
+			stop = serve(ln)
+		}
+	}
+	cancel()
+	<-a.Done()
+	stop()
+}

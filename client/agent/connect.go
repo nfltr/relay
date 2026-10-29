@@ -242,9 +242,9 @@ func (a *agent) runWithReconnect(
 		}
 		targets, e2ee, needed := a.tunnelTargets(acc.tunnel)
 		tcpCtx, tcpStreamCtx, cycleCtx, endTCP := drainContexts(ctx, streamCtx, a.cfg.Drain)
-		client := client // this cycle's: a move reassigns the outer one while this cycle's TCP tunnel runs
+		cycleClient := client // this cycle's: a move reassigns client while this cycle's TCP tunnel starts
 		auxiliary := func() error {
-			err := runTCPTunnel(tcpCtx, client, a.relayDialer(), tcpStreamCtx, targets, e2ee, a.logger, growth)
+			err := runTCPTunnel(tcpCtx, cycleClient, a.relayDialer(), tcpStreamCtx, targets, e2ee, a.logger, growth)
 			switch {
 			case err == nil:
 				return nil
