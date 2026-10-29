@@ -16,8 +16,6 @@ missing-ssl-minversion client/relaytrust/relaytrusttest/certs.go 59fd818abc7ef29
 no-direct-write-to-responsewriter client/mailboxclient/mailboxtest/server.go 2123a6145e814140  # _, _ = w.Write(data)
 no-io-writestring-to-responsewriter client/p2p/localserver.go c2babef602a3b12b  # _, _ = io.WriteString(w, html)
 potential-dos-via-decompression-bomb client/p2p/transfer.go 50cb9bab1312fdd0  # if _, err := io.Copy(f, tr); err != nil {
-reverseproxy-director client/agent/e2ee_session.go e08cb8f16fc511d8  # Director: func(req *http.Request) {
-shared-url-struct-mutation client/agent/e2ee_session.go 717dccd309a678f3  # req.Host = backend.Host
-shared-url-struct-mutation client/agent/e2ee_session.go f69982963c61ea7f  # req.URL.Scheme, req.URL.Host, req.Host = "http", addr, host
+shared-url-struct-mutation client/agent/e2ee_session.go c34d47b72ee9b89f  # req.URL.Scheme, req.URL.Host, req.Host = "http", addr, backendHost(req, host)
 use-of-sha1 client/p2p/ws.go ba2774768b423e0e  # h := sha1.New()
 use-of-weak-rsa-key client/relaytrust/relaytrusttest/certs.go e7d5b68757efd78c  # weak, err := rsa.GenerateKey(rand.Reader, 1024)

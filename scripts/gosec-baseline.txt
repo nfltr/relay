@@ -5,7 +5,6 @@
 G102 client/p2p/connect.go 55e66725deb47514  # ln, err := net.Listen("tcp4", ":0")
 G104 client/agent/run.go bf160ffe13386785  # resp.Body.Close() //nolint:errcheck
 G104 client/p2p/connect.go 146c332f10fa7e38  # conn.Close() //nolint:errcheck
-G104 client/p2p/connect.go 2470a28eb9153690  # best.Close() //nolint:errcheck
 G104 client/p2p/connect.go b2e475f9146e119a  # conn.Close() //nolint:errcheck // could be an unrelated scanner
 G104 client/p2p/connect.go eae72c5a4fc7dfa7  # c.Close() //nolint:errcheck
 G104 client/p2p/connect.go eae72c5a4fc7dfa7  # c.Close() //nolint:errcheck
