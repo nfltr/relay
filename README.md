@@ -73,6 +73,22 @@ list, classified by gRPC code and typed errors, never by message text; use it
 in your own reconnect loops. Another program on the same account can then call it through the relay
 with `rpcclient`.
 
+To serve an `http.Handler` of the same program instead of a separate
+backend, `agent.Listen` connects the agent and returns a `net.Listener`:
+
+```go
+ln, err := agent.Listen(ctx, agent.Config{
+	ServerAddr: "grpc.nfltr.xyz:443",
+	TLS:        true,
+	AgentID:    "my-service-01",
+	APIKey:     os.Getenv("NFLTR_API_KEY"),
+})
+if err != nil {
+	log.Fatal(err)
+}
+log.Fatal(http.Serve(ln, handler))
+```
+
 ## Compatibility
 
 The protocol is additive within a major version. A relay advertises its
