@@ -7,7 +7,7 @@ require (
 	github.com/nfltr/link v0.10.18
 	github.com/nfltr/link/peerlink/quiclink v0.4.18
 	github.com/nfltr/quic-go v0.63.1-nfltr.2
-	github.com/nfltr/relay/proto v0.19.3
+	github.com/nfltr/relay/proto v0.19.4
 	github.com/pion/logging v0.2.4
 	github.com/pion/stun/v4 v4.0.1
 	github.com/pion/webrtc/v4 v4.2.22
@@ -24,6 +24,7 @@ require (
 	github.com/google/btree v1.1.2 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
+	github.com/kr/text v0.2.0 // indirect
 	github.com/pion/datachannel v1.6.3 // indirect
 	github.com/pion/dtls/v3 v3.1.9 // indirect
 	github.com/pion/ice/v4 v4.4.4 // indirect
@@ -39,8 +40,9 @@ require (
 	github.com/pion/turn/v5 v5.1.2 // indirect
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
-	go.opentelemetry.io/otel v1.45.0 // indirect
-	go.opentelemetry.io/otel/sdk/metric v1.45.0 // indirect
+	go.opentelemetry.io/otel/metric v1.45.0 // indirect
+	go.opentelemetry.io/otel/sdk v1.45.0 // indirect
+	go.opentelemetry.io/otel/trace v1.45.0 // indirect
 	golang.org/x/exp v0.0.0-20250711185948-6ae5c78190dc // indirect
 	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
