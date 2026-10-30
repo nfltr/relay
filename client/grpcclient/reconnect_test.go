@@ -8,12 +8,14 @@ import (
 	"io"
 	"net"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nfltr/relay/client/grpcclient"
 	"github.com/nfltr/relay/proto/wire/agentwire"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 )
@@ -91,6 +93,9 @@ func TestClientConnReachesARelayBackFromAnOutageWithinASecond(t *testing.T) {
 // attempt. Without RedialNow the attempt fell into the channel's own backoff
 // (up to 1 s) and failed at once with the last dial's error, so a tunnel came
 // back up to a second after the relay (relay-agent-scaling decision, round 3).
+// RedialNow waits for the channel's state, not for a time: under load (a
+// starved machine) a handshake slower than a fixed wait failed the attempt
+// with the last dial's error ("connection refused").
 func TestRedialNowReachesARelayThatIsBack(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -105,7 +110,8 @@ func TestRedialNowReachesARelayThatIsBack(t *testing.T) {
 	}
 	defer conn.Close() //nolint:errcheck
 	health := healthpb.NewHealthClient(conn)
-	// Failed attempts until the channel's backoff is at its 1 s maximum.
+	// Failed attempts until the channel's backoff is at its 1 s maximum: the
+	// scenario, not the judgement.
 	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
 		_, _ = health.Check(context.Background(), &healthpb.HealthCheckRequest{})
 	}
@@ -120,9 +126,9 @@ func TestRedialNowReachesARelayThatIsBack(t *testing.T) {
 	defer srv.Stop()
 
 	grpcclient.RedialNow(context.Background(), conn)
-	// The defect is a fail-fast with the last dial's error, not slowness: a
-	// generous deadline keeps a loaded machine's slow handshake from looking
-	// like it.
+	if st := conn.GetState(); st != connectivity.Ready {
+		t.Fatalf("RedialNow returned with the channel %s; want READY: the relay is back", st)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := health.Check(ctx, &healthpb.HealthCheckRequest{}); err != nil {
@@ -132,9 +138,10 @@ func TestRedialNowReachesARelayThatIsBack(t *testing.T) {
 
 // TestRedialNowOutlivesADialInFlight: a reset of the channel's backoff
 // reaches only a backoff in progress. A dial in flight at RedialNow (it
-// started before the relay was back: here one the "relay" accepts and never
-// answers) fails into a fresh backoff of up to 1.2 s, longer than RedialNow
-// waits, and the attempt failed at once with that dial's error.
+// started before the relay was back: here one the "relay" accepts, holds and
+// then drops) fails into a fresh backoff of up to 1.2 s, and the attempt
+// failed at once with that dial's error. RedialNow waits for a dial made
+// after it, however late the held dial fails.
 func TestRedialNowOutlivesADialInFlight(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -150,10 +157,7 @@ func TestRedialNowOutlivesADialInFlight(t *testing.T) {
 	}
 	defer conn.Close() //nolint:errcheck
 	health := healthpb.NewHealthClient(conn)
-	// Failed attempts until the channel's backoff is at its 1 s maximum.
-	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
-		_, _ = health.Check(context.Background(), &healthpb.HealthCheckRequest{})
-	}
+	_, _ = health.Check(context.Background(), &healthpb.HealthCheckRequest{}) // refused: the channel backs off
 
 	// The channel's next dial is accepted and held: a dial in flight.
 	ln, err = net.Listen("tcp", addr)
@@ -171,48 +175,75 @@ func TestRedialNowOutlivesADialInFlight(t *testing.T) {
 	if err != nil {
 		t.Skipf("port %d taken: %v", port, err)
 	}
-	back := &firstAccept{Listener: ln, at: make(chan time.Time, 1)}
 	srv := grpc.NewServer(v1Relay())
 	healthpb.RegisterHealthServer(srv, servingHealth{})
-	go func() { _ = srv.Serve(back) }()
+	go func() { _ = srv.Serve(ln) }()
 	defer srv.Stop()
 
-	// The held dial fails while RedialNow waits, after its reset: the
-	// "relay" half-closes it and sees the client close it (failed).
-	start := time.Now()
-	failed := make(chan time.Time, 1)
+	// The held dial fails once RedialNow has begun: the "relay" half-closes
+	// it and sees the client close it.
+	entered := &enteredCtx{Context: context.Background(), ch: make(chan struct{})}
+	dropped := make(chan struct{})
 	go func() {
-		time.Sleep(300 * time.Millisecond)
+		defer close(dropped)
+		<-entered.ch
 		_ = held.(*net.TCPConn).CloseWrite()
 		_, _ = io.Copy(io.Discard, held)
-		failed <- time.Now()
 	}()
-	grpcclient.RedialNow(context.Background(), conn)
-	returned := time.Now()
+	grpcclient.RedialNow(entered, conn)
+	select {
+	case <-entered.ch:
+	default:
+		t.Fatal("RedialNow returned without using its context: the held dial was never dropped")
+	}
+	<-dropped
+	if st := conn.GetState(); st != connectivity.Ready {
+		t.Fatalf("RedialNow returned with the channel %s; want READY: the relay is back", st)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err = health.Check(ctx, &healthpb.HealthCheckRequest{})
-	if err == nil {
-		return
+	if _, err := health.Check(ctx, &healthpb.HealthCheckRequest{}); err != nil {
+		t.Fatalf("first attempt after RedialNow: %v; want the relay that is back reached", err)
 	}
-	at := <-failed
-	// RedialNow resets the backoff again every 250 ms while it waits; a
-	// held dial whose failure came later than that before RedialNow's end
-	// (a starved test) leaves it nothing to reset.
-	if at.After(returned.Add(-300 * time.Millisecond)) {
-		t.Skipf("the held dial failed %s after RedialNow began and %s before it returned (a starved test): nothing proved", at.Sub(start).Round(time.Millisecond), returned.Sub(at).Round(time.Millisecond))
+}
+
+// TestRedialNowReturnsWhileTheRelayIsDown: a relay still down refuses the
+// dial RedialNow makes, and RedialNow returns then, so its caller's attempt
+// fails with that refusal and the caller paces the next one itself.
+func TestRedialNowReturnsWhileTheRelayIsDown(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	// A lost reset: the channel's next dial waits out its backoff, at least
-	// 800 ms (1 s less its jitter) after the held dial failed. A dial before
-	// that is RedialNow's, too slow for its 1 s on a loaded machine.
-	select {
-	case dialed := <-back.at:
-		if dialed.Sub(at) < 800*time.Millisecond {
-			t.Skipf("first attempt after RedialNow: %v, but its dial reached the relay %s after the held dial failed (the backoff's floor is 800 ms): a loaded machine, nothing proved", err, dialed.Sub(at).Round(time.Millisecond))
-		}
-	case <-time.After(time.Until(at.Add(800 * time.Millisecond))):
+	port := ln.Addr().(*net.TCPAddr).Port
+	_ = ln.Close() // the relay is down
+
+	conn, err := grpcclient.NewClientConn(false, "127.0.0.1", port)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatalf("first attempt after RedialNow: %v; want the relay that is back reached", err)
+	defer conn.Close() //nolint:errcheck
+	health := healthpb.NewHealthClient(conn)
+	_, _ = health.Check(context.Background(), &healthpb.HealthCheckRequest{})
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	grpcclient.RedialNow(ctx, conn)
+	if ctx.Err() != nil {
+		t.Fatal("RedialNow waited out its caller's context on a relay that refuses its dial")
+	}
+}
+
+// enteredCtx closes ch the first time its Done is called: when RedialNow
+// begins to wait.
+type enteredCtx struct {
+	context.Context
+	once sync.Once
+	ch   chan struct{}
+}
+
+func (c *enteredCtx) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.ch) })
+	return c.Context.Done()
 }
 
 // firstAccept records when its listener's first connection arrived.

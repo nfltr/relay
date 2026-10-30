@@ -15,14 +15,14 @@ import (
 )
 
 // relayDialer is the dial option of a connection to the relay at host:port:
-// relayDial, unless an HTTPS proxy from the environment carries it (gRPC
-// dials a proxy only without a dialer of its own).
-func relayDialer(host string, port int) []grpc.DialOption {
+// relayDial counted by w, unless an HTTPS proxy from the environment carries
+// it (gRPC dials a proxy only without a dialer of its own; w then sees none).
+func relayDialer(host string, port int, w *dialWatch) []grpc.DialOption {
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	if p, _ := http.ProxyFromEnvironment(&http.Request{URL: &url.URL{Scheme: "https", Host: addr}}); p != nil {
 		return nil
 	}
-	return []grpc.DialOption{grpc.WithContextDialer(relayDial)}
+	return []grpc.DialOption{grpc.WithContextDialer(w.dial)}
 }
 
 // redialEvery is how often a connect attempt still unanswered starts

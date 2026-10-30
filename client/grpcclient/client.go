@@ -14,7 +14,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
+	"sync"
 	"time"
+	"weak"
 
 	"github.com/nfltr/relay/client/relaytrust"
 	"github.com/nfltr/relay/proto/wire/grpccodec"
@@ -89,7 +92,8 @@ func NewClientConn(secureConn bool, serverAddress string, serverPort int, opts .
 		o(&cfg)
 	}
 
-	dialOpts := append(buildDialOpts(&cfg), relayDialer(serverAddress, serverPort)...)
+	w := &dialWatch{}
+	dialOpts := append(buildDialOpts(&cfg), relayDialer(serverAddress, serverPort, w)...)
 
 	if secureConn {
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(
@@ -104,6 +108,7 @@ func NewClientConn(secureConn bool, serverAddress string, serverPort int, opts .
 	if err != nil {
 		return nil, fmt.Errorf("creating client for target: %s: %w", target, err)
 	}
+	watchDials(conn, w)
 	return conn, nil
 }
 
@@ -147,7 +152,8 @@ func NewMTLSClientConn(serverAddress string, serverPort int, tlsCfg *tls.Config,
 		o(&cfg)
 	}
 
-	dialOpts := append(buildDialOpts(&cfg), relayDialer(serverAddress, serverPort)...)
+	w := &dialWatch{}
+	dialOpts := append(buildDialOpts(&cfg), relayDialer(serverAddress, serverPort, w)...)
 	dialOpts = append(dialOpts, grpc.WithTransportCredentials(tlsbatch.ClientCredentials(credentials.NewTLS(tlsCfg))))
 
 	target := fmt.Sprintf("%s:%d", serverAddress, serverPort)
@@ -155,6 +161,7 @@ func NewMTLSClientConn(serverAddress string, serverPort int, tlsCfg *tls.Config,
 	if err != nil {
 		return nil, fmt.Errorf("creating mTLS client for target: %s: %w", target, err)
 	}
+	watchDials(conn, w)
 	return conn, nil
 }
 
@@ -214,35 +221,124 @@ const maxRecvMessageSize = 8 << 20
 // redials themselves (relayoutage.RedialDelay): call it before the attempt.
 // Without it an attempt made during that backoff fails at once with the last
 // dial's error, so a client lagged a relay that was back by up to a second.
-// The reset takes effect asynchronously, and a channel in TRANSIENT_FAILURE
-// stays there until its new dial is READY (pick_first's sticky failure,
-// gRPC A62): this waits, at most redialSettle, for that, so the attempt sees
-// the new dial. A reset reaches only a backoff in progress: a dial in flight
-// at the reset (started before the relay was back) fails into a fresh
-// backoff of up to 1.2 s, so the reset is repeated every redialRecheck.
-// Guard: TestRedialNowOutlivesADialInFlight.
+//
+// It returns once the channel is READY, or once a dial made after the call
+// failed (the relay is still down: the attempt fails with that dial's
+// error, and the caller paces the next), never on a time alone: a channel in
+// TRANSIENT_FAILURE stays there until a new dial is READY (pick_first's
+// sticky failure, gRPC A62), so an attempt before that fails with the last
+// dial's error, and a fixed wait lost the race to a slow handshake on a
+// loaded machine. A backoff reset reaches only a backoff in progress, not a
+// dial in flight at the call (started before the relay was back, it fails
+// into a fresh backoff of up to 1.2 s): the reset is repeated every
+// redialRecheck until a dial starts after the call.
+// Guards: TestRedialNowOutlivesADialInFlight, TestRedialNowReachesARelayThatIsBack.
 func RedialNow(ctx context.Context, conn *ClientConn) {
-	ctx, cancel := context.WithTimeout(ctx, redialSettle)
+	w := watchOf(conn)
+	bound := redialSettle
+	if w == nil {
+		bound = redialSettleBlind
+	}
+	ctx, cancel := context.WithTimeout(ctx, bound)
 	defer cancel()
+	since := w.snapshot()
 	for {
-		conn.ResetConnectBackoff()
+		st := conn.GetState()
+		if st != connectivity.TransientFailure && st != connectivity.Connecting {
+			return // READY; IDLE or SHUTDOWN: the attempt dials, or fails, itself
+		}
+		now := w.snapshot()
+		if now.failedSince(since) {
+			return // the relay is still down, or does not serve
+		}
+		if now.started == since.started {
+			conn.ResetConnectBackoff()
+		}
 		step, stop := context.WithTimeout(ctx, redialRecheck)
-		changed := conn.WaitForStateChange(step, connectivity.TransientFailure)
+		conn.WaitForStateChange(step, st)
 		stop()
-		if changed || ctx.Err() != nil {
+		if ctx.Err() != nil {
 			return
 		}
 	}
 }
 
-// redialRecheck is the channel's own first backoff: a relay still down is
-// dialled no faster than a new channel dials it.
+// redialRecheck is the channel's own first backoff: how soon a reset that
+// raced a dial in flight is repeated.
 var redialRecheck = relayReconnectParams.Backoff.BaseDelay
 
-// redialSettle covers a dial that reaches the relay: a TCP and TLS handshake
-// and the HTTP/2 preface, two or more round trips (100 ms, the bound before,
-// was shorter than one on a WAN or a loaded machine, so the attempt failed at
-// once with the last dial's error). A relay still down costs the wait; the
-// channel keeps redialling meanwhile and ends it when the relay is back.
-// Guard: TestRedialNowReachesARelayThatIsBack.
-const redialSettle = time.Second
+// redialSettle bounds RedialNow against a channel whose dial neither
+// succeeds nor fails: a dial and its handshake end within the connect
+// timeout (a silent path), after a dial in flight at the call did.
+var redialSettle = 2 * relayReconnectParams.MinConnectTimeout
+
+// redialSettleBlind bounds RedialNow on a channel whose dials it cannot see
+// (an HTTPS proxy's): a relay still down costs the wait.
+const redialSettleBlind = time.Second
+
+// dialWatch counts a channel's dials (relayDial): those started and ended,
+// and the last that connected.
+type dialWatch struct {
+	mu                    sync.Mutex
+	started, ended, okSeq uint64
+}
+
+type dialCounts struct{ started, ended, okSeq uint64 }
+
+func (w *dialWatch) dial(ctx context.Context, addr string) (net.Conn, error) {
+	w.mu.Lock()
+	w.started++
+	seq := w.started
+	w.mu.Unlock()
+	c, err := relayDial(ctx, addr)
+	w.mu.Lock()
+	w.ended++
+	if err == nil && seq > w.okSeq {
+		w.okSeq = seq
+	}
+	w.mu.Unlock()
+	return c, err
+}
+
+// failedSince reports whether a dial started after since failed: every
+// one of them ended without connecting, or one connected and the channel
+// dialled again after it (its handshake failed).
+// ponytail: with several addresses (localhost: ::1 and 127.0.0.1) a dial
+// of one may end this while another's is still to come; the caller's next
+// attempt reaches it.
+func (c dialCounts) failedSince(since dialCounts) bool {
+	if c.started == since.started {
+		return false
+	}
+	if c.okSeq <= since.started {
+		return c.ended == c.started
+	}
+	return c.started > c.okSeq
+}
+
+// snapshot is w's counts; zero for nil.
+func (w *dialWatch) snapshot() dialCounts {
+	if w == nil {
+		return dialCounts{}
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return dialCounts{w.started, w.ended, w.okSeq}
+}
+
+// dialWatches maps a channel to its dialWatch (ClientConn is grpc's own
+// type): weakly, so a channel dropped by its owner is collected and its
+// entry removed.
+var dialWatches sync.Map // weak.Pointer[grpc.ClientConn] -> *dialWatch
+
+func watchDials(conn *grpc.ClientConn, w *dialWatch) {
+	k := weak.Make(conn)
+	dialWatches.Store(k, w)
+	runtime.AddCleanup(conn, func(k weak.Pointer[grpc.ClientConn]) { dialWatches.Delete(k) }, k)
+}
+
+func watchOf(conn *grpc.ClientConn) *dialWatch {
+	w, _ := dialWatches.Load(weak.Make(conn))
+	d, _ := w.(*dialWatch)
+	return d
+}
