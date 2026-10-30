@@ -138,7 +138,20 @@ func TestA2AE2EE0RTTRoundTrip(t *testing.T) {
 			const latency = 100 * time.Millisecond // one way: a round trip is 200 ms
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			// While hold is set, the relay passes on nothing of the caller's
+			// after the first flight until the call has its reply: a call
+			// that needs a second flight to the peer never completes.
+			var hold atomic.Pointer[chan struct{}]
 			relay := &testRelay{latency: latency}
+			relay.rewrite = func(fromA bool, f *pb.TunnelFrame) *pb.TunnelFrame {
+				if replied := hold.Load(); fromA && replied != nil && f.GetMessageType() != a2aE2EEInit0RTTMessageType {
+					select {
+					case <-*replied:
+					case <-ctx.Done():
+					}
+				}
+				return f
+			}
 			caller, target, ran := echoPair(t, ctx, pairedAgent("zr-hub", tc.key), pairedAgent("zr-node", tc.key), relay)
 
 			t0 := time.Now()
@@ -147,27 +160,35 @@ func TestA2AE2EE0RTTRoundTrip(t *testing.T) {
 			if err != nil || string(got) != "echo:SECRET-BRIEF" {
 				t.Fatalf("interactive Invoke = %q, %v", got, err)
 			}
+			// The handshake first, then the request and its end.
+			const interactiveFrames = 3
+			if types := frameTypes(relay.awaitSentByA(ctx, t, interactiveFrames)); strings.Join(types, ",") != a2aE2EEInitMessageType+",a2a-request,a2a-request" {
+				t.Fatalf("interactive call sent %v", types)
+			}
 
 			learn(t, target, tc.key)
-			n := len(relay.sentByA())
+			replied := make(chan struct{})
+			hold.Store(&replied)
 			t0 = time.Now()
 			got, err = caller.Invoke(ctx, "zr-node", []byte("SECRET-BRIEF"))
 			zeroRTT := time.Since(t0)
+			close(replied)
 			if err != nil || string(got) != "echo:SECRET-BRIEF" {
-				t.Fatalf("0-RTT Invoke = %q, %v", got, err)
+				t.Fatalf("0-RTT Invoke = %q, %v (a call that needs more than its first flight never gets the reply)", got, err)
 			}
-			time.Sleep(2 * latency) // the end of the request reaches the relay after the reply
-			if types := frameTypes(relay.sentByA()[n:]); strings.Join(types, ",") != a2aE2EEInit0RTTMessageType+",a2a-request" {
+			// The end of the request reaches the relay after the reply.
+			if types := frameTypes(relay.awaitSentByA(ctx, t, interactiveFrames+2)[interactiveFrames:]); strings.Join(types, ",") != a2aE2EEInit0RTTMessageType+",a2a-request" {
 				t.Fatalf("0-RTT call sent %v, want the first flight then the end of the request", types)
 			}
 			noPlaintext(t, relay, "SECRET-BRIEF")
 			if ran.Load() != 2 {
 				t.Fatalf("handler ran %d times, want 2", ran.Load())
 			}
-			// One round trip to the peer, against two for the handshake first.
+			// One flight to the peer and its reply, against two round trips
+			// for the handshake first.
 			t.Logf("interactive %s, 0-RTT %s", interactive.Round(time.Millisecond), zeroRTT.Round(time.Millisecond))
-			if interactive < 4*latency || zeroRTT > 3*latency {
-				t.Fatalf("interactive %s (want >= 2 round trips), 0-RTT %s (want ~1)", interactive, zeroRTT)
+			if interactive < 4*latency {
+				t.Fatalf("interactive %s, want >= 2 round trips", interactive)
 			}
 		})
 	}
