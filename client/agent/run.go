@@ -425,11 +425,13 @@ func sendResponse(
 
 	total := 0
 	i := 0
+	ended := false // the last chunk was sent
 	for chunk := range chunkCh {
 		cut := chunk.Last && failed.err != nil
 		if cut {
 			chunk.Last = false
 		}
+		ended = chunk.Last
 		var out *pb.HTTPProxyResponse
 		switch {
 		case i == 0 && chunk.Last:
@@ -482,6 +484,11 @@ func sendResponse(
 	}
 	if failed.err != nil {
 		return total, fmt.Errorf("read response body: %w", failed.err)
+	}
+	// The chunkers stop on ctx without reading the body to its end: a body
+	// cut that way is not whole either (TestSendResponseNeverEndsAFailedBody).
+	if err := ctx.Err(); err != nil && !ended && !upgraded {
+		return total, fmt.Errorf("read response body: %w", err)
 	}
 
 	// Empty body (e.g. redirect responses with Content-Length: 0) —

@@ -179,6 +179,9 @@ func TestAgentMoveRetriesRefusedConnections(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	a := New(Config{ServerAddr: addr, AgentID: "mover", Retries: 3, Logger: slog.New(slog.DiscardHandler)})
+	// The retries, not the move's window (moveRetryFor, which a starved
+	// machine's three attempts can outlast) are what this checks.
+	a.(*agent).moveRetryFor = time.Minute
 	if err := a.Connect(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -213,8 +216,8 @@ func nextStream(t *testing.T, f *moveRelay, what string) grpc.BidiStreamingServe
 	select {
 	case s := <-f.streams:
 		return s
-	case <-time.After(5 * time.Second):
-		t.Fatalf("%s: no stream within 5 s", what)
+	case <-time.After(30 * time.Second): // a hang: a starved machine takes seconds
+		t.Fatalf("%s: no stream within 30 s", what)
 		return nil
 	}
 }
