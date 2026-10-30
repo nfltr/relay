@@ -9,6 +9,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -33,58 +34,73 @@ func (servingHealth) Check(context.Context, *healthpb.HealthCheckRequest) (*heal
 // about a second of its return. With gRPC's default backoff (1 s growing by
 // 1.6x to 120 s) the channel refused every call for the rest of its backoff:
 // `wg socks5`, which keeps one connection, came back 17-22 s after a restart.
+//
+// Judged by the channel's dials, not by a stopwatch: the relay is down for
+// outageDials of them (a listener that closes each connection), which the
+// relay's backoff (250 ms growing to 1 s) makes in about 7 s and gRPC's
+// default in at least 90 s (its timers never fire early), so the minute
+// bound only catches a hang or a backoff grown past a second, never a
+// loaded machine. Then the relay is back and the channel reaches it.
 func TestClientConnReachesARelayBackFromAnOutageWithinASecond(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close() // the relay is down
-
-	conn, err := grpcclient.NewClientConn(false, "127.0.0.1", port)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close() //nolint:errcheck
-	health := healthpb.NewHealthClient(conn)
-	check := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-		defer cancel()
-		_, err := health.Check(ctx, &healthpb.HealthCheckRequest{})
-		return err
-	}
-	// Six seconds of failed calls: the default backoff would now wait 4 s
-	// before its next dial.
-	for deadline := time.Now().Add(6 * time.Second); time.Now().Before(deadline); time.Sleep(250 * time.Millisecond) {
-		if check() == nil {
-			t.Fatal("reached a relay that is down")
-		}
-	}
-
-	ln, err = net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	if err != nil {
-		t.Skipf("port %d taken while the relay was down: %v", port, err)
-	}
-	l := &firstAccept{Listener: ln, at: make(chan time.Time, 1)}
+	l := &outageListener{Listener: ln, dials: make(chan struct{}, 1)}
+	l.down.Store(true)
 	srv := grpc.NewServer(v1Relay())
 	healthpb.RegisterHealthServer(srv, servingHealth{})
 	go func() { _ = srv.Serve(l) }()
 	defer srv.Stop()
-	back := time.Now()
-	// The channel's next dial reaches the relay within its longest backoff
-	// (1 s and its jitter) of the return; the default backoff would wait up
-	// to 4 s more. Judged by the dial's arrival, not by a call: a loaded
-	// machine slows the call after it, not the backoff before it.
-	select {
-	case at := <-l.at:
-		t.Logf("dialed %s after the relay came back", at.Sub(back).Truncate(time.Millisecond))
-	case <-time.After(2 * time.Second):
-		t.Fatalf("the relay has been back %s and the channel has not dialed it; want it reached within about a second", time.Since(back).Truncate(time.Millisecond))
+
+	conn, err := grpcclient.NewClientConn(false, "127.0.0.1", ln.Addr().(*net.TCPAddr).Port)
+	if err != nil {
+		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer conn.Close() //nolint:errcheck
+	const outageDials = 10
+	hang := time.After(time.Minute)
+	kick := time.NewTicker(100 * time.Millisecond) // a channel idle after its backoff dials again when asked
+	defer kick.Stop()
+	for n := 0; n < outageDials; {
+		conn.Connect()
+		select {
+		case <-l.dials:
+			n++
+		case <-kick.C:
+		case <-hang:
+			t.Fatalf("the channel dialed a relay that is down %d times in a minute, want %d: its backoff grows past a second", n, outageDials)
+		}
+	}
+
+	l.down.Store(false) // the relay is back
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
+	health := healthpb.NewHealthClient(conn)
 	if _, err := health.Check(ctx, &healthpb.HealthCheckRequest{}, grpc.WaitForReady(true)); err != nil {
-		t.Fatalf("call after the channel dialed the relay that is back: %v", err)
+		t.Fatalf("call after the relay came back: %v", err)
+	}
+}
+
+// outageListener is a relay that is down while down is set: it closes every
+// connection at once and reports the dial on dials.
+type outageListener struct {
+	net.Listener
+	down  atomic.Bool
+	dials chan struct{}
+}
+
+func (l *outageListener) Accept() (net.Conn, error) {
+	for {
+		c, err := l.Listener.Accept()
+		if err != nil || !l.down.Load() {
+			return c, err
+		}
+		_ = c.Close()
+		select {
+		case l.dials <- struct{}{}:
+		default:
+		}
 	}
 }
 
@@ -244,23 +260,6 @@ type enteredCtx struct {
 func (c *enteredCtx) Done() <-chan struct{} {
 	c.once.Do(func() { close(c.ch) })
 	return c.Context.Done()
-}
-
-// firstAccept records when its listener's first connection arrived.
-type firstAccept struct {
-	net.Listener
-	at chan time.Time
-}
-
-func (l *firstAccept) Accept() (net.Conn, error) {
-	c, err := l.Listener.Accept()
-	if err == nil {
-		select {
-		case l.at <- time.Now():
-		default:
-		}
-	}
-	return c, err
 }
 
 // v1Relay makes a test server answer unary calls as a protocol v1 relay
