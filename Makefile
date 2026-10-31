@@ -35,6 +35,11 @@ check-gosec:
 check-semgrep:
 	./scripts/check-semgrep.sh
 
+# scripts/check-identity.sh (the pre-push hook's) refuses what it should.
+.PHONY: test-identity
+test-identity:
+	./scripts/check-identity_test.sh
+
 # The relay's old name stays out of tracked files (see the script).
 check-no-legacy-name:
 	./scripts/check-no-legacy-name.sh

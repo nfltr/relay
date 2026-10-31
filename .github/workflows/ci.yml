@@ -27,6 +27,7 @@ jobs:
             proto/go.sum
             client/go.sum
       - run: make check-no-legacy-name
+      - run: make test-identity
       - run: make build
       - run: make vet
       # test-race, test-linkdebug and fuzz-short side by side; make test
