@@ -169,7 +169,7 @@ func serveE2EEStream(client net.Conn, addr, host string, visitor netip.Addr, log
 		serveLastRequest(client, req, addr, host, visitor, logger)
 		return
 	}
-	backend, err := net.Dial("tcp", addr)
+	backend, err := targetDialer().Dial("tcp", addr) // bounded as every target dial
 	if err != nil {
 		logger.Debug("e2ee: dial backend failed", "backend", addr, "error", err)
 		_, _ = io.WriteString(client, badGateway)
