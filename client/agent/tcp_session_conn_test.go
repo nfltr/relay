@@ -77,3 +77,32 @@ func TestSessionConnReadDeadlineAndClose(t *testing.T) {
 		t.Fatal("Write after Close must fail")
 	}
 }
+
+// Close stops a pending read-deadline timer, and a deadline set after Close
+// arms none: http.Server's keep-alive deadline (up to IdleTimeout) otherwise
+// kept the closed session and its queue reachable until it fired.
+func TestSessionConnCloseStopsDeadlineTimer(t *testing.T) {
+	tt := &tcpTunnel{
+		logger:   slog.New(slog.DiscardHandler),
+		sendCh:   make(chan *pb.TCPData, 8),
+		stop:     make(chan struct{}),
+		sendDone: make(chan struct{}),
+		sessions: map[string]*bytequeue.Queue{},
+	}
+	c := newSessionConn(tt, "s1", tt.openSession("s1"))
+	_ = c.SetReadDeadline(time.Now().Add(time.Hour))
+	_ = c.Close()
+	c.mu.Lock()
+	armed := c.timer != nil
+	c.mu.Unlock()
+	if armed {
+		t.Fatal("Close left the read-deadline timer armed")
+	}
+	_ = c.SetReadDeadline(time.Now().Add(time.Hour))
+	c.mu.Lock()
+	armed = c.timer != nil
+	c.mu.Unlock()
+	if armed {
+		t.Fatal("a deadline set after Close armed a timer")
+	}
+}

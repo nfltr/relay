@@ -69,10 +69,14 @@ func (c *sessionConn) Write(b []byte) (int, error) {
 }
 
 // Close ends the session: the relay gets a close frame, a pending Read
-// returns.
+// returns, a pending read-deadline timer stops (it would keep the session
+// reachable until it fired).
 func (c *sessionConn) Close() error {
 	c.once.Do(func() {
 		c.closed.Store(true)
+		c.mu.Lock()
+		c.stopTimerLocked()
+		c.mu.Unlock()
 		c.t.closeSession(c.id, c.q)
 		_ = c.t.send(&pb.TCPData{SessionId: c.id, Close: true})
 	})
@@ -82,12 +86,9 @@ func (c *sessionConn) Close() error {
 func (c *sessionConn) SetReadDeadline(t time.Time) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.deadline++
-	if c.timer != nil {
-		c.timer.Stop()
-		c.timer = nil
-	}
+	c.stopTimerLocked()
 	switch {
+	case c.closed.Load(): // no timer for a closed session
 	case t.IsZero():
 		c.expired.Store(false)
 	case !t.After(time.Now()):
@@ -106,6 +107,15 @@ func (c *sessionConn) SetReadDeadline(t time.Time) error {
 		})
 	}
 	return nil
+}
+
+// stopTimerLocked retires the current deadline's timer (c.mu held).
+func (c *sessionConn) stopTimerLocked() {
+	c.deadline++
+	if c.timer != nil {
+		c.timer.Stop()
+		c.timer = nil
+	}
 }
 
 func (c *sessionConn) SetDeadline(t time.Time) error { return c.SetReadDeadline(t) }
