@@ -42,9 +42,13 @@ const (
 	// data channel (OpenDataPath). From 3, every session is end-to-end
 	// encrypted (E2E): the offer and answer carry X25519 public keys instead
 	// of a session token, the initiator confirms the keys, and the signaling
-	// frames and the data stream are sealed on every path. A peer below 3 is
-	// refused, never served in the clear. An older peer omits it (0).
-	SignalProto = 3
+	// frames and the data stream are sealed on every path. From 4, each
+	// RelayMux path is flow-controlled on its own: a reader grants credit as
+	// it reads, so a slow data reader slows only the data sender and
+	// signaling always flows. A peer below 4 is refused (a peer below 3 is
+	// never served in the clear; one at 3 never grants credit, so its data
+	// sender would wait forever). An older peer omits it (0).
+	SignalProto = 4
 
 	// p2pMsgType is the rpcclient message-type sentinel that identifies P2P
 	// signaling frames on the AgentTunnel stream.
