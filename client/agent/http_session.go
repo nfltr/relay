@@ -68,4 +68,3 @@ func (s sessionTargets) httpSessionsValue() string {
 	}
 	return "1"
 }
-

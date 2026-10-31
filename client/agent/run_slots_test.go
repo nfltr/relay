@@ -50,9 +50,9 @@ func TestProcessStreamFullSlotsDoNotHoldTheReceiveLoop(t *testing.T) {
 	fast.Request.TransactionId = "fast"
 	stream.requests <- slow // takes the one slot
 	time.Sleep(100 * time.Millisecond)
-	stream.requests <- fast                                  // waits for a slot
+	stream.requests <- fast                                    // waits for a slot
 	stream.requests <- chunking.CancelRequest("agent", "slow") // frees it, if the loop reads it
-	deadline := time.After(5 * time.Second) // well within the request timeout
+	deadline := time.After(5 * time.Second)                    // well within the request timeout
 	for {
 		select {
 		case m := <-stream.sent:

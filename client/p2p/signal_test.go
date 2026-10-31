@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/client/rpcclient"
+	"github.com/nfltr/relay/proto/pb"
 )
 
 type mockSignalTunnel struct {

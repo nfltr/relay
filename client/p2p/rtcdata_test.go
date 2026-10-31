@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/client/rpcclient"
+	"github.com/nfltr/relay/proto/pb"
 	"github.com/pion/webrtc/v4"
 	"google.golang.org/protobuf/proto"
 )
@@ -501,7 +501,7 @@ func TestRemoteTypeLinkLocalPrflxIsHost(t *testing.T) {
 		{webrtc.ICECandidate{Typ: p, Address: "fe80::18e2:3e56:5e9c:70ef"}, h},
 		{webrtc.ICECandidate{Typ: p, Address: "fe80::1%en0"}, h},
 		{webrtc.ICECandidate{Typ: p, Address: "169.254.3.4"}, h},
-		{webrtc.ICECandidate{Typ: p, Address: "127.0.0.1"}, h}, // this machine's
+		{webrtc.ICECandidate{Typ: p, Address: "127.0.0.1"}, h},    // this machine's
 		{webrtc.ICECandidate{Typ: p, Address: "198.51.100.9"}, p}, // a NAT's mapping
 		{webrtc.ICECandidate{Typ: p, Address: "2001:db8::1"}, p},
 		{webrtc.ICECandidate{Typ: webrtc.ICECandidateTypeSrflx, Address: "fe80::1"}, webrtc.ICECandidateTypeSrflx},

@@ -62,8 +62,8 @@ func hexSum(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(
 func TestA2AE2EE0RTTKeyScheduleVectors(t *testing.T) {
 	key := testPairingKey(t, secretA)
 	for _, tc := range []struct {
-		name                       string
-		pairing                    []byte
+		name                         string
+		pairing                      []byte
 		label, flight, ack, i2r, r2i string
 	}{
 		{"unkeyed", nil, "k8V-LhDYv9TJL9GV5EXXglIdVcl1652QU6lrcS6qs0o",

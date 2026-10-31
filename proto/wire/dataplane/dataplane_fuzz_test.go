@@ -31,8 +31,6 @@ func (c *countingReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
-
-
 // FuzzSendRecvRoundTrip: any frame Send writes, Recv reads back equal.
 func FuzzSendRecvRoundTrip(f *testing.F) {
 	f.Add("7", []byte("hello"), "", "", false, false)
@@ -62,8 +60,6 @@ func FuzzSendRecvRoundTrip(f *testing.F) {
 		}
 	})
 }
-
-
 
 // FuzzParseWindow: a CreditHeader value is accepted only as a decimal in
 // the window range.

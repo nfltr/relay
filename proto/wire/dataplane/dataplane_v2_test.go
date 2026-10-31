@@ -142,7 +142,7 @@ func recordingV2(t testing.TB, w *bytes.Buffer) *Conn {
 func boundReply() []byte {
 	reply := []byte{0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	reply[6], reply[7] = byte(testWindow>>24), byte(testWindow>>16) // window, big endian
-	reply[13] = 64                                                   // max sessions
+	reply[13] = 64                                                  // max sessions
 	return reply
 }
 

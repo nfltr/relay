@@ -380,4 +380,3 @@ func (c *Client) Stat(ctx context.Context, sha string) (Blob, error) {
 	}
 	return Blob{SHA256: out.Blob.SHA256, SizeBytes: size, ExpiresAt: out.Blob.ExpiresAt}, nil
 }
-

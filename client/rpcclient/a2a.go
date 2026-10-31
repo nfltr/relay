@@ -60,9 +60,9 @@ import (
 	"time"
 	"uuid"
 
-	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/client/grpcclient"
 	"github.com/nfltr/relay/client/handoff"
+	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentwire"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"

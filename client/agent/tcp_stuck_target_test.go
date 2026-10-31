@@ -27,7 +27,7 @@ type fakeRelayStream struct {
 
 	mu     sync.Mutex
 	closed map[string]bool // sessions the agent closed
-	grants int            // window frames the agent sent
+	grants int             // window frames the agent sent
 }
 
 func (s *fakeRelayStream) Recv() (*pb.TCPData, error) {
