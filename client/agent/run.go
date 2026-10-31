@@ -104,8 +104,10 @@ func processStream(
 	flow := chunking.NewAgentFlow(chunking.RelayAcks(stream))
 	defer flow.StreamEnded()
 
+	recv := newActivityRecv(stream, recvThreshold)
+	defer recv.stop()
 	for {
-		msg, err := recvHTTPProxyRequestWithActivityTimeout(ctx, stream, recvThreshold)
+		msg, err := recv.next(ctx)
 		if err != nil {
 			return fmt.Errorf("recv: %w", err)
 		}
@@ -287,33 +289,70 @@ func heartbeatRecvThreshold(cfg Config, header map[string][]string) time.Duratio
 	return 45 * time.Second
 }
 
-func recvHTTPProxyRequestWithActivityTimeout(ctx context.Context, stream pb.Dispatcher_ConnectHTTPClient, threshold time.Duration) (*pb.HTTPProxyRequest, error) {
+// activityRecv receives the relay's frames, failing with
+// errNoServerActivity when none comes within threshold of asking for the
+// next: one reader goroutine and one timer for the stream's life, not one
+// per frame (threshold <= 0: plain Recv, no deadline).
+type activityRecv struct {
+	stream    pb.Dispatcher_ConnectHTTPClient
+	threshold time.Duration
+	ch        chan recvResult
+	done      chan struct{}
+	timer     *time.Timer
+}
+
+type recvResult struct {
+	msg *pb.HTTPProxyRequest
+	err error
+}
+
+// newActivityRecv starts the reader; stop ends it once the stream ends.
+func newActivityRecv(stream pb.Dispatcher_ConnectHTTPClient, threshold time.Duration) *activityRecv {
+	r := &activityRecv{stream: stream, threshold: threshold}
 	if threshold <= 0 {
-		return stream.Recv()
+		return r
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	type recvResult struct {
-		msg *pb.HTTPProxyRequest
-		err error
-	}
-	recvCh := make(chan recvResult, 1)
+	r.ch = make(chan recvResult)
+	r.done = make(chan struct{})
+	r.timer = time.NewTimer(threshold)
 	go func() {
-		msg, err := stream.Recv()
-		recvCh <- recvResult{msg: msg, err: err}
+		for {
+			msg, err := stream.Recv()
+			select {
+			case r.ch <- recvResult{msg, err}:
+			case <-r.done:
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
 	}()
+	return r
+}
 
-	timer := time.NewTimer(threshold)
-	defer timer.Stop()
-
+// next is the next frame, an error ending the stream, errNoServerActivity
+// after threshold without one, or ctx's error.
+func (r *activityRecv) next(ctx context.Context) (*pb.HTTPProxyRequest, error) {
+	if r.threshold <= 0 {
+		return r.stream.Recv()
+	}
+	r.timer.Reset(r.threshold)
 	select {
-	case result := <-recvCh:
-		return result.msg, result.err
-	case <-timer.C:
+	case res := <-r.ch:
+		return res.msg, res.err
+	case <-r.timer.C:
 		return nil, errNoServerActivity
 	case <-ctx.Done():
 		return nil, ctx.Err()
+	}
+}
+
+// stop releases the reader (blocked in Recv until the stream ends).
+func (r *activityRecv) stop() {
+	if r.done != nil {
+		r.timer.Stop()
+		close(r.done)
 	}
 }
 

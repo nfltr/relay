@@ -719,7 +719,7 @@ func (s *blockingStream) Context() context.Context     { return s.ctx }
 func (s *blockingStream) SendMsg(_ any) error          { return nil }
 func (s *blockingStream) RecvMsg(_ any) error          { return nil }
 
-func TestRecvHTTPProxyRequestWithActivityTimeout_ResetsOnDataMessage(t *testing.T) {
+func TestActivityRecvResetsOnDataMessage(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -735,8 +735,10 @@ func TestRecvHTTPProxyRequestWithActivityTimeout_ResetsOnDataMessage(t *testing.
 			stream.requests <- &pb.HTTPProxyRequest{Request: &pb.HTTPRequest{TransactionId: "txn-activity"}}
 		}()
 
+		recv := newActivityRecv(stream, 25*time.Millisecond)
+		defer recv.stop()
 		start := time.Now()
-		msg, err := recvHTTPProxyRequestWithActivityTimeout(ctx, stream, 25*time.Millisecond)
+		msg, err := recv.next(ctx)
 		if err != nil {
 			t.Fatalf("first receive returned error: %v", err)
 		}
@@ -744,7 +746,7 @@ func TestRecvHTTPProxyRequestWithActivityTimeout_ResetsOnDataMessage(t *testing.
 			t.Fatalf("transaction id = %q, want txn-activity", msg.GetRequest().GetTransactionId())
 		}
 
-		_, err = recvHTTPProxyRequestWithActivityTimeout(ctx, stream, 25*time.Millisecond)
+		_, err = recv.next(ctx)
 		if !errors.Is(err, errNoServerActivity) {
 			t.Fatalf("second receive error = %v, want errNoServerActivity", err)
 		}
@@ -756,6 +758,27 @@ func TestRecvHTTPProxyRequestWithActivityTimeout_ResetsOnDataMessage(t *testing.
 		synctest.Wait()
 	})
 }
+
+// Receiving a frame costs no goroutine, channel or timer of its own (it
+// once cost all three, six allocations, per frame, upload chunks included).
+func TestActivityRecvAllocatesNothingPerFrame(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s := &readyStream{blockingStream: blockingStream{ctx: ctx}, msg: &pb.HTTPProxyRequest{}}
+	recv := newActivityRecv(s, time.Minute)
+	defer recv.stop()
+	if a := testing.AllocsPerRun(1000, func() { _, _ = recv.next(ctx) }); a > 0 {
+		t.Fatalf("allocations per received frame = %v, want 0", a)
+	}
+}
+
+// readyStream has a frame ready on every Recv.
+type readyStream struct {
+	blockingStream
+	msg *pb.HTTPProxyRequest
+}
+
+func (s *readyStream) Recv() (*pb.HTTPProxyRequest, error) { return s.msg, nil }
 
 func TestProcessStream_ServerSilenceTimeout(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
