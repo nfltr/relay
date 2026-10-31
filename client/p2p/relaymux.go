@@ -30,10 +30,108 @@ type RelayMux struct {
 	closeSend func() error // client side only: half-closes the stream
 	closeOnce sync.Once
 
-	sig  chan *Frame
-	data chan []byte
+	// Each path has its own bounded queue, so a reader that stops reading
+	// fails only its own path (ErrMuxOverrun) and never stalls the demux,
+	// and with it the other path. The stream has no per-path credit: a
+	// path past its bound is failed, not paused.
+	sig  muxQueue[*Frame]
+	data muxQueue[[]byte]
 	quit chan struct{} // closed by Close: stop delivering
 	qOne sync.Once
+}
+
+// Per-path bounds on bytes received and not yet read.
+const (
+	muxSignalMax = 1 << 20  // signaling frames
+	muxDataMax   = 16 << 20 // file data (secure records of up to 64 KiB)
+)
+
+// ErrMuxOverrun is a read on a relay mux path whose reader left more than
+// the path's bound unread: the path is failed (what arrived before the bound
+// is still read first); the other path is unaffected.
+var ErrMuxOverrun = errors.New("p2p: relay stream path overrun: its reader stopped reading")
+
+// muxQueue is one path's queue: bounded in bytes, with a sticky end error.
+type muxQueue[T any] struct {
+	name  string
+	max   int
+	mu    sync.Mutex
+	items []T
+	sizes []int
+	bytes int
+	err   error         // the path's end (io.EOF) or failure, after items
+	ready chan struct{} // capacity 1: something changed
+}
+
+func newMuxQueue[T any](name string, max int) muxQueue[T] {
+	return muxQueue[T]{name: name, max: max, ready: make(chan struct{}, 1)}
+}
+
+func (q *muxQueue[T]) wake() {
+	select {
+	case q.ready <- struct{}{}:
+	default:
+	}
+}
+
+// push queues v, or fails the path when v would pass its bound; never blocks.
+func (q *muxQueue[T]) push(v T, size int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.err != nil {
+		return // failed or ended: its reader gets q.err
+	}
+	if q.bytes+size > q.max {
+		q.err = fmt.Errorf("%w (%s path: %d bytes unread, bound %d)", ErrMuxOverrun, q.name, q.bytes, q.max)
+	} else {
+		q.items = append(q.items, v)
+		q.sizes = append(q.sizes, size)
+		q.bytes += size
+	}
+	q.wake()
+}
+
+// end marks the stream's end: the reader gets io.EOF after the queued items.
+func (q *muxQueue[T]) end() {
+	q.mu.Lock()
+	if q.err == nil {
+		q.err = io.EOF
+	}
+	q.mu.Unlock()
+	q.wake()
+}
+
+// pop returns the next item, the path's end or failure, or closed once quit
+// is closed.
+func (q *muxQueue[T]) pop(quit <-chan struct{}, closed error) (T, error) {
+	for {
+		q.mu.Lock()
+		if len(q.items) > 0 {
+			v := q.items[0]
+			var zero T
+			q.items[0] = zero
+			q.items = q.items[1:]
+			q.bytes -= q.sizes[0]
+			q.sizes = q.sizes[1:]
+			if len(q.items) > 0 || q.err != nil {
+				q.wake() // for another waiting reader
+			}
+			q.mu.Unlock()
+			return v, nil
+		}
+		err := q.err
+		q.mu.Unlock()
+		if err != nil {
+			var zero T
+			return zero, err
+		}
+		select {
+		case <-q.ready:
+		case <-quit:
+			var zero T
+			return zero, closed
+		}
+	}
 }
 
 // NewClientRelayMux starts a mux on the initiator's stream.
@@ -60,20 +158,26 @@ func newRelayMux(send func([]byte) error, closeSend func() error) *RelayMux {
 	return &RelayMux{
 		send:      send,
 		closeSend: closeSend,
-		sig:       make(chan *Frame, 64),
-		data:      make(chan []byte, 8),
+		sig:       newMuxQueue[*Frame]("signaling", muxSignalMax),
+		data:      newMuxQueue[[]byte]("data", muxDataMax),
 		quit:      make(chan struct{}),
 	}
 }
 
-// demux reads the stream until it ends, routing each message by kind.
+// demux reads the stream until it ends (or the mux is closed), routing each
+// message to its path's queue without ever waiting for a reader.
 func (m *RelayMux) demux(recv func() ([]byte, error)) {
-	defer close(m.sig)
-	defer close(m.data)
+	defer m.sig.end()
+	defer m.data.end()
 	for {
 		msg, err := recv()
 		if err != nil || len(msg) == 0 {
 			return
+		}
+		select {
+		case <-m.quit:
+			return
+		default:
 		}
 		switch msg[0] {
 		case muxSignal:
@@ -81,17 +185,9 @@ func (m *RelayMux) demux(recv func() ([]byte, error)) {
 			if json.Unmarshal(msg[1:], &f) != nil {
 				return // not protocol 2: end rather than misread
 			}
-			select {
-			case m.sig <- &f:
-			case <-m.quit:
-				return
-			}
+			m.sig.push(&f, len(msg))
 		case muxData:
-			select {
-			case m.data <- msg[1:]:
-			case <-m.quit:
-				return
-			}
+			m.data.push(msg[1:], len(msg)-1)
 		default:
 			return
 		}
@@ -132,15 +228,7 @@ func (p muxSignalPath) WriteFrame(f *Frame) error {
 }
 
 func (p muxSignalPath) ReadFrame() (*Frame, error) {
-	select {
-	case f, ok := <-p.m.sig:
-		if !ok {
-			return nil, io.EOF
-		}
-		return f, nil
-	case <-p.m.quit:
-		return nil, io.EOF
-	}
+	return p.m.sig.pop(p.m.quit, io.EOF)
 }
 
 func (p muxSignalPath) Close() error {
@@ -158,16 +246,6 @@ func (m *RelayMux) DataConn() *RelayConn {
 	return &RelayConn{
 		send:      func(b []byte) error { return m.write(muxData, b) },
 		closeSend: m.Close,
-		recv: func() ([]byte, error) {
-			select {
-			case b, ok := <-m.data:
-				if !ok {
-					return nil, io.EOF
-				}
-				return b, nil
-			case <-m.quit:
-				return nil, errMuxClosed
-			}
-		},
+		recv:      func() ([]byte, error) { return m.data.pop(m.quit, errMuxClosed) },
 	}
 }
