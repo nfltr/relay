@@ -193,31 +193,55 @@ func (r *fakeLinkRelay) dialer(transport string) RelayDialer {
 	}
 }
 
-// won returns the Link the agent's link is up on, waiting for it: a
-// TransportAuto agent races QUIC and TCP, and either wins under load. TCP
-// is asked first: only a winning TCP connection says its hello, while a
-// losing QUIC one is accepted until the agent closes it.
-func (r *fakeLinkRelay) won(t *testing.T) peerlink.Link {
+// won returns the relay's Link of the transport the agent's link came up
+// on, as the agent reports it (its "agent link connected" record on the
+// logger linkWinner made): TransportAuto races QUIC and TCP, and either
+// wins under load. (Probing the relay's Links instead took a QUIC loser
+// the relay had accepted, before the agent closed it, for the winner.)
+func (r *fakeLinkRelay) won(t *testing.T, winner <-chan string) peerlink.Link {
 	t.Helper()
-	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: "x:1"})
-	if err != nil {
-		t.Fatal(err)
+	select {
+	case transport := <-winner:
+		if transport == TransportQUIC {
+			return r.quic
+		}
+		return r.tcp
+	case <-time.After(10 * time.Second):
+		t.Fatal("the agent's link came up on neither transport")
+		return nil
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		for _, node := range []peerlink.Link{r.tcp, r.quic} {
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-			s, err := node.Open(ctx, "agent", h)
-			cancel()
-			if err == nil {
-				_ = s.Close()
-				return node
+}
+
+// linkWinner is a logger for the agent and the transport of each agent
+// link it connects, in order.
+func linkWinner() (*slog.Logger, <-chan string) {
+	h := winnerHandler{Handler: slog.Default().Handler(), ch: make(chan string, 16)}
+	return slog.New(h), h.ch
+}
+
+type winnerHandler struct {
+	slog.Handler
+	ch chan string
+}
+
+func (h winnerHandler) Handle(ctx context.Context, r slog.Record) error {
+	if r.Message == "agent link connected" {
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == "transport" {
+				h.ch <- a.Value.String()
 			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("the agent's link is up on neither transport")
-		}
+			return true
+		})
 	}
+	return h.Handler.Handle(ctx, r)
+}
+
+func (h winnerHandler) WithAttrs(as []slog.Attr) slog.Handler {
+	return winnerHandler{Handler: h.Handler.WithAttrs(as), ch: h.ch}
+}
+
+func (h winnerHandler) WithGroup(name string) slog.Handler {
+	return winnerHandler{Handler: h.Handler.WithGroup(name), ch: h.ch}
 }
 
 // open opens a session to the agent on whichever Link has its connection.
@@ -294,8 +318,9 @@ func TestAgentLinkSessions(t *testing.T) {
 			st := &stats{}
 			ls := &linkSessions{ctx: ctx, targets: sessionTargets{forwardAddr: echo, http: h}, logger: slog.Default(), growth: &tcpStreamGrowth{stats: st}}
 			served := make(chan bool, 1)
-			go func() { served <- runAgentLink(ctx, r.dialer(transport), testLinkToken, offer, ls, slog.Default()) }()
-			node := r.won(t)
+			logger, winner := linkWinner()
+			go func() { served <- runAgentLink(ctx, r.dialer(transport), testLinkToken, offer, ls, logger) }()
+			node := r.won(t, winner)
 			s := r.open(t, node, &pb.TCPData{TargetAddr: "ignored:1"})
 			if _, err := s.Write([]byte("ping")); err != nil {
 				t.Fatal(err)
@@ -420,8 +445,9 @@ func testQUICRefusedRedials(t *testing.T, slow time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ls := &linkSessions{ctx: ctx, targets: sessionTargets{forwardAddr: echoServer(t)}, logger: slog.Default()}
-	go runAgentLink(ctx, r.dialer(TransportAuto), testLinkToken, offer, ls, slog.Default())
-	node := r.won(t)
+	logger, winner := linkWinner()
+	go runAgentLink(ctx, r.dialer(TransportAuto), testLinkToken, offer, ls, logger)
+	node := r.won(t, winner)
 	s := r.open(t, node, &pb.TCPData{TargetAddr: "x:1"})
 	_, _ = s.Write([]byte("ok"))
 	buf := make([]byte, 2)
@@ -501,7 +527,8 @@ func TestLazyAgentLink(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			ls := &linkSessions{ctx: ctx, targets: sessionTargets{forwardAddr: echo}, logger: slog.Default()}
-			z := newLazyLink(ctx, r.dialer(transport), func() (metadata.MD, error) { return md, nil }, ls, slog.Default())
+			logger, winner := linkWinner()
+			z := newLazyLink(ctx, r.dialer(transport), func() (metadata.MD, error) { return md, nil }, ls, logger)
 			time.Sleep(200 * time.Millisecond)
 			if n := r.accepted.Load(); n != 0 {
 				t.Fatalf("%d agent-link connections before the relay asked", n)
@@ -512,7 +539,7 @@ func TestLazyAgentLink(t *testing.T) {
 					wg.Go(func() { z.control(dataplane.AgentLinkDial) })
 				}
 				wg.Wait()
-				node := r.won(t)
+				node := r.won(t, winner)
 				s := r.open(t, node, &pb.TCPData{TargetAddr: "x:1"})
 				_, _ = s.Write([]byte("ping"))
 				buf := make([]byte, 4)
