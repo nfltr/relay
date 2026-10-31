@@ -16,12 +16,12 @@ import (
 // sibling of the stuck-client rule: a
 // handler that takes none of its call's frames must not stop the tunnel's
 // receive loop, which serves every call and response of the agent. Past
-// its call's 16-frame buffer the loop waits for it at most requestStall;
+// its call's 16-frame buffer the loop waits for it at most consumerStall;
 // then the call is refused (ResourceExhausted to its caller) and the
 // agent's other calls go on.
 func TestStuckHandlerDoesNotHoldTheReceiveLoop(t *testing.T) {
-	defer func(d time.Duration) { requestStall = d }(requestStall)
-	requestStall = 300 * time.Millisecond
+	defer func(d time.Duration) { consumerStall = d }(consumerStall)
+	consumerStall = 300 * time.Millisecond
 	ms := newMockStream(t.Context())
 	agent := NewAgent(testTargetAgentId, ms)
 	defer agent.Close() //nolint:errcheck

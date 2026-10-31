@@ -57,15 +57,16 @@ type serverStream struct {
 	early      []byte // a 0-RTT call's first request, already decrypted
 }
 
-// requestStall bounds how long the tunnel's receive loop, which serves
-// every call and response of the agent, waits for one handler to take
-// anything of its call (handoff.Stall; tests shorten it).
-var requestStall = handoff.Stall
+// consumerStall bounds how long the tunnel's receive loop, which serves
+// every call and response of the agent, waits for one consumer (a
+// handler's call, a caller's response stream) to take anything of its
+// transaction (handoff.Stall; tests shorten it).
+var consumerStall = handoff.Stall
 
 // pushRequest enqueues a request frame onto ss.requestCh, skipping the
 // send if the channel has already been closed (the EOM marker arrived
 // from a concurrent code path). It waits for a full channel only while
-// the handler keeps taking, at most requestStall (handoff.Send): then
+// the handler keeps taking, at most consumerStall (handoff.Send): then
 // handoff.ErrStalled, and the caller refuses the call. A call that ended
 // is handoff.ErrEnded, the frame dropped.
 func (ss *serverStream) pushRequest(msg *pb.TunnelFrame) (err error) {
@@ -81,7 +82,7 @@ func (ss *serverStream) pushRequest(msg *pb.TunnelFrame) (err error) {
 			err = handoff.ErrEnded
 		}
 	}()
-	return handoff.Send(ss.requestCh, msg, ss.ctx.Done(), requestStall)
+	return handoff.Send(ss.requestCh, msg, ss.ctx.Done(), consumerStall)
 }
 
 // closeRequests closes requestCh exactly once. Safe to call from any

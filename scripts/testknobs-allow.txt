@@ -9,4 +9,5 @@ client/p2p/stun_conformance_test.go:STUNServer exported SDK variable; follow-up:
 client/p2p/stun_test.go:STUNServer exported SDK variable; follow-up: an option on the constructor
 client/relayoutage/share_client_test.go:ShareClient exported SDK variable; follow-up: an option on the constructor
 client/rpcclient/a2a_handler_heartbeat_test.go:agentHeartbeatInterval unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
-client/rpcclient/a2a_stuck_handler_test.go:requestStall unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
+client/rpcclient/a2a_stuck_handler_test.go:consumerStall unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
+client/rpcclient/a2a_client_stream_test.go:consumerStall unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct

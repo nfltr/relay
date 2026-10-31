@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -59,8 +60,13 @@ func TestClientStream_BuffersBurstResponses(t *testing.T) {
 	}
 }
 
+// A caller that takes none of its responses holds the receive loop at most
+// consumerStall past its buffer: then its call is cut (ResourceExhausted
+// after the buffered frames) and the agent's other calls go on.
 func TestClientStream_SaturatedStreamDoesNotBlockOtherTransactions(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer func(d time.Duration) { consumerStall = d }(consumerStall)
+	consumerStall = 300 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
 	ms := &mockStream{
@@ -109,7 +115,7 @@ func TestClientStream_SaturatedStreamDoesNotBlockOtherTransactions(t *testing.T)
 		if err != nil {
 			t.Fatalf("healthy Recv: %v", err)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-ctx.Done():
 		t.Fatal("healthy transaction blocked behind saturated stream")
 	}
 
@@ -120,6 +126,46 @@ func TestClientStream_SaturatedStreamDoesNotBlockOtherTransactions(t *testing.T)
 	}
 	if _, err := stalled.Recv(); status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("stalled terminal Recv error = %v, want ResourceExhausted", err)
+	}
+}
+
+// A burst of responses past the call's buffer, arriving before the caller
+// reads any, is paced (the receive loop waits while the caller takes), not
+// failed: every frame reaches the caller. Only a caller that takes nothing
+// for consumerStall is cut (TestClientStream_SaturatedStreamDoesNotBlockOtherTransactions).
+func TestClientStream_BurstPastBufferIsPaced(t *testing.T) {
+	const frames = clientStreamResponseBufferSize + 44
+	ms := newMockStream(t.Context())
+	ms.recvCh = make(chan *pb.TunnelFrame, frames)
+	agent := NewAgent("agent-a", ms)
+	defer agent.Close() //nolint:errcheck
+	stream, err := agent.NewStream(t.Context(), testTargetAgentId)
+	if err != nil {
+		t.Fatalf("NewStream: %v", err)
+	}
+	txn := stream.(*clientStream).txnID
+	for i := range frames {
+		ms.recvCh <- &pb.TunnelFrame{Payload: fmt.Appendf(nil, "%d", i), MessageType: "a2a-response", TransactionId: txn, Eom: i == frames-1}
+	}
+	// The receive loop has taken the frame past the buffer (the stream's
+	// reader holds the next) before the caller reads anything.
+	for deadline := time.Now().Add(10 * time.Second); len(ms.recvCh) > frames-clientStreamResponseBufferSize-2; {
+		if time.Now().After(deadline) {
+			t.Fatalf("the receive loop took %d of %d frames", frames-len(ms.recvCh), frames)
+		}
+		runtime.Gosched()
+	}
+	for i := range frames {
+		resp, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv %d of %d: %v", i, frames, err)
+		}
+		if string(resp.Data) != fmt.Sprint(i) {
+			t.Fatalf("Recv %d = %q", i, resp.Data)
+		}
+	}
+	if _, err := stream.Recv(); err != io.EOF {
+		t.Fatalf("Recv after the last frame = %v, want EOF", err)
 	}
 }
 

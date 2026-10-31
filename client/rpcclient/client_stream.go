@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nfltr/relay/client/handoff"
 	"github.com/nfltr/relay/proto/pb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -43,6 +44,7 @@ type clientStream struct {
 	deadlineMs    int64
 	responseCh    chan *pb.TunnelFrame
 	done          chan struct{}
+	ended         chan struct{} // closed once the call, its context or the agent ended
 	ctx           context.Context
 
 	mu         sync.Mutex
@@ -83,6 +85,21 @@ func (cs *clientStream) closeResponses() {
 			close(cs.done)
 		}
 	})
+}
+
+// pushResponse gives msg to the caller: at once while its buffer has
+// room, else waiting while the caller keeps taking, at most consumerStall
+// (handoff.Send): then handoff.ErrStalled, and the receive loop cuts the
+// call. A call that ended is handoff.ErrEnded, the frame dropped.
+func (cs *clientStream) pushResponse(msg *pb.TunnelFrame) (err error) {
+	defer func() {
+		// closeResponses may close responseCh from another goroutine
+		// (failE2EE, closePendingClientStreams) during the send.
+		if recover() != nil {
+			err = handoff.ErrEnded
+		}
+	}()
+	return handoff.Send(cs.responseCh, msg, cs.ended, consumerStall)
 }
 
 // Send transmits data immediately with Eom=false.

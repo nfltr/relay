@@ -504,6 +504,7 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 		deadlineMs:    deadlineMs,
 		responseCh:    make(chan *pb.TunnelFrame, clientStreamResponseBufferSize),
 		done:          make(chan struct{}),
+		ended:         make(chan struct{}),
 		headerCh:      make(chan struct{}),
 		ctx:           ctx,
 	}
@@ -523,13 +524,14 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 }
 
 func (a *Agent) removePendingClientStreamOnContextDone(cs *clientStream) {
+	defer close(cs.ended)
 	select {
 	case <-cs.ctx.Done():
 		if pending, ok := a.pending.Load(cs.txnID); ok && pending == cs {
 			a.pending.Delete(cs.txnID)
 		}
 	case <-cs.done:
-	case <-a.done:
+	case <-a.ctx.Done():
 	}
 }
 
@@ -790,20 +792,19 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 			close(cs.headerCh)
 		})
 
-		select {
-		case cs.responseCh <- msg:
-		case <-cs.ctx.Done():
-			a.pending.Delete(txnID)
-			return
-		case <-a.ctx.Done():
-			return
-		default:
+		switch err := cs.pushResponse(msg); {
+		case errors.Is(err, handoff.ErrStalled):
 			err := status.Errorf(codes.ResourceExhausted,
-				"rpcclient: response buffer saturated for transaction %s", txnID)
+				"rpcclient: the caller took no response of transaction %s for %s", txnID, consumerStall)
 			cs.setResponseError(err)
 			cs.closeResponses()
 			a.pending.Delete(txnID)
-			log.Printf("rpcclient: isolated saturated response stream for transaction %s", txnID)
+			log.Printf("rpcclient: isolated stalled response stream for transaction %s", txnID)
+			return
+		case err != nil: // the call or the agent ended
+			if cs.ctx.Err() != nil {
+				a.pending.Delete(txnID)
+			}
 			return
 		}
 		if msg.GetEom() {
@@ -880,15 +881,15 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 }
 
 // refuseStalledCall ends an incoming call whose handler took none of its
-// request frames for requestStall: the receive loop, which serves every
+// request frames for consumerStall: the receive loop, which serves every
 // call and response of this agent, waits on it no longer. The handler's
 // context is cancelled, the caller gets ResourceExhausted, and the call's
 // later frames are dropped (pushRequest: the call ended).
 func (a *Agent) refuseStalledCall(ss *serverStream) {
 	ss.cancel()
-	log.Printf("rpcclient: refused incoming call %s: its handler took none of its request frames for %s", ss.txnID, requestStall)
+	log.Printf("rpcclient: refused incoming call %s: its handler took none of its request frames for %s", ss.txnID, consumerStall)
 	a.sendA2AControlError(ss.txnID, codes.ResourceExhausted, fmt.Sprintf(
-		"rpcclient: agent %s refused the call: its handler took none of the call's frames for %s", a.agentID, requestStall))
+		"rpcclient: agent %s refused the call: its handler took none of the call's frames for %s", a.agentID, consumerStall))
 }
 
 // handleCall runs the handler and sends the final status trailer.
