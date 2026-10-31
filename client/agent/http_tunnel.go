@@ -144,22 +144,27 @@ func responseHeaders(h http.Header, fwd resolvedForward) http.Header {
 	return out
 }
 
+// maxRewriteBody caps the text body responseBody buffers to rewrite.
+const maxRewriteBody = 50 << 20
+
 // responseBody is the backend's response body as the visitor gets it: a
-// text body (at most 50 MB) with its absolute links to the backend made
-// relative to the tunnel, anything else as it comes. streaming is set for
-// bodies that must never be buffered (SSE, NDJSON, media, chunked).
-func responseBody(resp *http.Response, fwd resolvedForward, browsePrefix string) (body io.Reader, streaming bool, err error) {
+// text body of at most maxRewriteBody with its absolute links to the
+// backend made relative to the tunnel (rewritten), anything else, a longer
+// text body included, whole as it comes. streaming is set for bodies that
+// must never be buffered (SSE, NDJSON, media, chunked).
+func responseBody(resp *http.Response, fwd resolvedForward, browsePrefix string) (body io.Reader, streaming, rewritten bool, err error) {
 	streaming = isStreamingResponse(resp)
 	if streaming || resp.StatusCode == http.StatusSwitchingProtocols || !isTextContent(resp.Header.Get("Content-Type")) {
-		return resp.Body, streaming, nil
+		return resp.Body, streaming, false, nil
 	}
-	// Cap body read at 50 MB to prevent unbounded memory usage on large
-	// JS bundles. Beyond this limit the body is sent without rewriting.
-	b, err := io.ReadAll(io.LimitReader(resp.Body, 50<<20))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxRewriteBody+1))
 	if err != nil {
-		return nil, false, fmt.Errorf("read response body: %w", err)
+		return nil, false, false, fmt.Errorf("read response body: %w", err)
 	}
-	return bytes.NewReader(rewriteLocalURLs(b, fwd.targetBase, fwd.prefix, browsePrefix)), false, nil
+	if len(b) > maxRewriteBody { // too long to buffer: every byte, unrewritten
+		return io.MultiReader(bytes.NewReader(b), resp.Body), false, false, nil
+	}
+	return bytes.NewReader(rewriteLocalURLs(b, fwd.targetBase, fwd.prefix, browsePrefix)), false, true, nil
 }
 
 // TunnelHandler serves the agent's HTTP tunnel on link sessions (sessions
@@ -222,7 +227,7 @@ func (h *TunnelHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		serveUpgrade(w, resp, responseHeaders(resp.Header, fwd))
 		return
 	}
-	body, streaming, err := responseBody(resp, fwd, r.Header.Get("X-Browse-Prefix"))
+	body, streaming, rewritten, err := responseBody(resp, fwd, r.Header.Get("X-Browse-Prefix"))
 	if err != nil {
 		http.Error(w, fmt.Sprintf("tunnel forward error: %v", err), http.StatusBadGateway)
 		return
@@ -230,7 +235,7 @@ func (h *TunnelHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for name, values := range responseHeaders(resp.Header, fwd) {
 		w.Header()[name] = values
 	}
-	if body == io.Reader(resp.Body) && resp.ContentLength >= 0 { // not rewritten: its length stands
+	if !rewritten && resp.ContentLength >= 0 { // its length stands
 		w.Header().Set("Content-Length", strconv.FormatInt(resp.ContentLength, 10))
 	}
 	w.WriteHeader(resp.StatusCode)

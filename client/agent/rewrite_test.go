@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"io"
 	"net/http"
 	"testing"
 )
@@ -192,3 +193,27 @@ func TestForwardRoutes(t *testing.T) {
 		}
 	}
 }
+
+// A text body over the rewrite cap reaches the visitor whole, unrewritten,
+// with its own length (it was once cut at the cap and ended cleanly).
+func TestResponseBodyOverRewriteCapIsWhole(t *testing.T) {
+	const size = maxRewriteBody + 1<<20
+	resp := &http.Response{
+		StatusCode:    http.StatusOK,
+		Header:        http.Header{"Content-Type": {"application/json"}},
+		ContentLength: size,
+		Body:          io.NopCloser(io.LimitReader(zeroReader{}, size)),
+	}
+	body, streaming, rewritten, err := responseBody(resp, resolvedForward{targetBase: "http://localhost:8080"}, "")
+	if err != nil || streaming || rewritten {
+		t.Fatalf("streaming=%v rewritten=%v err=%v, want neither and nil", streaming, rewritten, err)
+	}
+	n, err := io.Copy(io.Discard, body)
+	if err != nil || n != size {
+		t.Fatalf("visitor gets %d of %d bytes (err %v)", n, size, err)
+	}
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) { clear(p); return len(p), nil }

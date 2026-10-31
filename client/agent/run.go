@@ -364,12 +364,11 @@ func sendResponse(
 	if vs, ok := msg.Request.Headers["X-Browse-Prefix"]; ok && len(vs.HeaderValues) > 0 {
 		browsePrefix = vs.HeaderValues[0]
 	}
-	bodyReader, streaming, err := responseBody(resp, fwd, browsePrefix)
+	bodyReader, streaming, rewritten, err := responseBody(resp, fwd, browsePrefix)
 	if err != nil {
 		return 0, err
 	}
 	upgraded := resp.StatusCode == http.StatusSwitchingProtocols
-	rewritten := bodyReader != io.Reader(resp.Body)
 	// The chunkers end the response with a last chunk on any read error;
 	// a body that failed (the backend died, or the agent is closing) must
 	// not look whole, so its end is never sent as the last chunk. (An
