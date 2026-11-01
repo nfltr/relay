@@ -255,3 +255,56 @@ func newChanStream(t *testing.T, in, out int) *chanStream {
 }
 
 func (s *chanStream) closeIn() { s.once.Do(func() { close(s.in) }) }
+
+// A service's own certificate (Service.Cert) ends its E2EE sessions; a
+// service without one takes the tunnel's, and with no tunnel certificate
+// only a service with its own terminates E2EE: a pinned tcp service and
+// an http share with the tunnel's (ACME) certificate under one identity.
+func TestServiceOwnCertificate(t *testing.T) {
+	logger := slog.New(slog.DiscardHandler)
+	tunnel, err := NewE2EESetup("home", "", "", logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	own, err := NewE2EESetup("home", "", "", logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tab, err := NewServiceTable([]Service{
+		{Name: "db", Kind: agentservices.TCP, Target: "127.0.0.1:5432", E2EE: agentservices.E2EEOn, Cert: own},
+		{Name: "web", Kind: agentservices.HTTP, Target: "http://127.0.0.1:3000"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := sessionTargets{services: tab}
+	db := &pb.TCPData{Open: true, TargetAddr: "db", E2Ee: true, Answer: true}
+	web := &pb.TCPData{Open: true, TargetAddr: "web", E2Ee: true}
+	for _, tc := range []struct {
+		name   string
+		open   *pb.TCPData
+		tunnel *E2EESetup
+		want   *E2EESetup // nil: refused
+		kind   sessionKind
+	}{
+		{"tcp service, own certificate", db, tunnel, own, sessionE2EETCP},
+		{"http service, the tunnel's", web, tunnel, tunnel, sessionE2EE},
+		{"own certificate, no tunnel's", db, nil, own, sessionE2EETCP},
+		{"no certificate at all", web, nil, nil, 0},
+	} {
+		var cfg *e2eeTLSConfig
+		if tc.tunnel != nil {
+			cfg = tc.tunnel.cfg
+		}
+		p, err := planSession(tc.open, targets, cfg)
+		switch {
+		case tc.want == nil && err == nil:
+			t.Errorf("%s: accepted", tc.name)
+		case tc.want == nil:
+		case err != nil:
+			t.Errorf("%s: %v", tc.name, err)
+		case p.e2ee != tc.want.cfg || p.kind != tc.kind:
+			t.Errorf("%s: certificate %s kind %d, want %s kind %d", tc.name, p.e2ee.Fingerprint(), p.kind, tc.want.Fingerprint(), tc.kind)
+		}
+	}
+}

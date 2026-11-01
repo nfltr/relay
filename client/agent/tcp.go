@@ -692,7 +692,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 				if answer && t.answerOpen(id, q) != nil {
 					continue
 				}
-				go t.serveE2EE(id, q, e2ee, p.backend, p.client, p.wrap)
+				go t.serveE2EE(id, q, p.e2ee, p.backend, p.client, p.wrap)
 			default:
 				go func() {
 					conn, reason, dialErr := dialTarget(ctx, p.network, p.target)
@@ -712,7 +712,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 						return
 					}
 					if p.kind == sessionE2EETCP {
-						serveE2EETCP(newSessionConn(t, id, q), conn, e2ee, logger)
+						serveE2EETCP(newSessionConn(t, id, q), conn, p.e2ee, logger)
 						return
 					}
 					t.pump(id, q, conn)

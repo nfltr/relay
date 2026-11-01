@@ -31,6 +31,11 @@ type Service struct {
 	// with its E2EE certificate (a plain session is refused); Off, plain
 	// bytes only; Default, either, as the relay's policy resolves it.
 	E2EE agentservices.E2EE
+	// Cert, when set, is the certificate this service's E2EE sessions end
+	// with instead of the tunnel's (Tunnel.E2EE): a pinned tcp service and
+	// an http service whose share takes the tunnel's ACME certificate
+	// under one agent identity.
+	Cert *E2EESetup
 }
 
 // ServiceTable is the services an agent serves under its identity: the
@@ -52,6 +57,7 @@ type tableService struct {
 	backend string   // HTTP: the backend URL
 	shares  []string // share codes whose policy wrap enforces
 	wrap    func(http.Handler) http.Handler
+	cert    *e2eeTLSConfig // Service.Cert; nil: the tunnel's
 }
 
 // NewServiceTable validates services and returns their table.
@@ -68,6 +74,9 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 			return nil, fmt.Errorf("service %q: declared twice", s.Name)
 		}
 		e := &tableService{kind: s.Kind, e2ee: s.E2EE}
+		if s.Cert != nil {
+			e.cert = s.Cert.cfg
+		}
 		if s.E2EE != agentservices.E2EEDefault && (s.Kind != agentservices.TCP || (s.E2EE != agentservices.E2EEOn && s.E2EE != agentservices.E2EEOff)) {
 			return nil, fmt.Errorf("service %q: e2ee %q (want %q or %q on a tcp service)", s.Name, s.E2EE, agentservices.E2EEOn, agentservices.E2EEOff)
 		}
@@ -157,7 +166,7 @@ func (t *ServiceTable) resolve(target string, e2ee, terminatesE2EE, connect bool
 	switch {
 	case e == nil:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_UNKNOWN_SERVICE, "no such service")
-	case e2ee && !terminatesE2EE:
+	case e2ee && !terminatesE2EE && e.cert == nil:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "the agent does not terminate end-to-end TLS")
 	case e2ee && e.kind == agentservices.TCP && !connect:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "an end-to-end encrypted share session needs an http service")

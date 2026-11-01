@@ -37,7 +37,8 @@ type sessionPlan struct {
 	network         string // "" or "tcp": target is host:port; "unix": a service's socket path
 	target, backend string
 	wrap            func(http.Handler) http.Handler
-	client          netip.Addr // an E2EE session's visitor, from the relay (pb.TCPData.ClientAddr); zero: unknown
+	client          netip.Addr     // an E2EE session's visitor, from the relay (pb.TCPData.ClientAddr); zero: unknown
+	e2ee            *e2eeTLSConfig // the certificate an E2EE session ends with: its service's, else the tunnel's
 }
 
 var (
@@ -54,10 +55,8 @@ func planSession(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) 
 		}
 		return sessionPlan{kind: sessionHTTP}, nil
 	}
-	p := sessionPlan{target: open.GetTargetAddr(), backend: targets.defaultBackend}
-	if e2ee != nil {
-		p.wrap = e2ee.wrapHTTP
-	}
+	p := sessionPlan{target: open.GetTargetAddr(), backend: targets.defaultBackend, e2ee: e2ee}
+	var svcWrap func(http.Handler) http.Handler
 	if targets.services != nil {
 		// The table is the only set of targets: a session that names
 		// anything else is refused, never dialled.
@@ -65,11 +64,18 @@ func planSession(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) 
 		if err != nil {
 			return sessionPlan{}, err
 		}
-		p.network, p.target, p.backend, p.wrap = svc.network, svc.addr, svc.backend, composeWraps(p.wrap, svc.wrap)
+		p.network, p.target, p.backend, svcWrap = svc.network, svc.addr, svc.backend, svc.wrap
+		if svc.cert != nil {
+			p.e2ee = svc.cert
+		}
 	} else if targets.forwardAddr != "" {
 		p.target = targets.forwardAddr
 	}
-	if open.GetE2Ee() && e2ee != nil {
+	if p.e2ee != nil {
+		p.wrap = p.e2ee.wrapHTTP
+	}
+	p.wrap = composeWraps(p.wrap, svcWrap)
+	if open.GetE2Ee() && p.e2ee != nil {
 		p.kind = sessionE2EE
 		p.client = clientAddr(open.GetClientAddr())
 		if targets.services != nil && targets.services.byName[open.GetTargetAddr()].kind == agentservices.TCP {
@@ -157,7 +163,7 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 			_ = s.Close()
 			return
 		}
-		serveE2EEConn(tls.Server(s, l.e2ee.tlsConfig), backend, l.e2ee.rewriteHost, p.client, p.wrap, l.logger)
+		serveE2EEConn(tls.Server(s, p.e2ee.tlsConfig), backend, p.e2ee.rewriteHost, p.client, p.wrap, l.logger)
 	default:
 		target, reason, err := dialTarget(l.ctx, p.network, p.target)
 		if err != nil {
@@ -171,7 +177,7 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 			return
 		}
 		if p.kind == sessionE2EETCP {
-			serveE2EETCP(s, target, l.e2ee, l.logger)
+			serveE2EETCP(s, target, p.e2ee, l.logger)
 			return
 		}
 		_ = peerlink.Join(s, target)
