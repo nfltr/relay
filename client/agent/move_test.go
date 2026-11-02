@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/rpcclient"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentwire"
 	"google.golang.org/grpc"
@@ -30,6 +31,8 @@ type moveRelay struct {
 	streams chan grpc.BidiStreamingServer[pb.HTTPProxyResponse, pb.HTTPProxyRequest]
 	refuse  atomic.Bool  // refuse every further stream
 	refuseN atomic.Int32 // refuse this many further streams
+	// refuseErr, when set, is what a refused stream ends with (else Unavailable).
+	refuseErr error
 	// ends, when set, gets each stream's end: closing it ends the stream,
 	// as the relay ends one the agent moved off.
 	ends   chan chan struct{}
@@ -44,6 +47,9 @@ type moveRelay struct {
 
 func (f *moveRelay) ConnectHTTP(stream grpc.BidiStreamingServer[pb.HTTPProxyResponse, pb.HTTPProxyRequest]) error {
 	if f.refuse.Load() || f.refuseN.Add(-1) >= 0 {
+		if f.refuseErr != nil {
+			return f.refuseErr
+		}
 		return status.Error(codes.Unavailable, "no replica")
 	}
 	if f.stall.Load() {
@@ -193,6 +199,51 @@ func TestAgentMoveRetriesRefusedConnections(t *testing.T) {
 	nextStream(t, f, "new connection after three refusals")
 	if m, err := recvNonHeartbeat(t, old); err != nil || m.GetMove() != pb.Move_MOVE_CONNECTED {
 		t.Fatalf("old stream: got %v %v, want MOVE_CONNECTED", m, err)
+	}
+}
+
+// TestRevokedAgentStopsDuringAMove: a move's new connection the relay
+// refuses Unauthenticated (the key was revoked) ends the agent at once with
+// FatalAuth, not after moveRetryFor of retries; on MOVE_RECONNECT and on a
+// let-go end (the revocation's cut seen as Canceled before the TCP tunnel's
+// Unauthenticated). The relay's Revocation.tla model,
+// NoRetryAfterRefusal.
+func TestRevokedAgentStopsDuringAMove(t *testing.T) {
+	for _, letGo := range []bool{false, true} {
+		t.Run(fmt.Sprintf("letGo=%v", letGo), func(t *testing.T) {
+			f := &moveRelay{
+				streams:   make(chan grpc.BidiStreamingServer[pb.HTTPProxyResponse, pb.HTTPProxyRequest], 4),
+				refuseErr: status.Error(codes.Unauthenticated, "unknown credential"),
+			}
+			if letGo {
+				f.ends = make(chan chan struct{}, 4)
+				f.endErr = status.Error(codes.Canceled, "Canceled")
+			}
+			addr, stop := startMoveRelay(t, f)
+			defer stop()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			a := New(Config{ServerAddr: addr, AgentID: "revoked", Retries: 3, Logger: slog.New(slog.DiscardHandler)})
+			a.(*agent).moveRetryFor = time.Hour // only a fatal stop ends the move within the test
+			if err := a.Connect(ctx); err != nil {
+				t.Fatal(err)
+			}
+			old := nextStream(t, f, "first connection")
+			f.refuse.Store(true)
+			if letGo {
+				close(<-f.ends)
+			} else if err := old.Send(&pb.HTTPProxyRequest{Move: pb.Move_MOVE_RECONNECT}); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-a.Done():
+			case <-time.After(30 * time.Second): // a hang: moveRetryFor is an hour
+				t.Fatal("the revoked agent did not stop: the move retried a refusal")
+			}
+			if c := rpcclient.FatalClass(a.Err()); c != rpcclient.FatalAuth {
+				t.Fatalf("Err %v: class %v, want FatalAuth", a.Err(), c)
+			}
+		})
 	}
 }
 

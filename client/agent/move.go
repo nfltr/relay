@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,9 @@ import (
 
 // errMoved ends a connection the agent moved off.
 var errMoved = errors.New("moved to another relay connection")
+
+// errNoWelcome: a move's new stream whose headers carry no Welcome.
+var errNoWelcome = errors.New("no welcome")
 
 // moveTCPQuiet is how long the old connection's TCP tunnel must have no
 // session before the connection closes, and moveTCPBound how long the agent
@@ -105,8 +109,11 @@ func (g *tcpStreamGrowth) waitIdle(ctx context.Context) {
 // moveRetryEvery for up to moveRetryFor. moveRetryFor also bounds each
 // attempt (its dial, the stream's accept): the relay gives up on the move
 // 10 s after MOVE_RECONNECT, so a connection still stalled past it serves
-// no move. release ends the new stream's context; call it once its
-// connection is closed.
+// no move. A refusal of a fatal class (rpcclient.FatalClass: a revoked
+// key's Unauthenticated) is not tried again: it returns at once, wrapped,
+// for the loop to stop with (the relay's Revocation.tla, NoRetryAfterRefusal; guard
+// TestRevokedAgentStopsDuringAMove). release ends the new stream's context;
+// call it once its connection is closed.
 func (a *agent) moveConnect(ctx context.Context) (conn *grpc.ClientConn, client pb.DispatcherClient, stream pb.Dispatcher_ConnectHTTPClient, streamCtx context.Context, release func(), err error) {
 	until := time.Now().Add(a.moveRetryFor)
 	for {
@@ -118,12 +125,12 @@ func (a *agent) moveConnect(ctx context.Context) (conn *grpc.ClientConn, client 
 			if herr == nil && agentwire.HasWelcome(md) && late.Stop() {
 				return conn, client, stream, streamCtx, cancel, nil
 			}
-			err = fmt.Errorf("the relay refused the new stream: %v", herr)
+			err = fmt.Errorf("the relay refused the new stream: %w", cmp.Or(herr, errNoWelcome))
 			_ = conn.Close()
 		}
 		late.Stop()
 		cancel()
-		if ctx.Err() != nil || time.Now().After(until) {
+		if ctx.Err() != nil || time.Now().After(until) || rpcclient.FatalClass(err) != rpcclient.NotFatal {
 			return nil, nil, nil, nil, nil, err
 		}
 		select {

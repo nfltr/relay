@@ -333,6 +333,13 @@ func (a *agent) runWithReconnect(
 				if ctx.Err() != nil {
 					return
 				}
+				if rpcclient.FatalClass(err) != rpcclient.NotFatal {
+					err = rpcclient.FatalError(err)
+					a.logger.Error("move: the new connection was refused with a fatal error", "error", err)
+					_ = conn.Close()
+					a.stopWith(err)
+					return
+				}
 				a.logger.Warn("move: the new connection failed; staying until the relay lets this one go", "error", err)
 				streamErr = <-cycle
 			}
