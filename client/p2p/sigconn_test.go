@@ -292,10 +292,8 @@ func TestSignalConnJoiningPathCarriesEarlierFrames(t *testing.T) {
 // the direct path: its write gives up after sigWriteTimeout and drops it
 // (spec/SignalConn.tla M1:unbounded-relay).
 func TestSignalConnStalledRelayDoesNotBlockDirect(t *testing.T) {
-	old := sigWriteTimeout
-	sigWriteTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { sigWriteTimeout = old })
 	m := newRelayMux(func([]byte) error { return nil }, nil)
+	m.sigTimeout = 50 * time.Millisecond
 	m.sigWin.avail = 0 // the peer grants nothing
 	direct := newChanPath()
 	sc := NewSignalConn(m.SignalPath())

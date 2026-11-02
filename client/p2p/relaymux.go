@@ -46,6 +46,7 @@ type RelayMux struct {
 	data muxQueue[[]byte]
 	// Send side: each path's credit, what the peer's queue has room for.
 	sigWin, dataWin sendWindow
+	sigTimeout      time.Duration // a signaling frame's wait for credit (sigWriteTimeout)
 
 	quit chan struct{} // closed by Close: stop delivering
 	qOne sync.Once
@@ -238,13 +239,14 @@ func NewServerRelayMux(stream rpcclient.ServerStream) *RelayMux {
 
 func newRelayMux(send func([]byte) error, closeSend func() error) *RelayMux {
 	return &RelayMux{
-		send:      send,
-		closeSend: closeSend,
-		sig:       newMuxQueue[*Frame]("signaling", muxSignalMax),
-		data:      newMuxQueue[[]byte]("data", muxDataMax),
-		sigWin:    newSendWindow(muxSignalMax),
-		dataWin:   newSendWindow(muxDataMax),
-		quit:      make(chan struct{}),
+		send:       send,
+		closeSend:  closeSend,
+		sig:        newMuxQueue[*Frame]("signaling", muxSignalMax),
+		data:       newMuxQueue[[]byte]("data", muxDataMax),
+		sigWin:     newSendWindow(muxSignalMax),
+		dataWin:    newSendWindow(muxDataMax),
+		sigTimeout: sigWriteTimeout,
+		quit:       make(chan struct{}),
 	}
 }
 
@@ -343,7 +345,7 @@ func (m *RelayMux) Close() error {
 // tcpWriteTimeout bounds the direct path's write: a relay that stopped
 // granting credit fails the write, and SignalConn drops the path instead of
 // stalling the others behind its lock (spec/SignalConn.tla TimeOut).
-var sigWriteTimeout = tcpWriteTimeout
+const sigWriteTimeout = tcpWriteTimeout
 
 // SignalPath is the mux's signaling FramePath. Closing it closes the mux.
 func (m *RelayMux) SignalPath() FramePath { return muxSignalPath{m} }
@@ -358,7 +360,7 @@ func (p muxSignalPath) WriteFrame(f *Frame) error {
 	if 1+len(b) > muxSignalMax {
 		return fmt.Errorf("p2p: signaling frame of %d bytes exceeds the relay window %d", 1+len(b), muxSignalMax)
 	}
-	expire := time.NewTimer(sigWriteTimeout)
+	expire := time.NewTimer(p.m.sigTimeout)
 	defer expire.Stop()
 	if _, err := p.m.sigWin.take(1+len(b), true, p.m.quit, expire.C); err != nil {
 		return err
