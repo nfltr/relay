@@ -39,7 +39,8 @@ const maxAhead = 4096
 // fails is dropped; reads end (io.EOF) when the last path has ended.
 type SignalConn struct {
 	mu      sync.Mutex // serializes writes: each path sees frames in seq order
-	paths   []FramePath
+	paths   []pathEntry
+	added   int // paths added: the next one's id
 	sendSeq uint64
 	sent    []*Frame // the last maxAhead frames written, for a joining path
 	closed  bool
@@ -85,8 +86,13 @@ func (sc *SignalConn) AddPath(p FramePath) {
 	}
 	sc.readers++
 	sc.rmu.Unlock()
-	go sc.readPath(p) // first: the peer's replay may wait for this reader
 	sc.mu.Lock()
+	e := pathEntry{p, sc.added}
+	sc.added++
+	if traceOn {
+		traceJoin(sc, e.id)
+	}
+	go sc.readPath(e) // first: the peer's replay may wait for this reader
 	ok := !sc.closed
 	for _, f := range sc.sent {
 		if ok && p.WriteFrame(f) != nil {
@@ -94,7 +100,7 @@ func (sc *SignalConn) AddPath(p FramePath) {
 		}
 	}
 	if ok {
-		sc.paths = append(sc.paths, p)
+		sc.paths = append(sc.paths, e)
 	}
 	sc.mu.Unlock()
 	if !ok {
@@ -109,14 +115,27 @@ func (sc *SignalConn) Paths() int {
 	return len(sc.paths)
 }
 
-func (sc *SignalConn) readPath(p FramePath) {
+// pathEntry is an open path and its id: the order it was added in (the
+// relay stream 0; spec/SignalConn.tla's paths, its trace's ids).
+type pathEntry struct {
+	FramePath
+	id int
+}
+
+func (sc *SignalConn) readPath(p pathEntry) {
 	for {
 		f, err := p.ReadFrame()
+		if err == nil && traceOn {
+			traceRecv(sc, p.id, f.Seq)
+		}
 		if err != nil || !sc.accept(f) {
 			break
 		}
 	}
-	sc.dropPath(p)
+	if traceOn {
+		traceDrop(sc, p.id)
+	}
+	sc.dropPath(p.FramePath)
 	sc.rmu.Lock()
 	sc.readers--
 	if sc.readers == 0 {
@@ -159,7 +178,7 @@ func (sc *SignalConn) accept(f *Frame) bool {
 func (sc *SignalConn) dropPath(p FramePath) {
 	sc.mu.Lock()
 	for i, q := range sc.paths {
-		if q == p {
+		if q.FramePath == p {
 			sc.paths = append(sc.paths[:i:i], sc.paths[i+1:]...)
 			break
 		}
@@ -179,6 +198,9 @@ func (sc *SignalConn) WriteFrame(f *Frame) error {
 	sc.sendSeq++
 	g := *f
 	g.Seq = sc.sendSeq
+	if traceOn {
+		traceWrite(sc, g.Seq, sc.paths)
+	}
 	// ponytail: a path joining after more than maxAhead frames misses the
 	// older ones; one of them lost on every other path fills the reader's
 	// ahead and closes it (accept), never a silent stall.

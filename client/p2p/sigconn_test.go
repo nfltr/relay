@@ -178,6 +178,7 @@ func pipePaths() (FramePath, FramePath) {
 // The switch: a call whose direct path joins mid-stream and whose relay path
 // later dies delivers every frame exactly once, in order, both ways.
 func TestSignalConnSwitchLosesNothing(t *testing.T) {
+	traceTest(t)
 	relayA, relayB := pipePaths()
 	alice, bob := NewSignalConn(relayA), NewSignalConn(relayB)
 	defer alice.Close() //nolint:errcheck
@@ -257,6 +258,7 @@ func TestSignalConnGapIsBounded(t *testing.T) {
 // still in flight on a path that breaks is not lost while the newer path
 // lives (spec/SignalConn.tla NoSilentLoss).
 func TestSignalConnJoiningPathCarriesEarlierFrames(t *testing.T) {
+	traceTest(t)
 	relay, direct := newChanPath(), newChanPath()
 	w := NewSignalConn(relay)
 	defer w.Close() //nolint:errcheck
