@@ -4,9 +4,11 @@
 package p2p
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -312,5 +314,57 @@ func TestSignalConnStalledRelayDoesNotBlockDirect(t *testing.T) {
 	}
 	if f := <-direct.written; f.Text != "a" {
 		t.Fatalf("direct path carried %q, want a", f.Text)
+	}
+}
+
+// failWritePath refuses every write and keeps its reader open.
+type failWritePath struct{ quit chan struct{} }
+
+func (p failWritePath) WriteFrame(*Frame) error { return errors.New("write refused") }
+func (p failWritePath) ReadFrame() (*Frame, error) {
+	<-p.quit
+	return nil, io.EOF
+}
+func (p failWritePath) Close() error { return nil }
+
+// A frame no path took is not replayed to a later path (review r2 L4): the
+// caller saw an error for it.
+func TestSignalConnFailedWriteIsNotReplayed(t *testing.T) {
+	first := failWritePath{make(chan struct{})}
+	defer close(first.quit)
+	sc := NewSignalConn(first)
+	defer sc.Close() //nolint:errcheck
+	if err := sc.WriteFrame(&Frame{Type: FrameChat, Text: "failed"}); err == nil {
+		t.Fatal("a write no path took succeeded")
+	}
+	later := newChanPath()
+	sc.AddPath(later)
+	if err := sc.WriteFrame(&Frame{Type: FrameChat, Text: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if f := <-later.written; f.Text != "b" || f.Seq != 1 {
+		t.Fatalf("the later path carried %q seq %d first, want b seq 1", f.Text, f.Seq)
+	}
+}
+
+// A frame too large for the relay window is refused before it is numbered,
+// and the relay path stays open (review r2 L5).
+func TestSignalConnOversizeFrameKeepsPaths(t *testing.T) {
+	m := newRelayMux(func([]byte) error { return nil }, nil)
+	direct := newChanPath()
+	sc := NewSignalConn(m.SignalPath())
+	defer sc.Close() //nolint:errcheck
+	sc.AddPath(direct)
+	if err := sc.WriteFrame(&Frame{Type: FrameChat, Text: strings.Repeat("x", muxSignalMax)}); err == nil {
+		t.Fatal("an oversize frame was written")
+	}
+	if n := sc.Paths(); n != 2 {
+		t.Fatalf("%d paths after an oversize frame, want 2", n)
+	}
+	if err := sc.WriteFrame(&Frame{Type: FrameChat, Text: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	if f := <-direct.written; f.Text != "b" || f.Seq != 1 {
+		t.Fatalf("direct carried %q seq %d, want b seq 1", f.Text, f.Seq)
 	}
 }

@@ -5,6 +5,9 @@ package p2p
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -187,9 +190,23 @@ func (sc *SignalConn) dropPath(p FramePath) {
 	_ = p.Close()
 }
 
+// maxFrameJSON bounds a frame's JSON so every path takes it: the relay
+// window less the sealed envelope (base64 of the frame and its AEAD tag, the
+// outer frame's fields) and its sequence number. A larger frame failed only
+// on the relay path, which closed it and the data fallback with it.
+const maxFrameJSON = (muxSignalMax-256)/4*3 - 16 - 32
+
+// errFrameTooLarge is a frame over maxFrameJSON.
+var errFrameTooLarge = errors.New("p2p: signaling frame too large for the relay window")
+
 // WriteFrame numbers f and writes it on every open path. It fails only when
-// no path took it.
+// no path took it; such a frame is not numbered or replayed to a later path.
 func (sc *SignalConn) WriteFrame(f *Frame) error {
+	if b, err := json.Marshal(f); err != nil {
+		return fmt.Errorf("p2p: marshal frame: %w", err)
+	} else if len(b) > maxFrameJSON {
+		return errFrameTooLarge
+	}
 	sc.mu.Lock()
 	defer sc.mu.Unlock()
 	if sc.closed {
@@ -201,13 +218,6 @@ func (sc *SignalConn) WriteFrame(f *Frame) error {
 	if traceOn {
 		traceWrite(sc, g.Seq, sc.paths)
 	}
-	// ponytail: a path joining after more than maxAhead frames misses the
-	// older ones; one of them lost on every other path fills the reader's
-	// ahead and closes it (accept), never a silent stall.
-	if len(sc.sent) == maxAhead {
-		sc.sent = sc.sent[1:]
-	}
-	sc.sent = append(sc.sent, &g)
 	var err error
 	sent := 0
 	for _, p := range sc.paths {
@@ -219,8 +229,16 @@ func (sc *SignalConn) WriteFrame(f *Frame) error {
 		sent++
 	}
 	if sent > 0 {
+		// ponytail: a path joining after more than maxAhead frames misses
+		// the older ones; one of them lost on every other path fills the
+		// reader's ahead and closes it (accept), never a silent stall.
+		if len(sc.sent) == maxAhead {
+			sc.sent = sc.sent[1:]
+		}
+		sc.sent = append(sc.sent, &g)
 		return nil
 	}
+	sc.sendSeq-- // no path took it: the caller sees the error, no peer the frame
 	if err == nil {
 		err = io.ErrClosedPipe
 	}
