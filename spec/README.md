@@ -28,12 +28,15 @@ each path (`E2E.sealPath`, per path, below the frames), unsequenced frames
 | `Join` | `SignalConn.AddPath` (from `AddDirectPath`) on both sides |
 | `Recv(p)` | `readPath` and `accept`: deliver, hold ahead, drop a copy |
 | `Break(p)` | a path's read or write fails: `dropPath` |
+| `Stall(p)` | a path takes no write and delivers nothing, unbroken (no relay credit, a half-open connection) |
+| `TimeOut(p)` | a frame write past its bound (`tcpWriteTimeout`, `sigWriteTimeout`): the path is closed |
 
 Invariant `NoSilentLoss`: every frame sent and not delivered is held ahead
 or on a live path, or no path is left (reads end with `io.EOF`). Property
-`AllDelivered`: while a path lives, every frame is delivered (weak
-fairness on `Write` and `Recv`). `SignalConn.cfg` (3 frames, 1 break):
-223 states, depth 11, every action taken (`-coverage 1`).
+`AllDelivered`: while a path flows (lives, not stalled), every frame is
+delivered (weak fairness on `Write`, `Recv` and `TimeOut`). `SignalConn.cfg`
+(3 frames, 1 break, 1 stall): 310 states, depth 12, every action taken
+(`-coverage 1`).
 
 ### Findings (lane WGP2P, 2026-11-02)
 
@@ -52,6 +55,17 @@ fairness on `Write` and `Recv`). `SignalConn.cfg` (3 frames, 1 break):
   frame in order, so `ahead` holds a frame only past the replay's
   `maxAhead` bound; it stays for that case, where a gap ends the reader
   (`TestSignalConnGapIsBounded`) instead of stalling it.
+
+- **M1 (medium, fixed, lane WGFIX2, review r2)**: `WriteFrame` writes the
+  paths one after another under its lock, relay first, and the relay
+  path's write waited for credit with no bound. A relay that stopped
+  granting credit (peer reader blocked, relay overloaded, half-open
+  stream) blocked every later frame on the direct path too, and `AddPath`,
+  `dropPath` and `Close` behind the lock, while both paths looked live.
+  Mutant `M1:unbounded-relay`: `AllDelivered`. Fix: the relay signal
+  write waits for credit at most `sigWriteTimeout` (as the direct path's
+  `tcpWriteTimeout`) and fails, which closes the path. Test:
+  `TestSignalConnStalledRelayDoesNotBlockDirect`.
 
 Mutants (`make spec-mutants`): `P1:no-replay` (`NoSilentLoss`),
 `P1:no-replay-stall` (`AllDelivered`), `one-path` (a frame written on one

@@ -39,6 +39,7 @@ CONSTANTS
     R = $3
     N <- TraceN
     MaxBreak = 2
+    MaxStall = 0
     Replay = TRUE
     Mutant = "none"
 INIT TraceInit
@@ -82,6 +83,9 @@ mutants)
 	expect P1:no-replay -e 's/Replay = TRUE/Replay = FALSE/'
 	expect P1:no-replay-stall -e 's/Replay = TRUE/Replay = FALSE/' -e '/NoSilentLoss/d'
 	expect one-path -e 's/Mutant = "none"/Mutant = "one-path"/'
+	# M1 (review r2) put back: the relay path's write waits for credit with no bound.
+	expect M1:unbounded-relay -e 's/Mutant = "none"/Mutant = "unbounded-relay"/'
+	expect witness:Stall -e 's/^    NoSilentLoss$/    W_Stall/'
 	exit $fail
 	;;
 traces)
