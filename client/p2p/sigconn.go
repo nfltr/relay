@@ -29,7 +29,9 @@ const maxAhead = 4096
 // frame, and the direct TCP channel once it connects (AddPath).
 //
 // Every frame gets the next sequence number and is written on every open
-// path. The receiver delivers each sequence number once, in order: a copy of
+// path; a path that joins first carries the frames sent before it (the last
+// maxAhead of them), so a frame still in flight on a path that breaks is
+// carried by the newer one (spec/SignalConn.tla NoSilentLoss). The receiver delivers each sequence number once, in order: a copy of
 // a number already delivered is dropped (dedupe by sequence number, never by
 // payload: two identical frames are two frames), and a frame that overtook an
 // earlier one (the direct path is faster than the relay) waits for it. So a
@@ -39,6 +41,7 @@ type SignalConn struct {
 	mu      sync.Mutex // serializes writes: each path sees frames in seq order
 	paths   []FramePath
 	sendSeq uint64
+	sent    []*Frame // the last maxAhead frames written, for a joining path
 	closed  bool
 
 	rmu     sync.Mutex
@@ -67,8 +70,9 @@ func NewSignalConn(first FramePath) *SignalConn {
 	return sc
 }
 
-// AddPath adds a path: later frames are written on it too, and frames read
-// from it are delivered (deduped and in order with the other paths).
+// AddPath adds a path: the frames sent so far and later frames are written on
+// it too, and frames read from it are delivered (deduped and in order with
+// the other paths).
 func (sc *SignalConn) AddPath(p FramePath) {
 	if sc.e2e != nil {
 		p = sc.e2e.sealPath(p)
@@ -81,16 +85,21 @@ func (sc *SignalConn) AddPath(p FramePath) {
 	}
 	sc.readers++
 	sc.rmu.Unlock()
+	go sc.readPath(p) // first: the peer's replay may wait for this reader
 	sc.mu.Lock()
-	closed := sc.closed
-	if !closed {
+	ok := !sc.closed
+	for _, f := range sc.sent {
+		if ok && p.WriteFrame(f) != nil {
+			ok = false
+		}
+	}
+	if ok {
 		sc.paths = append(sc.paths, p)
 	}
 	sc.mu.Unlock()
-	if closed {
+	if !ok {
 		_ = p.Close() // its reader ends at once
 	}
-	go sc.readPath(p)
 }
 
 // Paths is the number of open paths.
@@ -170,6 +179,13 @@ func (sc *SignalConn) WriteFrame(f *Frame) error {
 	sc.sendSeq++
 	g := *f
 	g.Seq = sc.sendSeq
+	// ponytail: a path joining after more than maxAhead frames misses the
+	// older ones; one of them lost on every other path fills the reader's
+	// ahead and closes it (accept), never a silent stall.
+	if len(sc.sent) == maxAhead {
+		sc.sent = sc.sent[1:]
+	}
+	sc.sent = append(sc.sent, &g)
 	var err error
 	sent := 0
 	for _, p := range sc.paths {

@@ -122,8 +122,9 @@ func TestSignalConnDeliversIdenticalPayloads(t *testing.T) {
 	}
 }
 
-// WriteFrame numbers frames and writes each on every open path; a path that
-// fails is dropped and the others keep the frame.
+// WriteFrame numbers frames and writes each on every open path (a joining
+// path gets the earlier ones first); a path that fails is dropped and the
+// others keep the frame.
 func TestSignalConnWritesEveryPath(t *testing.T) {
 	relay, direct := newChanPath(), newChanPath()
 	sc := NewSignalConn(relay)
@@ -144,8 +145,13 @@ func TestSignalConnWritesEveryPath(t *testing.T) {
 			t.Fatalf("relay got seq %d, want %d", f.Seq, want)
 		}
 	}
-	if f := <-direct.written; f.Seq != 2 || len(direct.written) != 0 {
-		t.Fatalf("direct got seq %d (+%d more), want only 2", f.Seq, len(direct.written))
+	for _, want := range []uint64{1, 2} { // 1: replayed when it joined
+		if f := <-direct.written; f.Seq != want {
+			t.Fatalf("direct got seq %d, want %d", f.Seq, want)
+		}
+	}
+	if len(direct.written) != 0 {
+		t.Fatalf("direct got %d more", len(direct.written))
 	}
 	_ = relay.Close()
 	waitPaths(t, sc, 0)
@@ -202,8 +208,12 @@ func TestSignalConnSwitchLosesNothing(t *testing.T) {
 	done := make(chan struct{})
 	go func() { gotAlice = recv(alice); close(done) }()
 	time.Sleep(5 * time.Millisecond)
-	alice.AddPath(directA)
+	// Each side adds its end in its own process: at once (a joining path's
+	// replay waits for the other end's reader on a net.Pipe).
+	added := make(chan struct{})
+	go func() { alice.AddPath(directA); close(added) }()
 	bob.AddPath(directB)
+	<-added
 	time.Sleep(10 * time.Millisecond)
 	_ = relayA.Close() // the relay goes away mid-call
 
@@ -240,5 +250,36 @@ func TestSignalConnGapIsBounded(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("a gap past maxAhead did not end the connection")
+	}
+}
+
+// A path that joins later carries the frames sent before it, so a frame
+// still in flight on a path that breaks is not lost while the newer path
+// lives (spec/SignalConn.tla NoSilentLoss).
+func TestSignalConnJoiningPathCarriesEarlierFrames(t *testing.T) {
+	relay, direct := newChanPath(), newChanPath()
+	w := NewSignalConn(relay)
+	defer w.Close() //nolint:errcheck
+	if err := w.WriteFrame(&Frame{Type: FrameChat, Text: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	w.AddPath(direct)
+	if err := w.WriteFrame(&Frame{Type: FrameChat, Text: "b"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// The reader: the relay breaks with "a" in flight; only the direct path's
+	// frames arrive.
+	rRelay, rDirect := newChanPath(), newChanPath()
+	r := NewSignalConn(rRelay)
+	defer r.Close() //nolint:errcheck
+	r.AddPath(rDirect)
+	_ = rRelay.Close()
+	for range len(direct.written) {
+		rDirect.in <- <-direct.written
+	}
+	got := readN(t, r, 2)
+	if got[0].Text != "a" || got[1].Text != "b" {
+		t.Fatalf("read %q, %q, want a, b", got[0].Text, got[1].Text)
 	}
 }
