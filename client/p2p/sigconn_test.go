@@ -285,3 +285,32 @@ func TestSignalConnJoiningPathCarriesEarlierFrames(t *testing.T) {
 		t.Fatalf("read %q, %q, want a, b", got[0].Text, got[1].Text)
 	}
 }
+
+// A relay that grants no credit (a stalled, unbroken path) does not block
+// the direct path: its write gives up after sigWriteTimeout and drops it
+// (spec/SignalConn.tla M1:unbounded-relay).
+func TestSignalConnStalledRelayDoesNotBlockDirect(t *testing.T) {
+	old := sigWriteTimeout
+	sigWriteTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { sigWriteTimeout = old })
+	m := newRelayMux(func([]byte) error { return nil }, nil)
+	m.sigWin.avail = 0 // the peer grants nothing
+	direct := newChanPath()
+	sc := NewSignalConn(m.SignalPath())
+	defer sc.Close() //nolint:errcheck
+	sc.AddPath(direct)
+	done := make(chan error, 1)
+	go func() { done <- sc.WriteFrame(&Frame{Type: FrameChat, Text: "a"}) }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		_ = m.SignalPath().Close() // unblock the write, so Close can take the lock
+		t.Fatal("a stalled relay path blocked the write on the direct path")
+	}
+	if f := <-direct.written; f.Text != "a" {
+		t.Fatalf("direct path carried %q, want a", f.Text)
+	}
+}

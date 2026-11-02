@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/nfltr/relay/client/rpcclient"
 )
@@ -91,9 +92,13 @@ func (w *sendWindow) fail(err error) {
 	})
 }
 
+// errSigWriteTimeout is a signaling frame that got no relay credit within
+// sigWriteTimeout.
+var errSigWriteTimeout = errors.New("p2p: relay signaling path granted no credit within the write bound")
+
 // take waits for credit and takes n bytes of it, or (whole false) as many
-// as are available, at least one.
-func (w *sendWindow) take(n int, whole bool, quit <-chan struct{}) (int, error) {
+// as are available, at least one; it gives up when expire fires (nil: never).
+func (w *sendWindow) take(n int, whole bool, quit <-chan struct{}, expire <-chan time.Time) (int, error) {
 	for {
 		w.mu.Lock()
 		if w.err != nil {
@@ -113,6 +118,8 @@ func (w *sendWindow) take(n int, whole bool, quit <-chan struct{}) (int, error) 
 		case <-changed:
 		case <-quit:
 			return 0, errMuxClosed
+		case <-expire:
+			return 0, errSigWriteTimeout
 		}
 	}
 }
@@ -300,7 +307,7 @@ func (m *RelayMux) grant(kind byte, n int) {
 // for more as its reader reads.
 func (m *RelayMux) writeData(b []byte) error {
 	for len(b) > 0 {
-		k, err := m.dataWin.take(len(b), false, m.quit)
+		k, err := m.dataWin.take(len(b), false, m.quit, nil)
 		if err != nil {
 			return err
 		}
@@ -332,6 +339,12 @@ func (m *RelayMux) Close() error {
 	return err
 }
 
+// sigWriteTimeout bounds a signaling frame's wait for relay credit, as
+// tcpWriteTimeout bounds the direct path's write: a relay that stopped
+// granting credit fails the write, and SignalConn drops the path instead of
+// stalling the others behind its lock (spec/SignalConn.tla TimeOut).
+var sigWriteTimeout = tcpWriteTimeout
+
 // SignalPath is the mux's signaling FramePath. Closing it closes the mux.
 func (m *RelayMux) SignalPath() FramePath { return muxSignalPath{m} }
 
@@ -345,7 +358,9 @@ func (p muxSignalPath) WriteFrame(f *Frame) error {
 	if 1+len(b) > muxSignalMax {
 		return fmt.Errorf("p2p: signaling frame of %d bytes exceeds the relay window %d", 1+len(b), muxSignalMax)
 	}
-	if _, err := p.m.sigWin.take(1+len(b), true, p.m.quit); err != nil {
+	expire := time.NewTimer(sigWriteTimeout)
+	defer expire.Stop()
+	if _, err := p.m.sigWin.take(1+len(b), true, p.m.quit, expire.C); err != nil {
 		return err
 	}
 	return p.m.write(muxSignal, b)
