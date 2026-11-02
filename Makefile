@@ -53,8 +53,8 @@ CI_WORKFLOW_FILE := .github/workflows/ci.yml
 # and after it (nfltr's Linux CI runner). scripts/ci.sh reads the steps from
 # the workflow file itself, so the two cannot drift; a pass on a clean tree
 # is stamped and not rerun for the same tree.
-# hooks: install the pre-push hook (scripts/pre-push): `make ci` on the
-# exact commit pushed to main or a tag; bypass only with
+# hooks: install the pre-push hook (scripts/pre-push): a push to main or a
+# tag needs nfltr's Linux runner's green result for that sha; bypass only with
 # NFLTR_CI_BYPASS=<reason> (logged to <git-common-dir>/ci-bypass.log).
 .PHONY: ci hooks
 ci:
