@@ -1,7 +1,7 @@
 # TLA+ models of the relay SDK's state machines
 
 Checked with TLC (`make spec`, `make spec-mutants`; both in `make ci`,
-about 10 s together). Java and `tla2tools.jar` come from
+about 10 s together; `make spec-traces` checks recorded runs). Java and `tla2tools.jar` come from
 `scripts/fetch-tla.sh` (pinned, cached, never committed). The plan this
 belongs to is nfltr's `docs/decisions/formal-specs-tla-2026-11-02.md`
 (item 10).
@@ -56,6 +56,21 @@ fairness on `Write` and `Recv`). `SignalConn.cfg` (3 frames, 1 break):
 Mutants (`make spec-mutants`): `P1:no-replay` (`NoSilentLoss`),
 `P1:no-replay-stall` (`AllDelivered`), `one-path` (a frame written on one
 path only: `NoSilentLoss`).
+
+### Trace validation
+
+`make spec-traces`: with `-tags relaytrace`, a test that calls `traceTest`
+records its SignalConns' steps (`client/p2p/trace_on.go`: a write before
+its frame goes on the paths, a path joining before its replay, a frame
+read from a path, a path's reader ending), one NDJSON line each, in one
+process-wide order. `TraceSignalConn.tla` checks each direction that wrote
+(writer W, reader R) against `SignalConn.tla`: W's writes, W's direct path
+joining, R's reads, and the first end of a path on either side as its
+`Break`. Traced tests: `TestSignalConnSwitchLosesNothing` (both ways, about
+970 lines each), `TestSignalConnJoiningPathCarriesEarlierFrames`. Rejected
+fixtures (`spec/testdata/reject-*.ndjson`): a joining path without the
+replay (P1), a read before the write, a read from a path after its break.
+About 20 s (most of it the tagged test build), so not in `make ci`.
 
 ### Path selection: not a state machine to model further
 

@@ -99,9 +99,12 @@ stress-race:
 	@for p in $(PKGS); do m=$${p#./}; m=$${m%%/*}; (cd $$m && go test -race -count=$(COUNT) ./$${p#./$$m/} ) || exit 1; done
 
 # The TLA+ models (spec/README.md): spec checks them, spec-mutants checks
-# each bug put back is caught; both in make ci.
-.PHONY: spec spec-mutants
+# each bug put back is caught (both in make ci); spec-traces checks the
+# traces the tests record under -tags relaytrace against them (nightly).
+.PHONY: spec spec-mutants spec-traces
 spec:
 	./scripts/spec.sh check
 spec-mutants:
 	./scripts/spec.sh mutants
+spec-traces:
+	./scripts/spec.sh traces
