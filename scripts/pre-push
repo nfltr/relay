@@ -96,6 +96,14 @@ while read -r _lref lsha rref rsha; do
 	case "$lsha" in *[!0]*) ;; *) continue ;; esac # a delete
 	sha="$(git rev-parse -q --verify "$lsha^{commit}")" || continue
 	short="$(git rev-parse --short "$sha")"
+	# Spec drift: code a spec's code map lists changes only with its spec
+	# or a Spec-Reviewed trailer (scripts/check-spec-drift.sh; not bypassed).
+	if [ "$rref" = refs/heads/main ] && [ -x "$root/scripts/check-spec-drift.sh" ] &&
+		git cat-file -e "$rsha^{commit}" 2>/dev/null &&
+		! "$root/scripts/check-spec-drift.sh" "$rsha..$sha" >&2; then
+		echo "pre-push: $rref $(git rev-parse --short "$sha"): spec drift (above): push refused" >&2
+		exit 1
+	fi
 	if [ -n "${NFLTR_CI_BYPASS:-}" ]; then
 		line="$(date -u +%Y-%m-%dT%H:%M:%SZ) bypass $remote $rref $sha user=$(git config user.email || id -un) reason=$NFLTR_CI_BYPASS"
 		echo "$line" >>"$common/ci-bypass.log"

@@ -108,3 +108,13 @@ spec-mutants:
 	./scripts/spec.sh mutants
 spec-traces:
 	./scripts/spec.sh traces
+
+# Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
+# identical; its test is nfltr's scripts/check_spec_drift_test.sh): every
+# spec README's code-map entry exists, and the commits since origin/main
+# that change a file a code map lists change that spec too or carry
+# `Spec-Reviewed: <spec> <reason>`. The pre-push hook checks the pushed range.
+.PHONY: check-spec-drift
+check-spec-drift:
+	./scripts/check-spec-drift.sh maps
+	./scripts/check-spec-drift.sh ci
