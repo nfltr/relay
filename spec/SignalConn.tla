@@ -60,7 +60,9 @@ Write ==
     /\ \A p \in Paths : Live(p) => ~stalled[p]
     /\ sent' = sent + 1
     /\ LET on == IF Mutant = "one-path" THEN {CHOOSE p \in Paths : Live(p)} ELSE {p \in Paths : Live(p)}
-       IN chan' = [p \in Paths |-> IF p \in on THEN Append(chan[p], sent + 1) ELSE chan[p]]
+       IN chan' = [p \in Paths |-> IF p \notin on THEN chan[p]
+                                ELSE IF Mutant = "reorder" /\ p = "direct" THEN <<sent + 1>> \o chan[p]
+                                ELSE Append(chan[p], sent + 1)]
     /\ UNCHANGED <<open, dead, joined, next, ahead, breaks, stalled, stalls>>
 
 \* AddPath on both sides (the stream buffers what is written before the
@@ -125,7 +127,16 @@ NoSilentLoss ==
 \* every frame went out holds the reader open: the transport's own end).
 AllDelivered == <>[](next = N + 1 \/ ~\E p \in Paths : Flowing(p))
 
-\* Witness (make spec-mutants: must be violated): a stall is reachable
-\* while frames remain to write.
+\* The reader is never past the writer; what it holds ahead was sent and
+\* is past next.
+ReadBound == next <= sent + 1 /\ ahead \subseteq next + 1..sent
+
+\* Each path carries strictly increasing numbers (WriteFrame's writes are
+\* serialized under its lock, and AddPath's replay is in order).
+PathOrdered == \A p \in Paths : \A i, j \in 1..Len(chan[p]) : i < j => chan[p][i] < chan[p][j]
+
+\* Witnesses (make spec-mutants: each must be violated).
 W_Stall == ~\E p \in Paths : stalled[p] /\ sent < N
+W_PathOrdered == \A p \in Paths : Len(chan[p]) < 2
+W_ReadBound == next = 1
 =============================================================================

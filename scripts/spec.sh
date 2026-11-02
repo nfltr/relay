@@ -47,6 +47,8 @@ NEXT TraceNext
 INVARIANTS
     TraceNotDone
     NoSilentLoss
+    ReadBound
+    PathOrdered
 CFG
 	META=$work/states-$(basename "$1").$2 tlc "$cfg" TraceSignalConn.tla >"$1.$2.out" 2>&1 || true
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.$2.out"
@@ -86,6 +88,9 @@ mutants)
 	# M1 (review r2) put back: the relay path's write waits for credit with no bound.
 	expect M1:unbounded-relay -e 's/Mutant = "none"/Mutant = "unbounded-relay"/'
 	expect witness:Stall -e 's/^    NoSilentLoss$/    W_Stall/'
+	expect reorder -e 's/Mutant = "none"/Mutant = "reorder"/'
+	expect witness:PathOrdered -e 's/^    PathOrdered$/    W_PathOrdered/'
+	expect witness:ReadBound -e 's/^    ReadBound$/    W_ReadBound/'
 	exit $fail
 	;;
 traces)

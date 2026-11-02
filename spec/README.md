@@ -67,6 +67,26 @@ delivered (weak fairness on `Write`, `Recv` and `TimeOut`). `SignalConn.cfg`
   `tcpWriteTimeout`) and fails, which closes the path. Test:
   `TestSignalConnStalledRelayDoesNotBlockDirect`.
 
+- **L6 (low, lane WGFIX2, review r2)**: invariants `ReadBound` (the
+  reader is never past the writer; `ahead` within `next+1..sent`) and
+  `PathOrdered` (each path carries strictly increasing numbers); mutant
+  `reorder` (a frame put before earlier ones on the direct path):
+  `PathOrdered`. Witnesses `W_PathOrdered`, `W_ReadBound`, `W_Stall`.
+- **L4, L5 (low, fixed, lane WGFIX2)**: a frame no path took stays out of
+  the replay window and its number is reused (`WriteFrame` returned an
+  error for a frame a later `AddPath` replayed:
+  `TestSignalConnFailedWriteIsNotReplayed`); a frame too large for the
+  relay window is refused before it is numbered (it closed the relay path
+  and so the data fallback: `TestSignalConnOversizeFrameKeepsPaths`). The
+  model's `Write`, disabled with no live path, is the fixed behaviour.
+- Open: M2 (a one-sided drop of the relay path: the responder's
+  `RelayMux.Close` sends nothing, so the initiator writes on until its
+  credit ends; since M1 that costs one `sigWriteTimeout`, not the call);
+  L1 (`Join` after every path died, which the code's sticky `ended`
+  refuses); L2 (the reader-before-replay order is guarded only by
+  `TestSignalConnSwitchLosesNothing`); L3 (a read after the writer side's
+  drop is rejected by the trace check; needs per-side path state).
+
 Mutants (`make spec-mutants`): `P1:no-replay` (`NoSilentLoss`),
 `P1:no-replay-stall` (`AllDelivered`), `one-path` (a frame written on one
 path only: `NoSilentLoss`).
