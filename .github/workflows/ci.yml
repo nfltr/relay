@@ -35,3 +35,4 @@ jobs:
       - run: make test-ci
       - run: make check-testknobs
       - run: make check-linkvet
+      - run: make spec spec-mutants

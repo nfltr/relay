@@ -97,3 +97,11 @@ COUNT ?= 50
 stress-race:
 	@test -n "$(PKGS)" || { echo "stress-race: PKGS='<packages>' is required, e.g. make stress-race PKGS=./client/agent" >&2; exit 2; }
 	@for p in $(PKGS); do m=$${p#./}; m=$${m%%/*}; (cd $$m && go test -race -count=$(COUNT) ./$${p#./$$m/} ) || exit 1; done
+
+# The TLA+ models (spec/README.md): spec checks them, spec-mutants checks
+# each bug put back is caught; both in make ci.
+.PHONY: spec spec-mutants
+spec:
+	./scripts/spec.sh check
+spec-mutants:
+	./scripts/spec.sh mutants
