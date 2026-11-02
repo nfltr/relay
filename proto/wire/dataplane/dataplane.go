@@ -68,6 +68,24 @@ func PickVersion(values []string) int {
 // response header. With both, the stream's sessions run on credit.
 const CreditHeader = "x-nfltr-tcp-credit" // #nosec G101 -- a header name, not a credential
 
+// EndAckHeader, "1" in an agent's ConnectTCP request metadata and echoed
+// in the relay's response header, says both sides of the gRPC stream
+// acknowledge a session's half close (EndAckFrame): a side ends a session
+// cleanly only once its own half close was acked, and resets its app when
+// the stream ends first (relay-core spec/README.md finding 2). Without it
+// on both sides no ack is sent or awaited.
+const EndAckHeader = "x-nfltr-tcp-end-ack"
+
+// EndAckSID is the session id of the control frame that acknowledges a
+// session's half close on a gRPC stream (EndAckFrame).
+const EndAckSID = "_endack"
+
+// EndAckFrame acknowledges sid's half close: every byte the peer sent
+// before it was received (the stream is FIFO).
+func EndAckFrame(sid string) *pb.TCPData {
+	return &pb.TCPData{SessionId: EndAckSID, Data: []byte(sid)}
+}
+
 // HTTPSessionTarget is the target of a session that carries HTTP/1.1 to the
 // agent's own HTTP server: the relay's reverse proxy writes requests into
 // it and the agent serves them with net/http, in place of HTTP requests as

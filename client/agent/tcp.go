@@ -86,8 +86,13 @@ type tcpTunnel struct {
 	// target's write side ends after them, its bytes keep going.
 	peerHalf map[*bytequeue.Queue]bool
 	// lost marks the queues the stream ended under (closeAll), neither
-	// closed nor half-closed by the relay: their targets are reset.
+	// closed nor half-closed by the relay, or whose target's half close
+	// was not acked: their targets are reset.
 	lost map[*bytequeue.Queue]bool
+	// endAck: both sides announced dataplane.EndAckHeader. halfSent holds
+	// the sessions whose target half-closed, until the relay acked it.
+	endAck   bool
+	halfSent map[*bytequeue.Queue]*halfEnd
 
 	growth *tcpStreamGrowth // shared by the agent's streams
 
@@ -96,6 +101,24 @@ type tcpTunnel struct {
 	// cr is the per-session credit: dc's, or a gRPC stream's whose relay
 	// announced its window (dataplane.CreditHeader); nil without credit.
 	cr *link.Credit
+}
+
+// halfEnd is a target's half close waiting for the relay's ack
+// (dataplane.EndAckFrame): the session ends cleanly only once acked, and
+// the target is reset when the session ends first (relay-core
+// spec/README.md finding 2).
+type halfEnd struct {
+	done  chan struct{} // closed once acked or the session ended
+	acked bool          // under tcpTunnel.mu, set before done closes
+	ended bool          // under tcpTunnel.mu
+}
+
+// end records the ack (acked) or the session's end; under tcpTunnel.mu.
+func (h *halfEnd) end(acked bool) {
+	if !h.ended {
+		h.ended, h.acked = true, acked
+		close(h.done)
+	}
 }
 
 // tcpGrowAtSessions is how many sessions must be open at once before the
@@ -253,6 +276,13 @@ func (t *tcpTunnel) closeSession(id string, q *bytequeue.Queue) {
 		delete(t.aborts, id)
 	}
 	delete(t.peerHalf, q)
+	if he := t.halfSent[q]; he != nil {
+		if !he.acked {
+			t.lost[q] = true // the relay's whole close came first: a reset
+		}
+		he.end(false)
+		delete(t.halfSent, q)
+	}
 	t.mu.Unlock()
 	q.Close()
 	if ours {
@@ -287,21 +317,50 @@ func (t *tcpTunnel) resetSession(id string, q *bytequeue.Queue) {
 // direction at a half close (TCPData.half): the target reads EOF after
 // what is queued, its bytes keep going. A whole close after a half one
 // cuts the target, whose write side already ended.
+//
+// With the end acknowledgement a half close is acked, and while the
+// target's own half close waits for its ack the target's EOF is held: it
+// reads EOF only with the clean end (endAcked), else a reset.
 func (t *tcpTunnel) closeFrame(id string, q *bytequeue.Queue, half bool) {
 	t.mu.Lock()
+	ours := t.sessions[id] == q
 	wasHalf := t.peerHalf[q]
-	if half && t.sessions[id] == q {
+	hold := false
+	if half && ours {
 		t.peerHalf[q] = true
+		he := t.halfSent[q]
+		hold = he != nil && !he.acked
 	}
 	abort := t.aborts[id]
 	t.mu.Unlock()
 	if half {
-		q.Close()
+		if ours && t.endAck {
+			go func() { _ = t.enqueue(dataplane.EndAckFrame(id)) }() // a receive loop never waits for its outbox
+		}
+		if !hold {
+			q.Close()
+		}
 		return
 	}
 	t.closeSession(id, q)
 	if wasHalf && abort != nil {
 		abort()
+	}
+}
+
+// endAcked takes the relay's ack of session id's half close: the session
+// may end cleanly, and a relay half close held for it reaches the target.
+func (t *tcpTunnel) endAcked(id string) {
+	t.mu.Lock()
+	q := t.sessions[id]
+	he := t.halfSent[q]
+	if he != nil {
+		he.end(true)
+	}
+	release := he != nil && t.peerHalf[q]
+	t.mu.Unlock()
+	if release {
+		q.Close()
 	}
 }
 
@@ -330,7 +389,6 @@ func (t *tcpTunnel) refuseAnswered(id string, q *bytequeue.Queue, reason relayv1
 func (t *tcpTunnel) closeAll() {
 	t.mu.Lock()
 	n := len(t.sessions)
-	t.lost = make(map[*bytequeue.Queue]bool, n)
 	for id, q := range t.sessions {
 		delete(t.sessions, id)
 		if !t.peerHalf[q] {
@@ -338,6 +396,13 @@ func (t *tcpTunnel) closeAll() {
 		}
 		q.Close()
 	}
+	for q, he := range t.halfSent { // a half close not acked: a reset
+		if !he.acked {
+			t.lost[q] = true
+		}
+		he.end(false)
+	}
+	clear(t.halfSent)
 	clear(t.aborts)
 	clear(t.peerHalf)
 	t.mu.Unlock()
@@ -362,13 +427,16 @@ func (t *tcpTunnel) pump(id string, q *bytequeue.Queue, conn net.Conn) {
 			if bufs, ok = q.PopBatch(bufs[:0], tcpWriteBatch); !ok {
 				t.mu.Lock()
 				half, lost := t.peerHalf[q], t.lost[q]
+				delete(t.lost, q)
 				t.mu.Unlock()
+				if tc, isTCP := conn.(*net.TCPConn); lost && isTCP {
+					_ = tc.SetLinger(0) // an RST
+					_ = conn.Close()
+					return
+				}
 				if cw, isTCP := conn.(interface{ CloseWrite() error }); half && isTCP {
 					_ = cw.CloseWrite() // the relay's half close: the target's bytes keep going
 					return
-				}
-				if tc, isTCP := conn.(*net.TCPConn); lost && isTCP {
-					_ = tc.SetLinger(0) // an RST
 				}
 				_ = conn.Close()
 				return
@@ -399,17 +467,36 @@ func (t *tcpTunnel) pump(id string, q *bytequeue.Queue, conn net.Conn) {
 			// The target half-closed: so does the session, and the relay's
 			// bytes keep going to the target until the relay's side ends
 			// (a close no longer cuts them: closeFrame).
+			// With the end acknowledgement the session ends cleanly only
+			// once the relay acked the half close; the target is reset when
+			// the session ends first.
+			var he *halfEnd
 			t.mu.Lock()
 			if t.sessions[id] == q {
 				delete(t.aborts, id)
+				if t.endAck {
+					he = &halfEnd{done: make(chan struct{})}
+					t.halfSent[q] = he
+				}
 			}
 			t.mu.Unlock()
 			_ = t.send(&pb.TCPData{SessionId: id, Close: true, Half: true})
 			<-written
+			if he != nil {
+				<-he.done
+				t.mu.Lock()
+				acked := he.acked
+				delete(t.lost, q) // the writer is done: nothing reads it
+				t.mu.Unlock()
+				if tc, isTCP := conn.(*net.TCPConn); !acked && isTCP {
+					_ = tc.SetLinger(0) // an RST
+				}
+			}
 			break
 		}
 		if readErr != nil {
 			t.logger.Debug("tcp tunnel: target read error", "session", id, "error", readErr)
+			t.closeSession(id, q) // before the close: no ack of a half close follows it
 			_ = t.send(&pb.TCPData{SessionId: id, Close: true})
 			break
 		}
@@ -453,6 +540,9 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 	// Ask for per-session credit on the tunnel's gRPC streams: a relay that
 	// keeps it there answers with its window (dataplane.CreditHeader).
 	streamCtx = metadata.AppendToOutgoingContext(streamCtx, dataplane.CreditHeader, strconv.Itoa(tcpDataWindow))
+	// Ask for the end acknowledgement (relay-core spec/README.md finding 2):
+	// a relay that keeps it echoes the header.
+	streamCtx = metadata.AppendToOutgoingContext(streamCtx, dataplane.EndAckHeader, "1")
 	// Answer the opens that ask (TCPData.answer) once the target is reached.
 	streamCtx = metadata.AppendToOutgoingContext(streamCtx, dataplane.AnswerHeader, "1")
 	if v := targets.httpSessionsValue(); v != "" {
@@ -608,6 +698,8 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 		sessions: make(map[string]*bytequeue.Queue),
 		aborts:   make(map[string]func()),
 		peerHalf: make(map[*bytequeue.Queue]bool),
+		lost:     make(map[*bytequeue.Queue]bool),
+		halfSent: make(map[*bytequeue.Queue]*halfEnd),
 		growth:   growth,
 	}
 	t.dc, _ = stream.(*dataplane.Conn)
@@ -616,6 +708,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 	}
 	defer close(t.stop)
 	defer t.closeAll()
+	t.endAck = t.dc == nil && streamEndAck(stream)
 	if t.cr = t.streamCredit(stream); t.cr != nil && t.dc == nil {
 		defer t.cr.Close() // senders waiting for credit give up
 	}
@@ -660,6 +753,9 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 			if err != nil {
 				return err
 			}
+
+		case id == dataplane.EndAckSID && t.endAck:
+			t.endAcked(string(frame.Data))
 
 		case id == dataplane.AgentLinkSID && lazy != nil:
 			lazy.control(string(frame.Data))
@@ -771,6 +867,17 @@ func (t *tcpTunnel) streamCredit(stream tcpStream) *link.Credit {
 	st := t.growth.st()
 	cr.SetObserver(st.observer(ObserveGRPC, st.grpcC(), nil, true))
 	return cr
+}
+
+// streamEndAck reports whether the relay echoed dataplane.EndAckHeader in
+// the stream's response header (the agent asked in runTCPTunnel).
+func streamEndAck(stream tcpStream) bool {
+	h, ok := stream.(interface{ Header() (metadata.MD, error) })
+	if !ok {
+		return false
+	}
+	md, err := h.Header()
+	return err == nil && firstValue(md, dataplane.EndAckHeader) == "1"
 }
 
 // RunTCPTunnel opens a raw TCP sidecar stream for commands that already manage
