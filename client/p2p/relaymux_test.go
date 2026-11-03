@@ -5,6 +5,7 @@ package p2p
 
 import (
 	"bytes"
+	"context"
 	crand "crypto/rand"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/nfltr/relay/client/rpcclient"
 )
 
 // startTestMux runs a mux whose stream delivers msgs, then blocks until the
@@ -297,4 +300,46 @@ func TestRelayMuxSlowReaderLargeTransfer(t *testing.T) {
 	}
 	t.Logf("%d MiB in %v (%.0f MiB/s), sender at most %d KiB ahead of the reader",
 		total>>20, elapsed.Round(time.Millisecond), float64(total>>20)/elapsed.Seconds(), peak.Load()>>10)
+}
+
+// A responder that drops the relay signaling path on its own (a tampered
+// frame, a malformed message, a failed write) ends it at the initiator too:
+// the responder cannot half-close its stream, so its Close sends an empty
+// message, the end the initiator's demux already reads (review r2 M2,
+// spec/SignalConn.tla OneSided).
+func TestRelayMuxResponderCloseEndsInitiator(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	sender, receiver := relayAgents(t, ctx, nil)
+	receiver.Handle(func(stream rpcclient.ServerStream) error {
+		m := NewServerRelayMux(stream)
+		if _, err := m.SignalPath().ReadFrame(); err != nil {
+			return err
+		}
+		_ = m.SignalPath().Close()
+		<-ctx.Done() // the responder lives on (its direct path, say)
+		return nil
+	})
+	stream, err := sender.NewStream(ctx, "receiver")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewClientRelayMux(stream)
+	defer m.SignalPath().Close() //nolint:errcheck
+	if err := m.SignalPath().WriteFrame(&Frame{Type: FrameChat, Text: "a"}); err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan error, 1)
+	go func() { _, err := m.SignalPath().ReadFrame(); read <- err }()
+	select {
+	case err := <-read:
+		if !errors.Is(err, io.EOF) {
+			t.Fatalf("ReadFrame = %v, want io.EOF", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the responder dropped the relay path; the initiator never learned")
+	}
+	if err := m.SignalPath().WriteFrame(&Frame{Type: FrameChat, Text: "b"}); err == nil {
+		t.Fatal("a write after the responder's drop succeeded")
+	}
 }

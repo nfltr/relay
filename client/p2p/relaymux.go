@@ -374,8 +374,22 @@ func (p muxSignalPath) ReadFrame() (*Frame, error) {
 	return f, err
 }
 
+// Close ends the mux at both sides. The initiator half-closes its stream;
+// the responder cannot, so it sends an empty message, which ends the
+// initiator's demux as the stream's end does (and any peer's: an empty
+// message ended the demux before protocol 4 too). Without it a responder's
+// own drop (a tampered or malformed frame, a failed write) left the
+// initiator writing into a path nobody read (review r2 M2,
+// spec/SignalConn.tla WLearn, mutant one-sided).
 func (p muxSignalPath) Close() error {
-	p.m.qOne.Do(func() { close(p.m.quit) })
+	p.m.qOne.Do(func() {
+		close(p.m.quit)
+		if p.m.closeSend == nil {
+			p.m.sendMu.Lock()
+			_ = p.m.send(nil)
+			p.m.sendMu.Unlock()
+		}
+	})
 	return p.m.Close()
 }
 
