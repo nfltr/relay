@@ -8,7 +8,7 @@
 #   traces   client/p2p's SignalConn tests (TRACE_TESTS) run with -tags
 #            relaytrace; each trace, per direction that wrote, checked
 #            against spec/TraceSignalConn.tla; each spec/testdata/reject-*
-#            fixture rejected.
+#            fixture rejected, each accept-* fixture accepted.
 # COVERAGE=1 adds -coverage 1. Java and tla2tools.jar come from
 # scripts/fetch-tla.sh.
 set -eu
@@ -38,7 +38,7 @@ CONSTANTS
     W = $2
     R = $3
     N <- TraceN
-    MaxBreak = 2
+    MaxBreak = 4
     MaxStall = 0
     Replay = TRUE
     Mutant = "none"
@@ -47,6 +47,7 @@ NEXT TraceNext
 INVARIANTS
     TraceNotDone
     NoSilentLoss
+    EndedFinal
     ReadBound
     PathOrdered
 CFG
@@ -91,6 +92,13 @@ mutants)
 	expect reorder -e 's/Mutant = "none"/Mutant = "reorder"/'
 	expect witness:PathOrdered -e 's/^    PathOrdered$/    W_PathOrdered/'
 	expect witness:ReadBound -e 's/^    ReadBound$/    W_ReadBound/'
+	expect witness:NoSilentLoss -e 's/^    NoSilentLoss$/    W_NoSilentLoss/'
+	# M2 (review r2) put back: the responder's close sent nothing.
+	expect M2:one-sided -e 's/Mutant = "none"/Mutant = "one-sided"/'
+	expect witness:OneSided -e 's/^    TypeOK$/    W_OneSided/'
+	# L1 (review r2): a path joining a reader that ended.
+	expect L1:revive -e 's/Mutant = "none"/Mutant = "revive"/'
+	expect witness:EndedFinal -e 's/^    EndedFinal$/    W_EndedFinal/'
 	exit $fail
 	;;
 traces)
@@ -105,6 +113,15 @@ traces)
 			exit 1
 		fi
 		echo "$f: rejected"
+	done
+	for f in spec/testdata/accept-*.ndjson; do
+		cp "$f" "$work/"
+		trace "$work/$(basename "$f")" 1 2 || {
+			echo "$f: rejected, want accepted"
+			grep -E 'Error' "$work/$(basename "$f").1.out" | head -5
+			exit 1
+		}
+		echo "$f: accepted"
 	done
 	mkdir -p "$work/traces"
 	tests=${TRACE_TESTS:-'^(TestSignalConnSwitchLosesNothing|TestSignalConnJoiningPathCarriesEarlierFrames)$'}

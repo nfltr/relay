@@ -1,0 +1,5 @@
+{"op":"join","path":0,"sc":1}
+{"op":"write","paths":[0],"sc":1,"seq":1}
+{"op":"drop","path":0,"sc":1}
+{"op":"recv","path":0,"sc":2,"seq":1}
+{"op":"drop","path":0,"sc":2}

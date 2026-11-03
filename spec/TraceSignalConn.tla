@@ -3,7 +3,9 @@
 (* the steps a real run recorded (-tags relaytrace, client/p2p trace_on.go) *)
 (* for one direction, writer W to reader R, must be a behaviour of the     *)
 (* fixed SignalConn: W's writes, W's direct path joining, R's reads, and   *)
-(* either side's reader of a path ending (the first is the path's Break).  *)
+(* each side's end of a path closing: W's is its WDrop (or WLearn, once R  *)
+(* dropped it), R's its REnd (after W's close and what it carried) or its  *)
+(* RDrop. A W join once R ended is W's alone (R refuses it).               *)
 (* Accepted when TLC reaches the trace's end: TraceNotDone is then violated *)
 (* (scripts/spec.sh traces).                                               *)
 EXTENDS Json, SignalConn, TLC
@@ -24,13 +26,18 @@ E == Log[l]
 TWrite ==
     /\ Write
     /\ sent' = E.seq
-    /\ \A p \in Paths : Live(p) => \E i \in DOMAIN E.paths : P(E.paths[i]) = p
+    /\ \A p \in Paths : wOpen[p] => \E i \in DOMAIN E.paths : P(E.paths[i]) = p
 
-TJoin == IF E.path = 0 THEN UNCHANGED vars ELSE Join
+TJoin == IF E.path = 0 \/ ended THEN UNCHANGED vars ELSE Join
 
 TRecv == Recv(P(E.path)) /\ Head(chan[P(E.path)]) = E.seq
 
-TDrop == IF dead[P(E.path)] THEN UNCHANGED vars ELSE Break(P(E.path))
+TDrop ==
+    LET p == P(E.path) IN
+    IF E.sc = W THEN
+        IF ~wOpen[p] THEN UNCHANGED vars ELSE IF ~rOpen[p] THEN WLearn(p) ELSE WDrop(p)
+    ELSE
+        IF ~rOpen[p] THEN UNCHANGED vars ELSE IF ~wOpen[p] /\ chan[p] = <<>> THEN REnd(p) ELSE RDrop(p)
 
 Step ==
     CASE E.op = "write" -> TWrite
