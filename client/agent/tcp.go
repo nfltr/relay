@@ -81,7 +81,7 @@ type tcpTunnel struct {
 
 	mu       sync.Mutex
 	sessions map[string]*bytequeue.Queue // relay -> target bytes per session
-	aborts   map[string]func()           // cuts a session's target (resetSession)
+	aborts   map[string]func(reset bool) // cuts a session's target (resetSession; reset: an RST)
 	// peerHalf marks the queues the relay half-closed (TCPData.half): the
 	// target's write side ends after them, its bytes keep going.
 	peerHalf map[*bytequeue.Queue]bool
@@ -308,23 +308,28 @@ func (t *tcpTunnel) resetSession(id string, q *bytequeue.Queue) {
 		}
 	}
 	if abort != nil {
-		abort()
+		abort(false)
 	}
-	go func() { _ = t.send(&pb.TCPData{SessionId: id, Close: true}) }() // the sender may be busy
+	go func() { _ = t.send(&pb.TCPData{SessionId: id, Close: true, Abort: true}) }() // the sender may be busy
 }
 
 // closeFrame ends a session at the relay's close, or its relay -> target
 // direction at a half close (TCPData.half): the target reads EOF after
 // what is queued, its bytes keep going. A whole close after a half one
-// cuts the target, whose write side already ended.
+// cuts the target, whose write side already ended. The relay's abort
+// (TCPData.abort: its client's connection was cut) resets the target after
+// what is queued, never a FIN (relay-core spec/README.md finding 15).
 //
 // With the end acknowledgement a half close is acked, and while the
 // target's own half close waits for its ack the target's EOF is held: it
 // reads EOF only with the clean end (endAcked), else a reset.
-func (t *tcpTunnel) closeFrame(id string, q *bytequeue.Queue, half bool) {
+func (t *tcpTunnel) closeFrame(id string, q *bytequeue.Queue, half, reset bool) {
 	t.mu.Lock()
 	ours := t.sessions[id] == q
 	wasHalf := t.peerHalf[q]
+	if reset && !half && ours {
+		t.lost[q] = true // the writer resets the target once the queue drained
+	}
 	hold := false
 	if half && ours {
 		t.peerHalf[q] = true
@@ -344,7 +349,7 @@ func (t *tcpTunnel) closeFrame(id string, q *bytequeue.Queue, half bool) {
 	}
 	t.closeSession(id, q)
 	if wasHalf && abort != nil {
-		abort()
+		abort(reset)
 	}
 }
 
@@ -415,7 +420,12 @@ func (t *tcpTunnel) closeAll() {
 func (t *tcpTunnel) pump(id string, q *bytequeue.Queue, conn net.Conn) {
 	t.mu.Lock()
 	if t.sessions[id] == q {
-		t.aborts[id] = func() { _ = conn.Close() }
+		t.aborts[id] = func(reset bool) {
+			if tc, isTCP := conn.(*net.TCPConn); reset && isTCP {
+				_ = tc.SetLinger(0) // an RST
+			}
+			_ = conn.Close()
+		}
 	}
 	t.mu.Unlock()
 	written := make(chan struct{})
@@ -497,7 +507,7 @@ func (t *tcpTunnel) pump(id string, q *bytequeue.Queue, conn net.Conn) {
 		if readErr != nil {
 			t.logger.Debug("tcp tunnel: target read error", "session", id, "error", readErr)
 			t.closeSession(id, q) // before the close: no ack of a half close follows it
-			_ = t.send(&pb.TCPData{SessionId: id, Close: true})
+			_ = t.send(&pb.TCPData{SessionId: id, Close: true, Abort: true})
 			break
 		}
 	}
@@ -696,7 +706,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 		stop:     make(chan struct{}),
 		sendDone: make(chan struct{}),
 		sessions: make(map[string]*bytequeue.Queue),
-		aborts:   make(map[string]func()),
+		aborts:   make(map[string]func(reset bool)),
 		peerHalf: make(map[*bytequeue.Queue]bool),
 		lost:     make(map[*bytequeue.Queue]bool),
 		halfSent: make(map[*bytequeue.Queue]*halfEnd),
@@ -817,7 +827,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 
 		case frame.Close:
 			if q := t.session(id); q != nil {
-				t.closeFrame(id, q, frame.Half)
+				t.closeFrame(id, q, frame.Half, frame.Abort)
 			}
 
 		case len(frame.Data) > 0:

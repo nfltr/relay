@@ -37,6 +37,7 @@ type serverStream struct {
 	agent         *Agent
 	txnID         string
 	sourceAgentID string
+	sourceSession uint64 // RoutingInfo.source_session of the call's first frame
 	ctx           context.Context
 	cancel        context.CancelFunc
 	requestCh     chan *pb.TunnelFrame
@@ -180,4 +181,16 @@ func (ss *serverStream) Context() context.Context {
 // SourceAgentID returns the AgentID of the agent that initiated this call.
 func (ss *serverStream) SourceAgentID() string {
 	return ss.sourceAgentID
+}
+
+// SourceSession is the relay's number of the connection of the source agent
+// that made the call (pb.RoutingInfo source_session): two calls from one
+// connection carry one number, a reconnect's calls another; 0 when the
+// relay does not number them or stream is not an rpcclient stream. A
+// relay's own service applies a call only to the connection that made it.
+func SourceSession(stream ServerStream) uint64 {
+	if ss, ok := stream.(*serverStream); ok {
+		return ss.sourceSession
+	}
+	return 0
 }

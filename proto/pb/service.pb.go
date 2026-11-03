@@ -247,8 +247,15 @@ type RoutingInfo struct {
 	// initial_metadata carries key-value pairs analogous to gRPC response
 	// headers that the target agent sends before the first response body.
 	InitialMetadata map[string]string `protobuf:"bytes,4,rep,name=initial_metadata,json=initialMetadata,proto3" json:"initial_metadata,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// source_session numbers the source agent's connection on the relay that
+	// routes an A2A call: the frames of one connection carry one number, the
+	// agent's later connection (a reconnect replacing it) another. Set by the
+	// relay on the frames it routes (a value the agent sends is replaced);
+	// opaque to agents; 0 from a relay that does not number them. The relay's
+	// own services apply a call only to the connection that made it.
+	SourceSession uint64 `protobuf:"varint,5,opt,name=source_session,json=sourceSession,proto3" json:"source_session,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RoutingInfo) Reset() {
@@ -307,6 +314,13 @@ func (x *RoutingInfo) GetInitialMetadata() map[string]string {
 		return x.InitialMetadata
 	}
 	return nil
+}
+
+func (x *RoutingInfo) GetSourceSession() uint64 {
+	if x != nil {
+		return x.SourceSession
+	}
+	return 0
 }
 
 // HTTPRequest is a proxied HTTP request the agent must forward to a local
@@ -785,7 +799,15 @@ type TCPData struct {
 	// address, never anything the visitor sent). The agent, which ends that
 	// visitor's TLS, gives it to the backend as X-Forwarded-For. Empty from a
 	// relay that does not send it: the agent then sets no X-Forwarded-For.
-	ClientAddr    string `protobuf:"bytes,10,opt,name=client_addr,json=clientAddr,proto3" json:"client_addr,omitempty"`
+	ClientAddr string `protobuf:"bytes,10,opt,name=client_addr,json=clientAddr,proto3" json:"client_addr,omitempty"`
+	// abort=true with close=true (and half false) is a whole close that says
+	// the session failed: the sender's end was cut (its app's connection
+	// reset or failed to read or write, a stall reset), not closed. The
+	// receiver resets its end (a TCP target gets an RST, a reader an error),
+	// never a FIN or EOF, so a cut stream is never taken for a whole one. On
+	// a link leg it is link's reset (CLOSE code 2). A receiver that does not
+	// know the field closes as before (a FIN).
+	Abort         bool `protobuf:"varint,11,opt,name=abort,proto3" json:"abort,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -890,6 +912,13 @@ func (x *TCPData) GetClientAddr() string {
 	return ""
 }
 
+func (x *TCPData) GetAbort() bool {
+	if x != nil {
+		return x.Abort
+	}
+	return false
+}
+
 var File_service_proto protoreflect.FileDescriptor
 
 const file_service_proto_rawDesc = "" +
@@ -904,13 +933,14 @@ const file_service_proto_rawDesc = "" +
 	"\x10request_at_agent\x18\x03 \x01(\x03R\x0erequestAtAgent\x12*\n" +
 	"\x11response_at_agent\x18\x04 \x01(\x03R\x0fresponseAtAgent\x125\n" +
 	"\x17response_at_grpc_server\x18\x05 \x01(\x03R\x14responseAtGrpcServer\x125\n" +
-	"\x17response_at_http_server\x18\x06 \x01(\x03R\x14responseAtHttpServer\"\x8d\x02\n" +
+	"\x17response_at_http_server\x18\x06 \x01(\x03R\x14responseAtHttpServer\"\xb4\x02\n" +
 	"\vRoutingInfo\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12&\n" +
 	"\x0ftarget_agent_id\x18\x02 \x01(\tR\rtargetAgentId\x12\x1f\n" +
 	"\vdeadline_ms\x18\x03 \x01(\x03R\n" +
 	"deadlineMs\x12V\n" +
-	"\x10initial_metadata\x18\x04 \x03(\v2+.rpcserver.RoutingInfo.InitialMetadataEntryR\x0finitialMetadata\x1aB\n" +
+	"\x10initial_metadata\x18\x04 \x03(\v2+.rpcserver.RoutingInfo.InitialMetadataEntryR\x0finitialMetadata\x12%\n" +
+	"\x0esource_session\x18\x05 \x01(\x04R\rsourceSession\x1aB\n" +
 	"\x14InitialMetadataEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xab\x02\n" +
@@ -959,7 +989,7 @@ const file_service_proto_rawDesc = "" +
 	"\x03eom\x18\x06 \x01(\bR\x03eom\x12\x1f\n" +
 	"\vstatus_code\x18\a \x01(\x05R\n" +
 	"statusCode\x12#\n" +
-	"\rstatus_detail\x18\b \x01(\tR\fstatusDetail\"\x83\x02\n" +
+	"\rstatus_detail\x18\b \x01(\tR\fstatusDetail\"\x99\x02\n" +
 	"\aTCPData\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +
@@ -974,7 +1004,8 @@ const file_service_proto_rawDesc = "" +
 	"\x06answer\x18\t \x01(\bR\x06answer\x12\x1f\n" +
 	"\vclient_addr\x18\n" +
 	" \x01(\tR\n" +
-	"clientAddr*S\n" +
+	"clientAddr\x12\x14\n" +
+	"\x05abort\x18\v \x01(\bR\x05abort*S\n" +
 	"\x04Move\x12\x14\n" +
 	"\x10MOVE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eMOVE_RECONNECT\x10\x01\x12\x12\n" +

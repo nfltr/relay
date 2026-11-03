@@ -865,6 +865,7 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 		agent:         a,
 		txnID:         txnID,
 		sourceAgentID: msg.GetRouting().GetAgentId(),
+		sourceSession: msg.GetRouting().GetSourceSession(),
 		ctx:           ssCtx,
 		cancel:        ssCancel,
 		requestCh:     make(chan *pb.TunnelFrame, 16),

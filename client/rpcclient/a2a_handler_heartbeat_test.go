@@ -23,11 +23,13 @@ func TestHandle_IncomingCall(t *testing.T) {
 
 	handlerDone := make(chan struct{})
 	var handlerSource string
+	var handlerSession uint64
 	var handlerData []string
 
 	agent.Handle(func(stream ServerStream) error {
 		defer close(handlerDone)
 		handlerSource = stream.SourceAgentID()
+		handlerSession = SourceSession(stream)
 		for {
 			data, err := stream.Recv()
 			if err == io.EOF {
@@ -52,7 +54,7 @@ func TestHandle_IncomingCall(t *testing.T) {
 		Payload:       []byte("req1"),
 		MessageType:   "a2a-request",
 		TransactionId: txnID,
-		Routing:       &pb.RoutingInfo{AgentId: "agent-a", TargetAgentId: testTargetAgentId},
+		Routing:       &pb.RoutingInfo{AgentId: "agent-a", TargetAgentId: testTargetAgentId, SourceSession: 7},
 	}
 	ms.recvCh <- &pb.TunnelFrame{
 		Payload:       []byte("req2"),
@@ -68,6 +70,9 @@ func TestHandle_IncomingCall(t *testing.T) {
 		t.Fatal("handler did not complete")
 	}
 
+	if handlerSession != 7 {
+		t.Errorf("SourceSession = %d, want the relay's 7", handlerSession)
+	}
 	if handlerSource != "agent-a" {
 		t.Fatalf("expected source=agent-a, got %s", handlerSource)
 	}

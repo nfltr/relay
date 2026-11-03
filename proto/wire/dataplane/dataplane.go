@@ -164,11 +164,11 @@ type Conn struct{ *link.Conn }
 // isData reports whether f is a session id and data, nothing else.
 func isData(f *pb.TCPData) bool {
 	return len(f.GetData()) > 0 && len(f.GetSessionId()) <= link.MaxSID && f.GetAgentId() == "" && f.GetTargetAddr() == "" &&
-		!f.GetOpen() && !f.GetClose() && !f.GetE2Ee() && len(f.ProtoReflect().GetUnknown()) == 0
+		!f.GetOpen() && !f.GetClose() && !f.GetE2Ee() && !f.GetAbort() && len(f.ProtoReflect().GetUnknown()) == 0
 }
 
 // isClose reports whether f is a session id and the close flag (and the
-// half flag of a half close), nothing else.
+// half flag of a half close, or the abort flag of a reset), nothing else.
 func isClose(f *pb.TCPData) bool {
 	return f.GetClose() && len(f.GetData()) == 0 && f.GetAgentId() == "" && f.GetTargetAddr() == "" &&
 		!f.GetOpen() && !f.GetE2Ee() && len(f.ProtoReflect().GetUnknown()) == 0
@@ -202,6 +202,8 @@ func (c *Conn) Send(f *pb.TCPData) error {
 				return err
 			}
 			return c.SendOpen(f.GetSessionId(), b)
+		case isClose(f) && f.GetAbort() && !f.GetHalf():
+			return c.SendReset(f.GetSessionId()) // TCPData.abort: link's reset
 		case isClose(f):
 			return c.SendClose(f.GetSessionId(), f.GetHalf())
 		}
@@ -232,8 +234,8 @@ func (c *Conn) Recv() (*pb.TCPData, error) {
 		}
 		m.SessionId, m.Open = f.SID, true
 		return m, nil
-	case f.Close: // a half close (TCPData.half) or a whole one; a reset reads as a close
-		return &pb.TCPData{SessionId: f.SID, Close: true, Half: f.Half}, nil
+	case f.Close: // a half close (TCPData.half), a whole one, or a reset (TCPData.abort)
+		return &pb.TCPData{SessionId: f.SID, Close: true, Half: f.Half, Abort: f.Reset}, nil
 	case f.Msg == nil:
 		return &pb.TCPData{SessionId: f.SID, Data: f.Data}, nil
 	}

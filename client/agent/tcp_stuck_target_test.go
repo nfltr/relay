@@ -224,3 +224,56 @@ func TestTCPTunnelStreamLossResetsTargets(t *testing.T) {
 		t.Fatal("the target's connection did not end with the stream")
 	}
 }
+
+// The relay's abort of a session (TCPData.abort: its client's connection
+// was cut) reaches the target as a reset, never a clean end (relay-core
+// spec/README.md finding 15; spec/AgentLink.tla AbortTyped, mutant
+// relay-abort-as-eof).
+func TestTCPTunnelRelayAbortResetsTarget(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close() //nolint:errcheck
+	end := make(chan error, 1)
+	got := make(chan struct{})
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			end <- err
+			return
+		}
+		defer c.Close() //nolint:errcheck
+		buf := make([]byte, 1)
+		if _, err := io.ReadFull(c, buf); err != nil {
+			end <- err
+			return
+		}
+		close(got)
+		_, err = io.Copy(io.Discard, c)
+		end <- err // nil: a clean end
+	}()
+	st := &fakeRelayStream{in: make(chan *pb.TCPData), stop: make(chan struct{}), closed: map[string]bool{}}
+	done := make(chan error, 1)
+	go func() {
+		done <- serveTCPStream(context.Background(), st, sessionTargets{}, nil, nil, slog.New(slog.DiscardHandler), nil, nil)
+	}()
+	st.feed(&pb.TCPData{SessionId: "s", TargetAddr: ln.Addr().String(), Open: true})
+	st.feed(&pb.TCPData{SessionId: "s", Data: []byte("part of an upload")})
+	select {
+	case <-got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the target got nothing")
+	}
+	st.feed(&pb.TCPData{SessionId: "s", Close: true, Abort: true})
+	select {
+	case err := <-end:
+		if err == nil {
+			t.Fatal("the target read a clean end after the relay aborted its session")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the target's connection did not end with the abort")
+	}
+	close(st.stop)
+	<-done
+}

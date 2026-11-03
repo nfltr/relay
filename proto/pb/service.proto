@@ -47,6 +47,13 @@ message RoutingInfo {
   // initial_metadata carries key-value pairs analogous to gRPC response
   // headers that the target agent sends before the first response body.
   map<string, string> initial_metadata = 4;
+  // source_session numbers the source agent's connection on the relay that
+  // routes an A2A call: the frames of one connection carry one number, the
+  // agent's later connection (a reconnect replacing it) another. Set by the
+  // relay on the frames it routes (a value the agent sends is replaced);
+  // opaque to agents; 0 from a relay that does not number them. The relay's
+  // own services apply a call only to the connection that made it.
+  uint64 source_session = 5;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +228,15 @@ message TCPData {
   // visitor's TLS, gives it to the backend as X-Forwarded-For. Empty from a
   // relay that does not send it: the agent then sets no X-Forwarded-For.
   string client_addr = 10;
+
+  // abort=true with close=true (and half false) is a whole close that says
+  // the session failed: the sender's end was cut (its app's connection
+  // reset or failed to read or write, a stall reset), not closed. The
+  // receiver resets its end (a TCP target gets an RST, a reader an error),
+  // never a FIN or EOF, so a cut stream is never taken for a whole one. On
+  // a link leg it is link's reset (CLOSE code 2). A receiver that does not
+  // know the field closes as before (a FIN).
+  bool   abort       = 11;
 }
 
 // ---------------------------------------------------------------------------

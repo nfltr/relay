@@ -88,6 +88,7 @@ func TestFramesRoundTripV2(t *testing.T) {
 			{SessionId: "_fingerprint", Data: []byte("ab:cd")},
 			{SessionId: "9", Close: true, Half: true}, // a half close: link's half close frame
 			{SessionId: "7", Close: true},
+			{SessionId: "6", Close: true, Abort: true},     // TCPData.abort: link's reset
 			{SessionId: "8", TargetAddr: "x", Close: true}, // not bare: a message
 		}
 		go func() {
