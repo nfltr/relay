@@ -626,11 +626,13 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 		}
 		n, _ := strconv.Atoi(firstValue(md, tcpStreamsHeader))
 		token = firstValue(md, tcpBindHeader)
+		traceARegister(lazy, md)
 		if parked := dial.park.take(); parked.node != nil {
 			if parked.token == token { // the relay resumed the link: its sessions go on
 				logger.Info("agent link resumed by the new tcp tunnel stream")
 				lazy.adopt(parked)
 			} else {
+				traceADrain(lazy, parked.token)
 				drainNow(parked.node)
 			}
 		}

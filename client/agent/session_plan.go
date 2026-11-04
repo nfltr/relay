@@ -138,6 +138,7 @@ func newLinkSessions(park *linkPark, primary context.Context, targets sessionTar
 func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 	l.growth.add(1)
 	defer l.growth.add(-1)
+	ts := traceAOpen(l)
 	open, err := dataplane.ParseOpenHeader(header)
 	var p sessionPlan
 	if err == nil {
@@ -167,6 +168,9 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 	default:
 		target, reason, err := dialTarget(l.ctx, p.network, p.target)
 		if err != nil {
+			if traceOn && l.ctx.Err() != nil {
+				traceARefused(l, ts) // no context to serve it in (finding 42)
+			}
 			l.logger.Warn("tcp tunnel: dial target failed", "target", p.target, "error", err)
 			a.refuse(reason, err)
 			return

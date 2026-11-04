@@ -253,6 +253,7 @@ type lazyLink struct {
 
 func newLazyLink(ctx context.Context, dial RelayDialer, header func() (metadata.MD, error), ls *linkSessions, logger *slog.Logger) *lazyLink {
 	z := &lazyLink{ctx: ctx, park: dial.park, dial: dial, header: header, ls: ls, logger: logger, failed: make(chan struct{})}
+	traceANew(z)
 	context.AfterFunc(ctx, z.end)
 	return z
 }
@@ -266,6 +267,7 @@ func (z *lazyLink) end() {
 		return
 	}
 	z.mu.Lock()
+	traceAEnd(z)
 	node, token, acc := z.node, z.token, z.acc
 	z.node = nil
 	if node == nil && z.dialing {
@@ -294,6 +296,7 @@ func (z *lazyLink) adopt(p parkedLink) {
 		z.node, z.token, z.acc = p.node, p.token, p.acc
 		p.acc.ls.Store(z.ls)
 	}
+	traceAAdopt(z, p.token, ok)
 	z.mu.Unlock()
 	if !ok {
 		drainNow(p.node)
@@ -321,12 +324,14 @@ func (z *lazyLink) open() {
 	if err != nil {
 		return
 	}
+	traceARegister(z, md)
 	token := firstValue(md, tcpBindHeader)
 	offer := dataplane.ParseAgentLinkOffer(md.Get(dataplane.AgentLinkHeader), md.Get(dataplane.AgentLinkQUICHeader))
 	if token == "" {
 		return
 	}
 	z.dialing, z.retired = true, false
+	traceADial(z)
 	go z.run(token, offer)
 }
 
@@ -335,6 +340,9 @@ func (z *lazyLink) run(token string, offer dataplane.AgentLinkOffer) {
 	z.mu.Lock()
 	z.dialing = false
 	if node == nil {
+		if traceOn && !z.retired && z.ctx.Err() == nil {
+			traceAGiveUp(z)
+		}
 		z.gaveUp = true
 		z.mu.Unlock()
 		close(z.failed)
@@ -345,6 +353,7 @@ func (z *lazyLink) run(token string, offer dataplane.AgentLinkOffer) {
 	retired := z.retired || z.ctx.Err() != nil
 	if !retired {
 		z.node, z.token, z.acc = node, token, acc
+		traceABind(z, token)
 	}
 	z.mu.Unlock()
 	if retired {
@@ -362,7 +371,13 @@ func (z *lazyLink) run(token string, offer dataplane.AgentLinkOffer) {
 // retired it, or the primary ended).
 func (z *lazyLink) close() {
 	z.mu.Lock()
+	if traceOn && z.ctx.Err() != nil {
+		traceAEnd(z) // the primary's end without a park
+	}
 	node := z.node
+	if node != nil {
+		traceADrain(z, z.token)
+	}
 	z.node = nil
 	if node == nil && z.dialing {
 		z.retired = true
@@ -428,6 +443,7 @@ func (p *linkPark) park(l parkedLink) {
 		p.mu.Lock()
 		var n peerlink.Link
 		if p.link.node == l.node {
+			traceAParkDrain(p, l.token)
 			n = p.takeLocked().node
 		}
 		p.mu.Unlock()
