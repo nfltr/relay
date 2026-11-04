@@ -74,8 +74,11 @@ func (ss *serverStream) pushRequest(msg *pb.TunnelFrame) (err error) {
 			err = errCallEnded
 		}
 	}()
-	if !msg.GetEom() && ss.agent.serveCredit.Received(ss.txnID, 1) != nil {
-		return errPastWindow
+	if !msg.GetEom() {
+		traceCC(ss.agent, "Deliver", ss.txnID, 0)
+		if ss.agent.serveCredit.Received(ss.txnID, 1) != nil {
+			return errPastWindow
+		}
 	}
 	select {
 	case ss.requestCh <- msg:
@@ -113,6 +116,7 @@ func (ss *serverStream) Recv() ([]byte, error) {
 			return nil, io.EOF
 		}
 		if !msg.GetEom() {
+			traceCC(ss.agent, "Read", ss.txnID, 0)
 			ss.agent.serveCredit.Consumed(ss.txnID, 1) // may send a window update
 		}
 		data := msg.GetPayload()
@@ -165,6 +169,7 @@ func (ss *serverStream) Send(data []byte) error {
 		}
 		return ss.agent.connectionClosed()
 	}
+	traceCC(ss.agent, "Send", ss.txnID, 0)
 
 	return ss.agent.sendFrame(&pb.TunnelFrame{
 		Payload:       data,

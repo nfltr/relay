@@ -1,0 +1,13 @@
+{"ev":"Send","d":"req","c":"early-grant","n":0}
+{"ev":"Send","d":"req","c":"early-grant","n":0}
+{"ev":"Send","d":"req","c":"early-grant","n":0}
+{"ev":"Send","d":"req","c":"early-grant","n":0}
+{"ev":"Deliver","d":"req","c":"early-grant","n":0}
+{"ev":"Deliver","d":"req","c":"early-grant","n":0}
+{"ev":"Deliver","d":"req","c":"early-grant","n":0}
+{"ev":"Deliver","d":"req","c":"early-grant","n":0}
+{"ev":"Read","d":"req","c":"early-grant","n":0}
+{"ev":"Read","d":"req","c":"early-grant","n":0}
+{"ev":"Read","d":"req","c":"early-grant","n":0}
+{"ev":"Grant","d":"req","c":"early-grant","n":4}
+{"ev":"Read","d":"req","c":"early-grant","n":0}

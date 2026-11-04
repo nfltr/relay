@@ -525,6 +525,7 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 		}
 	}
 	a.callCredit.Open(cs.txnID)
+	traceCCOpen(a, cs.txnID, true)
 	a.pending.Store(cs.txnID, cs)
 	go a.removePendingClientStreamOnContextDone(cs)
 	return cs, nil
@@ -537,6 +538,7 @@ func (a *Agent) removePendingClientStreamOnContextDone(cs *clientStream) {
 	case <-cs.ctx.Done():
 		if pending, ok := a.pending.Load(cs.txnID); ok && pending == cs {
 			a.pending.Delete(cs.txnID)
+			traceCC(a, "Cancel", cs.txnID, 0)
 			// The caller left: its target stops (its handler may be
 			// waiting for credit the caller will no longer grant).
 			cs.sendCancel()

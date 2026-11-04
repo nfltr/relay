@@ -3,13 +3,18 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # spec.sh check|mutants: the TLA+ models of spec/ (spec/README.md).
-#   check    TLC on spec/SignalConn.cfg and spec/CallCredit.cfg: their
-#            invariants and liveness (LARGE=1 adds CallCreditLarge.cfg).
+#   check    TLC on spec/SignalConn.cfg, spec/CallCredit.cfg and
+#            spec/CallCreditBoth.cfg: their invariants and liveness
+#            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg).
 #   mutants  each bug put back must be caught.
 #   traces   client/p2p's SignalConn tests (TRACE_TESTS) run with -tags
 #            relaytrace; each trace, per direction that wrote, checked
 #            against spec/TraceSignalConn.tla; each spec/testdata/reject-*
-#            fixture rejected, each accept-* fixture accepted.
+#            fixture rejected, each accept-* fixture accepted; every event
+#            TraceCallCredit.tla takes recorded by client/rpcclient.
+#   cctraces FILE...  each call and direction of each recorded CallCredit
+#            trace (client/rpcclient -tags relaytrace) checked against
+#            spec/TraceCallCredit.tla.
 # COVERAGE=1 adds -coverage 1. Java and tla2tools.jar come from
 # scripts/fetch-tla.sh.
 set -eu
@@ -56,11 +61,65 @@ CFG
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.$2.out"
 }
 
+# cctrace FILE D C: TLC on call C's direction D (req, resp) of a recorded
+# CallCredit trace (spec/TraceCallCredit.tla); 0 when accepted. Its TLC
+# output: FILE.D.C.out. The windows are rpcclient's: RequestWindow 16,
+# ResponseWindow 256.
+cctrace() {
+	w=16
+	[ "$2" = req ] || w=256
+	cfg=$work/$(basename "$1").$2.$3.cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Dir = "$2"
+    Call = "$3"
+    Calls <- TraceCalls
+    Stuck = {}
+    W = $w
+    N <- TraceLen
+    P <- TraceLen
+    Q <- TraceLen
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TraceNotDone
+    TypeOK
+    NoHOL
+    BufferBound
+    Conservation
+    GrantBound
+    Ordered
+CFG
+	META=$work/states-$(basename "$1").$2.$3 tlc "$cfg" TraceCallCredit.tla >"$1.$2.$3.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.$2.$3.out"
+}
+
+# cctraces FILE: each call and direction of a CallCredit trace; prints one
+# line each, fails on a rejected one or none.
+cctraces() {
+	n=0 bad=0
+	for dc in $(sed -E 's/.*"d":"([a-z]+)","c":"([^"]+)".*/\1:\2/' "$1" | sort -u); do
+		dir=${dc%%:*} call=${dc#*:} # not d, c: tlc's
+		n=$((n + 1))
+		if cctrace "$1" "$dir" "$call"; then
+			echo "trace $(basename "$1") $call $dir: $(grep -c "\"d\":\"$dir\",\"c\":\"$call\"" "$1") lines: accepted"
+		else
+			bad=$((bad + 1))
+			echo "trace $(basename "$1") $call $dir: REJECTED"
+			grep -E 'Error|unknown event' "$1.$dir.$call.out" | head -5
+		fi
+	done
+	echo "$n call directions, $bad rejected"
+	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
+}
+
 fail=0
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit"
-	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge"
+	cfgs="SignalConn CallCredit CallCreditBoth"
+	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge"
 	for c in $cfgs; do
 		m=${c%Large}
 		echo "== $c.cfg"
@@ -120,10 +179,51 @@ mutants)
 	expect witness:LateGrant -e 's/^    NoHOL$/    W_LateGrant/'
 	expect witness:SenderWaits -e 's/^    NoHOL$/    W_SenderWaits/'
 	expect witness:CancelDrop -e 's/^    NoHOL$/    W_CancelDrop/'
+	model=CallCreditBoth
+	# One direction uncredited (lane CALLCREDIT2: symmetry checked, not
+	# assumed): its receive loop waits, and so does the other direction's
+	# window updates behind it on the same connection.
+	expect CCB:no-credit-req -e 's/Mutant = "none"/Mutant = "no-credit-req"/' -e '/Conservation/d' -e '/GrantBound/d'
+	expect CCB:no-credit-req-holds-resp -e 's/Mutant = "none"/Mutant = "no-credit-req"/' -e '/Conservation/d' -e '/GrantBound/d' -e '/NoHOL/d' -e 's/^    HealthyDone$/    HealthyRespDone/'
+	expect CCB:no-credit-resp -e 's/Mutant = "none"/Mutant = "no-credit-resp"/' -e '/Conservation/d' -e '/GrantBound/d'
+	expect CCB:no-credit-resp-holds-req -e 's/Mutant = "none"/Mutant = "no-credit-resp"/' -e '/Conservation/d' -e '/GrantBound/d' -e '/NoHOL/d' -e 's/^    HealthyDone$/    HealthyReqDone/'
+	expect CCB:drop-after-eom -e 's/Mutant = "none"/Mutant = "drop-after-eom"/' -e '/Conservation/d'
+	expect witness:BothFullHealthyDone -e 's/^    NoHOL$/    W_BothFullHealthyDone/'
+	expect witness:GrantBehindData -e 's/^    NoHOL$/    W_GrantBehindData/'
+	expect witness:ReadWaits -e 's/^    NoHOL$/    W_ReadWaits/'
+	expect witness:BothLateGrant -e 's/^    NoHOL$/    W_LateGrant/'
+	exit $fail
+	;;
+cctraces)
+	# CallCredit traces recorded elsewhere (relay-core's two-agent tests:
+	# its scripts/spec.sh traces runs this from the required relay version).
+	shift
+	[ $# -gt 0 ] || { echo "usage: spec.sh cctraces FILE..." >&2; exit 2; }
+	for f in "$@"; do
+		cp "$f" "$work/"
+		cctraces "$work/$(basename "$f")" || fail=1
+	done
 	exit $fail
 	;;
 traces)
+	# Every step TraceCallCredit.tla takes is one rpcclient records.
+	ccgo=$(cat client/rpcclient/*.go | grep -v '^//' | grep -ohE 'traceCC\([a-z.]+, "[A-Za-z]+"' | grep -ohE '"[A-Za-z]+"' | sort -u)
+	for e in $(grep -E 'E\.ev = ' spec/TraceCallCredit.tla | grep -ohE '"[A-Z][A-Za-z]*"' | sort -u); do
+		echo "$ccgo" | grep -qx "$e" || { echo "spec/TraceCallCredit.tla: event $e is recorded by no traceCC in client/rpcclient"; exit 1; }
+	done
+	for f in spec/testdata/reject-callcredit-*.ndjson; do
+		cp "$f" "$work/"
+		if cctraces "$work/$(basename "$f")" >"$work/cc.out"; then
+			echo "$f: accepted, want rejected"
+			exit 1
+		fi
+		for o in "$work/$(basename "$f")".*.out; do
+			grep -q 'distinct states found' "$o" || { echo "$f: TLC failed:"; tail -20 "$o"; exit 1; }
+		done
+		echo "$f: rejected"
+	done
 	for f in spec/testdata/reject-*.ndjson; do
+		case $f in *reject-callcredit-*) continue ;; esac
 		cp "$f" "$work/"
 		if trace "$work/$(basename "$f")" 1 2; then
 			echo "$f: accepted, want rejected"
@@ -168,7 +268,7 @@ traces)
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
 	;;
 *)
-	echo "usage: spec.sh check|mutants|traces" >&2
+	echo "usage: spec.sh check|mutants|traces|cctraces FILE..." >&2
 	exit 2
 	;;
 esac

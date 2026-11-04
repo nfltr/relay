@@ -151,13 +151,17 @@ SenderGrant ==
     /\ gout' = Tail(gout)
     /\ UNCHANGED <<sent, in, pipe, out, buf, got, cons, gin, eom, gone, late>>
 
-\* A stuck call ends (its caller's context, a cancel, the deadline): both
-\* sides forget its credit; what it buffered goes, later frames are dropped.
-Cancel(c) ==
-    /\ c \in Stuck /\ ~gone[c]
+\* A call ends (its caller's context, a cancel, the deadline): both sides
+\* forget its credit; what it buffered goes, later frames are dropped.
+End(c) ==
+    /\ ~gone[c]
     /\ gone' = [gone EXCEPT ![c] = TRUE]
     /\ buf' = [buf EXCEPT ![c] = <<>>]
     /\ UNCHANGED <<cr, sent, in, pipe, out, got, cons, gin, gout, eom, late>>
+
+\* Only a stuck call ends early here: a reader that reads gets every frame
+\* (HealthyDone). A trace's calls end where the run ended them (End).
+Cancel(c) == c \in Stuck /\ End(c)
 
 Next ==
     \/ \E c \in Calls : Send(c) \/ RelayOut(c) \/ Read(c) \/ Eom(c) \/ Cancel(c)

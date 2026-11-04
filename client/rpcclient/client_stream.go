@@ -97,8 +97,11 @@ func (cs *clientStream) pushResponse(msg *pb.TunnelFrame) (err error) {
 			err = errCallEnded
 		}
 	}()
-	if !msg.GetEom() && cs.agent.callCredit.Received(cs.txnID, 1) != nil {
-		return errPastWindow
+	if !msg.GetEom() {
+		traceCC(cs.agent, "Deliver", cs.txnID, 0)
+		if cs.agent.callCredit.Received(cs.txnID, 1) != nil {
+			return errPastWindow
+		}
 	}
 	select {
 	case cs.responseCh <- msg:
@@ -178,6 +181,11 @@ func (cs *clientStream) sendMsg(data []byte, eom bool) error {
 	// RequestWindow); the request's end takes none.
 	if !eom && !cs.agent.callCredit.Acquire(cs.txnID, 1) {
 		return cs.sendEnded()
+	}
+	if eom {
+		traceCC(cs.agent, "Eom", cs.txnID, 0)
+	} else {
+		traceCC(cs.agent, "Send", cs.txnID, 0)
 	}
 
 	md := &pb.RoutingInfo{
@@ -283,6 +291,7 @@ func (cs *clientStream) resendEarly(s *a2aE2EEState, data []byte) error {
 	if !cs.agent.callCredit.Acquire(cs.txnID, 1) {
 		return cs.sendEnded()
 	}
+	traceCC(cs.agent, "Send", cs.txnID, 0)
 	return cs.agent.sendFrame(&pb.TunnelFrame{
 		Payload:       ciphertext,
 		MessageType:   cs.msgType,
@@ -342,6 +351,7 @@ func (cs *clientStream) Recv() (*Response, error) {
 		return nil, io.EOF
 	}
 	if !msg.GetEom() {
+		traceCC(cs.agent, "Read", cs.txnID, 0)
 		cs.agent.callCredit.Consumed(cs.txnID, 1) // may send a window update
 	}
 

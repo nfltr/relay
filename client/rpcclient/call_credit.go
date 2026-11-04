@@ -77,6 +77,9 @@ func (a *Agent) handleWindow(msg *pb.TunnelFrame) {
 	txnID := msg.GetTransactionId()
 	n, size := binary.Uvarint(msg.GetPayload())
 	bad := size <= 0 || size != len(msg.GetPayload()) || n > ResponseWindow
+	if !bad {
+		traceCC(a, "Grant", txnID, int(n)) // #nosec G115 -- n <= ResponseWindow
+	}
 	if val, ok := a.pending.Load(txnID); ok {
 		if bad || a.callCredit.Grant(txnID, int(n)) != nil { // #nosec G115 -- n <= ResponseWindow
 			val.(*clientStream).refuse(errPastWindow)
@@ -99,6 +102,7 @@ func (a *Agent) newServerStream(msg *pb.TunnelFrame, e2ee *a2aE2EEState, early [
 	ssCtx, ssCancel := context.WithCancel(a.ctx)
 	txnID := msg.GetTransactionId()
 	a.serveCredit.Open(txnID)
+	traceCCOpen(a, txnID, false)
 	context.AfterFunc(ssCtx, func() { a.serveCredit.Forget(txnID) })
 	return &serverStream{
 		agent:         a,

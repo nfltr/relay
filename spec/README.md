@@ -302,7 +302,8 @@ both FIFOs of cap `Q`; the receiver's per-call buffer (`buf`), the reads
 (`got`), acknowledgements (`cons`), and the updates back (`gin` to the
 relay, `gout` to the sender). The other direction is the same machine
 (requests: their updates travel the response direction, which has no
-early end). Abstracted: frame sizes (frames are counted; a frame's bytes
+early end); `CallCreditBoth.tla` checks both at once on the connections
+they share. Abstracted: frame sizes (frames are counted; a frame's bytes
 are bounded by the gRPC message limit), E2EE (it changes payloads, not
 frames), the agents' send queues (one FIFO with the connection: every
 frame of a connection goes through its one `sendLoop`).
@@ -317,7 +318,8 @@ frame of a connection goes through its one `sendLoop`).
 | `Eom(c)` | `clientStream.CloseSend` |
 | `RelayGrant` | relay-core: `dispatchAgentToAgent` -> `a2aSession.windows` -> the route (caller's updates); the response path (handler's) |
 | `SenderGrant` | `handleMessage` `WindowMessageType`: `Credit.Grant` |
-| `Cancel(c)` | the call's context, cancel or deadline: `Credit.Forget` on both sides |
+| `Cancel(c)` | a stuck call's `End(c)` |
+| `End(c)` | the call's context, cancel or deadline: `Credit.Forget` on both sides (the caller's `removePendingClientStreamOnContextDone`; the handler's context) |
 
 Mutants (`make spec-mutants`): `CC:no-credit` (the code before: `NoHOL`),
 `CC:no-credit-live` (the same, `HealthyDone`), `CC:no-return` (reads
@@ -342,9 +344,78 @@ distinct states, depth 55, about 12 s.
 | The relay keeps a call's frames in order (one route goroutine per direction) | relay-core `dispatcher_agent_routing.go` |
 | A reader that reads keeps reading (weak fairness on `Read` outside `Stuck`) | the app |
 
-### Code map (CallCredit.tla)
+### Code map (CallCredit.tla, CallCreditBoth.tla)
 
 | actions | code |
 |---|---|
-| `Send`, `Read`, `Eom`, `Cancel` | client/rpcclient/client_stream.go, client/rpcclient/server_stream.go |
+| `Send`, `Read`, `Eom`, `Cancel`, `End`, `CloseSend` | client/rpcclient/client_stream.go, client/rpcclient/server_stream.go |
 | `Deliver`, `SenderGrant` | client/rpcclient/a2a.go, client/rpcclient/call_credit.go |
+| trace recorder | client/rpcclient/trace_callcredit_on.go |
+
+### CallCreditBoth.tla: both directions at once
+
+Lane CALLCREDIT2 (2026-11-05). `CallCredit.tla` checks one direction on
+connections of its own and took the other as the same machine. Both
+directions of a call share connections: the caller's connection to the
+relay carries its requests, its request EOM and its window updates for
+responses; the handler's its responses and its window updates for
+requests; the relay's connection to each agent what the other sent. So an
+agent's receive loop serves one direction's frames and the other
+direction's window updates from one FIFO, and a `Recv` that sends a window
+update waits for room on its connection behind that agent's own frames
+(`Agent.sendFrame` returns once its frame is written).
+`CallCreditBoth.tla` has both directions credited at once (`WReq`,
+`WResp`) on those four FIFOs (`up[a]`, `down[a]`), the relay's pipe and
+window channel per call and direction (`pipe`, `gch`), the request EOM as
+a frame on the caller's connection (`CloseSend`, after its requests), and
+the same invariants per direction (`NoHOL` now: the head of each agent's
+connection is a window update or fits its call's buffer) and
+`HealthyReqDone`, `HealthyRespDone`.
+
+| action | Go |
+|---|---|
+| `Send(d, c)` | as `CallCredit`'s `Send`, per direction |
+| `CloseSend(c)` | `clientStream.CloseSend`: the request EOM, after the call's requests |
+| `RelayIn(a)` | relay-core: agent `a`'s stream receive loop: data to the call's pipe, a window update to its window channel, the EOM ends the requests |
+| `RelayOut(d, c)`, `RelayGrant(d, c)` | relay-core: the call's routes |
+| `Deliver(a)` | agent `a`'s `recvLoop`: `pushRequest` / `pushResponse`, `handleWindow` |
+| `Read(d, c)` | `Recv`: `Credit.Consumed`, its window update written before `Recv` returns |
+| `Cancel(c)` | a call with a stuck reader ends: `Credit.Forget` on both sides |
+
+`CallCreditBoth.cfg` (2 calls, one stuck both ways; windows of 1, 2
+frames each way, pipes of 1, FIFOs of 2): 38,350 distinct states, depth
+44, about 18 s; `CallCreditBothLarge.cfg` (windows of 2; `LARGE=1`).
+Mutants: `CCB:no-credit-req`, `CCB:no-credit-resp` (one direction
+uncredited: `NoHOL`), `CCB:no-credit-req-holds-resp` and
+`CCB:no-credit-resp-holds-req` (the same with `NoHOL` off: the healthy
+call's *other* direction stops, its window updates behind the waiting
+loop: `HealthyRespDone`, `HealthyReqDone`), `CCB:drop-after-eom`
+(`HealthyDone`). Witnesses, each violated: `W_BothFullHealthyDone`,
+`W_GrantBehindData` (a window update behind data on one connection),
+`W_ReadWaits` (a `Recv` whose window update waits for room), `W_LateGrant`.
+
+### CallCredit traces
+
+`make spec-traces` here checks the recorder's fixtures; the traces come
+from relay-core's two-agent tests (relay-core `make spec-traces`, which
+runs `scripts/spec.sh cctraces` from the relay version it requires): with
+`-tags relaytrace` and `RELAYTRACE=<dir>`, `client/rpcclient`
+(`trace_callcredit_on.go`; without the tag empty functions the compiler
+drops) writes every agent's steps of the process to
+`callcredit-<pid>.ndjson`: `Send` (after `Credit.Acquire`), `Deliver`
+(the receive loop, before `Credit.Received`), `Read` (before
+`Credit.Consumed`), `Eom` (`CloseSend`), `Grant` (`handleWindow`, its
+count) and `Cancel` (the caller left), each with its call's transaction
+id and direction (from the agent's role in the call, which
+`traceCCOpen` records). Each line is written before the step's effect
+can be seen by the other side, under one lock, so the file's order is one
+the run took. `TraceCallCredit.tla` checks each call and direction alone
+against `CallCredit.tla` with that call (`W` the direction's window): the
+relay's steps are TLC's, taken only when the next logged step needs them.
+One call at a time because frames and window updates of different calls
+on one connection are ordered by goroutines the recorder does not see.
+Rejected fixtures: `reject-callcredit-send-past-window.ndjson` (a
+handler's 257th response with no window update: the code before lane
+CALLCREDIT), `reject-callcredit-early-grant.ndjson` (a window update for
+4 requests after 3 reads). `scripts/spec.sh traces` also checks that
+every step `TraceCallCredit.tla` takes is one `traceCC` records.
