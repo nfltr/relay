@@ -345,7 +345,7 @@ distinct states, depth 55, about 12 s.
 | The relay keeps a call's frames in order (one route goroutine per direction) | relay-core `dispatcher_agent_routing.go` |
 | A reader that reads keeps reading (weak fairness on `Read` outside `Stuck`) | the app |
 
-### Code map (CallCredit.tla, CallCreditBoth.tla)
+### Code map (CallCredit.tla, CallCreditBoth.tla, CallCreditSenders.tla)
 
 | actions | code |
 |---|---|
@@ -423,3 +423,47 @@ handler's 257th response with no window update: the code before lane
 CALLCREDIT), `reject-callcredit-early-grant.ndjson` (a window update for
 4 requests after 3 reads). `scripts/spec.sh traces` also checks that
 every step `TraceCallCredit.tla` takes is one `traceCC` records.
+
+### CallCreditSenders.tla: several senders on one call
+
+Lane FLAKECC (2026-11-05). `CallCredit.tla`'s `Send(c)` is enabled
+whenever the call has credit: it assumes a sender waiting for credit takes
+it once credit is there. That holds for one sender per call. A handler may
+`Send` from several goroutines (`serverStream.Send`: a remote-exec
+handler's stdout and stderr), and `link.Credit.Acquire` wakes its waiters
+through one token of capacity one (`sessionCredit.wake`), which `Grant`
+fills and one waiter empties. Of two waiters a grant woke one; it took a
+credit and sent on, and once it had nothing more to send the other waited
+with credit there and no token; no grant came, since the receiver grants
+only for frames it read (`TestConcurrentServerStreamSend` on the Linux
+runner, relay 582038b7: 427 of 500 frames, every sender waiting).
+
+Design: a call's senders take its credit one at a time
+(`serverStream.creditMu`, held across `Credit.Acquire`), so at most one
+waits on the token and every grant reaches it. A `clientStream` has one
+sender (its `Send` is not safe for concurrent use: `sentFirst`), and
+`resendEarly` runs before anything else of the call is sent.
+
+Invariants: `Conservation` (credit, frames on the wire, read and not yet
+granted, and grants on the way make up the window), `NoStrandedWaiter` (a
+sender waiting while the call has credit has the token, or another sender
+is checking); liveness `AllSent` (every sender sends all its frames).
+Mutants: `CCS:no-lock` (the code before: `NoStrandedWaiter`),
+`CCS:no-lock-live` (the same: `AllSent`). Witnesses, each violated:
+`W_BothWant` (one sender waits while the other wants credit),
+`W_GrantToWaiter`. `CallCreditSenders.cfg` (2 senders, window 8 so grants
+come two frames at a time, 5 frames each): 1,406 distinct states, depth
+37, every action taken.
+
+| action | Go |
+|---|---|
+| `Start(s)` | `serverStream.Send`: `creditMu.Lock` |
+| `Try(s)` | `link.Credit.acquire`'s check; `creditMu.Unlock`, `Agent.sendFrame` |
+| `Wake(s)` | `link.Credit.acquire`'s `<-wake` |
+| `Read` | `clientStream.Recv`: `Credit.Consumed` |
+| `Grant` | `handleWindow`: `Credit.Grant` |
+
+Follow-up (link): `Credit` documents its methods as safe from any
+goroutine, so two `Acquire`s of one session are legal there too; `acquire`
+passing the token on when it leaves credit (a non-blocking send on `wake`
+after a take with `s.n > 0`) would make the mutex unneeded.

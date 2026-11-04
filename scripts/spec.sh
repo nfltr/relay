@@ -3,8 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # spec.sh check|mutants: the TLA+ models of spec/ (spec/README.md).
-#   check    TLC on spec/SignalConn.cfg, spec/CallCredit.cfg and
-#            spec/CallCreditBoth.cfg: their invariants and liveness
+#   check    TLC on spec/SignalConn.cfg, spec/CallCredit.cfg,
+#            spec/CallCreditBoth.cfg and spec/CallCreditSenders.cfg: their
+#            invariants and liveness
 #            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg).
 #   mutants  each bug put back must be caught.
 #   traces   client/p2p's SignalConn tests (TRACE_TESTS) run with -tags
@@ -118,7 +119,7 @@ cctraces() {
 fail=0
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth"
+	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge"
 	for c in $cfgs; do
 		m=${c%Large}
@@ -192,6 +193,13 @@ mutants)
 	expect witness:GrantBehindData -e 's/^    NoHOL$/    W_GrantBehindData/'
 	expect witness:ReadWaits -e 's/^    NoHOL$/    W_ReadWaits/'
 	expect witness:BothLateGrant -e 's/^    NoHOL$/    W_LateGrant/'
+	model=CallCreditSenders
+	# The code before lane FLAKECC: a call's concurrent senders each wait on
+	# link.Credit's one wake token; one grant wakes one of them.
+	expect CCS:no-lock -e 's/Mutant = "none"/Mutant = "no-lock"/'
+	expect CCS:no-lock-live -e 's/Mutant = "none"/Mutant = "no-lock"/' -e '/NoStrandedWaiter/d'
+	expect witness:BothWant -e 's/^    NoStrandedWaiter$/    W_BothWant/'
+	expect witness:GrantToWaiter -e 's/^    NoStrandedWaiter$/    W_GrantToWaiter/'
 	exit $fail
 	;;
 cctraces)
