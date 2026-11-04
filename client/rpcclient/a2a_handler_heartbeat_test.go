@@ -248,18 +248,18 @@ func TestAgent_SuppressesHeartbeatWhileDataFlowing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewStream error: %v", err)
 	}
-	for i := range 64 {
+	for i := range RequestWindow { // the call's credit: the mock grants none
 		if err := stream.Send([]byte("x")); err != nil {
 			t.Fatalf("Send(%d) error: %v", i, err)
 		}
 	}
 
-	// While the 64-frame backlog drains (each frame takes 5ms ≈ 320ms total),
+	// While the backlog drains (each frame takes 5ms),
 	// no empty heartbeat frames should appear — data alone is proof-of-life.
 	deadline := time.After(600 * time.Millisecond)
 	dataFrames := 0
 	heartbeatFrames := 0
-	for dataFrames < 64 {
+	for dataFrames < RequestWindow {
 		select {
 		case msg := <-ms.sentCh:
 			if msg.GetTransactionId() == "" && len(msg.GetPayload()) == 0 && !msg.GetEom() {
@@ -382,7 +382,7 @@ func TestHeartbeatFiltering(t *testing.T) {
 	cs := &clientStream{
 		agent:      agent,
 		txnID:      txnID,
-		responseCh: make(chan *pb.TunnelFrame, clientStreamResponseBufferSize),
+		responseCh: make(chan *pb.TunnelFrame, ResponseWindow+1),
 		headerCh:   make(chan struct{}),
 		ctx:        ctx,
 	}

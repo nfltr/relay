@@ -3,7 +3,7 @@
 
 // Package handoff gives a value from a receive loop that serves many
 // transactions (an agent's stream, a WireGuard exit's session, a broker
-// fanout worker, an agent's A2A tunnel) to one transaction's consumer
+// fanout worker, the relay's agent-to-agent routes) to one transaction's consumer
 // without letting that consumer hold the loop: the loop waits on a
 // consumer only while it keeps taking, and never past a bound; then the
 // caller refuses that one transaction with a typed error. It is the

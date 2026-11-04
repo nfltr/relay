@@ -8,20 +8,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/handoff"
 	"github.com/nfltr/relay/proto/pb"
 	"google.golang.org/grpc/codes"
 )
 
 // TestStuckHandlerDoesNotHoldTheReceiveLoop guards the agent-to-agent
-// sibling of the stuck-client rule: a
-// handler that takes none of its call's frames must not stop the tunnel's
-// receive loop, which serves every call and response of the agent. Past
-// its call's 16-frame buffer the loop waits for it at most consumerStall;
-// then the call is refused (ResourceExhausted to its caller) and the
-// agent's other calls go on.
+// sibling of the stuck-client rule: a handler that takes none of its
+// call's frames must not stop the tunnel's receive loop, which serves every
+// call and response of the agent. A caller that sends past the call's
+// RequestWindow (it broke the credit rules) has that call refused at once
+// (ResourceExhausted), and the agent's other calls go on.
 func TestStuckHandlerDoesNotHoldTheReceiveLoop(t *testing.T) {
-	defer func(d time.Duration) { consumerStall = d }(consumerStall)
-	consumerStall = 300 * time.Millisecond
 	ms := newMockStream(t.Context())
 	agent := NewAgent(testTargetAgentId, ms)
 	defer agent.Close() //nolint:errcheck
@@ -42,7 +40,7 @@ func TestStuckHandlerDoesNotHoldTheReceiveLoop(t *testing.T) {
 			Routing: &pb.RoutingInfo{AgentId: "agent-a", TargetAgentId: testTargetAgentId}}
 	}()
 	var refused, answered bool
-	deadline := time.After(10 * time.Second)
+	deadline := time.After(handoff.Stall / 2) // the code before waited handoff.Stall
 	for !refused || !answered {
 		select {
 		case f := <-ms.sendCh:

@@ -5,13 +5,13 @@ package rpcclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/nfltr/relay/client/handoff"
 	"github.com/nfltr/relay/proto/pb"
 )
 
@@ -58,32 +58,31 @@ type serverStream struct {
 	early      []byte // a 0-RTT call's first request, already decrypted
 }
 
-// consumerStall bounds how long the tunnel's receive loop, which serves
-// every call and response of the agent, waits for one consumer (a
-// handler's call, a caller's response stream) to take anything of its
-// transaction (handoff.Stall; tests shorten it).
-var consumerStall = handoff.Stall
+// errCallEnded: a frame for a call that ended (it is dropped).
+var errCallEnded = errors.New("rpcclient: the call ended")
 
-// pushRequest enqueues a request frame onto ss.requestCh, skipping the
-// send if the channel has already been closed (the EOM marker arrived
-// from a concurrent code path). It waits for a full channel only while
-// the handler keeps taking, at most consumerStall (handoff.Send): then
-// handoff.ErrStalled, and the caller refuses the call. A call that ended
-// is handoff.ErrEnded, the frame dropped.
+// pushRequest puts a request into the call's buffer without waiting: a
+// data frame is charged to the call's credit, which guarantees it room
+// (RequestWindow, plus a slot for the request's end). errPastWindow: the
+// caller sent past the window; errCallEnded: the call ended.
 func (ss *serverStream) pushRequest(msg *pb.TunnelFrame) (err error) {
 	if ss == nil || ss.closed.Load() {
-		return handoff.ErrEnded
+		return errCallEnded
 	}
 	defer func() {
-		// Belt-and-braces: another goroutine may have closed between the
-		// flag check and the actual send. The panic that would otherwise
-		// reach the runtime is swallowed: the message is then equivalent
-		// to "arrived after close" and is correctly dropped.
-		if recover() != nil {
-			err = handoff.ErrEnded
+		if recover() != nil { // closeRequests ran
+			err = errCallEnded
 		}
 	}()
-	return handoff.Send(ss.requestCh, msg, ss.ctx.Done(), consumerStall)
+	if !msg.GetEom() && ss.agent.serveCredit.Received(ss.txnID, 1) != nil {
+		return errPastWindow
+	}
+	select {
+	case ss.requestCh <- msg:
+		return nil
+	default:
+		return errPastWindow
+	}
 }
 
 // closeRequests closes requestCh exactly once. Safe to call from any
@@ -112,6 +111,9 @@ func (ss *serverStream) Recv() ([]byte, error) {
 	case msg, ok := <-ss.requestCh:
 		if !ok {
 			return nil, io.EOF
+		}
+		if !msg.GetEom() {
+			ss.agent.serveCredit.Consumed(ss.txnID, 1) // may send a window update
 		}
 		data := msg.GetPayload()
 		// Empty-data EOM is the CloseSend marker — return EOF.
@@ -154,6 +156,14 @@ func (ss *serverStream) Send(data []byte) error {
 			return fmt.Errorf("rpcclient: encrypt response payload: %w", err)
 		}
 		data = ciphertext
+	}
+	// One of the call's credit (the caller's ResponseWindow): a caller
+	// that stops reading holds this handler, never the agent's other calls.
+	if !ss.agent.serveCredit.Acquire(ss.txnID, 1) {
+		if err := ss.ctx.Err(); err != nil {
+			return err
+		}
+		return ss.agent.connectionClosed()
 	}
 
 	return ss.agent.sendFrame(&pb.TunnelFrame{

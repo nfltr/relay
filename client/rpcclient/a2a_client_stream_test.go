@@ -5,14 +5,15 @@ package rpcclient
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/handoff"
 	"github.com/nfltr/relay/proto/pb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -60,18 +61,18 @@ func TestClientStream_BuffersBurstResponses(t *testing.T) {
 	}
 }
 
-// A caller that takes none of its responses holds the receive loop at most
-// consumerStall past its buffer: then its call is cut (ResourceExhausted
-// after the buffered frames) and the agent's other calls go on.
+// A caller that takes none of its responses holds only its own call: with
+// its window full the receive loop still delivers the agent's other calls
+// at once (the code before waited handoff.Stall here when the stalled
+// call's next frame came first), and a frame past the window (a peer that
+// broke the credit rules) refuses that call alone, without waiting.
 func TestClientStream_SaturatedStreamDoesNotBlockOtherTransactions(t *testing.T) {
-	defer func(d time.Duration) { consumerStall = d }(consumerStall)
-	consumerStall = 300 * time.Millisecond
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), handoff.Stall/2)
 	defer cancel()
 
 	ms := &mockStream{
 		sendCh: make(chan *pb.TunnelFrame, 4),
-		recvCh: make(chan *pb.TunnelFrame, clientStreamResponseBufferSize+2),
+		recvCh: make(chan *pb.TunnelFrame, ResponseWindow+2),
 		ctx:    ctx,
 	}
 	agent := NewAgent("agent-a", ms)
@@ -88,7 +89,7 @@ func TestClientStream_SaturatedStreamDoesNotBlockOtherTransactions(t *testing.T)
 	stalledTxn := stalled.(*clientStream).txnID
 	healthyTxn := healthy.(*clientStream).txnID
 
-	for i := range clientStreamResponseBufferSize + 1 {
+	for i := range ResponseWindow + 1 { // the last one past the window
 		ms.recvCh <- &pb.TunnelFrame{
 			Payload:       fmt.Appendf(nil, "stalled-%d", i),
 			MessageType:   "a2a-response",
@@ -101,25 +102,14 @@ func TestClientStream_SaturatedStreamDoesNotBlockOtherTransactions(t *testing.T)
 		TransactionId: healthyTxn,
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		resp, recvErr := healthy.Recv()
-		if recvErr == nil && string(resp.Data) != "healthy-response" {
-			recvErr = fmt.Errorf("healthy payload = %q", resp.Data)
-		}
-		done <- recvErr
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("healthy Recv: %v", err)
-		}
-	case <-ctx.Done():
-		t.Fatal("healthy transaction blocked behind saturated stream")
+	resp, err := healthy.Recv()
+	if err != nil {
+		t.Fatalf("healthy Recv: %v (blocked behind the saturated stream)", err)
 	}
-
-	for i := range clientStreamResponseBufferSize {
+	if string(resp.Data) != "healthy-response" {
+		t.Fatalf("healthy payload = %q", resp.Data)
+	}
+	for i := range ResponseWindow {
 		if _, err := stalled.Recv(); err != nil {
 			t.Fatalf("stalled Recv(%d): %v", i, err)
 		}
@@ -127,16 +117,20 @@ func TestClientStream_SaturatedStreamDoesNotBlockOtherTransactions(t *testing.T)
 	if _, err := stalled.Recv(); status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("stalled terminal Recv error = %v, want ResourceExhausted", err)
 	}
+	// The refused call's target is told to stop.
+	for f := range ms.sendCh {
+		if f.GetTransactionId() == stalledTxn && f.GetMessageType() == "cancel" {
+			break
+		}
+	}
 }
 
-// A burst of responses past the call's buffer, arriving before the caller
-// reads any, is paced (the receive loop waits while the caller takes), not
-// failed: every frame reaches the caller. Only a caller that takes nothing
-// for consumerStall is cut (TestClientStream_SaturatedStreamDoesNotBlockOtherTransactions).
-func TestClientStream_BurstPastBufferIsPaced(t *testing.T) {
-	const frames = clientStreamResponseBufferSize + 44
+// Responses within the window, arriving before the caller reads any, all
+// wait in the call's buffer; each quarter window the caller reads goes back
+// to the target as one window update.
+func TestClientStream_WindowFillsAndGrantsBack(t *testing.T) {
 	ms := newMockStream(t.Context())
-	ms.recvCh = make(chan *pb.TunnelFrame, frames)
+	ms.recvCh = make(chan *pb.TunnelFrame, ResponseWindow)
 	agent := NewAgent("agent-a", ms)
 	defer agent.Close() //nolint:errcheck
 	stream, err := agent.NewStream(t.Context(), testTargetAgentId)
@@ -144,28 +138,35 @@ func TestClientStream_BurstPastBufferIsPaced(t *testing.T) {
 		t.Fatalf("NewStream: %v", err)
 	}
 	txn := stream.(*clientStream).txnID
-	for i := range frames {
-		ms.recvCh <- &pb.TunnelFrame{Payload: fmt.Appendf(nil, "%d", i), MessageType: "a2a-response", TransactionId: txn, Eom: i == frames-1}
+	for i := range ResponseWindow {
+		ms.recvCh <- &pb.TunnelFrame{Payload: fmt.Appendf(nil, "%d", i), MessageType: "a2a-response", TransactionId: txn}
 	}
-	// The receive loop has taken the frame past the buffer (the stream's
-	// reader holds the next) before the caller reads anything.
-	for deadline := time.Now().Add(10 * time.Second); len(ms.recvCh) > frames-clientStreamResponseBufferSize-2; {
-		if time.Now().After(deadline) {
-			t.Fatalf("the receive loop took %d of %d frames", frames-len(ms.recvCh), frames)
-		}
-		runtime.Gosched()
-	}
-	for i := range frames {
+	for i := range ResponseWindow {
 		resp, err := stream.Recv()
 		if err != nil {
-			t.Fatalf("Recv %d of %d: %v", i, frames, err)
+			t.Fatalf("Recv %d: %v", i, err)
 		}
 		if string(resp.Data) != fmt.Sprint(i) {
 			t.Fatalf("Recv %d = %q", i, resp.Data)
 		}
 	}
+	for granted := 0; granted < ResponseWindow; {
+		f := <-ms.sendCh
+		if f.GetMessageType() != WindowMessageType || f.GetTransactionId() != txn {
+			continue
+		}
+		if f.GetRouting().GetTargetAgentId() != testTargetAgentId {
+			t.Fatalf("window update routed to %q", f.GetRouting().GetTargetAgentId())
+		}
+		n, _ := binary.Uvarint(f.GetPayload())
+		if n != ResponseWindow/4 {
+			t.Fatalf("window update of %d, want a quarter window", n)
+		}
+		granted += int(n)
+	}
+	ms.recvCh <- &pb.TunnelFrame{MessageType: "a2a-status", TransactionId: txn, Eom: true}
 	if _, err := stream.Recv(); err != io.EOF {
-		t.Fatalf("Recv after the last frame = %v, want EOF", err)
+		t.Fatalf("Recv after the call's end = %v, want EOF", err)
 	}
 }
 
@@ -420,6 +421,9 @@ func TestConcurrentServerStreamSend(t *testing.T) {
 				gotStatus = true
 			} else {
 				dataFrames++
+				if dataFrames%(ResponseWindow/4) == 0 { // the caller's reads, granted back
+					mock.recvCh <- windowFrame("txn-concurrent", ResponseWindow/4)
+				}
 			}
 			if gotStatus && dataFrames == totalExpected {
 				goto done
@@ -438,3 +442,8 @@ done:
 // ---------------------------------------------------------------------------
 // Full round-trip: client + handler via mock stream bridge
 // ---------------------------------------------------------------------------
+
+// windowFrame is a peer's window update for n frames of txn.
+func windowFrame(txn string, n int) *pb.TunnelFrame {
+	return &pb.TunnelFrame{MessageType: WindowMessageType, TransactionId: txn, Payload: binary.AppendUvarint(nil, uint64(n))}
+}

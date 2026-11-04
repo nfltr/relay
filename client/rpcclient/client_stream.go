@@ -8,10 +8,10 @@ import (
 	"crypto/rand"
 	"fmt"
 	"io"
+	"log"
 	"sync"
 	"time"
 
-	"github.com/nfltr/relay/client/handoff"
 	"github.com/nfltr/relay/proto/pb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -87,19 +87,47 @@ func (cs *clientStream) closeResponses() {
 	})
 }
 
-// pushResponse gives msg to the caller: at once while its buffer has
-// room, else waiting while the caller keeps taking, at most consumerStall
-// (handoff.Send): then handoff.ErrStalled, and the receive loop cuts the
-// call. A call that ended is handoff.ErrEnded, the frame dropped.
+// pushResponse puts a response into the call's buffer without waiting: a
+// data frame is charged to the call's credit, and the caller's credit
+// guarantees it room (ResponseWindow, plus a slot for the call's end).
+// errPastWindow: the peer sent past the window; errCallEnded: the call ended.
 func (cs *clientStream) pushResponse(msg *pb.TunnelFrame) (err error) {
 	defer func() {
-		// closeResponses may close responseCh from another goroutine
-		// (failE2EE, closePendingClientStreams) during the send.
-		if recover() != nil {
-			err = handoff.ErrEnded
+		if recover() != nil { // closeResponses ran: the call ended
+			err = errCallEnded
 		}
 	}()
-	return handoff.Send(cs.responseCh, msg, cs.ended, consumerStall)
+	if !msg.GetEom() && cs.agent.callCredit.Received(cs.txnID, 1) != nil {
+		return errPastWindow
+	}
+	select {
+	case cs.responseCh <- msg:
+		return nil
+	default:
+		return errPastWindow
+	}
+}
+
+// refuse ends the call with err (its peer broke the credit rules) and
+// tells the target to stop.
+func (cs *clientStream) refuse(err error) {
+	log.Printf("rpcclient: refused transaction %s: %v", cs.txnID, err)
+	cs.setResponseError(err)
+	cs.closeResponses()
+	cs.agent.pending.Delete(cs.txnID)
+	go cs.sendCancel() // the receive loop never waits on a send
+}
+
+// sendCancel tells the call's target that the caller left (the relay
+// forwards it: the target's handler context ends).
+func (cs *clientStream) sendCancel() {
+	_ = cs.agent.sendFrame(&pb.TunnelFrame{
+		MessageType:   "cancel",
+		TransactionId: cs.txnID,
+		Timestamps:    &pb.Timestamps{RequestAtAgent: time.Now().UnixMilli()},
+		Routing:       &pb.RoutingInfo{AgentId: cs.sourceAgentID, TargetAgentId: cs.targetAgentID},
+		Eom:           true,
+	})
 }
 
 // Send transmits data immediately with Eom=false.
@@ -144,6 +172,12 @@ func (cs *clientStream) sendMsg(data []byte, eom bool) error {
 			return fmt.Errorf("rpcclient: encrypt request payload: %w", err)
 		}
 		data = ciphertext
+	}
+
+	// A data frame takes one of the call's credit (the target's
+	// RequestWindow); the request's end takes none.
+	if !eom && !cs.agent.callCredit.Acquire(cs.txnID, 1) {
+		return cs.sendEnded()
 	}
 
 	md := &pb.RoutingInfo{
@@ -246,6 +280,9 @@ func (cs *clientStream) resendEarly(s *a2aE2EEState, data []byte) error {
 	if err != nil {
 		return err
 	}
+	if !cs.agent.callCredit.Acquire(cs.txnID, 1) {
+		return cs.sendEnded()
+	}
 	return cs.agent.sendFrame(&pb.TunnelFrame{
 		Payload:       ciphertext,
 		MessageType:   cs.msgType,
@@ -304,6 +341,9 @@ func (cs *clientStream) Recv() (*Response, error) {
 		}
 		return nil, io.EOF
 	}
+	if !msg.GetEom() {
+		cs.agent.callCredit.Consumed(cs.txnID, 1) // may send a window update
+	}
 
 	// Error from proxy (e.g., target not connected).
 	if msg.GetMessageType() == "error" {
@@ -347,6 +387,22 @@ func (cs *clientStream) Recv() (*Response, error) {
 
 // Header returns the initial metadata from the target agent's first response.
 // Blocks until the first response arrives or the context is cancelled.
+// sendEnded is a Send's error once the call's credit ended: the call's
+// context, the agent, or the call itself (its target answered: io.EOF, as
+// gRPC's Send after the server's status).
+func (cs *clientStream) sendEnded() error {
+	if err := cs.ctx.Err(); err != nil {
+		return err
+	}
+	if cs.agent.ctx.Err() != nil {
+		return cs.agent.connectionClosed()
+	}
+	if err := cs.responseError(); err != nil {
+		return err
+	}
+	return io.EOF
+}
+
 func (cs *clientStream) Header() (MD, error) {
 	select {
 	case <-cs.headerCh:

@@ -7,7 +7,6 @@ package rpcclient
 // refusal and the pairing key.
 
 import (
-	"context"
 	"crypto/rand"
 	"errors"
 	"log"
@@ -78,17 +77,7 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) {
 		return
 	}
 
-	ssCtx, ssCancel := context.WithCancel(a.ctx)
-	ss := &serverStream{
-		agent:         a,
-		txnID:         msg.GetTransactionId(),
-		sourceAgentID: msg.GetRouting().GetAgentId(),
-		sourceSession: msg.GetRouting().GetSourceSession(),
-		ctx:           ssCtx,
-		cancel:        ssCancel,
-		requestCh:     make(chan *pb.TunnelFrame, 16),
-		e2ee:          state,
-	}
+	ss := a.newServerStream(msg, state, nil)
 	a.incoming.Store(ss.txnID, ss)
 
 	if err := a.sendFrame(&pb.TunnelFrame{
@@ -98,7 +87,7 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) {
 		Timestamps:    &pb.Timestamps{ResponseAtAgent: time.Now().UnixMilli()},
 		Routing:       &pb.RoutingInfo{AgentId: a.agentID},
 	}); err != nil {
-		ssCancel()
+		ss.cancel()
 		a.incoming.Delete(ss.txnID)
 		log.Printf("rpcclient: failed to send A2A E2EE ack for txn %s: %v", ss.txnID, err)
 		return
@@ -158,18 +147,7 @@ func (a *Agent) handleE2EEInit0RTT(msg *pb.TunnelFrame) {
 		}
 		return
 	}
-	ssCtx, ssCancel := context.WithCancel(a.ctx)
-	ss := &serverStream{
-		agent:         a,
-		txnID:         txnID,
-		sourceAgentID: msg.GetRouting().GetAgentId(),
-		sourceSession: msg.GetRouting().GetSourceSession(),
-		ctx:           ssCtx,
-		cancel:        ssCancel,
-		requestCh:     make(chan *pb.TunnelFrame, 16),
-		e2ee:          accepted.state,
-		early:         accepted.request,
-	}
+	ss := a.newServerStream(msg, accepted.state, accepted.request)
 	a.incoming.Store(txnID, ss)
 	if err := a.sendFrame(&pb.TunnelFrame{
 		Payload:       accepted.ack,
@@ -178,7 +156,7 @@ func (a *Agent) handleE2EEInit0RTT(msg *pb.TunnelFrame) {
 		Timestamps:    &pb.Timestamps{ResponseAtAgent: time.Now().UnixMilli()},
 		Routing:       &pb.RoutingInfo{AgentId: a.agentID},
 	}); err != nil {
-		ssCancel()
+		ss.cancel()
 		a.incoming.Delete(txnID)
 		log.Printf("rpcclient: failed to send A2A E2EE ack for txn %s: %v", txnID, err)
 		return

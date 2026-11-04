@@ -60,8 +60,8 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/nfltr/link"
 	"github.com/nfltr/relay/client/grpcclient"
-	"github.com/nfltr/relay/client/handoff"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentwire"
 	"google.golang.org/grpc"
@@ -142,6 +142,9 @@ type Agent struct {
 	incoming sync.Map
 	// drainAcks maps a Drain's txnID → the channel its acknowledgement closes.
 	drainAcks sync.Map
+	// callCredit and serveCredit are the per-call credit of the calls this
+	// agent makes and serves (call_credit.go).
+	callCredit, serveCredit *link.Credit
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -172,8 +175,6 @@ type Agent struct {
 	sendStallEpoch  time.Time
 	lastFrameSentAt atomic.Int64
 }
-
-const clientStreamResponseBufferSize = 256
 
 // Conn returns the underlying gRPC client connection, or nil when the
 // Agent was created via NewAgent (bufconn / in-process).
@@ -386,6 +387,11 @@ func newAgent(agentID string, s AgentTunnel, ctx context.Context, heartbeatInter
 	}
 	a.a2aE2EEInbound.Store(a2aE2EEInbound)
 	a.a2aE2EEOutbound.Store(a2aE2EEOutbound)
+	a.newCallCredits()
+	context.AfterFunc(agentCtx, func() { // senders waiting for credit give up
+		a.callCredit.Close()
+		a.serveCredit.Close()
+	})
 	// Seed the stall watchdog so it measures from agent creation forward and
 	// uses a monotonic reference (immune to wall-clock jumps from suspend/NTP).
 	a.sendStallEpoch = time.Now()
@@ -502,7 +508,7 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 		sourceAgentID: a.agentID,
 		msgType:       co.messageType,
 		deadlineMs:    deadlineMs,
-		responseCh:    make(chan *pb.TunnelFrame, clientStreamResponseBufferSize),
+		responseCh:    make(chan *pb.TunnelFrame, ResponseWindow+1), // + the call's end
 		done:          make(chan struct{}),
 		ended:         make(chan struct{}),
 		headerCh:      make(chan struct{}),
@@ -518,6 +524,7 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 			}
 		}
 	}
+	a.callCredit.Open(cs.txnID)
 	a.pending.Store(cs.txnID, cs)
 	go a.removePendingClientStreamOnContextDone(cs)
 	return cs, nil
@@ -525,10 +532,14 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 
 func (a *Agent) removePendingClientStreamOnContextDone(cs *clientStream) {
 	defer close(cs.ended)
+	defer a.callCredit.Forget(cs.txnID) // a Send waiting for credit returns
 	select {
 	case <-cs.ctx.Done():
 		if pending, ok := a.pending.Load(cs.txnID); ok && pending == cs {
 			a.pending.Delete(cs.txnID)
+			// The caller left: its target stops (its handler may be
+			// waiting for credit the caller will no longer grant).
+			cs.sendCancel()
 		}
 	case <-cs.done:
 	case <-a.ctx.Done():
@@ -741,6 +752,9 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 	case AgentDrainAckMessageType:
 		a.handleDrainAck(txnID)
 		return
+	case WindowMessageType:
+		a.handleWindow(msg)
+		return
 	case a2aE2EEAckMessageType:
 		if val, ok := a.pending.Load(txnID); ok {
 			cs := val.(*clientStream)
@@ -793,13 +807,8 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 		})
 
 		switch err := cs.pushResponse(msg); {
-		case errors.Is(err, handoff.ErrStalled):
-			err := status.Errorf(codes.ResourceExhausted,
-				"rpcclient: the caller took no response of transaction %s for %s", txnID, consumerStall)
-			cs.setResponseError(err)
-			cs.closeResponses()
-			a.pending.Delete(txnID)
-			log.Printf("rpcclient: isolated stalled response stream for transaction %s", txnID)
+		case errors.Is(err, errPastWindow):
+			cs.refuse(err)
 			return
 		case err != nil: // the call or the agent ended
 			if cs.ctx.Err() != nil {
@@ -820,8 +829,8 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 		// 2026-05-24 deflake: route the send through pushRequest +
 		// closeRequests so a concurrent close cannot race the send and
 		// panic. See serverStream.closeRequests + pushRequest.
-		if errors.Is(ss.pushRequest(msg), handoff.ErrStalled) {
-			a.refuseStalledCall(ss)
+		if errors.Is(ss.pushRequest(msg), errPastWindow) {
+			a.refuseCall(ss, "its caller sent past the call's window")
 			return
 		}
 		if msg.GetEom() {
@@ -860,19 +869,13 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 		return
 	}
 
-	ssCtx, ssCancel := context.WithCancel(a.ctx)
-	ss := &serverStream{
-		agent:         a,
-		txnID:         txnID,
-		sourceAgentID: msg.GetRouting().GetAgentId(),
-		sourceSession: msg.GetRouting().GetSourceSession(),
-		ctx:           ssCtx,
-		cancel:        ssCancel,
-		requestCh:     make(chan *pb.TunnelFrame, 16),
-	}
+	ss := a.newServerStream(msg, nil, nil)
 	a.incoming.Store(txnID, ss)
 
-	_ = ss.pushRequest(msg) // the call's first frame: requestCh has room
+	if errors.Is(ss.pushRequest(msg), errPastWindow) { // the call's first frame
+		a.refuseCall(ss, "its caller sent past the call's window")
+		return
+	}
 	if msg.GetEom() {
 		ss.closeRequests()
 	}
@@ -881,16 +884,16 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 	go a.handleCall(ss, h)
 }
 
-// refuseStalledCall ends an incoming call whose handler took none of its
-// request frames for consumerStall: the receive loop, which serves every
-// call and response of this agent, waits on it no longer. The handler's
-// context is cancelled, the caller gets ResourceExhausted, and the call's
-// later frames are dropped (pushRequest: the call ended).
-func (a *Agent) refuseStalledCall(ss *serverStream) {
+// refuseCall ends an incoming call whose caller broke its credit (why):
+// the handler's context is cancelled, the caller gets ResourceExhausted,
+// and the call's later frames are dropped (pushRequest: the call ended).
+// The connection's other calls go on.
+func (a *Agent) refuseCall(ss *serverStream, why string) {
 	ss.cancel()
-	log.Printf("rpcclient: refused incoming call %s: its handler took none of its request frames for %s", ss.txnID, consumerStall)
-	a.sendA2AControlError(ss.txnID, codes.ResourceExhausted, fmt.Sprintf(
-		"rpcclient: agent %s refused the call: its handler took none of the call's frames for %s", a.agentID, consumerStall))
+	ss.closeRequests()
+	log.Printf("rpcclient: refused incoming call %s: %s", ss.txnID, why)
+	go a.sendA2AControlError(ss.txnID, codes.ResourceExhausted, fmt.Sprintf( // the receive loop never waits on a send
+		"rpcclient: agent %s refused the call: %s", a.agentID, why))
 }
 
 // handleCall runs the handler and sends the final status trailer.

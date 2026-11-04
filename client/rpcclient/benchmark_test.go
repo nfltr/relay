@@ -177,8 +177,11 @@ func BenchmarkAgent_Stream(b *testing.B) {
 						if !ok {
 							return
 						}
-						// Only reply when we see EOM.
-						if msg.GetEom() {
+						if !msg.GetEom() { // taken at once: its credit back
+							bs.recvCh <- windowFrame(msg.GetTransactionId(), 1)
+							continue
+						}
+						{
 							txnID := msg.GetTransactionId()
 							resp := &pb.TunnelFrame{
 								Payload:       []byte("resp"),
