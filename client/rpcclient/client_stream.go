@@ -20,7 +20,9 @@ import (
 // ClientStream is the caller's view of a bidirectional agent-to-agent call.
 // It mirrors grpc.ClientStream.
 type ClientStream interface {
-	// Send sends request data to the target agent.
+	// Send sends request data to the target agent. It is not safe to
+	// call from several goroutines at once (as grpc.ClientStream's
+	// SendMsg): a call has one sender.
 	Send(data []byte) error
 	// CloseSend signals that no more request messages will be sent.
 	// The target agent's ServerStream.Recv will return io.EOF.
