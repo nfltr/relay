@@ -98,18 +98,7 @@ func TestTCPTunnelReturnsAfterTheLinkIsParked(t *testing.T) {
 	dial.park = newLinkPark(t.Context())
 	logger, winner := linkWinner()
 	target := echoServer(t)
-	echo := func(what string) {
-		t.Helper()
-		s := r.open(t, r.tcp, &pb.TCPData{TargetAddr: "x:1"})
-		defer s.Close() //nolint:errcheck
-		buf := []byte("ping")
-		if _, err := s.Write(buf); err != nil {
-			t.Fatalf("%s: %v", what, err)
-		}
-		if _, err := io.ReadFull(s, buf); err != nil {
-			t.Fatalf("%s: %v", what, err)
-		}
-	}
+	echo := func(what string) { t.Helper(); r.echo(t, what) }
 	primary := func() (*chanStream, <-chan string) {
 		st := newChanStream(t, 8, 64)
 		relay := &primaryClient{st: st, md: metadata.Pairs(tcpBindHeader, testLinkToken, dataplane.AgentLinkHeader, "tcp")}
@@ -137,6 +126,21 @@ func TestTCPTunnelReturnsAfterTheLinkIsParked(t *testing.T) {
 	}
 	echo("on the adopted link")
 	st.closeIn()
+}
+
+// echo opens a session on the agent's link and echoes on it: the agent's
+// Node serves, so its lazyLink holds the link (not only dialled it).
+func (r *fakeLinkRelay) echo(t *testing.T, what string) {
+	t.Helper()
+	s := r.open(t, r.tcp, &pb.TCPData{TargetAddr: "x:1"})
+	defer s.Close() //nolint:errcheck
+	buf := []byte("ping")
+	if _, err := s.Write(buf); err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
+	if _, err := io.ReadFull(s, buf); err != nil {
+		t.Fatalf("%s: %v", what, err)
+	}
 }
 
 // TestTCPTunnelLeavesTheParkToTheNextPrimary: a primary that ends before
@@ -215,20 +219,23 @@ func TestTCPTunnelAdoptRefusedWhileDialling(t *testing.T) {
 	logger, winner := linkWinner()
 	target := echoServer(t)
 	md := metadata.Pairs(tcpBindHeader, testLinkToken, dataplane.AgentLinkHeader, "tcp")
-	run := func(relay pb.DispatcherClient) {
+	run := func(relay pb.DispatcherClient) <-chan struct{} {
+		done := make(chan struct{})
 		go func() {
 			_ = runTCPTunnel(t.Context(), relay, dial, t.Context(), sessionTargets{forwardAddr: target}, nil, logger, nil)
+			close(done)
 		}()
+		return done
 	}
 	st := newChanStream(t, 8, 64)
-	run(&primaryClient{st: st, md: md})
+	done := run(&primaryClient{st: st, md: md})
 	st.in <- &pb.TCPData{SessionId: dataplane.AgentLinkSID, Data: []byte(dataplane.AgentLinkDial)}
 	r.won(t, winner)
+	r.echo(t, "on the link") // bound, not only dialled: its primary's end parks it
 	st.closeIn()
-	for deadline := time.Now().Add(5 * time.Second); dial.park.parked() == ""; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the link was not parked")
-		}
+	<-done
+	if got := dial.park.parked(); got != testLinkToken {
+		t.Fatalf("parked %q, want %q", got, testLinkToken)
 	}
 	gate := make(chan struct{})
 	st = newChanStream(t, 8, 64)
@@ -241,15 +248,7 @@ func TestTCPTunnelAdoptRefusedWhileDialling(t *testing.T) {
 			t.Fatal("the parked link was neither adopted nor drained")
 		}
 	}
-	s := r.open(t, r.tcp, &pb.TCPData{TargetAddr: "x:1"})
-	buf := []byte("ping")
-	if _, err := s.Write(buf); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.ReadFull(s, buf); err != nil {
-		t.Fatal(err)
-	}
-	_ = s.Close()
+	r.echo(t, "on the new primary's link")
 	st.closeIn()
 }
 
