@@ -159,13 +159,17 @@ func TestTCPTunnelStuckTargetDoesNotHoldTheReceiveLoop(t *testing.T) {
 }
 
 // TestTCPTunnelCreditRefusesARelayPastTheWindow: a relay that sends a
-// session more than the agent's window ends the stream.
+// session more than the agent's window ends the stream. The bytes past
+// the window come in the frame that fills it: a window split over two
+// frames is a race the test lost (lane LINKWAKE2, 1 hang in about 4,000
+// runs on Linux), since the session's pump may take the first frame into
+// the target's socket buffer and acknowledge it (Credit.Consumed) before
+// the receive loop reads the second, which is then within the window.
 func TestTCPTunnelCreditRefusesARelayPastTheWindow(t *testing.T) {
 	st := &fakeRelayStream{in: make(chan *pb.TCPData, 4), stop: make(chan struct{}), closed: map[string]bool{},
 		md: metadata.Pairs(dataplane.CreditHeader, strconv.Itoa(tcpDataWindow))}
 	st.in <- &pb.TCPData{SessionId: "s", TargetAddr: stuckTarget(t), Open: true}
-	st.in <- &pb.TCPData{SessionId: "s", Data: make([]byte, tcpDataWindow)}
-	st.in <- &pb.TCPData{SessionId: "s", Data: []byte("x")}
+	st.in <- &pb.TCPData{SessionId: "s", Data: make([]byte, tcpDataWindow+1)}
 	err := serveTCPStream(context.Background(), st, sessionTargets{}, nil, nil, slog.New(slog.DiscardHandler), nil, nil)
 	if err == nil {
 		t.Fatal("a relay past the window kept its stream")
