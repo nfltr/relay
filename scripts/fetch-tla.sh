@@ -23,10 +23,31 @@ get() {
 	mv "$3.part" "$3"
 }
 
-# TLA+ tools v1.8.0 (the Json module's ndJsonDeserialize, POSTCONDITION).
+# TLA+ tools 1.8.0, master 090e85c of 2026-10-30 (the Json module's
+# ndJsonDeserialize, POSTCONDITION). Upstream rebuilds its v1.8.0 release
+# asset on every master commit, so a pin of that URL breaks: the jar comes
+# from an immutable, versioned bundle of that build instead, the TLA+ VS Code
+# extension 2026.10.301552 on Open VSX (extension/tools/tla2tools.jar).
 jar=$cache/tla2tools-1.8.0.jar
-get https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar \
-	011267fca25d0752cf18894dd585cd28b96960c112ea8a20b823ea770e7e10cd "$jar"
+jarsum=011267fca25d0752cf18894dd585cd28b96960c112ea8a20b823ea770e7e10cd
+if [ ! -f "$jar" ] || [ "$(shasum -a 256 "$jar" | cut -d' ' -f1)" != "$jarsum" ]; then
+	vsix=$cache/tlaplus.vscode-ide-2026.10.301552.vsix
+	get https://open-vsx.org/api/tlaplus/vscode-ide/2026.10.301552/file/tlaplus.vscode-ide-2026.10.301552.vsix \
+		89adb8d05d3136f74a4a33c97ae35b04730cdb3fb551b81d4299ba5b56c3c5a8 "$vsix"
+	if command -v unzip >/dev/null 2>&1; then
+		unzip -p "$vsix" extension/tools/tla2tools.jar >"$jar.part"
+	else
+		python3 -I -c 'import sys, zipfile; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))' \
+			"$vsix" extension/tools/tla2tools.jar >"$jar.part"
+	fi
+	got=$(shasum -a 256 "$jar.part" | cut -d' ' -f1)
+	if [ "$got" != "$jarsum" ]; then
+		rm -f "$jar.part"
+		echo "fetch-tla: $vsix: tla2tools.jar sha256 $got, want $jarsum" >&2
+		exit 1
+	fi
+	mv "$jar.part" "$jar"
+fi
 
 java=${JAVA:-java}
 if ! "$java" -version >/dev/null 2>&1; then
