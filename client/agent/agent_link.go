@@ -227,11 +227,10 @@ func drainNow(node peerlink.Link) {
 }
 
 // lazyLink is one primary stream's agent link, dialled when the relay
-// asks (dataplane.AgentLinkDial on the primary) and closed when the relay
-// retired it (dataplane.AgentLinkClose): an idle agent holds no link
-// connection. Concurrent requests make one dial; a link that cannot
-// connect is not tried again on this primary (failed closes), and its
-// sessions stay on the gRPC streams. The Node's redialling while the link
+// asks (dataplane.AgentLinkDial on the primary): an agent that never
+// needed one holds no link connection. Concurrent requests make one dial;
+// a link that cannot connect is not tried again on this primary (failed
+// closes), and its sessions stay on the gRPC streams. The Node's redialling while the link
 // is up is link's (linkBackoff), as before.
 type lazyLink struct {
 	ctx    context.Context // the primary's
@@ -247,20 +246,21 @@ type lazyLink struct {
 	token   string        // its bind token
 	acc     *linkAccept   // what serves its sessions
 	dialing bool
-	retired bool // the relay retired the link while it was being dialled
 	gaveUp  bool
 }
 
 func newLazyLink(ctx context.Context, dial RelayDialer, header func() (metadata.MD, error), ls *linkSessions, logger *slog.Logger) *lazyLink {
 	z := &lazyLink{ctx: ctx, park: dial.park, dial: dial, header: header, ls: ls, logger: logger, failed: make(chan struct{})}
 	traceANew(z)
-	context.AfterFunc(ctx, z.end)
 	return z
 }
 
-// end is the primary's end: a link that is up waits for the next primary
-// to resume it (linkPark) while the agent runs on, its sessions going on;
-// otherwise it closes.
+// end is the primary's end, called once its context ended: a link that
+// is up waits for the next primary to resume it (linkPark) while the agent
+// runs on, its sessions going on; otherwise it closes. runTCPTunnel calls
+// it before it returns, so the next primary finds the link parked
+// (relay-core spec/README.md finding 43: it ran in context.AfterFunc's
+// goroutine, after the next primary had read the park).
 func (z *lazyLink) end() {
 	if z.park == nil || z.park.ctx.Err() != nil {
 		z.close()
@@ -270,9 +270,6 @@ func (z *lazyLink) end() {
 	traceAEnd(z)
 	node, token, acc := z.node, z.token, z.acc
 	z.node = nil
-	if node == nil && z.dialing {
-		z.retired = true
-	}
 	z.mu.Unlock()
 	if node != nil { // its sessions dial in the agent's context (newLinkSessions)
 		z.park.park(parkedLink{token: token, node: node, acc: acc})
@@ -288,28 +285,34 @@ func (a *linkAccept) accept(peer string, header []byte, s peerlink.Session) {
 }
 
 // adopt makes node, the link a previous primary of token parked, this
-// primary's: the relay resumed it (the primary's bind token is token).
+// primary's: the relay resumed it (the primary's bind token is token). A
+// primary that ended adopts nothing: the link goes back to the park for
+// the next one (finding 44); one with a dial of its own out, or a link up,
+// drains it.
 func (z *lazyLink) adopt(p parkedLink) {
 	z.mu.Lock()
-	ok := z.node == nil && !z.dialing && z.ctx.Err() == nil
+	ended := z.ctx.Err() != nil
+	ok := z.node == nil && !z.dialing && !ended
 	if ok {
 		z.node, z.token, z.acc = p.node, p.token, p.acc
 		p.acc.ls.Store(z.ls)
 	}
-	traceAAdopt(z, p.token, ok)
+	if !ended {
+		traceAAdopt(z, p.token, ok)
+	}
 	z.mu.Unlock()
-	if !ok {
+	switch {
+	case ended && z.park != nil:
+		z.park.park(p)
+	case !ok:
 		drainNow(p.node)
 	}
 }
 
 // control acts on the relay's agent-link control frame.
 func (z *lazyLink) control(what string) {
-	switch what {
-	case dataplane.AgentLinkDial:
+	if what == dataplane.AgentLinkDial {
 		z.open()
-	case dataplane.AgentLinkClose:
-		z.close()
 	}
 }
 
@@ -330,7 +333,7 @@ func (z *lazyLink) open() {
 	if token == "" {
 		return
 	}
-	z.dialing, z.retired = true, false
+	z.dialing = true
 	traceADial(z)
 	go z.run(token, offer)
 }
@@ -340,7 +343,7 @@ func (z *lazyLink) run(token string, offer dataplane.AgentLinkOffer) {
 	z.mu.Lock()
 	z.dialing = false
 	if node == nil {
-		if traceOn && !z.retired && z.ctx.Err() == nil {
+		if traceOn && z.ctx.Err() == nil {
 			traceAGiveUp(z)
 		}
 		z.gaveUp = true
@@ -350,7 +353,7 @@ func (z *lazyLink) run(token string, offer dataplane.AgentLinkOffer) {
 	}
 	acc := &linkAccept{}
 	acc.ls.Store(z.ls)
-	retired := z.retired || z.ctx.Err() != nil
+	retired := z.ctx.Err() != nil // the primary ended while it dialled
 	if !retired {
 		z.node, z.token, z.acc = node, token, acc
 		traceABind(z, token)
@@ -367,8 +370,7 @@ func (z *lazyLink) run(token string, offer dataplane.AgentLinkOffer) {
 	z.mu.Unlock()
 }
 
-// close closes the link: the relay opens no more sessions on it (it
-// retired it, or the primary ended).
+// close closes the link: the primary ended with no park to wait in.
 func (z *lazyLink) close() {
 	z.mu.Lock()
 	if traceOn && z.ctx.Err() != nil {
@@ -379,9 +381,6 @@ func (z *lazyLink) close() {
 		traceADrain(z, z.token)
 	}
 	z.node = nil
-	if node == nil && z.dialing {
-		z.retired = true
-	}
 	z.mu.Unlock()
 	if node != nil {
 		drainNow(node)

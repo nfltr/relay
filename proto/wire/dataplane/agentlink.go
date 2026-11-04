@@ -40,14 +40,12 @@ const (
 // The agent link is dialled lazily: an agent the relay offered it dials
 // only when the relay asks, with a control frame on the primary stream
 // (session id AgentLinkSID, data AgentLinkDial) when it needs a session for
-// an agent with no agent-link connection; the relay retires a link that
-// carried no session for a while and tells the agent (data AgentLinkClose),
-// which then closes it. Frames whose session id starts with "_" belong to
-// no session: an agent that does not know these ignores them.
+// an agent with no agent-link connection; the link then lasts as long as
+// the primary (or its resume). Frames whose session id starts with "_"
+// belong to no session: an agent that does not know these ignores them.
 const (
-	AgentLinkSID   = "_link"
-	AgentLinkDial  = "dial"
-	AgentLinkClose = "close"
+	AgentLinkSID  = "_link"
+	AgentLinkDial = "dial"
 )
 
 // AgentLinkMagic opens an agent-link connection on the relay's gRPC port,

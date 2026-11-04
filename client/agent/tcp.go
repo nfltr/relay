@@ -619,9 +619,23 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 	// agent link that failed leaves the further streams to open as before.
 	lazy := newLazyLink(extraCtx, dial, stream.Header,
 		newLinkSessions(dial.park, ctx, targets, e2eeTLS, logger, growth), logger)
+	// The primary's end parks its link before the next primary connects
+	// (relay-core spec/README.md findings 43, 44): the header goroutine
+	// takes the park only before the end began (hdr 1), and the end waits
+	// for one that did (parkDone); one the end beat (hdr 2) leaves the park
+	// to the next primary.
+	var hdr atomic.Int32
+	parkDone := make(chan struct{})
+	defer func() {
+		stopExtra()
+		if !hdr.CompareAndSwap(0, 2) {
+			<-parkDone
+		}
+		lazy.end()
+	}()
 	go func() {
 		md, err := stream.Header()
-		if err != nil {
+		if err != nil || !hdr.CompareAndSwap(0, 1) {
 			return
 		}
 		n, _ := strconv.Atoi(firstValue(md, tcpStreamsHeader))
@@ -636,6 +650,7 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 				drainNow(parked.node)
 			}
 		}
+		close(parkDone)
 		data = dataplane.PickVersion(md.Get(dataplane.Header)) > 0
 		offer := dataplane.ParseAgentLinkOffer(md.Get(dataplane.AgentLinkHeader), md.Get(dataplane.AgentLinkQUICHeader))
 		if quicOK, tcpOK := dial.linkPlan(offer); token != "" && (quicOK || tcpOK) {

@@ -514,9 +514,8 @@ func TestParseTransport(t *testing.T) {
 }
 
 // TestLazyAgentLink: on each transport the agent dials its link only when
-// the relay asks (concurrent asks: one dial), the relay's sessions ride
-// it, the agent closes it when the relay retires it, and a later ask
-// dials it again.
+// the relay asks (concurrent asks: one dial), and the relay's sessions
+// ride it.
 func TestLazyAgentLink(t *testing.T) {
 	echo := echoServer(t)
 	for _, transport := range []string{TransportTCP, TransportQUIC, TransportAuto} {
@@ -529,44 +528,27 @@ func TestLazyAgentLink(t *testing.T) {
 			ls := &linkSessions{ctx: ctx, targets: sessionTargets{forwardAddr: echo}, logger: slog.Default()}
 			logger, winner := linkWinner()
 			z := newLazyLink(ctx, r.dialer(transport), func() (metadata.MD, error) { return md, nil }, ls, logger)
+			defer func() { cancel(); z.end() }()
 			time.Sleep(200 * time.Millisecond)
 			if n := r.accepted.Load(); n != 0 {
 				t.Fatalf("%d agent-link connections before the relay asked", n)
 			}
-			for round := range 2 {
-				var wg sync.WaitGroup
-				for range 8 {
-					wg.Go(func() { z.control(dataplane.AgentLinkDial) })
-				}
-				wg.Wait()
-				node := r.won(t, winner)
-				s := r.open(t, node, &pb.TCPData{TargetAddr: "x:1"})
-				_, _ = s.Write([]byte("ping"))
-				buf := make([]byte, 4)
-				if _, err := io.ReadFull(s, buf); err != nil || string(buf) != "ping" {
-					t.Fatalf("round %d: echo %q %v", round, buf, err)
-				}
-				_ = s.Close()
-				// auto's race may also take its loser's connection.
-				if n, want := r.accepted.Load(), int32(round+1); n < want || n > want && (transport != TransportAuto || n > 2*want) {
-					t.Fatalf("round %d: %d agent-link connections, want one per ask", round, n)
-				}
-				z.control(dataplane.AgentLinkClose)
-				deadline := time.Now().Add(5 * time.Second)
-				for {
-					octx, ocancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-					h, _ := dataplane.OpenHeader(&pb.TCPData{TargetAddr: "x:1"})
-					s, err := node.Open(octx, "agent", h)
-					ocancel()
-					if err != nil {
-						break
-					}
-					_ = s.Close()
-					if time.Now().After(deadline) {
-						t.Fatalf("round %d: the agent kept its link after the relay retired it", round)
-					}
-					time.Sleep(20 * time.Millisecond)
-				}
+			var wg sync.WaitGroup
+			for range 8 {
+				wg.Go(func() { z.control(dataplane.AgentLinkDial) })
+			}
+			wg.Wait()
+			node := r.won(t, winner)
+			s := r.open(t, node, &pb.TCPData{TargetAddr: "x:1"})
+			_, _ = s.Write([]byte("ping"))
+			buf := make([]byte, 4)
+			if _, err := io.ReadFull(s, buf); err != nil || string(buf) != "ping" {
+				t.Fatalf("echo %q %v", buf, err)
+			}
+			_ = s.Close()
+			// auto's race may also take its loser's connection.
+			if n := r.accepted.Load(); n < 1 || n > 1 && (transport != TransportAuto || n > 2) {
+				t.Fatalf("%d agent-link connections, want one for the asks", n)
 			}
 		})
 	}
@@ -605,10 +587,10 @@ func TestAgentLinkUpOnlyWhileBound(t *testing.T) {
 	start := func(t *testing.T, r *fakeLinkRelay, token string) *tcpStreamGrowth {
 		md := metadata.Pairs(tcpBindHeader, token, dataplane.AgentLinkHeader, "tcp")
 		ctx, cancel := context.WithCancel(context.Background())
-		t.Cleanup(cancel)
 		g := &tcpStreamGrowth{}
 		ls := &linkSessions{ctx: ctx, targets: sessionTargets{forwardAddr: echoServer(t)}, logger: slog.Default(), growth: g}
 		z := newLazyLink(ctx, r.dialer(TransportTCP), func() (metadata.MD, error) { return md, nil }, ls, slog.Default())
+		t.Cleanup(func() { cancel(); z.end() })
 		z.control(dataplane.AgentLinkDial)
 		return g
 	}
