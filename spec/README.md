@@ -385,7 +385,10 @@ connection is a window update or fits its call's buffer) and
 
 `CallCreditBoth.cfg` (2 calls, one stuck both ways; windows of 1, 2
 frames each way, pipes of 1, FIFOs of 2): 38,350 distinct states, depth
-44, about 18 s; `CallCreditBothLarge.cfg` (windows of 2; `LARGE=1`).
+44, about 18 s; `CallCreditBothLarge.cfg` (`LARGE=1`: windows that differ,
+2 frames for requests and 1 for responses): 672,092 distinct states,
+depth 50, about 6 min at load 9 (windows of 2 both ways passed 1.1 M
+states at depth 25 in 15 min and was stopped).
 Mutants: `CCB:no-credit-req`, `CCB:no-credit-resp` (one direction
 uncredited: `NoHOL`), `CCB:no-credit-req-holds-resp` and
 `CCB:no-credit-resp-holds-req` (the same with `NoHOL` off: the healthy
