@@ -194,3 +194,157 @@ and need no spec:
 - **Data on a path the peer no longer reads**: when the receiver fails to
   find the chosen path it closes it (`settleTCP`, `closePC`), so the
   sender's writes fail (a reset, an SCTP abort) rather than vanish.
+
+## CallCredit.tla: per-call credit for agent-to-agent calls
+
+Lane CALLCREDIT (2026-11-04). This section is the design; it came before
+the spec and the code.
+
+### Problem
+
+An agent's agent-to-agent calls (`client/rpcclient`: `NewStream`,
+`Invoke`, the `Handle` handler) share the agent's one tunnel and its one
+receive loop (`recvLoop` -> `handleMessage`). Each call has a buffer
+(`clientStream.responseCh`, 256 frames; `serverStream.requestCh`, 16), and
+nothing told the sender how much of it was free. A caller that stopped
+reading filled its buffer; the loop then waited on it (`handoff.Send`) for
+`handoff.Stall` (10 s) before it cut the call, and every other call on
+the connection, both directions, waited too (lane FLAKEQW4: relay-core
+`TestInternalAgentRouting_SaturatedTransactionDoesNotBlockHealthyTransaction`).
+The relay in between keeps per-call pipes (relay-core
+`dispatcher_agent_routing.go`) and was not the cause.
+
+### Design
+
+Per-call credit end to end, between the two rpcclient agents, as the TCP
+data path's (`x-nfltr-tcp-credit`, relay-core `spec/AgentLink.tla` NoHOL),
+with `github.com/nfltr/link`'s `Credit` counting frames instead of bytes:
+
+- Windows, in frames: a caller buffers `ResponseWindow` (256) responses of
+  a call, a handler `RequestWindow` (16) requests. Each side keeps two
+  `link.Credit`s, one per role: calls it makes (its window the response
+  window, the peer's the request window) and calls it serves (the other
+  way round). The call's transaction id is the session id.
+- A sender takes one credit per data frame before it queues it
+  (`clientStream.sendMsg`, `resendEarly`; `serverStream.Send`). The
+  frame that ends a direction (the caller's `CloseSend`, the handler's
+  `a2a-status`, the relay's `error`) takes none: each buffer has one slot
+  beyond its window for it. Control frames (E2EE handshake, 0-RTT first
+  flight, which carries its request outside the buffer, cancel) take none.
+- The receive loop charges each data frame (`Credit.Received`) and puts it
+  in its call's buffer without waiting: credit guarantees room. A frame
+  past the window is the peer breaking the rules: that call is refused
+  (`ResourceExhausted`), never the connection, which carries other peers'
+  calls.
+- The app's `Recv` acknowledges what it took (`Credit.Consumed`), which
+  sends a window update once a quarter window was read: a frame of type
+  `a2a-window` (`rpcclient.WindowMessageType`) with the call's transaction
+  id and the count as an unsigned varint payload. A caller's update is
+  routed like its requests (source and target ids), a handler's like its
+  responses. A received update is `Credit.Grant`; one past the peer's
+  window refuses that call.
+- The relay carries window updates like any frame of the call, with one
+  change (relay-core): a caller's updates travel the request direction,
+  which its `CloseSend` ended, so the relay forwards them after the
+  request's EOM as well: from the caller's receive loop into a per-call
+  channel of `a2aWindowCap` updates (never waiting: a full one refuses the
+  call), forwarded by the call's route until its responses end (local
+  route, remote route, and `RelayTunnel` between replicas, which forwards
+  an agent-to-agent call's frames until its stream ends).
+
+### Invariants (each a property of CallCredit.tla)
+
+- `NoHOL`: the receive loop never waits on one call: the frame at the head
+  of the connection always fits its call's buffer (or its call is gone).
+- `BufferBound`: a call's buffer holds at most its window (plus the end
+  frame); a connection's at most its calls times that. The relay's pipe
+  per call stays at its cap (16): it only waits on the connection it sends
+  to, never on a call, since the receiver never waits.
+- `Ordered`: each call's frames arrive in order, once each.
+- `Conservation`: credit + frames on the way + buffered + read and not yet
+  acknowledged + updates on the way = the window, per live call.
+- `GrantBound`: a call has at most `W / T` updates on the way (each is at
+  least a quarter window and together they never pass the window): 4. So
+  the relay's channel of `a2aWindowCap` (4) is never full for a peer that
+  keeps to the rules.
+- `HealthyDone` (liveness): every call whose reader reads gets all its
+  frames, whatever a stuck call does.
+
+Who ends what: the caller's context (cancel, deadline) and the call's end
+forget the call's credit on the caller (`Credit.Forget`: a `Send` waiting
+for credit returns); the handler's context (the call's cancel, a refusal,
+the agent) forgets it on the handler side; `Agent.Close` closes both
+credits. A peer that stops reading holds only its own call: that call's
+sender waits in `Acquire` until credit or the call's end.
+
+Failure model: a connection is a FIFO each way that ends whole (gRPC
+stream); a frame is never lost while it lives, so no update is lost; when
+it ends every call on it ends (`closePendingClientStreams`, the handler
+contexts). The relay refusing a call (a target connection that took
+nothing of its requests for `handoff.Stall`, relay-core) ends that call.
+
+Out of scope: a slow connection (not a stalled call) still paces every
+call on it, as TCP and gRPC flow control do; the relay's per-call pipes
+then wait on that connection (its `TxnRegistry` stall bound).
+
+Wire change, a hard cut (no users yet): a peer before this version sends
+no window updates, so a new sender to it stops after its window; a relay
+before it drops a caller's updates after the request EOM, so a call with
+more responses than the window stops. relay-server and nfltr take both
+modules together.
+
+### Model
+
+One direction of the frames of several calls (`Calls`, `Stuck` the ones
+whose reader never reads): the sender's connection to the relay (`in`), a
+relay pipe per call (`pipe`, cap `P`), the receiver's connection (`out`),
+both FIFOs of cap `Q`; the receiver's per-call buffer (`buf`), the reads
+(`got`), acknowledgements (`cons`), and the updates back (`gin` to the
+relay, `gout` to the sender). The other direction is the same machine
+(requests: their updates travel the response direction, which has no
+early end). Abstracted: frame sizes (frames are counted; a frame's bytes
+are bounded by the gRPC message limit), E2EE (it changes payloads, not
+frames), the agents' send queues (one FIFO with the connection: every
+frame of a connection goes through its one `sendLoop`).
+
+| action | Go |
+|---|---|
+| `Send(c)` | `clientStream.sendMsg` / `serverStream.Send`: `Credit.Acquire`, `Agent.sendFrame` |
+| `RelayIn` | relay-core: the sender's stream receive loop; `TxnRegistry` fanout (responses), `dispatchAgentToAgent` (requests) |
+| `RelayOut(c)` | relay-core: the call's route sending on the receiver's stream (`routeAgentToAgentLocal`, `routeAgentToAgentRemote`, `RelayTunnel`) |
+| `Deliver` | `Agent.recvLoop` -> `handleMessage` -> `pushResponse` / `pushRequest` (`Credit.Received`) |
+| `Read(c)` | `clientStream.Recv` / `serverStream.Recv`: `Credit.Consumed` -> `sendWindow` |
+| `Eom(c)` | `clientStream.CloseSend` |
+| `RelayGrant` | relay-core: `dispatchAgentToAgent` -> `a2aSession.windows` -> the route (caller's updates); the response path (handler's) |
+| `SenderGrant` | `handleMessage` `WindowMessageType`: `Credit.Grant` |
+| `Cancel(c)` | the call's context, cancel or deadline: `Credit.Forget` on both sides |
+
+Mutants (`make spec-mutants`): `CC:no-credit` (the code before: `NoHOL`),
+`CC:no-credit-live` (the same, `HealthyDone`), `CC:no-return` (reads
+grant nothing: `HealthyDone`), `CC:shared-buffer` (one buffer per
+connection: `NoHOL`), `CC:drop-after-eom` (the relay before: `HealthyDone`).
+Witnesses, each violated: `W_StuckFullHealthyDone` (a healthy call done
+while the stuck one's buffer is full), `W_RelayPipeFull` (the relay's pipe
+smaller than the window fills), `W_LateGrant` (an update forwarded after
+the request EOM), `W_SenderWaits`, `W_CancelDrop` (a frame of an ended
+call dropped at the head). `CallCredit.cfg` (2 calls, window 2, 3 frames,
+pipes of 1, FIFOs of 2): 9,932 distinct states, depth 33, every action
+taken (`-coverage 1`), about 1 s. `CallCreditLarge.cfg` (window 4, 5
+frames, pipes of 2; `LARGE=1 make spec`, not in `make ci`): 296,864
+distinct states, depth 55, about 12 s.
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| A gRPC stream is FIFO each way and ends whole; nothing is lost while it lives | grpc.io "Core concepts: streaming" |
+| Every frame of one agent goes through its one `sendLoop`, in queue order | `a2a.go` `sendLoop` |
+| The relay keeps a call's frames in order (one route goroutine per direction) | relay-core `dispatcher_agent_routing.go` |
+| A reader that reads keeps reading (weak fairness on `Read` outside `Stuck`) | the app |
+
+### Code map (CallCredit.tla)
+
+| actions | code |
+|---|---|
+| `Send`, `Read`, `Eom`, `Cancel` | client/rpcclient/client_stream.go, client/rpcclient/server_stream.go |
+| `Deliver`, `SenderGrant` | client/rpcclient/a2a.go, client/rpcclient/call_credit.go |

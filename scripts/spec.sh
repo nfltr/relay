@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # spec.sh check|mutants: the TLA+ models of spec/ (spec/README.md).
-#   check    TLC on spec/SignalConn.cfg: its invariant and liveness.
+#   check    TLC on spec/SignalConn.cfg and spec/CallCredit.cfg: their
+#            invariants and liveness (LARGE=1 adds CallCreditLarge.cfg).
 #   mutants  each bug put back must be caught.
 #   traces   client/p2p's SignalConn tests (TRACE_TESTS) run with -tags
 #            relaytrace; each trace, per direction that wrote, checked
@@ -58,20 +59,26 @@ CFG
 fail=0
 case ${1:-} in
 check)
-	echo "== SignalConn.cfg"
-	st=0
-	tlc SignalConn.cfg SignalConn.tla >"$work/out" 2>&1 || st=$?
-	grep -E '^[0-9]+ states generated|depth of|Error|violated' "$work/out" || true
-	[ -z "${COVERAGE:-}" ] || grep -E '^<[A-Za-z]+.*>: 0:0$' "$work/out" | sed 's/^/never taken: /' || true
-	[ $st = 0 ] || { tail -60 "$work/out"; exit $st; }
+	cfgs="SignalConn CallCredit"
+	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge"
+	for c in $cfgs; do
+		m=${c%Large}
+		echo "== $c.cfg"
+		st=0
+		tlc $c.cfg $m.tla >"$work/out" 2>&1 || st=$?
+		grep -E '^[0-9]+ states generated|depth of|Error|violated' "$work/out" || true
+		[ -z "${COVERAGE:-}" ] || grep -E '^<[A-Za-z]+.*>: 0:0$' "$work/out" | sed 's/^/never taken: /' || true
+		[ $st = 0 ] || { tail -60 "$work/out"; exit $st; }
+	done
 	;;
 mutants)
-	# expect NAME SED...: SignalConn.cfg edited must violate a property.
+	# expect NAME SED...: $model.cfg edited must violate a property.
+	model=SignalConn
 	expect() {
 		name=$1
 		shift
-		sed "$@" spec/SignalConn.cfg >"$work/Mutant.cfg"
-		if tlc "$work/Mutant.cfg" SignalConn.tla >"$work/m.out" 2>&1; then
+		sed "$@" spec/$model.cfg >"$work/Mutant.cfg"
+		if tlc "$work/Mutant.cfg" $model.tla >"$work/m.out" 2>&1; then
 			echo "$name: not caught"
 			fail=1
 		elif grep -qE '^Error: (Invariant .* is violated|Temporal propert.* was violated)' "$work/m.out"; then
@@ -99,6 +106,20 @@ mutants)
 	# L1 (review r2): a path joining a reader that ended.
 	expect L1:revive -e 's/Mutant = "none"/Mutant = "revive"/'
 	expect witness:EndedFinal -e 's/^    EndedFinal$/    W_EndedFinal/'
+	model=CallCredit
+	# The code before lane CALLCREDIT: no per-call credit, the receive loop
+	# waits on a full call buffer (handoff.Stall).
+	expect CC:no-credit -e 's/Mutant = "none"/Mutant = "no-credit"/' -e '/Conservation/d' -e '/GrantBound/d'
+	expect CC:no-credit-live -e 's/Mutant = "none"/Mutant = "no-credit"/' -e '/Conservation/d' -e '/GrantBound/d' -e '/NoHOL/d'
+	expect CC:no-return -e 's/Mutant = "none"/Mutant = "no-return"/' -e '/Conservation/d'
+	expect CC:shared-buffer -e 's/Mutant = "none"/Mutant = "shared-buffer"/'
+	# The relay before lane CALLCREDIT: a call's frames after its request EOM dropped.
+	expect CC:drop-after-eom -e 's/Mutant = "none"/Mutant = "drop-after-eom"/' -e '/Conservation/d'
+	expect witness:StuckFullHealthyDone -e 's/^    NoHOL$/    W_StuckFullHealthyDone/'
+	expect witness:RelayPipeFull -e 's/^    NoHOL$/    W_RelayPipeFull/'
+	expect witness:LateGrant -e 's/^    NoHOL$/    W_LateGrant/'
+	expect witness:SenderWaits -e 's/^    NoHOL$/    W_SenderWaits/'
+	expect witness:CancelDrop -e 's/^    NoHOL$/    W_CancelDrop/'
 	exit $fail
 	;;
 traces)
