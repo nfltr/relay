@@ -272,9 +272,10 @@ with `github.com/nfltr/link`'s `Credit` counting frames instead of bytes:
 
 Who ends what: the caller's context (cancel, deadline) and the call's end
 forget the call's credit on the caller (`Credit.Forget`: a `Send` waiting
-for credit returns); the handler's context (the call's cancel, a refusal,
-the agent) forgets it on the handler side; `Agent.Close` closes both
-credits. A peer that stops reading holds only its own call: that call's
+for credit returns); on the handler side `serverStream.end` forgets it
+where the call ends (its handler returned, the call's cancel, a refusal, a
+failed E2EE ack; lane CALLCREDIT2, no context callback per call);
+`Agent.Close` closes both credits. A peer that stops reading holds only its own call: that call's
 sender waits in `Acquire` until credit or the call's end.
 
 Failure model: a connection is a FIFO each way that ends whole (gRPC
@@ -319,7 +320,7 @@ frame of a connection goes through its one `sendLoop`).
 | `RelayGrant` | relay-core: `dispatchAgentToAgent` -> `a2aSession.windows` -> the route (caller's updates); the response path (handler's) |
 | `SenderGrant` | `handleMessage` `WindowMessageType`: `Credit.Grant` |
 | `Cancel(c)` | a stuck call's `End(c)` |
-| `End(c)` | the call's context, cancel or deadline: `Credit.Forget` on both sides (the caller's `removePendingClientStreamOnContextDone`; the handler's context) |
+| `End(c)` | the call's context, cancel or deadline: `Credit.Forget` on both sides (the caller's `removePendingClientStreamOnContextDone`; the handler's `serverStream.end`) |
 
 Mutants (`make spec-mutants`): `CC:no-credit` (the code before: `NoHOL`),
 `CC:no-credit-live` (the same, `HealthyDone`), `CC:no-return` (reads

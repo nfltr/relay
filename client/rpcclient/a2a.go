@@ -772,7 +772,7 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 	// Cancel message.
 	if msg.GetMessageType() == "cancel" {
 		if val, ok := a.incoming.Load(txnID); ok {
-			val.(*serverStream).cancel()
+			val.(*serverStream).end()
 		}
 		return
 	}
@@ -891,7 +891,7 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 // and the call's later frames are dropped (pushRequest: the call ended).
 // The connection's other calls go on.
 func (a *Agent) refuseCall(ss *serverStream, why string) {
-	ss.cancel()
+	ss.end()
 	ss.closeRequests()
 	log.Printf("rpcclient: refused incoming call %s: %s", ss.txnID, why)
 	go a.sendA2AControlError(ss.txnID, codes.ResourceExhausted, fmt.Sprintf( // the receive loop never waits on a send
@@ -902,7 +902,7 @@ func (a *Agent) refuseCall(ss *serverStream, why string) {
 func (a *Agent) handleCall(ss *serverStream, h Handler) {
 	defer a.wg.Done()
 	defer a.incoming.Delete(ss.txnID)
-	defer ss.cancel()
+	defer ss.end()
 
 	err := h(ss)
 

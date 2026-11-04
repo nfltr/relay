@@ -97,13 +97,12 @@ func (a *Agent) handleWindow(msg *pb.TunnelFrame) {
 var errPastWindow = status.Error(codes.ResourceExhausted, "rpcclient: the peer sent past the call's window")
 
 // newServerStream makes the stream of a call this agent serves, its credit
-// open until the call's context ends.
+// open until the call ends (end; the agent's end closes every credit).
 func (a *Agent) newServerStream(msg *pb.TunnelFrame, e2ee *a2aE2EEState, early []byte) *serverStream {
 	ssCtx, ssCancel := context.WithCancel(a.ctx)
 	txnID := msg.GetTransactionId()
 	a.serveCredit.Open(txnID)
 	traceCCOpen(a, txnID, false)
-	context.AfterFunc(ssCtx, func() { a.serveCredit.Forget(txnID) })
 	return &serverStream{
 		agent:         a,
 		txnID:         txnID,
@@ -115,4 +114,15 @@ func (a *Agent) newServerStream(msg *pb.TunnelFrame, e2ee *a2aE2EEState, early [
 		e2ee:          e2ee,
 		early:         early,
 	}
+}
+
+// end ends a call this agent serves: its context, and its credit, so a
+// Send waiting for credit returns. Every path that ends a served call
+// (its handler returned, a cancel, a refusal, a failed E2EE ack) calls it,
+// where the call is removed, instead of a context callback per call
+// (lane CALLCREDIT2: the allocations of context.AfterFunc; guard
+// TestServedCallCreditEndsWithTheCall).
+func (ss *serverStream) end() {
+	ss.cancel()
+	ss.agent.serveCredit.Forget(ss.txnID)
 }

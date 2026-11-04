@@ -87,7 +87,7 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) {
 		Timestamps:    &pb.Timestamps{ResponseAtAgent: time.Now().UnixMilli()},
 		Routing:       &pb.RoutingInfo{AgentId: a.agentID},
 	}); err != nil {
-		ss.cancel()
+		ss.end()
 		a.incoming.Delete(ss.txnID)
 		log.Printf("rpcclient: failed to send A2A E2EE ack for txn %s: %v", ss.txnID, err)
 		return
@@ -156,7 +156,7 @@ func (a *Agent) handleE2EEInit0RTT(msg *pb.TunnelFrame) {
 		Timestamps:    &pb.Timestamps{ResponseAtAgent: time.Now().UnixMilli()},
 		Routing:       &pb.RoutingInfo{AgentId: a.agentID},
 	}); err != nil {
-		ss.cancel()
+		ss.end()
 		a.incoming.Delete(txnID)
 		log.Printf("rpcclient: failed to send A2A E2EE ack for txn %s: %v", txnID, err)
 		return
