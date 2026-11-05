@@ -210,7 +210,9 @@ func (a *agent) tunnelTargets(t *Tunnel) (targets sessionTargets, e2ee *e2eeTLSC
 // the bounded, jittered relayoutage.RedialDelay backoff. It closes a.done
 // only when the context is cancelled or the error is on the closed fatal
 // list (rpcclient.FatalClass: auth, version, config, session replaced); the
-// error it stops with then carries a hint. A WithConnected hook's error
+// error it stops with then carries a hint. A balance refusal
+// (rpcclient.IsBalanceExhausted) is not fatal: it is logged once per outage
+// and redialed on the same bounded backoff, so a top-up brings it back. A WithConnected hook's error
 // also ends it: that is the caller's own decision.
 func (a *agent) runWithReconnect(
 	ctx context.Context,
@@ -229,6 +231,7 @@ func (a *agent) runWithReconnect(
 	failures := 0
 	var outageSince time.Time // when the current outage began
 	release := func() {}      // ends a move's stream context once its connection closed (moveConnect)
+	balanceSaid := false      // this outage's balance refusal was logged (once per outage)
 
 	for {
 		startedAt := time.Now()
@@ -361,7 +364,7 @@ func (a *agent) runWithReconnect(
 		}
 
 		if time.Since(startedAt) >= stableConnectionAfter {
-			failures = 0
+			failures, balanceSaid = 0, false
 		}
 		if failures == 0 {
 			outageSince = time.Now()
@@ -386,6 +389,10 @@ func (a *agent) runWithReconnect(
 			a.logger.Info("server graceful stop detected, reconnecting fast")
 		}
 		for {
+			if !balanceSaid && rpcclient.IsBalanceExhausted(streamErr) {
+				a.logger.Error(rpcclient.BalanceExhaustedHint, "error", streamErr)
+				balanceSaid = true
+			}
 			wait := gracefulReconnectDelay
 			if !graceful {
 				failures++

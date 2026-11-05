@@ -36,15 +36,17 @@ const (
 
 // FatalClass classifies err for a connection loop's stop-or-redial decision.
 // Every error that is not one of the closed fatal classes is NotFatal: a
-// loop redials on it, whatever it is. It looks at gRPC codes and the
-// agentwire refusal constants, never at other error text. The loop's own
+// loop redials on it, whatever it is; a balance refusal
+// (IsBalanceExhausted) is never fatal, whatever its code. It looks at gRPC
+// codes, ErrorInfo reasons and the agentwire refusal constants, never at other error text. The loop's own
 // context cancellation is the loop's to check (ctx.Err()).
 func FatalClass(err error) Fatal {
 	if err == nil {
 		return NotFatal
 	}
 	s, ok := status.FromError(err) // unwraps
-	if !ok {
+	if !ok || IsBalanceExhausted(err) {
+		// a top-up ends a balance refusal: redial
 		return NotFatal
 	}
 	switch s.Code() {
