@@ -426,44 +426,48 @@ every step `TraceCallCredit.tla` takes is one `traceCC` records.
 
 ### CallCreditSenders.tla: several senders on one call
 
-Lane FLAKECC (2026-11-05). `CallCredit.tla`'s `Send(c)` is enabled
-whenever the call has credit: it assumes a sender waiting for credit takes
-it once credit is there. That holds for one sender per call. A handler may
-`Send` from several goroutines (`serverStream.Send`: a remote-exec
-handler's stdout and stderr), and `link.Credit.Acquire` wakes its waiters
-through one token of capacity one (`sessionCredit.wake`), which `Grant`
-fills and one waiter empties. Of two waiters a grant woke one; it took a
-credit and sent on, and once it had nothing more to send the other waited
-with credit there and no token; no grant came, since the receiver grants
-only for frames it read (`TestConcurrentServerStreamSend` on the Linux
-runner, relay 582038b7: 427 of 500 frames, every sender waiting).
+Lane FLAKECC (2026-11-05), lane CREDITMU. `CallCredit.tla`'s `Send(c)` is
+enabled whenever the call has credit: it assumes a sender waiting for
+credit takes it once credit is there. That holds for one sender per call.
+A handler may `Send` from several goroutines (`serverStream.Send`: a
+remote-exec handler's stdout and stderr), each waiting in
+`link.Credit.Acquire`. Before link v0.12.3 `Credit` woke its waiters
+through one token of capacity one, which `Grant` filled and one waiter
+emptied. Of two waiters a grant woke one; it took a credit and sent on,
+and once it had nothing more to send the other waited with credit there
+and no token; no grant came, since the receiver grants only for frames it
+read (`TestConcurrentServerStreamSend` on the Linux runner, relay
+582038b7: 427 of 500 frames, every sender waiting). Lane FLAKECC worked
+around it with a lock per call (`serverStream.creditMu`); lane CREDITMU
+deleted it.
 
-Design: a call's senders take its credit one at a time
-(`serverStream.creditMu`, held across `Credit.Acquire`), so at most one
-waits on the token and every grant reaches it. A `clientStream` has one
-sender (its `Send` is not safe for concurrent use: `sentFirst`), and
-`resendEarly` runs before anything else of the call is sent.
+Design: the guarantee link v0.12.3 gives (link's `spec/CreditWaiters.tla`,
+lane LINKWAKE): a grant wakes every waiter, each checking again under
+`Credit`'s lock. So a call's senders `Acquire` with no lock of their own.
+A `clientStream` has one sender (its `Send` is not safe for concurrent
+use: `sentFirst`), and `resendEarly` runs before anything else of the
+call is sent.
 
 Invariants: `Conservation` (credit, frames on the wire, read and not yet
-granted, and grants on the way make up the window), `NoStrandedWaiter` (a
-sender waiting while the call has credit has the token, or another sender
-is checking); liveness `AllSent` (every sender sends all its frames).
-Mutants: `CCS:no-lock` (the code before: `NoStrandedWaiter`),
-`CCS:no-lock-live` (the same: `AllSent`). Witnesses, each violated:
-`W_BothWant` (one sender waits while the other wants credit),
-`W_GrantToWaiter`. `CallCreditSenders.cfg` (2 senders, window 8 so grants
-come two frames at a time, 5 frames each): 1,406 distinct states, depth
-37, every action taken.
+granted, and grants on the way make up the window), `NoStrandedWaiter` (no
+sender waits while the call has credit unless it is woken); liveness
+`AllSent` (every sender sends all its frames).
+Mutants: `CCS:one-slot` (link before v0.12.3 with no lock:
+`NoStrandedWaiter`), `CCS:one-slot-live` (the same: `AllSent`).
+Witnesses, each violated: `W_BothWant` (one sender waits while the other
+wants credit), `W_GrantToWaiter`, `W_WakeAll` (one grant wakes both
+senders). `CallCreditSenders.cfg` (2 senders, window 8 so grants come two
+frames at a time, 5 frames each): 1,600 distinct states, depth 36, every
+action taken.
 
 | action | Go |
 |---|---|
-| `Start(s)` | `serverStream.Send`: `creditMu.Lock` |
-| `Try(s)` | `link.Credit.acquire`'s check; `creditMu.Unlock`, `Agent.sendFrame` |
-| `Wake(s)` | `link.Credit.acquire`'s `<-wake` |
+| `Start(s)` | `serverStream.Send`: `Credit.Acquire` |
+| `Try(s)` | `link.Credit.acquire`'s check; `Agent.sendFrame` |
+| `Wake(s)` | `link.Credit.acquire`'s `<-wake` (a closed channel) |
 | `Read` | `clientStream.Recv`: `Credit.Consumed` |
-| `Grant` | `handleWindow`: `Credit.Grant` |
+| `Grant` | `handleWindow`: `Credit.Grant` (wakes every waiter) |
 
-Follow-up (link): `Credit` documents its methods as safe from any
-goroutine, so two `Acquire`s of one session are legal there too; `acquire`
-passing the token on when it leaves credit (a non-blocking send on `wake`
-after a take with `s.n > 0`) would make the mutex unneeded.
+| assumption | source |
+|---|---|
+| A grant or refund wakes every waiter of the session, each checks again under `Credit`'s lock | link v0.12.3 `credit.go` `wakeAll`; link `spec/CreditWaiters.tla` |

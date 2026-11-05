@@ -51,13 +51,6 @@ type serverStream struct {
 	closed    atomic.Bool
 	closeOnce sync.Once
 
-	// creditMu: the call's senders take its credit one at a time.
-	// link.Credit wakes a waiting sender through one token, so of two
-	// waiters one grant could wake one and leave the other waiting with
-	// credit there (spec/CallCreditSenders.tla; lane FLAKECC, guard
-	// TestConcurrentSendersShareAGrant).
-	creditMu sync.Mutex
-
 	mu         sync.Mutex
 	header     MD
 	headerSent bool
@@ -170,10 +163,7 @@ func (ss *serverStream) Send(data []byte) error {
 	}
 	// One of the call's credit (the caller's ResponseWindow): a caller
 	// that stops reading holds this handler, never the agent's other calls.
-	ss.creditMu.Lock()
-	ok := ss.agent.serveCredit.Acquire(ss.txnID, 1)
-	ss.creditMu.Unlock()
-	if !ok {
+	if !ss.agent.serveCredit.Acquire(ss.txnID, 1) {
 		if err := ss.ctx.Err(); err != nil {
 			return err
 		}

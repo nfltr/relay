@@ -194,12 +194,14 @@ mutants)
 	expect witness:ReadWaits -e 's/^    NoHOL$/    W_ReadWaits/'
 	expect witness:BothLateGrant -e 's/^    NoHOL$/    W_LateGrant/'
 	model=CallCreditSenders
-	# The code before lane FLAKECC: a call's concurrent senders each wait on
-	# link.Credit's one wake token; one grant wakes one of them.
-	expect CCS:no-lock -e 's/Mutant = "none"/Mutant = "no-lock"/'
-	expect CCS:no-lock-live -e 's/Mutant = "none"/Mutant = "no-lock"/' -e '/NoStrandedWaiter/d'
+	# The code before lane FLAKECC (link before v0.12.3, no lock): a call's
+	# concurrent senders each wait on link.Credit's one wake token; one
+	# grant wakes one of them.
+	expect CCS:one-slot -e 's/Mutant = "none"/Mutant = "one-slot"/'
+	expect CCS:one-slot-live -e 's/Mutant = "none"/Mutant = "one-slot"/' -e '/NoStrandedWaiter/d'
 	expect witness:BothWant -e 's/^    NoStrandedWaiter$/    W_BothWant/'
 	expect witness:GrantToWaiter -e 's/^    NoStrandedWaiter$/    W_GrantToWaiter/'
+	expect witness:WakeAll -e 's/^    NoStrandedWaiter$/    W_WakeAll/'
 	exit $fail
 	;;
 cctraces)
