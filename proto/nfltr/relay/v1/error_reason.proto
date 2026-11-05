@@ -73,4 +73,11 @@ enum ErrorReason {
   // The session asks for end-to-end encryption that its service, its
   // agent or the relay's policy does not offer.
   ERROR_REASON_E2EE_UNAVAILABLE = 43;
+  // The account's prepaid balance is exhausted and its grace is over: the
+  // relay refuses its credentials and ends its connections until a top-up
+  // (on the dashboard) reactivates it. Not a bad credential: a client
+  // keeps retrying with a bounded backoff, and a share or site visit is
+  // answered HTTP 402. On gRPC it is FailedPrecondition, on a data
+  // connection HTTP 402 or the session's abort code.
+  ERROR_REASON_BALANCE_EXHAUSTED = 50;
 }

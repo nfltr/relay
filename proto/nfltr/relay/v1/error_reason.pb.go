@@ -88,6 +88,13 @@ const (
 	// The session asks for end-to-end encryption that its service, its
 	// agent or the relay's policy does not offer.
 	ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE ErrorReason = 43
+	// The account's prepaid balance is exhausted and its grace is over: the
+	// relay refuses its credentials and ends its connections until a top-up
+	// (on the dashboard) reactivates it. Not a bad credential: a client
+	// keeps retrying with a bounded backoff, and a share or site visit is
+	// answered HTTP 402. On gRPC it is FailedPrecondition, on a data
+	// connection HTTP 402 or the session's abort code.
+	ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED ErrorReason = 50
 )
 
 // Enum value maps for ErrorReason.
@@ -117,6 +124,7 @@ var (
 		41: "ERROR_REASON_INVALID_ARGUMENT",
 		42: "ERROR_REASON_E2EE_REQUIRED",
 		43: "ERROR_REASON_E2EE_UNAVAILABLE",
+		50: "ERROR_REASON_BALANCE_EXHAUSTED",
 	}
 	ErrorReason_value = map[string]int32{
 		"ERROR_REASON_UNSPECIFIED":             0,
@@ -143,6 +151,7 @@ var (
 		"ERROR_REASON_INVALID_ARGUMENT":        41,
 		"ERROR_REASON_E2EE_REQUIRED":           42,
 		"ERROR_REASON_E2EE_UNAVAILABLE":        43,
+		"ERROR_REASON_BALANCE_EXHAUSTED":       50,
 	}
 )
 
@@ -177,7 +186,7 @@ var File_nfltr_relay_v1_error_reason_proto protoreflect.FileDescriptor
 
 const file_nfltr_relay_v1_error_reason_proto_rawDesc = "" +
 	"\n" +
-	"!nfltr/relay/v1/error_reason.proto\x12\x0enfltr.relay.v1*\x9a\a\n" +
+	"!nfltr/relay/v1/error_reason.proto\x12\x0enfltr.relay.v1*\xbe\a\n" +
 	"\vErrorReason\x12\x1c\n" +
 	"\x18ERROR_REASON_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cERROR_REASON_UNAUTHENTICATED\x10\x01\x12 \n" +
@@ -203,7 +212,8 @@ const file_nfltr_relay_v1_error_reason_proto_rawDesc = "" +
 	"\x1fERROR_REASON_TARGET_UNREACHABLE\x10(\x12!\n" +
 	"\x1dERROR_REASON_INVALID_ARGUMENT\x10)\x12\x1e\n" +
 	"\x1aERROR_REASON_E2EE_REQUIRED\x10*\x12!\n" +
-	"\x1dERROR_REASON_E2EE_UNAVAILABLE\x10+\"\x04\b\x04\x10\x04\"\x04\b\x05\x10\x05*\x1dERROR_REASON_SESSION_REPLACED* ERROR_REASON_SESSION_RECONNECTEDB\xb5\x01\n" +
+	"\x1dERROR_REASON_E2EE_UNAVAILABLE\x10+\x12\"\n" +
+	"\x1eERROR_REASON_BALANCE_EXHAUSTED\x102\"\x04\b\x04\x10\x04\"\x04\b\x05\x10\x05*\x1dERROR_REASON_SESSION_REPLACED* ERROR_REASON_SESSION_RECONNECTEDB\xb5\x01\n" +
 	"\x12com.nfltr.relay.v1B\x10ErrorReasonProtoP\x01Z3github.com/nfltr/relay/proto/nfltr/relay/v1;relayv1\xa2\x02\x03NRX\xaa\x02\x0eNfltr.Relay.V1\xca\x02\x0eNfltr\\Relay\\V1\xe2\x02\x1aNfltr\\Relay\\V1\\GPBMetadata\xea\x02\x10Nfltr::Relay::V1b\x06proto3"
 
 var (
