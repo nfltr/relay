@@ -41,6 +41,10 @@ type sessionPlan struct {
 	e2ee            *e2eeTLSConfig // the certificate an E2EE session ends with: its service's, else the tunnel's
 }
 
+// e2eeShareTarget is the target the relay's SNI router names for an E2EE
+// share session to a whole agent (relay-core TCPDispatcher.RouteConnection).
+const e2eeShareTarget = "__e2ee__"
+
 var (
 	errNoHTTPSessions = errors.New("this agent serves no HTTP sessions")
 	errNoRawTargets   = errors.New("this agent serves no tcp targets")
@@ -78,7 +82,16 @@ func planSession(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) 
 	if open.GetE2Ee() && p.e2ee != nil {
 		p.kind = sessionE2EE
 		p.client = clientAddr(open.GetClientAddr())
-		if targets.services != nil && targets.services.byName[open.GetTargetAddr()].kind == agentservices.TCP {
+		switch {
+		case targets.services != nil:
+			if targets.services.byName[open.GetTargetAddr()].kind == agentservices.TCP {
+				p.kind = sessionE2EETCP
+			}
+		case open.GetTargetAddr() != e2eeShareTarget && !targets.noRaw:
+			// A pinned session to a target of a tunnel without a table
+			// (nfltr tcp --e2ee): TLS ends here, the bytes go to the
+			// target a raw session dials. Only the SNI marker is an
+			// E2EE share's HTTP. Guard: TestPinnedSessionToTunnelTargetCarriesBytes.
 			p.kind = sessionE2EETCP
 		}
 		return p, nil
