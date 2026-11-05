@@ -87,11 +87,13 @@ func planSession(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) 
 			if targets.services.byName[open.GetTargetAddr()].kind == agentservices.TCP {
 				p.kind = sessionE2EETCP
 			}
-		case open.GetTargetAddr() != e2eeShareTarget && !targets.noRaw:
-			// A pinned session to a target of a tunnel without a table
-			// (nfltr tcp --e2ee): TLS ends here, the bytes go to the
-			// target a raw session dials. Only the SNI marker is an
-			// E2EE share's HTTP. Guard: TestPinnedSessionToTunnelTargetCarriesBytes.
+		case targets.e2eeBytes && open.GetTargetAddr() != e2eeShareTarget && !targets.noRaw:
+			// Config.TCPE2EEBytes (nfltr tcp --e2ee): a pinned session to
+			// a target of a tunnel without a table ends TLS here and its
+			// bytes go to the target a raw session dials; the SNI marker
+			// stays an E2EE share's HTTP. Without the option a pinned
+			// session is HTTP to the default route (relay-core
+			// TestCoreProcessTLSAndE2EE). Guard: TestPinnedSessionToTunnelTargetCarriesBytes.
 			p.kind = sessionE2EETCP
 		}
 		return p, nil

@@ -924,6 +924,7 @@ type sessionTargets struct {
 	services       *ServiceTable // when set, the only targets (the fields above unused)
 	http           http.Handler  // serves sessions to dataplane.HTTPSessionTarget
 	noRaw          bool          // refuses sessions that would dial a target
+	e2eeBytes      bool          // Config.TCPE2EEBytes: a pinned session to a target is its bytes, not HTTP
 }
 
 // RunServiceTunnel serves the ConnectTCP stream of an agent that serves
