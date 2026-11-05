@@ -145,13 +145,16 @@ type Config struct {
 	// Format: "host:port" (e.g. "kubernetes.default.svc:443").
 	TCPForwardAddr string
 
-	// TCPE2EEBytes makes an end-to-end encrypted session that names a
-	// target (a pinned connect session: tcp-connect/dial --pin) TLS ended
-	// here with the plaintext bridged to that target, byte for byte as a
-	// raw session's. Without it such a session is HTTP to the default
-	// route, as an E2EE share's (the relay's SNI sessions are that either
-	// way). With TCPTunnel and an E2EE certificate.
-	TCPE2EEBytes bool
+	// TCPE2EEOnly makes the TCP tunnel end-to-end encrypted only. An end
+	// to end encrypted session that names a target (a pinned connect
+	// session: tcp-connect/dial --pin) is TLS ended here with the
+	// plaintext bridged to that target, byte for byte as a raw session's;
+	// any other session to a target (no pin: the relay could read it) is
+	// refused with ERROR_REASON_E2EE_REQUIRED. Without it a pinned session
+	// is HTTP to the default route, as an E2EE share's (the relay's SNI
+	// sessions are that either way), and a plain one is a raw session.
+	// With TCPTunnel and an E2EE certificate.
+	TCPE2EEOnly bool
 
 	// Capabilities is a list of capability identifiers advertised to the
 	// server via the x-agent-capabilities metadata header (e.g. "terminal").

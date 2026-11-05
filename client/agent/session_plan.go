@@ -87,8 +87,8 @@ func planSession(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) 
 			if targets.services.byName[open.GetTargetAddr()].kind == agentservices.TCP {
 				p.kind = sessionE2EETCP
 			}
-		case targets.e2eeBytes && open.GetTargetAddr() != e2eeShareTarget && !targets.noRaw:
-			// Config.TCPE2EEBytes (nfltr tcp --e2ee): a pinned session to
+		case targets.e2eeOnly && open.GetTargetAddr() != e2eeShareTarget && !targets.noRaw:
+			// Config.TCPE2EEOnly (nfltr tcp --e2ee): a pinned session to
 			// a target of a tunnel without a table ends TLS here and its
 			// bytes go to the target a raw session dials; the SNI marker
 			// stays an E2EE share's HTTP. Without the option a pinned
@@ -98,10 +98,24 @@ func planSession(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) 
 		}
 		return p, nil
 	}
+	if targets.e2eeOnly {
+		// Config.TCPE2EEOnly: without a pin the relay could read the
+		// session's bytes, so it is refused, never dialled. The refusal
+		// names no fingerprint: the answer is not authenticated.
+		// Guard: TestE2EEOnlyTunnelRefusesUnpinnedSessions.
+		return sessionPlan{}, errE2EERequired(open)
+	}
 	if targets.noRaw {
 		return sessionPlan{}, errNoRawTargets
 	}
 	return p, nil
+}
+
+// errE2EERequired refuses a session to an end-to-end encrypted only tunnel
+// that is not end to end encrypted.
+func errE2EERequired(open *pb.TCPData) error {
+	return &ServiceRefusedError{Target: open.GetTargetAddr(), E2EE: open.GetE2Ee(), Answer: relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED,
+		Reason: "the agent takes end-to-end encrypted sessions only: open it pinned (nfltr dial/tcp-connect --pin, pin: on a connect: mapping) with the fingerprint from the agent's own output"}
 }
 
 // clientAddr is the visitor address an open names, the zero Addr when it
