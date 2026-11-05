@@ -35,5 +35,5 @@ jobs:
       - run: make test-ci
       - run: make check-testknobs
       - run: make check-linkvet
-      - run: make spec spec-mutants
+      - run: make spec spec-mutants spec-cltraces
       - run: make check-spec-drift

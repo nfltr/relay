@@ -555,14 +555,25 @@ and `endServed`'s delete and its line, are taken under one lock
 address) alone; the caller's steps are TLC's, taken only when the next
 logged step needs them. A transaction no frame of which is marked is
 checked with an old caller (`Mutant = "old-caller"`): tests that play the
-caller by hand send unmarked frames; `AtMostOneCall` still holds for them.
+caller by hand send unmarked frames; `AtMostOneCall` holds for them only
+while no handler returns before its caller's last frame (an old caller's
+later frame starts a second call: mutant `CL:old-caller`), so a test whose
+handler returns early marks its continuations as a caller does
+(`TestStuckHandlerDoesNotHoldTheReceiveLoop`, finding CL3).
 `make spec-traces` runs `client/rpcclient`'s tests (`CL_TRACE_TESTS`,
 default all) with the recorder and checks every transaction: 72
 transactions accepted, 0 rejected; every action taken (`Start` 53,
 `Return` 53, `Serve` 78, `Drop` 47, `Refuse` 13). Rejected fixtures:
 `reject-calllifecycle-late-new-call.ndjson` (a second `Start` from a
 continuation after `Return`: the code before),
-`reject-calllifecycle-tombstone.ndjson` (a frame served after `Return`).
+`reject-calllifecycle-tombstone.ndjson` (a frame served after `Return`),
+`reject-calllifecycle-old-caller-second-call.ndjson` (an old caller's
+unmarked frame after `Return` starts a second call; it ends at that
+`Start`, so it was accepted while the checker listed `TraceNotDone` first:
+every trace checker of `scripts/spec.sh` now lists it last, so a trace whose
+last step breaks an invariant is rejected). `make spec-cltraces`
+(in `make ci`, about 10 s) is the per-push slice: the stuck-handler test's
+traces, three runs (`CL_TRACE_TESTS`, `CL_TRACE_COUNT`).
 
 ### Findings (lane CONFORM6-RELAY, 2026-11-05)
 
@@ -570,6 +581,7 @@ continuation after `Return`: the code before),
 |---|---|---|---|
 | CL1 | medium | a request frame that reached the target after its call's handler returned started a second handler call for the transaction (code diverged from `CallCredit.tla`'s `End`) | fixed: `continuation` mark and the rule above; `TestLateRequestFrameStartsNoCall`, `TestEndedAndRefusedCallsLeaveNoEntry` (red before: 2 handler calls for one call; 20 entries left by late frames) |
 | CL2 | low | a call refused at its first frame kept its entry (one per refusal) | unreachable (a fresh call always takes its first frame); the refusal deleted; `TestFirstFrameFitsAFreshCall` |
+| CL3 | low | `make spec-traces` rejected `TestStuckHandlerDoesNotHoldTheReceiveLoop`'s `stuck` trace in about 2 of 3 runs (`AtMostOneCall`): the test played an old caller (no `continuation` marks) and its refused handler returned before the caller's last frame, so a later frame started a real second handler call (2-3 per run in the raw trace). Callers of this module mark continuations, so no product path; the test was outside the spec's caller (lane CALLDUP, 2026-11-06) | fixed: the test marks continuations and asserts one handler call (red before: `ran 2 handler calls, want 1` in 2 of 10 runs); `make spec-cltraces` in `make ci`; reject fixture `reject-calllifecycle-old-caller-second-call.ndjson` |
 
 ### Code map (CallLifecycle.tla)
 

@@ -5,6 +5,7 @@ package rpcclient
 
 import (
 	"io"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,13 +19,19 @@ import (
 // call's frames must not stop the tunnel's receive loop, which serves every
 // call and response of the agent. A caller that sends past the call's
 // RequestWindow (it broke the credit rules) has that call refused at once
-// (ResourceExhausted), and the agent's other calls go on.
+// (ResourceExhausted), and the agent's other calls go on. Its frames after
+// the first are continuations, as a caller sends them: those that reach the
+// agent after the refused handler returned start no second handler call
+// (spec/CallLifecycle.tla AtMostOneCall; unmarked, they did, in about 2 of
+// 3 runs, and its recorded trace was rejected).
 func TestStuckHandlerDoesNotHoldTheReceiveLoop(t *testing.T) {
 	ms := newMockStream(t.Context())
 	agent := NewAgent(testTargetAgentId, ms)
 	defer agent.Close() //nolint:errcheck
+	var stuckCalls atomic.Int32
 	agent.Handle(func(stream ServerStream) error {
 		if stream.SourceAgentID() == "stuck" {
+			stuckCalls.Add(1)
 			<-stream.Context().Done() // takes none of its frames
 			return stream.Context().Err()
 		}
@@ -32,8 +39,8 @@ func TestStuckHandlerDoesNotHoldTheReceiveLoop(t *testing.T) {
 		return stream.Send([]byte("ok"))
 	})
 	go func() {
-		for range 40 { // past the call's buffer and the stream's
-			ms.recvCh <- &pb.TunnelFrame{Payload: []byte("x"), MessageType: "a2a-request", TransactionId: "stuck",
+		for i := range 40 { // past the call's buffer and the stream's
+			ms.recvCh <- &pb.TunnelFrame{Payload: []byte("x"), MessageType: "a2a-request", TransactionId: "stuck", Continuation: i > 0,
 				Routing: &pb.RoutingInfo{AgentId: "stuck", TargetAgentId: testTargetAgentId}}
 		}
 		ms.recvCh <- &pb.TunnelFrame{Payload: []byte("hi"), MessageType: "a2a-request", TransactionId: "other", Eom: true,
@@ -53,6 +60,12 @@ func TestStuckHandlerDoesNotHoldTheReceiveLoop(t *testing.T) {
 		case <-deadline:
 			t.Fatalf("refused the stuck call %v, answered the other %v: the receive loop waits on a stuck handler", refused, answered)
 		}
+	}
+	// The other call's frame came last: every frame of the stuck call was
+	// taken. Close waits for every handler.
+	_ = agent.Close()
+	if n := stuckCalls.Load(); n != 1 {
+		t.Fatalf("the stuck call ran %d handler calls, want 1", n)
 	}
 }
 

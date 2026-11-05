@@ -100,14 +100,18 @@ stress-race:
 
 # The TLA+ models (spec/README.md): spec checks them, spec-mutants checks
 # each bug put back is caught (both in make ci); spec-traces checks the
-# traces the tests record under -tags relaytrace against them (nightly).
-.PHONY: spec spec-mutants spec-traces
+# traces the tests record under -tags relaytrace against them (nightly);
+# spec-cltraces is its per-push slice (the stuck-handler test's CallLifecycle
+# traces, about 10 s; in make ci).
+.PHONY: spec spec-mutants spec-traces spec-cltraces
 spec:
 	./scripts/spec.sh check
 spec-mutants:
 	./scripts/spec.sh mutants
 spec-traces:
 	./scripts/spec.sh traces
+spec-cltraces:
+	./scripts/spec.sh cltraces
 
 # Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
 # identical; its test is nfltr's scripts/check_spec_drift_test.sh): every

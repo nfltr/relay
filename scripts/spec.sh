@@ -13,6 +13,9 @@
 #            against spec/TraceSignalConn.tla; each spec/testdata/reject-*
 #            fixture rejected, each accept-* fixture accepted; every event
 #            TraceCallCredit.tla takes recorded by client/rpcclient.
+#   cltraces  the CallLifecycle traces of CL_TRACE_TESTS (default: the
+#            stuck-handler test), CL_TRACE_COUNT runs (default 3), checked
+#            against spec/TraceCallLifecycle.tla (in make ci).
 #   cctraces FILE...  each call and direction of each recorded CallCredit
 #            trace (client/rpcclient -tags relaytrace) checked against
 #            spec/TraceCallCredit.tla.
@@ -52,11 +55,11 @@ CONSTANTS
 INIT TraceInit
 NEXT TraceNext
 INVARIANTS
-    TraceNotDone
     NoSilentLoss
     EndedFinal
     ReadBound
     PathOrdered
+    TraceNotDone
 CFG
 	META=$work/states-$(basename "$1").$2 tlc "$cfg" TraceSignalConn.tla >"$1.$2.out" 2>&1 || true
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.$2.out"
@@ -85,13 +88,13 @@ CONSTANTS
 INIT TraceInit
 NEXT TraceNext
 INVARIANTS
-    TraceNotDone
     TypeOK
     NoHOL
     BufferBound
     Conservation
     GrantBound
     Ordered
+    TraceNotDone
 CFG
 	META=$work/states-$(basename "$1").$2.$3 tlc "$cfg" TraceCallCredit.tla >"$1.$2.$3.out" 2>&1 || true
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.$2.$3.out"
@@ -131,10 +134,10 @@ CONSTANTS
 INIT TraceInit
 NEXT TraceNext
 INVARIANTS
-    TraceNotDone
     TypeOK
     AtMostOneCall
     NoEndedEntry
+    TraceNotDone
 CFG
 	META=$work/states-$(basename "$1").$2.$3 tlc "$cfg" TraceCallLifecycle.tla >"$1.$2.$3.out" 2>&1 || true
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.$2.$3.out"
@@ -155,6 +158,19 @@ cltraces() {
 	done
 	echo "$n transactions, $bad rejected"
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
+}
+
+# clrun TESTS COUNT: client/rpcclient's tests TESTS (-count COUNT) with the
+# recorder; every transaction of their CallLifecycle traces checked.
+clrun() {
+	mkdir -p "$work/cltraces"
+	(cd client && RELAYTRACE=$work/cltraces go test -tags relaytrace -count="$2" -run "$1" ./rpcclient/) >"$work/cltest.out" 2>&1 || {
+		cat "$work/cltest.out"
+		exit 1
+	}
+	for t in "$work"/cltraces/calllifecycle-*.ndjson; do
+		cltraces "$t" || exit 1
+	done
 }
 
 fail=0
@@ -254,6 +270,13 @@ mutants)
 	expect witness:BothRun -e 's/^    NoEndedEntry$/    W_BothRun/'
 	exit $fail
 	;;
+cltraces)
+	# The per-push slice of traces: the CallLifecycle traces of the tests
+	# whose handler returns before its caller's last frame
+	# (CL_TRACE_TESTS), several runs, so AtMostOneCall is checked where a
+	# late frame reaches the target.
+	clrun "${CL_TRACE_TESTS:-^TestStuckHandlerDoesNotHoldTheReceiveLoop$}" "${CL_TRACE_COUNT:-3}"
+	;;
 cctraces)
 	# CallCredit traces recorded elsewhere (relay-core's two-agent tests:
 	# its scripts/spec.sh traces runs this from the required relay version).
@@ -306,15 +329,7 @@ traces)
 		done
 		echo "$f: rejected"
 	done
-	mkdir -p "$work/cltraces"
-	cltests=${CL_TRACE_TESTS:-.}
-	(cd client && RELAYTRACE=$work/cltraces go test -tags relaytrace -count=1 -run "$cltests" ./rpcclient/) >"$work/cltest.out" 2>&1 || {
-		cat "$work/cltest.out"
-		exit 1
-	}
-	for t in "$work"/cltraces/calllifecycle-*.ndjson; do
-		cltraces "$t" || exit 1
-	done
+	clrun "${CL_TRACE_TESTS:-.}" 1
 	for f in spec/testdata/reject-*.ndjson; do
 		case $f in *reject-callcredit-* | *reject-calllifecycle-*) continue ;; esac
 		cp "$f" "$work/"
@@ -362,7 +377,7 @@ traces)
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
 	;;
 *)
-	echo "usage: spec.sh check|mutants|traces|cctraces FILE..." >&2
+	echo "usage: spec.sh check|mutants|traces|cltraces|cctraces FILE..." >&2
 	exit 2
 	;;
 esac
