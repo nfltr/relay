@@ -45,11 +45,11 @@ func (a *Agent) pairingKey() []byte {
 	return nil
 }
 
-func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) {
+func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
 	if !a.a2aE2EEInbound.Load() {
 		a.sendA2AControlError(msg.GetTransactionId(), codes.FailedPrecondition,
 			"target agent does not support A2A E2EE; retry with --e2ee=false or upgrade the target")
-		return
+		return "Refuse"
 	}
 
 	a.handlerMu.RLock()
@@ -58,14 +58,14 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) {
 	if h == nil {
 		a.sendA2AControlError(msg.GetTransactionId(), codes.Unimplemented,
 			"target agent has no A2A handler registered")
-		return
+		return "Refuse"
 	}
 
 	// A call this agent already serves (its 0-RTT first flight was taken)
 	// is never started a second time.
 	if _, serving := a.incoming.Load(msg.GetTransactionId()); serving {
 		log.Printf("rpcclient: dropped an A2A E2EE init for txn %s, a call this agent already serves", msg.GetTransactionId())
-		return
+		return "" // a second start of a served call: dropped, not traced
 	}
 	state, responderPub, err := newServerA2AE2EEState(msg.GetTransactionId(), msg.GetPayload(), a.pairingKey())
 	if err != nil {
@@ -74,7 +74,7 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) {
 			code = codes.FailedPrecondition
 		}
 		a.sendA2AControlError(msg.GetTransactionId(), code, err.Error())
-		return
+		return "Refuse"
 	}
 
 	ss := a.newServerStream(msg, state, nil)
@@ -90,11 +90,12 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) {
 		ss.end()
 		a.incoming.Delete(ss.txnID)
 		log.Printf("rpcclient: failed to send A2A E2EE ack for txn %s: %v", ss.txnID, err)
-		return
+		return "Refuse"
 	}
 
 	a.wg.Add(1)
 	go a.handleCall(ss, h)
+	return "Start"
 }
 
 // e2eeStatic is this agent's static key: the process's, unless replaced.
@@ -110,23 +111,23 @@ func (a *Agent) e2eeStatic() *a2aE2EEStatic {
 // answers message 2 at once and starts the handler with the request, or
 // refuses it with a2a-e2ee-retry and the caller runs the interactive
 // handshake on the same call.
-func (a *Agent) handleE2EEInit0RTT(msg *pb.TunnelFrame) {
+func (a *Agent) handleE2EEInit0RTT(msg *pb.TunnelFrame) string {
 	txnID := msg.GetTransactionId()
 	if !a.a2aE2EEInbound.Load() {
 		a.sendA2AControlError(txnID, codes.FailedPrecondition,
 			"target agent does not support A2A E2EE; retry with --e2ee=false or upgrade the target")
-		return
+		return "Refuse"
 	}
 	a.handlerMu.RLock()
 	h := a.handler
 	a.handlerMu.RUnlock()
 	if h == nil {
 		a.sendA2AControlError(txnID, codes.Unimplemented, "target agent has no A2A handler registered")
-		return
+		return "Refuse"
 	}
 	if _, serving := a.incoming.Load(txnID); serving {
 		log.Printf("rpcclient: dropped an A2A E2EE first flight for txn %s, a call this agent already serves", txnID)
-		return
+		return "" // a second start of a served call: dropped, not traced
 	}
 	pairing := a.pairingKey()
 	var accepted a2aE2EEAccepted
@@ -145,7 +146,7 @@ func (a *Agent) handleE2EEInit0RTT(msg *pb.TunnelFrame) {
 		}); err != nil {
 			log.Printf("rpcclient: failed to send A2A E2EE retry for txn %s: %v", txnID, err)
 		}
-		return
+		return "" // the caller starts the call again with an init
 	}
 	ss := a.newServerStream(msg, accepted.state, accepted.request)
 	a.incoming.Store(txnID, ss)
@@ -159,10 +160,11 @@ func (a *Agent) handleE2EEInit0RTT(msg *pb.TunnelFrame) {
 		ss.end()
 		a.incoming.Delete(txnID)
 		log.Printf("rpcclient: failed to send A2A E2EE ack for txn %s: %v", txnID, err)
-		return
+		return "Refuse"
 	}
 	a.wg.Add(1)
 	go a.handleCall(ss, h)
+	return "Start"
 }
 
 func (a *Agent) sendA2AControlError(txnID string, code codes.Code, detail string) {

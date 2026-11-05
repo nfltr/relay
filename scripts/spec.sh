@@ -116,6 +116,47 @@ cctraces() {
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
 }
 
+cltrace() {
+	cfg=$work/$(basename "$1").$2.$3.cfg
+	m=none
+	grep "\"a\":\"$2\",\"c\":\"$3\"" "$1" | grep -q '"cont":true' || m=old-caller
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Agent = "$2"
+    Call = "$3"
+    Txns <- TraceTxns
+    N <- TraceLen
+    Mutant = "$m"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TraceNotDone
+    TypeOK
+    AtMostOneCall
+    NoEndedEntry
+CFG
+	META=$work/states-$(basename "$1").$2.$3 tlc "$cfg" TraceCallLifecycle.tla >"$1.$2.$3.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.$2.$3.out"
+}
+
+cltraces() {
+	n=0 bad=0
+	for ac in $(sed -E 's/.*"a":"([^"]+)","c":"([^"]+)".*/\1:\2/' "$1" | sort -u); do
+		ag=${ac%%:*} call=${ac#*:}
+		n=$((n + 1))
+		if cltrace "$1" "$ag" "$call"; then
+			echo "trace $(basename "$1") $ag $call: $(grep -c "\"a\":\"$ag\",\"c\":\"$call\"" "$1") lines: accepted"
+		else
+			bad=$((bad + 1))
+			echo "trace $(basename "$1") $ag $call: REJECTED"
+			grep -E 'Error|unknown event' "$1.$ag.$call.out" | head -5
+		fi
+	done
+	echo "$n transactions, $bad rejected"
+	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
+}
+
 fail=0
 case ${1:-} in
 check)
@@ -241,8 +282,32 @@ traces)
 		done
 		echo "$f: rejected"
 	done
+	clgo=$(cat client/rpcclient/*.go | grep -v '^//' | grep -ohE '"(Serve|Start|Drop|Refuse|Return)"' | sort -u)
+	for e in $(grep -E 'E\.ev = ' spec/TraceCallLifecycle.tla | grep -ohE '"[A-Z][A-Za-z]*"' | sort -u); do
+		echo "$clgo" | grep -qx "$e" || { echo "spec/TraceCallLifecycle.tla: event $e is recorded by no step of client/rpcclient"; exit 1; }
+	done
+	for f in spec/testdata/reject-calllifecycle-*.ndjson; do
+		cp "$f" "$work/"
+		if cltraces "$work/$(basename "$f")" >"$work/cl.out"; then
+			echo "$f: accepted, want rejected"
+			exit 1
+		fi
+		for o in "$work/$(basename "$f")".*.out; do
+			grep -q 'distinct states found' "$o" || { echo "$f: TLC failed:"; tail -20 "$o"; exit 1; }
+		done
+		echo "$f: rejected"
+	done
+	mkdir -p "$work/cltraces"
+	cltests=${CL_TRACE_TESTS:-.}
+	(cd client && RELAYTRACE=$work/cltraces go test -tags relaytrace -count=1 -run "$cltests" ./rpcclient/) >"$work/cltest.out" 2>&1 || {
+		cat "$work/cltest.out"
+		exit 1
+	}
+	for t in "$work"/cltraces/calllifecycle-*.ndjson; do
+		cltraces "$t" || exit 1
+	done
 	for f in spec/testdata/reject-*.ndjson; do
-		case $f in *reject-callcredit-*) continue ;; esac
+		case $f in *reject-callcredit-* | *reject-calllifecycle-*) continue ;; esac
 		cp "$f" "$work/"
 		if trace "$work/$(basename "$f")" 1 2; then
 			echo "$f: accepted, want rejected"

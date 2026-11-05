@@ -78,17 +78,15 @@ func TestConcurrentSendersShareAGrant(t *testing.T) {
 }
 
 // waitSendersParked waits until n goroutines in serverStream.Send are
-// blocked waiting for the call's credit (in link.Credit.acquire's select,
-// or for the call's send mutex).
+// blocked waiting for the call's credit (in link.Credit.acquire's select).
 func waitSendersParked(t *testing.T, n int) {
 	t.Helper()
 	buf := make([]byte, 1<<20)
 	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
 		parked := 0
 		for _, g := range strings.Split(string(buf[:runtime.Stack(buf, true)]), "\n\n") {
-			if strings.Contains(g, "(*serverStream).Send") &&
-				(strings.Contains(g, "[select") && strings.Contains(g, "(*Credit).acquire") ||
-					strings.Contains(g, "[sync.Mutex.Lock")) {
+			if strings.Contains(g, "(*serverStream).Send") && strings.Contains(g, "[select") &&
+				strings.Contains(g, "(*Credit).acquire") {
 				parked++
 			}
 		}

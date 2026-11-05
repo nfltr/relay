@@ -18,6 +18,7 @@ import (
 	"github.com/nfltr/relay/proto/pb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func pairingKeyFile(t *testing.T, secret string) string {
@@ -131,11 +132,7 @@ func (m *mitmRelay) stole(secret string) bool {
 }
 
 func cloneFrame(f *pb.TunnelFrame) *pb.TunnelFrame {
-	c := &pb.TunnelFrame{
-		Payload: append([]byte(nil), f.GetPayload()...), MessageType: f.GetMessageType(), TransactionId: f.GetTransactionId(),
-		Routing: f.GetRouting(), Eom: f.GetEom(), StatusCode: f.GetStatusCode(), StatusDetail: f.GetStatusDetail(), Timestamps: f.GetTimestamps(),
-	}
-	return c
+	return proto.Clone(f).(*pb.TunnelFrame) // every field, as a relay forwards it
 }
 
 // Without a pairing key the ephemeral keys are unauthenticated: an active

@@ -197,6 +197,10 @@ func (cs *clientStream) sendMsg(data []byte, eom bool) error {
 	if !cs.sentFirst && cs.deadlineMs > 0 {
 		md.DeadlineMs = cs.deadlineMs
 	}
+	// Every frame after the call's start (its first frame, or an E2EE
+	// call's handshake) is a continuation: a target no longer serving the
+	// call drops it (spec/CallLifecycle.tla AtMostOneCall).
+	cont := cs.sentFirst || cs.e2ee != nil
 	cs.sentFirst = true
 
 	return cs.agent.sendFrame(&pb.TunnelFrame{
@@ -206,6 +210,7 @@ func (cs *clientStream) sendMsg(data []byte, eom bool) error {
 		Timestamps:    &pb.Timestamps{RequestAtAgent: time.Now().UnixMilli()},
 		Routing:       md,
 		Eom:           eom,
+		Continuation:  cont,
 	})
 }
 
@@ -300,6 +305,7 @@ func (cs *clientStream) resendEarly(s *a2aE2EEState, data []byte) error {
 		TransactionId: cs.txnID,
 		Timestamps:    &pb.Timestamps{RequestAtAgent: time.Now().UnixMilli()},
 		Routing:       &pb.RoutingInfo{AgentId: cs.sourceAgentID, TargetAgentId: cs.targetAgentID},
+		Continuation:  true, // after the call's handshake
 	})
 }
 

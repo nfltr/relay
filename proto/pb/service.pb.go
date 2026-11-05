@@ -655,7 +655,12 @@ type TunnelFrame struct {
 	// response of an A2A transaction.
 	StatusCode int32 `protobuf:"varint,7,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`
 	// status_detail is an optional human-readable message for status_code.
-	StatusDetail  string `protobuf:"bytes,8,opt,name=status_detail,json=statusDetail,proto3" json:"status_detail,omitempty"`
+	StatusDetail string `protobuf:"bytes,8,opt,name=status_detail,json=statusDetail,proto3" json:"status_detail,omitempty"`
+	// continuation is true on an A2A request data frame that is not its
+	// call's first. A target that serves no call of the transaction (its
+	// handler returned, or it never ran) drops such a frame instead of
+	// starting a call with it (relay spec/CallLifecycle.tla).
+	Continuation  bool `protobuf:"varint,9,opt,name=continuation,proto3" json:"continuation,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -746,6 +751,13 @@ func (x *TunnelFrame) GetStatusDetail() string {
 	return ""
 }
 
+func (x *TunnelFrame) GetContinuation() bool {
+	if x != nil {
+		return x.Continuation
+	}
+	return false
+}
+
 // TCPData is the per-frame envelope for the ConnectTCP bidi stream.
 // Multiple independent TCP connections are multiplexed on a single gRPC
 // stream; each is identified by session_id.
@@ -765,8 +777,7 @@ type TCPData struct {
 	// target_addr is the backend address the agent should dial.
 	// Format: "host:port".  Present only when open=true.
 	// For LAN gateway use: any address reachable from the agent, e.g.
-	//
-	//	"192.168.1.42:22"  — SSH to a LAN machine via the gateway agent.
+	//   "192.168.1.42:22"  — SSH to a LAN machine via the gateway agent.
 	TargetAddr string `protobuf:"bytes,4,opt,name=target_addr,json=targetAddr,proto3" json:"target_addr,omitempty"`
 	// open=true signals a new incoming TCP connection on the server side.
 	// The agent must dial target_addr and begin relaying bytes.
@@ -977,7 +988,7 @@ const file_service_proto_rawDesc = "" +
 	"timestamps\x18\x02 \x01(\v2\x15.rpcserver.TimestampsR\n" +
 	"timestamps\x120\n" +
 	"\arouting\x18\x03 \x01(\v2\x16.rpcserver.RoutingInfoR\arouting\x12#\n" +
-	"\x04move\x18\x04 \x01(\x0e2\x0f.rpcserver.MoveR\x04move\"\xb2\x02\n" +
+	"\x04move\x18\x04 \x01(\x0e2\x0f.rpcserver.MoveR\x04move\"\xd6\x02\n" +
 	"\vTunnelFrame\x12\x18\n" +
 	"\apayload\x18\x01 \x01(\fR\apayload\x12!\n" +
 	"\fmessage_type\x18\x02 \x01(\tR\vmessageType\x12%\n" +
@@ -989,7 +1000,8 @@ const file_service_proto_rawDesc = "" +
 	"\x03eom\x18\x06 \x01(\bR\x03eom\x12\x1f\n" +
 	"\vstatus_code\x18\a \x01(\x05R\n" +
 	"statusCode\x12#\n" +
-	"\rstatus_detail\x18\b \x01(\tR\fstatusDetail\"\x99\x02\n" +
+	"\rstatus_detail\x18\b \x01(\tR\fstatusDetail\x12\"\n" +
+	"\fcontinuation\x18\t \x01(\bR\fcontinuation\"\x99\x02\n" +
 	"\aTCPData\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +

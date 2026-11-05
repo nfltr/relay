@@ -161,6 +161,11 @@ message TunnelFrame {
   int32       status_code    = 7;
   // status_detail is an optional human-readable message for status_code.
   string      status_detail  = 8;
+  // continuation is true on an A2A request data frame that is not its
+  // call's first. A target that serves no call of the transaction (its
+  // handler returned, or it never ran) drops such a frame instead of
+  // starting a call with it (relay spec/CallLifecycle.tla).
+  bool        continuation   = 9;
 }
 
 // ---------------------------------------------------------------------------

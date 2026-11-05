@@ -740,11 +740,15 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 	txnID := msg.TransactionId
 
 	switch msg.GetMessageType() {
-	case a2aE2EEInitMessageType:
-		a.handleE2EEInit(msg)
+	case a2aE2EEInitMessageType: // an E2EE call's start
+		clLock()
+		traceCL(a, a.handleE2EEInit(msg), txnID, msg)
+		clUnlock()
 		return
 	case a2aE2EEInit0RTTMessageType:
-		a.handleE2EEInit0RTT(msg)
+		clLock()
+		traceCL(a, a.handleE2EEInit0RTT(msg), txnID, msg)
+		clUnlock()
 		return
 	case a2aE2EERetryMessageType:
 		if val, ok := a.pending.Load(txnID); ok {
@@ -771,9 +775,14 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 
 	// Cancel message.
 	if msg.GetMessageType() == "cancel" {
+		clLock()
+		ev := "Drop"
 		if val, ok := a.incoming.Load(txnID); ok {
 			val.(*serverStream).end()
+			ev = "Serve"
 		}
+		traceCL(a, ev, txnID, msg)
+		clUnlock()
 		return
 	}
 
@@ -825,6 +834,16 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 		return
 	}
 
+	clLock()
+	traceCL(a, a.handleRequest(msg), txnID, msg)
+	clUnlock()
+}
+
+// handleRequest takes a request frame of a call this agent serves or may
+// start, and returns the step of spec/CallLifecycle.tla it took ("" for a
+// frame that is no request): Serve, Start, Drop or Refuse.
+func (a *Agent) handleRequest(msg *pb.TunnelFrame) string {
+	txnID := msg.TransactionId
 	// Continuation of an existing incoming call.
 	if val, ok := a.incoming.Load(txnID); ok {
 		ss := val.(*serverStream)
@@ -833,12 +852,12 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 		// panic. See serverStream.closeRequests + pushRequest.
 		if errors.Is(ss.pushRequest(msg), errPastWindow) {
 			a.refuseCall(ss, "its caller sent past the call's window")
-			return
+			return "Serve"
 		}
 		if msg.GetEom() {
 			ss.closeRequests()
 		}
-		return
+		return "Serve"
 	}
 
 	// A unary handler can validly return after consuming the request payload
@@ -846,21 +865,27 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 	// finishes, the incoming stream is removed; that late marker must not be
 	// interpreted as a new request.
 	if msg.GetEom() && len(msg.GetPayload()) == 0 {
-		return
+		return "Drop"
 	}
 
 	// A response, status or error for a transaction this agent no longer
-	// tracks (it ended, or a refused call's later frames) is never a request.
+	// tracks is never a request; nor is a continuation: a later frame of a
+	// call whose handler returned (spec/CallLifecycle.tla AtMostOneCall:
+	// the frame does not start a second call, and the agent keeps nothing
+	// per ended call to know it: NoEndedEntry).
 	switch msg.GetMessageType() {
 	case "error", "a2a-response", "a2a-status":
-		return
+		return ""
+	}
+	if msg.GetContinuation() {
+		return "Drop"
 	}
 
 	if a.refusesPlaintext(msg) {
 		a.sendA2AControlError(txnID, codes.FailedPrecondition, fmt.Sprintf(
 			"rpcclient: agent %s requires end-to-end encrypted A2A streams (--e2ee / NFLTR_A2A_E2EE); %s sent plaintext: turn on --e2ee at the caller, or upgrade it",
 			a.agentID, msg.GetRouting().GetAgentId()))
-		return
+		return "Refuse"
 	}
 
 	// New incoming call — create serverStream and invoke handler.
@@ -868,22 +893,23 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 	h := a.handler
 	a.handlerMu.RUnlock()
 	if h == nil {
-		return
+		return "Refuse"
 	}
 
 	ss := a.newServerStream(msg, nil, nil)
 	a.incoming.Store(txnID, ss)
-
-	if errors.Is(ss.pushRequest(msg), errPastWindow) { // the call's first frame
-		a.refuseCall(ss, "its caller sent past the call's window")
-		return
-	}
+	// A fresh call's credit and buffer always take its first frame, so it
+	// is never refused here (TestFirstFrameFitsAFreshCall;
+	// spec/CallLifecycle.tla mutant CL:refused-first-kept: a refusal here
+	// kept the entry).
+	_ = ss.pushRequest(msg)
 	if msg.GetEom() {
 		ss.closeRequests()
 	}
 
 	a.wg.Add(1)
 	go a.handleCall(ss, h)
+	return "Start"
 }
 
 // refuseCall ends an incoming call whose caller broke its credit (why):
@@ -898,10 +924,19 @@ func (a *Agent) refuseCall(ss *serverStream, why string) {
 		"rpcclient: agent %s refused the call: %s", a.agentID, why))
 }
 
+// endServed deletes the entry of a call this agent served once its handler
+// returned (spec/CallLifecycle.tla Return): nothing of it is kept.
+func (a *Agent) endServed(txnID string) {
+	clLock()
+	a.incoming.Delete(txnID)
+	traceCL(a, "Return", txnID, nil)
+	clUnlock()
+}
+
 // handleCall runs the handler and sends the final status trailer.
 func (a *Agent) handleCall(ss *serverStream, h Handler) {
 	defer a.wg.Done()
-	defer a.incoming.Delete(ss.txnID)
+	defer a.endServed(ss.txnID)
 	defer ss.end()
 
 	err := h(ss)
