@@ -45,10 +45,11 @@ vars == <<cr, sent, in, pipe, out, buf, got, cons, gin, gout, eom, gone, late>>
 
 Range(s) == {s[i] : i \in 1..Len(s)}
 \* The entries of s for call c, in order (frames: their numbers; grants: n).
-Of(s, c) == LET f[k \in 0..Len(s)] ==
-                 IF k = 0 THEN <<>>
-                 ELSE IF s[k][1] = c THEN Append(f[k-1], s[k][2]) ELSE f[k-1]
-            IN f[Len(s)]
+\* Not a recursive function: TLC evaluates one of those a Java stack frame
+\* chain per element, and a full response window (256 frames in flight)
+\* overflowed the 1 MiB thread stack of the Linux JVM (lane TRACEFIX2,
+\* spec/testdata/accept-callcredit-full-window.ndjson).
+Of(s, c) == LET t == SelectSeq(s, LAMBDA e : e[1] = c) IN [k \in 1..Len(t) |-> t[k][2]]
 Sum(s) == LET f[k \in 0..Len(s)] == IF k = 0 THEN 0 ELSE f[k-1] + s[k] IN f[Len(s)]
 Held == LET f[S \in SUBSET Calls] ==
               IF S = {} THEN 0

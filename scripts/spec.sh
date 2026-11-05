@@ -282,6 +282,15 @@ traces)
 		done
 		echo "$f: rejected"
 	done
+	for f in spec/testdata/accept-callcredit-*.ndjson; do
+		cp "$f" "$work/"
+		cctraces "$work/$(basename "$f")" >"$work/cc.out" || {
+			echo "$f: rejected, want accepted"
+			cat "$work/cc.out"
+			exit 1
+		}
+		echo "$f: accepted"
+	done
 	clgo=$(cat client/rpcclient/*.go | grep -v '^//' | grep -ohE '"(Serve|Start|Drop|Refuse|Return)"' | sort -u)
 	for e in $(grep -E 'E\.ev = ' spec/TraceCallLifecycle.tla | grep -ohE '"[A-Z][A-Za-z]*"' | sort -u); do
 		echo "$clgo" | grep -qx "$e" || { echo "spec/TraceCallLifecycle.tla: event $e is recorded by no step of client/rpcclient"; exit 1; }
@@ -320,6 +329,7 @@ traces)
 		echo "$f: rejected"
 	done
 	for f in spec/testdata/accept-*.ndjson; do
+		case $f in *accept-callcredit-*) continue ;; esac
 		cp "$f" "$work/"
 		trace "$work/$(basename "$f")" 1 2 || {
 			echo "$f: rejected, want accepted"

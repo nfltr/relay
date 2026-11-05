@@ -421,8 +421,14 @@ on one connection are ordered by goroutines the recorder does not see.
 Rejected fixtures: `reject-callcredit-send-past-window.ndjson` (a
 handler's 257th response with no window update: the code before lane
 CALLCREDIT), `reject-callcredit-early-grant.ndjson` (a window update for
-4 requests after 3 reads). `scripts/spec.sh traces` also checks that
-every step `TraceCallCredit.tla` takes is one `traceCC` records.
+4 requests after 3 reads). Accepted fixture:
+`accept-callcredit-full-window.ndjson` (a full response window, 256
+frames, in flight at once; lane TRACEFIX2: `Of` was a recursive function,
+which TLC evaluates one Java frame chain per element, and a long call's
+trace overflowed the Linux JVM's 1 MiB thread stack, relay-core nightly
+2026-11-05; `Of` is now `SelectSeq`, no recursion). `scripts/spec.sh
+traces` also checks that every step `TraceCallCredit.tla` takes is one
+`traceCC` records.
 
 ### CallCreditSenders.tla: several senders on one call
 
