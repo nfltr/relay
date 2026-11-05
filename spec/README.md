@@ -471,3 +471,105 @@ action taken.
 | assumption | source |
 |---|---|
 | A grant or refund wakes every waiter of the session, each checks again under `Credit`'s lock | link v0.12.3 `credit.go` `wakeAll`; link `spec/CreditWaiters.tla` |
+
+## CallLifecycle.tla: which frame starts a call, and what an ended call leaves
+
+Lane CONFORM6-RELAY (2026-11-05). `CallCredit.tla`'s `End` drops a call's
+later frames; the code did not (finding CL1 below). The target's receive
+loop (`Agent.handleMessage`) keeps one entry per call it serves
+(`Agent.incoming`), deleted when the call's handler returns. A frame of a
+transaction with no entry was taken as a new call, so a request frame that
+arrived after the handler returned (the caller sent it before it saw the
+call's status) ran the handler a second time with the call's later
+requests. Keeping the ended call's id would drop it, but then every ended
+call leaves an entry: the transaction ids are the callers' random UUIDs
+(`NewStream`: `uuid.New()`), not numbers that grow per connection, so "at
+or below the highest ended id" is no rule here, and the relay drops the
+caller's last frame of a call whose route ended (relay-core
+`dispatchAgentToAgent`'s `a2aEnded`), so the target never learns when to
+forget it.
+
+Design: the caller says which frames continue a call. Every request data
+frame after the call's start (its first frame, or an E2EE call's
+handshake init) carries `TunnelFrame.continuation` (proto field 9).
+Rule at the target: **a frame of a transaction it serves goes to that
+call; a frame of any other transaction starts a call only if it is a data
+frame without `continuation`; every other frame is dropped**. The target
+keeps nothing per ended or refused call: 0 entries, at any rate of calls.
+A caller older than this field marks nothing; its late frames still start
+a call (mutant `CL:old-caller`), as before; an old target ignores the
+field. No other wire change.
+
+The refusal of a call at its first frame (`refuseCall` from the new-call
+branch, which kept its entry: finding CL2) is gone: a fresh call's credit
+(`link.Credit.Open`: nothing held, window `RequestWindow` >= 1) and buffer
+(`RequestWindow+1`) always take its first frame
+(`TestFirstFrameFitsAFreshCall`).
+
+Invariants: `AtMostOneCall` (a transaction runs at most one handler
+call), `NoEndedEntry` (`incoming` holds only calls whose handler runs: the
+memory bound); liveness `AllServed` (a call whose first frame was sent
+gets its handler call or its refusal). Mutants, each caught:
+`CL:late-new-call` (the code before: `AtMostOneCall`), `CL:old-caller`
+(`AtMostOneCall`), `CL:tombstone` (an ended call keeps its entry:
+`NoEndedEntry`), `CL:refused-first-kept` (the code before for a refused
+first frame: `NoEndedEntry`), `CL:drop-unknown` (every frame of an
+unknown transaction dropped: `AllServed`). Witnesses, each violated:
+`W_LateFrame`, `W_LateData` (a data frame of a call whose handler
+returned reaches the target), `W_BothRun`. `CallLifecycle.cfg` (2 calls,
+2 data frames each, request ends and cancels; a `Send` that took its
+credit before its caller left may follow the cancel): 45,421 distinct
+states, depth 19, every action taken (`-coverage 1`), about 3 s.
+
+| action | Go |
+|---|---|
+| `Send(t)`, `CloseSend(t)`, `Cancel(t)` | `clientStream.sendMsg` (sets `continuation`), `resendEarly`, `CloseSend`, `sendCancel` |
+| `Serve` | `Agent.handleRequest`: a frame of a served call (`pushRequest`); `handleMessage`'s cancel of a served call |
+| `Start` | `Agent.handleRequest`'s new-call branch; `handleE2EEInit`, `handleE2EEInit0RTT` |
+| `Drop` | `Agent.handleRequest`: an empty EOM or a `continuation` of an unknown transaction; a cancel of one |
+| `Refuse` | no handler; `refusesPlaintext`; a bad or unanswered E2EE init |
+| `Return(t)` | `Agent.endServed` (from `handleCall`) |
+
+| assumption | source |
+|---|---|
+| A call's frames reach its target in the order its caller sent them | the gRPC streams (grpc.io "Core concepts: streaming"); relay-core `dispatcher_agent_routing.go` (one route per call) |
+| The receive loop takes one frame at a time (`recvLoop` -> `handleMessage`) | `a2a.go` `recvLoop` |
+| A caller marks every request data frame after its call's start | `client_stream.go` `sendMsg`, `resendEarly` (this lane); older callers do not (`CL:old-caller`) |
+
+### CallLifecycle traces
+
+With `-tags relaytrace` and `RELAYTRACE=<dir>`, `client/rpcclient`
+(`trace_callcredit_on.go` `traceCL`) writes every agent's target-side
+steps of the process to `calllifecycle-<pid>.ndjson`: `Serve`, `Start`,
+`Drop`, `Refuse` (the receive loop took a request frame: its kind and
+`continuation`) and `Return`. The receive loop's decision and its line,
+and `endServed`'s delete and its line, are taken under one lock
+(`clLock`), so the file's order is the order the entries changed.
+`TraceCallLifecycle.tla` checks each transaction of each agent (`a`, its
+address) alone; the caller's steps are TLC's, taken only when the next
+logged step needs them. A transaction no frame of which is marked is
+checked with an old caller (`Mutant = "old-caller"`): tests that play the
+caller by hand send unmarked frames; `AtMostOneCall` still holds for them.
+`make spec-traces` runs `client/rpcclient`'s tests (`CL_TRACE_TESTS`,
+default all) with the recorder and checks every transaction: 72
+transactions accepted, 0 rejected; every action taken (`Start` 53,
+`Return` 53, `Serve` 78, `Drop` 47, `Refuse` 13). Rejected fixtures:
+`reject-calllifecycle-late-new-call.ndjson` (a second `Start` from a
+continuation after `Return`: the code before),
+`reject-calllifecycle-tombstone.ndjson` (a frame served after `Return`).
+
+### Findings (lane CONFORM6-RELAY, 2026-11-05)
+
+| id | severity | finding | status |
+|---|---|---|---|
+| CL1 | medium | a request frame that reached the target after its call's handler returned started a second handler call for the transaction (code diverged from `CallCredit.tla`'s `End`) | fixed: `continuation` mark and the rule above; `TestLateRequestFrameStartsNoCall`, `TestEndedAndRefusedCallsLeaveNoEntry` (red before: 2 handler calls for one call; 20 entries left by late frames) |
+| CL2 | low | a call refused at its first frame kept its entry (one per refusal) | unreachable (a fresh call always takes its first frame); the refusal deleted; `TestFirstFrameFitsAFreshCall` |
+
+### Code map (CallLifecycle.tla)
+
+| actions | code |
+|---|---|
+| `Serve`, `Start`, `Drop`, `Refuse`, `Return` | client/rpcclient/a2a.go, client/rpcclient/a2a_e2ee_agent.go |
+| `Send`, `CloseSend`, `Cancel` | client/rpcclient/client_stream.go |
+| the mark | proto/pb/service.proto |
+| trace recorder | client/rpcclient/trace_callcredit_on.go |

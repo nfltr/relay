@@ -119,7 +119,7 @@ cctraces() {
 fail=0
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders"
+	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge"
 	for c in $cfgs; do
 		m=${c%Large}
@@ -202,6 +202,15 @@ mutants)
 	expect witness:BothWant -e 's/^    NoStrandedWaiter$/    W_BothWant/'
 	expect witness:GrantToWaiter -e 's/^    NoStrandedWaiter$/    W_GrantToWaiter/'
 	expect witness:WakeAll -e 's/^    NoStrandedWaiter$/    W_WakeAll/'
+	model=CallLifecycle
+	expect CL:late-new-call -e 's/Mutant = "none"/Mutant = "late-new-call"/'
+	expect CL:old-caller -e 's/Mutant = "none"/Mutant = "old-caller"/'
+	expect CL:tombstone -e 's/Mutant = "none"/Mutant = "tombstone"/'
+	expect CL:refused-first-kept -e 's/Mutant = "none"/Mutant = "refused-first-kept"/'
+	expect CL:drop-unknown -e 's/Mutant = "none"/Mutant = "drop-unknown"/'
+	expect witness:LateFrame -e 's/^    NoEndedEntry$/    W_LateFrame/'
+	expect witness:LateData -e 's/^    NoEndedEntry$/    W_LateData/'
+	expect witness:BothRun -e 's/^    NoEndedEntry$/    W_BothRun/'
 	exit $fail
 	;;
 cctraces)
