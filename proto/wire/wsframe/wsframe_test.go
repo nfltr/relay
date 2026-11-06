@@ -161,6 +161,9 @@ func TestMessageReaderViolations(t *testing.T) {
 		{"invalid UTF-8 close reason", frame(true, 0, 0x8, append(ClosePayload(1000), 0xff)), CloseInvalidPayload},
 		{"fragmented message over max", slices.Concat(frame(false, 0, 0x2, make([]byte, 150)), frame(true, 0, 0x0, make([]byte, 60))), CloseTooBig},
 		{"frame over max", frame(true, 0, 0x2, make([]byte, 201)), CloseTooBig},
+		// F-25: a 64-bit length with its top bit set is not a length (RFC
+		// 6455 §5.2): refused, never read as its low 63 bits.
+		{"64-bit length, top bit set", append([]byte{0x82, 0x7F, 0x80, 0, 0, 0, 0, 0, 0, 2}, "hi"...), CloseProtocolError},
 	} {
 		_, _, err := readAll(tc.wire, 200)
 		if ce, ok := errors.AsType[*CloseError](err); !ok || ce.Code != tc.code {

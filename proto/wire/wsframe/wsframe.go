@@ -47,7 +47,11 @@ func ReadHeader(r *bufio.Reader) (Header, error) {
 		if b, err = next(r, 8); err != nil {
 			return h, err
 		}
-		h.Len = int64(binary.BigEndian.Uint64(b) & (1<<63 - 1))
+		n := binary.BigEndian.Uint64(b)
+		if n>>63 != 0 { // RFC 6455 §5.2: the most significant bit must be 0
+			return h, protocolError("64-bit payload length with the top bit set")
+		}
+		h.Len = int64(n)
 	}
 	if h.Masked {
 		if b, err = next(r, 4); err != nil {
