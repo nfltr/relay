@@ -1,0 +1,140 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   p2p_e2e.pv: a P2P session's end-to-end keys (nfltr p2p call, send, recv;
+   the browser call page). spec/proverif/README.md "p2p_e2e.pv".
+
+   The attacker owns the relay (offer, answer, confirmation, every signaling
+   frame and the relay data path), the direct paths, TURN and the network;
+   with two relays it owns both. The browser's DTLS-SRTP (media, data
+   channels) is not re-proven: an ideal channel to the holder of the DTLS
+   key whose fingerprint the other end checked (RFC 5763, RFC 8827). What is
+   modelled is ours: the ephemeral X25519 exchange through the relay, the
+   HKDF psalt (pairing key), the transcript, the key confirmation, the
+   fingerprint the users compare, the sealed signaling that carries the SDP
+   (and so the DTLS fingerprint), and the protocol check.
+
+   Code (github.com/nfltr/relay unless named):
+     client/p2p/e2e.go:67-73       fresh ephemeral X25519 per side
+     client/p2p/e2e.go:97-106      th = SHA-256("nfltr-p2p-e2e-v1" sid ipub rpub); prk = HKDF-Extract(shared, psalt=pairing)
+     client/p2p/e2e.go:113-120     every key = HKDF-Expand(prk, label || th)
+     client/p2p/e2e.go:132-148     confirm = HMAC(k_confirm, role); checkConfirm
+     client/p2p/e2e.go:152-156     Fingerprint (80 bits) the CLIs print
+     client/p2p/e2e.go:160-206     Answer, FinishOffer, AwaitConfirm
+     client/p2p/e2e.go:340-386     sealed signaling frames (the SDP)
+     client/p2p/rtcdata.go:109     no data path without E2E
+     nfltr cmd/nfltr/internal/transportcli/p2p_session.go:199  answer.Proto < SignalProto refused
+     nfltr cmd/nfltr/internal/transportcli/p2p_transfer.go:314 offer.Proto < SignalProto refused *)
+
+free c: channel.
+free oob: channel [private].        (* the two users reading their fingerprints to each other *)
+
+type exponent.
+type G.
+const g: G [data].
+fun exp(G, exponent): G.
+equation forall x: exponent, y: exponent; exp(exp(g, x), y) = exp(exp(g, y), x).
+
+type psalt.
+fun saltOf(bitstring): psalt.        (* rpcclient LoadA2AE2EEPairingKey *)
+const noSalt: psalt.                  (* no pairing key: HKDF psalt nil *)
+fun hkdfExtract(G, psalt): bitstring.
+fun th(bitstring, G, G): bitstring.
+fun hkdfExpand(bitstring, bitstring, bitstring): bitstring.
+fun hmac(bitstring, bitstring): bitstring.
+fun senc(bitstring, bitstring): bitstring.
+reduc forall m: bitstring, k: bitstring; sdec(senc(m, k), k) = m.
+
+(* DTLS: the browser's certificate key and its fingerprint in the SDP *)
+type dkey.
+fun dpk(dkey): bitstring.
+fun dfp(bitstring): bitstring.
+fun denc(bitstring, bitstring): bitstring.
+reduc forall m: bitstring, k: dkey; ddec(denc(m, dpk(k)), k) = m.
+
+const lConfirm, lFp, lData, lSignal, rInit, rResp: bitstring.
+const proto4, proto3: bitstring.     (* SignalProto and an older one *)
+
+free dataPaired, dataUnpaired, mediaPaired, mediaUnpaired: bitstring [private].
+
+event InitDone(psalt, bitstring, G, G).          (* psalt, sid, ipub, rpub *)
+event RespDone(psalt, bitstring, G, G).
+event InitSend(psalt, bitstring, G, G, bitstring).
+event RespRecv(psalt, bitstring, G, G, bitstring).
+event RespFpMatch(psalt, bitstring, G, G).
+
+let Initiator(s: psalt, sid: bitstring, data: bitstring, media: bitstring) =
+  new x: exponent;
+  out(c, (sid, exp(g, x), proto4));                     (* offer *)
+  in(c, (rpub: G, tagR: bitstring, proto: bitstring));  (* answer, through the relay *)
+  if proto = proto4 then                                 (* p2p_session.go:199 *) (* NOT:old-protocol-plaintext *)
+  if proto = proto3 then out(c, data) else (* ONLY:old-protocol-plaintext *)
+  if rpub <> g then                                      (* ECDH refuses a low-order point, e2e.go:92 *)
+  let prk = hkdfExtract(exp(rpub, x), s) in (* NOT:no-pairing-salt *)
+  let prk = hkdfExtract(exp(rpub, x), noSalt) in (* ONLY:no-pairing-salt *)
+  let t = th(sid, exp(g, x), rpub) in
+  if tagR = hmac(hkdfExpand(prk, lConfirm, t), rResp) then  (* FinishOffer *)
+  event InitDone(s, sid, exp(g, x), rpub);
+  out(c, hmac(hkdfExpand(prk, lConfirm, t), rInit));
+  (out(oob, (sid, hkdfExpand(prk, lFp, t))) | (     (* the fingerprint it prints; never waits *)
+  event InitSend(s, sid, exp(g, x), rpub, data);
+  out(c, senc(data, hkdfExpand(prk, lData, t)));            (* Secure on any path *)
+  (* the browser's DTLS fingerprint, in a sealed signaling frame *)
+  in(c, sdp: bitstring);
+  let fpPeer = sdec(sdp, hkdfExpand(prk, lSignal, t)) in (* NOT:sdp-not-sealed *)
+  let fpPeer = sdp in (* ONLY:sdp-not-sealed *)
+  in(c, peerDtls: bitstring);                           (* the DTLS handshake, via TURN *)
+  if dfp(peerDtls) = fpPeer then (* NOT:accept-any-dtls *)
+  if true then (* ONLY:accept-any-dtls *)
+  out(c, denc(media, peerDtls)))).
+
+let Responder(s: psalt, d: dkey) =
+  in(c, (sid: bitstring, ipub: G, proto: bitstring));
+  if proto = proto4 then                                 (* p2p_transfer.go:314 *)
+  if ipub <> g then
+  new y: exponent;
+  let prk = hkdfExtract(exp(ipub, y), s) in
+  let t = th(sid, ipub, exp(g, y)) in
+  out(c, (exp(g, y), hmac(hkdfExpand(prk, lConfirm, t), rResp), proto4));
+  in(c, tagI: bitstring);
+  if tagI = hmac(hkdfExpand(prk, lConfirm, t), rInit) then  (* AwaitConfirm *) (* NOT:skip-await-confirm *)
+  if true then (* ONLY:skip-await-confirm *)
+  event RespDone(s, sid, ipub, exp(g, y));
+  (
+    (in(oob, (=sid, f: bitstring));
+     if f = hkdfExpand(prk, lFp, t) then event RespFpMatch(s, sid, ipub, exp(g, y))) (* NOT:fingerprint-not-compared *)
+     if true then event RespFpMatch(s, sid, ipub, exp(g, y))) (* ONLY:fingerprint-not-compared *)
+  | (in(c, e: bitstring);
+     let m = sdec(e, hkdfExpand(prk, lData, t)) in
+     event RespRecv(s, sid, ipub, exp(g, y), m))
+  | out(c, senc(dfp(dpk(d)), hkdfExpand(prk, lSignal, t)))
+  ).
+
+(* paired: secret data and media, injective agreement both ways *)
+(* expect true *)
+query attacker(dataPaired).
+(* expect true *)
+query attacker(mediaPaired).
+(* expect true *)
+query sid: bitstring, i: G, r: G, m: bitstring, k: bitstring;
+  inj-event(RespRecv(saltOf(k), sid, i, r, m)) ==> inj-event(InitSend(saltOf(k), sid, i, r, m)).
+(* expect true *)
+query sid: bitstring, i: G, r: G, k: bitstring;
+  inj-event(RespDone(saltOf(k), sid, i, r)) ==> inj-event(InitDone(saltOf(k), sid, i, r)).
+(* unpaired: the relay in the middle reads the data (documented) ... *)
+(* expect false *)
+query attacker(dataUnpaired).
+(* ... but cannot make the two fingerprints equal: equal fingerprints mean
+   both ends hold the same two keys (computationally: an 80-bit second
+   preimage, one side's fingerprint being fixed before the relay picks its
+   second key) *)
+(* expect true *)
+query s: psalt, sid: bitstring, i: G, r: G;
+  event(RespFpMatch(s, sid, i, r)) ==> event(InitDone(s, sid, i, r)).
+
+process
+  new k: bitstring; new d1: dkey; new d2: dkey;
+  (
+    (!new sid: bitstring; Initiator(saltOf(k), sid, dataPaired, mediaPaired)) | (!Responder(saltOf(k), d1))
+  | (!new sid: bitstring; out(c, sid); Initiator(noSalt, sid, dataUnpaired, mediaUnpaired)) | (!Responder(noSalt, d2))
+  )

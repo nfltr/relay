@@ -200,6 +200,98 @@ and `TestA2AE2EE0RTTRegisterBounded`. A TLA+ model of the register is open
   by its mutant). A revoked machine itself learns nothing: frames a root
   holder sealed before the revoke still open there, which is harmless.
 
+## E2EE paths: pinned TCP, WireGuard, P2P (lane E2EEPROOF, 2026-11-07)
+
+`e2ee_tcp.pv`, `wg_exit.pv` and `p2p_e2e.pv` model the other E2EE paths
+whose ends live in this repository (Part 3 of `expect.txt`); nfltr's
+`docs/e2ee.md` "Formal proofs" is the overview of every path. The
+attacker owns every relay: with two relays (each end on another relay or
+replica, the replica link between them, a relay rerouting a session to a
+third machine) one Dolev-Yao attacker plays all of them, which is the
+colluding case and so covers each relay hostile alone. A query that holds
+holds for two relays too; none needs one relay.
+
+Not re-proven: TLS 1.3, WireGuard's Noise IKpsk2, DTLS-SRTP. Each is an
+ideal channel to the holder of the key its end checked (citations in each
+model and below). Modelled is ours: where each end gets the other's key or
+fingerprint, the check, the pairing key, rotation, the plaintext
+fallbacks a relay could steer to. An F on a model's base line is a
+documented limit or a finding (nfltr's LEFTOVERS, lane E2EEPROOF).
+
+### e2ee_tcp.pv: pinned TCP sessions (Track A)
+
+`nfltr dial|tcp-connect|ssh-proxy --pin`, `pin:` on a `connect:` mapping,
+to an agent ending TLS with its E2EE certificate (`Config.TCPE2EEOnly`, a
+service table's `e2ee: true` service).
+
+| # | query | result |
+|---|---|---|
+| 1 | payload secret (pin from the agent's own output, target fixed by the agent) | holds |
+| 2 | injective agreement: a response the client accepts came from the pinned key in that session | holds |
+| 3 | `nfltr tcp --e2ee` without `--forward`: payload secret | **attack**: the relay names the target, the agent sends the client's plaintext there (finding) |
+| 4 | rotation: the old key leaks; a client pinned to the new certificate | holds |
+| 5 | ... a client still pinned to the old certificate | attack: a rotation revokes no pin; re-pin |
+| 6 | first use: a pin taken from what the relay shows (dashboard), or an SSH host key on first use (`nfltr shell`: OpenSSH known_hosts; a new key every start without `--host-key`) | attack |
+| 7 | the agent's service against the relay | attack: no client authentication; E2EE only is not access control against the relay |
+
+Mutants: skip the pin check, a relay-supplied pin, plaintext when the relay
+gives no answer, the relay's target despite `--forward`, accept a response
+without the session key.
+
+### wg_exit.pv: WireGuard client and exit (Track B)
+
+| # | query | result |
+|---|---|---|
+| 1 | paired (`--e2ee-key-file` on both): payload secret | holds |
+| 2 | paired: injective agreement exit <- client on both keys and the payload | holds |
+| 3 | unpaired: payload secret | attack: the relay hands each end its own key (documented) |
+| 4 | one pairing file on two exits, the relay reroutes a client to the other: payload secret | holds |
+| 5 | ... the exit that got it is the one the client named | **attack**: the preshared key names a group, not an exit (finding) |
+| 6 | one client's pairing file leaked: another client's payload | attack: the pairing file is a group secret |
+
+`x-wg-paired` is advisory: each end applies its own preshared key whatever
+the relay says. Mutants: drop the preshared key on the relay's word, no
+preshared key at the client, none at the exit.
+
+### p2p_e2e.pv: P2P sessions (calls, file transfer, the call page)
+
+| # | query | result |
+|---|---|---|
+| 1 | paired: data secret | holds |
+| 2 | paired: browser media secret (DTLS fingerprint in a sealed signaling frame) | holds |
+| 3 | paired: injective agreement responder <- initiator on sid, both keys, data | holds |
+| 4 | paired: injective agreement on the key confirmation | holds |
+| 5 | unpaired: data secret | attack: the relay in the middle (documented) |
+| 6 | unpaired: equal fingerprints on both machines imply the same two keys | holds |
+
+Query 6 is symbolic; computationally it is an 80-bit second preimage (one
+side's fingerprint is fixed before the relay picks its second key).
+Mutants: no pairing salt, skip the responder's confirmation check, old
+protocol in plaintext, accept any DTLS fingerprint, the SDP unsealed,
+fingerprints not compared. Below the model (nonces are not symbolic): a
+SignalConn frame no path took gives its sequence number back
+(`sigconn.go` `sendSeq--`), so a frame partly written before its error is
+followed by another sealed under the same nonce (finding, LEFTOVERS).
+
+### First use
+
+| path | what the first contact trusts |
+|---|---|
+| pinned TCP | the fingerprint the agent printed, carried by the user; never the relay's |
+| `nfltr shell` | OpenSSH's first-use prompt; every start without `--host-key` is a first use |
+| WireGuard unpaired | the relay, on every connect; paired: the pairing file, copied out of band |
+| P2P unpaired | the relay, unless the users compare the fingerprints; paired: the pairing file |
+
+### Environment assumptions of these paths
+
+| assumption | source |
+|---|---|
+| TLS 1.3 with a checked server key is an authenticated channel; no resumption skips the pin check | Cremers et al., IEEE S&P 2017; Bhargavan et al., IEEE S&P 2017; `e2eeTLSConfig` sets no session cache |
+| Noise IKpsk2 gives a key only to the holder of the peer key it used and the same psk | Donenfeld and Milner 2017 (Tamarin); Dowling and Paterson, ACNS 2018; Lipp, Blanchet and Bhargavan, EuroS&P 2019 |
+| DTLS-SRTP keys only the holder of the fingerprinted certificate | RFC 5763, RFC 8827 |
+| X25519 refuses low-order points | Go `crypto/ecdh` (`ECDH` errors on the all-zero output) |
+| SHA-256, HKDF, HMAC, AES-GCM are ideal | standard; nonces unique per key (see the SignalConn finding) |
+
 ## Code map
 
 | model | code |
@@ -209,3 +301,12 @@ and `TestA2AE2EE0RTTRegisterBounded`. A TLA+ model of the register is open
 | responder policy | client/rpcclient/a2a_e2ee_agent.go |
 | frames on the streams | client/rpcclient/client_stream.go, client/rpcclient/server_stream.go |
 | runner, prover pin | spec/proverif/run.sh, scripts/fetch-proverif.sh |
+| e2ee_tcp.pv | client/relaytrust/relaytrust.go |
+| e2ee_tcp.pv | client/agent/session_plan.go |
+| e2ee_tcp.pv | client/agent/tls.go |
+| wg_exit.pv | client/wg/keys.go |
+| wg_exit.pv | client/wg/tunnel.go |
+| wg_exit.pv | client/agent/wgexit/wgexit.go |
+| wg_exit.pv | proto/wire/wgwire/wgwire.go |
+| p2p_e2e.pv | client/p2p/e2e.go |
+| p2p_e2e.pv | client/p2p/rtcdata.go |
