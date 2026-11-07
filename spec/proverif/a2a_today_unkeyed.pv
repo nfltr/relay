@@ -1,3 +1,7 @@
+(* Wire v1, removed (lines cite relay 3977c04). Wire v2 without a key is
+   Noise NN (a2a_e2ee.go newA2AE2EEHandshake without a psk): the same
+   attack, pinned by TestA2AE2EEWithoutPairingKeyIsOpenToAnActiveRelay. *)
+
 (* A2A E2EE without a pairing key (client/rpcclient a2a_e2ee.go: an
    unkeyed end sends a bare X25519 key, :162-175, and derives the v1
    session key SHA-256("nfltr-a2a-e2ee-v1" || shared), :509): nothing

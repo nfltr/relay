@@ -29,8 +29,8 @@ and pin.
 |---|---|
 | X25519 is a Diffie-Hellman group (CDH hard, small-subgroup keys refused) | RFC 7748; Go `crypto/ecdh` rejects the all-zero shared secret |
 | HMAC-SHA256 and HKDF-SHA256 are PRFs; SHA-256 collision resistant | RFC 2104, RFC 5869 |
-| AES-256-GCM is an AEAD; random 96-bit nonces do not repeat under one key | NIST SP 800-38D (2^32 messages per key) |
-| Noise NKpsk0 / NNpsk0 as specified | Noise Protocol Framework rev. 34, `github.com/flynn/noise` |
+| AES-256-GCM is an AEAD; a nonce never repeats under one key (v1: random 96-bit nonces; v2: Noise's 64-bit counter per direction) | NIST SP 800-38D (2^32 random-nonce messages per key); Noise rev. 34 §5.1 |
+| Noise NNpsk0 / NN as specified | Noise Protocol Framework rev. 34, `github.com/flynn/noise` |
 | the HMAC input encoding `label 0 txn 0 keys` is injective | the labels are prefix-free; the keys after the second 0 have fixed length (`a2a_e2ee.go` `a2aE2EEPairingTag`) |
 | a call's frames reach the other end in order, unless the relay misbehaves | gRPC stream per agent, relay-core sessions (relied on by v2's counters only) |
 | the root pairing key and machine keys never pass through a relay | nfltr `a2akeys`: files made on a root holder, copied out of band |
@@ -39,11 +39,14 @@ and pin.
 
 | file | what |
 |---|---|
-| `a2a_today.pv` | today: interactive handshake, frames, machine keys, revoke; root holder R on relay X, machines B, E (honest), C (leaked), D (leaked, revoked at phase 1) on relay Y |
-| `a2a_today_0rtt.pv` | today: the 0-RTT first flight (Noise NKpsk0 to the label's static key) |
-| `a2a_today_unkeyed.pv` | today without a pairing key |
-| `a2a_machine.pv` | Part 2, wire v2: Noise NNpsk0 under the owner-derived machine key, key id from the called agent id, prologue binding txn, caller, callee and key id, per-direction counter keys, authenticated end |
-| `a2a_machine_0rtt.pv` | Part 2, wire v2: the 0-RTT flight with the same bindings |
+| `a2a_today.pv` | wire v1 (removed; relay 3977c04, the findings' evidence): interactive handshake, frames, machine keys, revoke; root holder R on relay X, machines B, E (honest), C (leaked), D (leaked, revoked at phase 1) on relay Y |
+| `a2a_today_unkeyed.pv` | wire v1 without a pairing key (v2's unkeyed Noise NN has the same attack) |
+| `a2a_machine.pv` | wire v2, what `client/rpcclient` ships: Noise NNpsk0 under the owner-derived machine key, key id from the called agent id, prologue binding txn, caller, callee and key id, per-direction counter keys, authenticated end; each rule cites its code |
+
+Wire v2 is interactive only: v1's 0-RTT first flight (Noise NK to a
+static key advertised as a connect label, its replay register and NK's
+early-data limit) is gone, with its models (lane A2AV2, the hub's default;
+cost: one more round trip per E2EE call).
 
 Two relays (the owner's 2026-11-07 addition): caller on X, callee on Y,
 frames over the link (today the replica link, `relay-server`
@@ -78,7 +81,7 @@ completes.
 
 ## Queries and results
 
-`a2a_today.pv` (positions in `expect.txt`):
+`a2a_today.pv`, wire v1 (positions in `expect.txt`):
 
 | # | query | today |
 |---|---|---|
@@ -95,23 +98,10 @@ completes.
 | 11 | no handshake of revoked D answered after the revoke | T (mutant `skip-peer-revoke`: F) |
 | 12-13 | witnesses: R gets B's response; R gets B's request | F (reachable) |
 
-`a2a_today_0rtt.pv`:
-
-| # | query | today |
-|---|---|---|
-| 1 | secrecy of R's early request to B | **F** (F3: C's label for B's agent id) |
-| 2 | secrecy of B's response | T |
-| 3 | B took request x on txn t only if R sent it there (non-injective) | T |
-| 4 | the same, injective | **F**: NK 0-RTT is replayable by design (below) |
-| 5 | R's peer is the machine the label's key id names | T |
-| 6 | R's peer is the target R called | **F** (F3) |
-| 7 | what R reads as the response, the label's machine sent (one key per direction) | T |
-| 8 | witness: R gets B's response | F (reachable) |
-
 `a2a_today_unkeyed.pv`: secrecy of the request **F**, agreement **F**: the
 relay runs one handshake with each end (F4, expected); witness F.
 
-`a2a_machine.pv` (Part 2), every variant and `leak` (phase 2 leaks the
+`a2a_machine.pv` (wire v2), every variant and `leak` (phase 2 leaks the
 root key, so every machine key: forward secrecy of all earlier calls):
 
 | # | query | v2 | fails under mutant |
@@ -121,18 +111,11 @@ root key, so every machine key: forward secrecy of all earlier calls):
 | 6 | R as callee: the caller it answered as machine n is n, on that txn and key (non-injective: msg1 replays, and gets no frame accepted, 8) | T | `drop-psk`, `relay-cert`, `drop-txn` |
 | 7 | each request B handles was sent once by R | T | `drop-psk`, `relay-cert`, `drop-txn` |
 | 8 | each request R handles under B's key id was sent once by B | T | `drop-psk`, `relay-cert`, `drop-txn` |
-| 9 | no reflection | T | `drop-psk`, `relay-cert`, `drop-txn`, `no-target-check` |
-| 10 | the end of a stream is the sender's | T | `drop-psk`, `relay-cert`, `drop-txn` |
+| 9 | no reflection | T | `drop-psk`, `relay-cert`, `drop-txn`, `no-target-check`, `one-key` (F1) |
+| 10 | the end of a stream is the sender's | T | `drop-psk`, `relay-cert`, `drop-txn`, `clear-end` (F2) |
 | 11 | no frame of revoked D after the revoke | T | `skip-revoke` |
 | 12 | no handshake of revoked D after the revoke | T | `skip-revoke` |
 | 13-15 | witnesses: R gets B's response, B's request, B gets R's end | F (reachable) | |
-
-`a2a_machine_0rtt.pv` (Part 2): the today queries, now 1 T, 4 F (by
-design, as today), 6 T; `leak` (B's machine key leaks after the calls):
-1 T; `leak-static` (B's machine key and its process's static key leak):
-1 **F**, as NK specifies (early data is protected by the responder's
-static key, not forward secret against its compromise; the static key is
-held in memory only, per process); `no-target-check`: 1 and 6 F.
 
 `expect.txt` lists every result exactly, mutants included (a mutant
 also fails queries it does not target, e.g. `drop-txn` breaks agreement
@@ -140,34 +123,24 @@ everywhere but not secrecy).
 
 Conformance: these are symbolic models of a message exchange, not state
 machines, so there is no trace recorder; the code is tied to the model by
-its key-schedule vectors (`TestA2AE2EE0RTTKeyScheduleVectors`; v2 adds
-`TestA2AE2EEv2Vectors`) and by the code map below (the drift check makes
-a change to those files update the models or carry `Spec-Reviewed`).
-Runtime: about 9 CPU minutes for all lines (490 s user on a Mac at load
-average 40-60), most of it the four `a2a_machine_0rtt` lines; lines run
-side by side (`PROVERIF_JOBS`).
+its wire vectors (`TestA2AE2EEv2Vectors`: prologue, psk, both handshake
+messages and the first frames of each direction, the model's term beside
+each), by each rule's file:line citation in `a2a_machine.pv`, by one test
+per finding (`client/rpcclient/a2a_e2ee_v2_test.go`: F1
+`TestA2AE2EERefusesReflectedFrame`; F2 `TestA2AE2EERefusesReplayedFrame`,
+`TestA2AE2EERefusesDroppedFrame`, `TestA2AE2EERefusesForgedEnd`; F3
+`TestA2AE2EERefusesReroute`; each fails on v1) and by the code map below
+(the drift check makes a change to those files update the models or carry
+`Spec-Reviewed`). Runtime: about 4 CPU minutes for all lines (229 s user,
+82 s wall on a Mac at load average 7-10); lines run side by side
+(`PROVERIF_JOBS`).
 
-## 0-RTT replay
-
-A first flight is replayable by design (query 4). What the code does
-about it (`client/rpcclient/a2a_e2ee_0rtt.go`): every flight's ephemeral
-key is burned in a per-process register before anything else is judged
-(`accept`, `burn`), for two windows; the timestamp must be within 60 s
-(`a2aE2EE0RTTWindow`); the static key is per process and in memory only, so
-a restarted agent refuses old flights as stale; a full register refuses
-everything for two windows (busy); a refusal for replay is never retried
-by the caller (`takeRetry`). So a flight is taken at most once by the
-process it was made for, and never by another. The register is a stateful
-check ProVerif does not model; its tests are `TestA2AE2EE0RTTReplayAndTamperRefused`
-and `TestA2AE2EE0RTTRegisterBounded`. A TLA+ model of the register is open
-(nfltr `LEFTOVERS.md` A2AID).
-
-## Findings (lane A2AID, 2026-11-07; open, fixed by wire v2)
+## Findings (lane A2AID, 2026-11-07; F1-F3 and F5 fixed by wire v2, lane A2AV2)
 
 - **F1 (medium) reflection.** The interactive handshake derives one
   session key for both directions and frames carry only the txn as AAD
   (`a2a_e2ee.go` `deriveA2AE2EESessionKey`, `encrypt`/`decrypt`,
-  `a2aE2EEAAD`); a 0-RTT call that falls back keeps that key (`adopt`). The
+  `a2aE2EEAAD`); a 0-RTT call that fell back kept that key (`adopt`). The
   relay returns a frame to its sender, which opens it as the peer's: a
   caller reads its own request as the response, a handler its own response
   as a new request. Traces: `a2a_today` queries 7 and 9.
@@ -184,13 +157,14 @@ and `TestA2AE2EE0RTTRegisterBounded`. A TLA+ model of the register is open
   target agent id, and the tags do not cover it. A relay reroutes a call to
   another machine of the owner unnoticed; with any one compromised machine
   key, the relay plus that machine read every request a root holder sends
-  to any machine (a 0-RTT label may even claim another agent's name under
-  the compromised key). Traces: `a2a_today` 1, 6; `a2a_today_0rtt` 1, 6.
-- **F4 (expected) no pairing key, no authentication.** Without a pairing
-  key or keyring the relay runs a handshake with each end
-  (`a2a_today_unkeyed`; `TestA2AE2EEWithoutPairingKeyIsOpenToAnActiveRelay`).
-  The docs must say that E2EE without a key protects only against a
-  passive relay.
+  to any machine (a 0-RTT label could even claim another agent's name
+  under the compromised key). Traces: `a2a_today` 1, 6 (and v1's 0-RTT
+  model, removed with the flight).
+- **F4 (expected, unchanged in v2) no pairing key, no authentication.**
+  Without a pairing key or keyring the relay runs a handshake with each end
+  (`a2a_today_unkeyed`; v2's Noise NN the same,
+  `TestA2AE2EEWithoutPairingKeyIsOpenToAnActiveRelay`). The docs must say
+  that E2EE without a key protects only against a passive relay.
 - **F5 (low)** a machine answers a root holder's init (key id "") without
   checking its tag (`newServerA2AE2EEState`): authentication is implicit
   (no frame of such a call decrypts for anyone without the machine's key,
@@ -297,9 +271,9 @@ followed by another sealed under the same nonce (finding, LEFTOVERS).
 | model | code |
 |---|---|
 | handshake, keys, frames | client/rpcclient/a2a_e2ee.go |
-| 0-RTT flight, label, register, retry | client/rpcclient/a2a_e2ee_0rtt.go |
 | responder policy | client/rpcclient/a2a_e2ee_agent.go |
-| frames on the streams | client/rpcclient/client_stream.go, client/rpcclient/server_stream.go |
+| frames on the streams, the end of a served call, v1 refused | client/rpcclient/client_stream.go, client/rpcclient/server_stream.go, client/rpcclient/a2a.go |
+| one test per finding, wire vectors | client/rpcclient/a2a_e2ee_v2_test.go |
 | runner, prover pin | spec/proverif/run.sh, scripts/fetch-proverif.sh |
 | e2ee_tcp.pv | client/relaytrust/relaytrust.go |
 | e2ee_tcp.pv | client/agent/session_plan.go |

@@ -1,16 +1,17 @@
 # <model> <flags> <results>: run.sh. T holds, F attack, ? not proved.
 # The query of each position is in README.md "Queries and results".
 #
-# Part 1: today's protocol (an F is a finding, README "Findings").
+# Part 1: wire v1, removed (an F is a finding, README "Findings"; kept as
+# their evidence).
 a2a_today_unkeyed - FFF
-a2a_today_0rtt - FTTFTFTF
 a2a_today - FTTTTFF?FTTFF
 a2a_today skip-valid FTTTTFF?FFTFF
 a2a_today skip-peer-revoke FTTTTFF?FTFFF
 #
-# Part 2: on the machine identity (wire v2). Every query holds; each
-# mutant fails the ones it targets. With X's hops private ProVerif finds no
-# trace for the first witness (?): it is reachable in the other variants.
+# Part 2: wire v2, on the machine identity, what client/rpcclient ships.
+# Every query holds; each mutant fails the ones it targets. With X's hops
+# private ProVerif finds no trace for the first witness (?): it is
+# reachable in the other variants.
 a2a_machine - TTTTTTTTTTTTFFF
 a2a_machine honestX TTTTTTTTTTTT?FF
 a2a_machine honestY TTTTTTTTTTTTFFF
@@ -21,10 +22,10 @@ a2a_machine drop-txn TTTTFFFFFFTTFFF
 a2a_machine skip-revoke TTTTTTTTTTFFFFF
 a2a_machine relay-cert FFFFFFFFFFTTFFF
 a2a_machine no-target-check FTTTFTTTFTTTFFF
-a2a_machine_0rtt - TTTFTTTF
-a2a_machine_0rtt leak TTTFTTTF
-a2a_machine_0rtt leak-static FTTFTTTF
-a2a_machine_0rtt no-target-check FTTFTFTF
+# wire v1's findings put back: F1 (one key both ways) fails no reflection
+# (9; 7, 8 not proved), F2 (the end in the clear) fails the authenticated end (10).
+a2a_machine one-key TTTTTT??FTTTFFF
+a2a_machine clear-end TTTTTTTTTFTTFFF
 #
 # Part 3: the agent-side E2EE paths (e2ee_tcp: pinned TCP; wg_exit:
 # WireGuard client and exit; p2p_e2e: p2p). Queries in README "E2EE paths";

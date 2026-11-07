@@ -226,11 +226,11 @@ with `github.com/nfltr/link`'s `Credit` counting frames instead of bytes:
   window, the peer's the request window) and calls it serves (the other
   way round). The call's transaction id is the session id.
 - A sender takes one credit per data frame before it queues it
-  (`clientStream.sendMsg`, `resendEarly`; `serverStream.Send`). The
+  (`clientStream.sendMsg`; `serverStream.Send`). The
   frame that ends a direction (the caller's `CloseSend`, the handler's
   `a2a-status`, the relay's `error`) takes none: each buffer has one slot
-  beyond its window for it. Control frames (E2EE handshake, 0-RTT first
-  flight, which carries its request outside the buffer, cancel) take none.
+  beyond its window for it. Control frames (E2EE handshake, cancel) take
+  none.
 - The receive loop charges each data frame (`Credit.Received`) and puts it
   in its call's buffer without waiting: credit guarantees room. A frame
   past the window is the peer breaking the rules: that call is refused
@@ -529,11 +529,11 @@ states, depth 19, every action taken (`-coverage 1`), about 3 s.
 
 | action | Go |
 |---|---|
-| `Send(t)`, `CloseSend(t)`, `Cancel(t)` | `clientStream.sendMsg` (sets `continuation`), `resendEarly`, `CloseSend`, `sendCancel` |
+| `Send(t)`, `CloseSend(t)`, `Cancel(t)` | `clientStream.sendMsg` (sets `continuation`), `CloseSend`, `sendCancel` |
 | `Serve` | `Agent.handleRequest`: a frame of a served call (`pushRequest`); `handleMessage`'s cancel of a served call |
-| `Start` | `Agent.handleRequest`'s new-call branch; `handleE2EEInit`, `handleE2EEInit0RTT` |
+| `Start` | `Agent.handleRequest`'s new-call branch; `handleE2EEInit` |
 | `Drop` | `Agent.handleRequest`: an empty EOM or a `continuation` of an unknown transaction; a cancel of one |
-| `Refuse` | no handler; `refusesPlaintext`; a bad or unanswered E2EE init |
+| `Refuse` | no handler; `refusesPlaintext`; a bad or unanswered E2EE init; a wire v1 E2EE init |
 | `Return(t)` | `Agent.endServed` (from `handleCall`) |
 
 | assumption | source |

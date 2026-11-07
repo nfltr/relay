@@ -1,6 +1,9 @@
-(* A2A E2EE on the machine identity, the design of
-   nfltr docs/decisions/a2a-machine-identity-2026-11-07.md (wire v2), as
-   TENANTS2 implements it in client/rpcclient. Interactive handshake.
+(* A2A E2EE wire v2 (nfltr docs/decisions/a2a-machine-identity-2026-11-07.md),
+   as client/rpcclient implements it: a2a_e2ee.go (handshake, frames),
+   a2a_e2ee_agent.go (the responder), client_stream.go and server_stream.go
+   (frames on the streams), a2a.go (the end of a served call); each rule
+   below cites its code (file:line, relay client/rpcclient). Interactive
+   only (wire v2 has no 0-RTT flight).
 
    Trust anchor: the owner's root pairing key, never a relay. A machine's
    key K_m = HKDF(root, machine id, generation) (nfltr a2akeys Derive), its
@@ -8,11 +11,21 @@
    id, the first label of every agent id the machine registers, so a caller
    derives the key id from the agent id it calls.
 
-   Handshake: Noise NNpsk0 (github.com/flynn/noise), psk = HMAC(K_kid,
-   "psk-v2"), prologue = v2 0 txn 0 caller agent id 0 callee agent id 0 key
-   id. -> psk, e (empty payload: its AEAD tag proves the psk); <- e, ee
-   (empty payload). Frames: Noise transport keys, one per direction, counter
-   nonces, AD = txn, plaintext = type || body with an authenticated END.
+   Handshake: Noise NNpsk0 (github.com/flynn/noise, a2a_e2ee.go:155
+   newA2AE2EEHandshake), psk = HMAC(K_kid, "nfltr-a2a-e2ee-v2-psk")
+   (:126), prologue = v2 0 txn 0 caller agent id 0 callee agent id 0 key
+   id (:135). -> psk, e (empty payload: its AEAD tag proves the psk); <- e,
+   ee (empty payload). The init carries caller, callee and key id in the
+   clear before message 1 (:238). Frames: Noise transport keys, one per
+   direction, counter nonces, AD = txn (:383, :400), plaintext = type ||
+   body: DATA, END and ERROR (:66-70); ERROR is sealed as END is and ends
+   the stream the same way, so the model's END stands for both.
+
+   Abstractions: the key id is mid(n, gen) and an agent id is its machine
+   name; the code's key id is opaque and A2AE2EEKeyring.For(ref) maps an
+   agent ref to it (:74-95; nfltr a2akeys, by machine id with TENANTS2). A
+   callee also answers a ref under the relay's key scope ("<scope>.<own>",
+   :332), which the attacker chooses anyway; the key id is the binding.
 
    Topology as a2a_today.pv: R (root holder) on relay X; B, E honest, C
    compromised, D compromised and revoked at phase 1, all on relay Y; the
@@ -20,7 +33,8 @@
    certificate; nothing here trusts one). Flag leak: phase 2 leaks the root
    key (so every machine key): forward secrecy of what came before.
    Mutants (run.sh flags): drop-psk, drop-txn, skip-revoke, relay-cert,
-   no-target-check. *)
+   no-target-check, and wire v1's findings put back: one-key (F1: one key
+   both ways), clear-end (F2: the end of a stream in the clear). *)
 
 type key.
 type exponent.
@@ -70,15 +84,21 @@ free yDownB, yDownE: channel [private].  (* ONLY:honestY *)
 letfun mkey(n: bitstring, gen: bitstring) =
   hkdf(Kroot, n, gen).        (* NOT:relay-cert *)
   hkdf(KrelayCA, n, gen).     (* ONLY:relay-cert *)
-letfun psk(K: key) =
+letfun psk(K: key) =             (* a2a_e2ee.go:126 a2aE2EEPsk *)
   mackey(K, Lpsk).            (* NOT:drop-psk *)
   PublicPsk.                  (* ONLY:drop-psk *)
+(* a2a_e2ee.go:135 a2aE2EEPrologue *)
 letfun prologue(t: bitstring, caller: bitstring, callee: bitstring, k: bitstring) =
   (V2, t, caller, callee, k).       (* NOT:drop-txn *)
   (V2, caller, callee, k).          (* ONLY:drop-txn *)
-letfun ad(t: bitstring) =
+letfun ad(t: bitstring) =           (* a2a_e2ee.go:383, :400: AD = txn *)
   t.                                (* NOT:drop-txn *)
   Lempty.                           (* ONLY:drop-txn *)
+(* The responder -> initiator key: split2, or (mutant one-key, finding F1)
+   the initiator's key both ways. *)
+letfun back(c: key) =
+  split2(c).                        (* NOT:one-key *)
+  split1(c).                        (* ONLY:one-key *)
 letfun known(n: bitstring) = n = nameB || n = nameE || n = nameC || n = nameD.
 
 event RootAccept(bitstring, bitstring, bitstring, G, G).
@@ -136,7 +156,12 @@ query t: bitstring; event(RootRecvReq(t, mid(nameB, G1), mreq(nameB))).
 query t: bitstring; event(MachRecvEnd(t, mid(nameB, G1))).
 
 (* R calls agent tgt: the key id is the target's machine id at the store's
-   generation; nothing the relay or the peer says picks it. *)
+   generation (a2a_e2ee.go:222 For(callee)); nothing the relay or the peer
+   says picks it. Message 1 :233, the ack :302 (complete), a request frame
+   client_stream.go:181 (seal after its credit), its END there too
+   (CloseSend), the response client_stream.go:328-354 (recvE2EE: a frame
+   in the clear is the relay's, one that does not open ends the call,
+   a2a_e2ee.go:400). *)
 let RootInit(tgt: bitstring) =
   in(att, pick: bitstring);                 (* ONLY:no-target-check *)
   let n = pick in                           (* ONLY:no-target-check *)
@@ -159,10 +184,14 @@ let RootInit(tgt: bitstring) =
   event RootSendEnd(t, k);
   out(xUp, (tgt, (t, FRAME, aenc(split1(c2), N1, ad(t), (END, Lempty)))));
   in(xDown, (src2: bitstring, (=t, =FRAME, ct3: bitstring)));
-  let (=DATA, y: bitstring) = adec(split2(c2), N0, ad(t), ct3) in
+  let (=DATA, y: bitstring) = adec(back(c2), N0, ad(t), ct3) in
   event RootRecvResp(t, tgt, k, y).
 
-(* Machine m answers: the key id must be its own, the callee its own agent. *)
+(* Machine m answers (a2a_e2ee_agent.go:70 -> a2a_e2ee.go
+   newServerA2AE2EEState): the callee its own agent (:332), the key id the
+   one For gives for the caller, a machine's own (:347-353), message 1 opens
+   under it (:360), the ack :363; requests and their END
+   server_stream.go:174-189, the response server_stream.go:154. *)
 let MachResp(m: bitstring, cin: channel, cout: channel) =
   ! in(cin, (t: bitstring, =INIT, caller: bitstring, callee: bitstring, k: bitstring, i: G, ct1: bitstring));
   if callee = m && k = mid(m, G1) then
@@ -177,13 +206,15 @@ let MachResp(m: bitstring, cin: channel, cout: channel) =
   in(cin, (=t, =FRAME, ct3: bitstring));
   let (=DATA, z: bitstring) = adec(split1(c2), N0, ad(t), ct3) in
   event MachRecvReq(t, k, z);
-  ( (in(cin, (=t, =FRAME, ct4: bitstring));
-     let (=END, e: bitstring) = adec(split1(c2), N1, ad(t), ct4) in
+  ( (
+     in(cin, (=t, =FRAME, ct4: bitstring));                               (* NOT:clear-end *)
+     let (=END, e: bitstring) = adec(split1(c2), N1, ad(t), ct4) in      (* NOT:clear-end *)
+     in(cin, (=t, =END));                                                 (* ONLY:clear-end *)
      event MachRecvEnd(t, k))
   | (event MachSendResp(t, k, respFrom(m));
-     out(cout, (caller, (t, FRAME, aenc(split2(c2), N0, ad(t), (DATA, respFrom(m))))))) ).
+     out(cout, (caller, (t, FRAME, aenc(back(c2), N0, ad(t), (DATA, respFrom(m))))))) ).
 
-(* Machine m calls R. *)
+(* Machine m calls R: For(callee) is its own key id (a2a_e2ee.go:222). *)
 let MachInit(m: bitstring, cin: channel, cout: channel) =
   let k = mid(m, G1) in
   let K = mkey(m, G1) in
@@ -200,13 +231,14 @@ let MachInit(m: bitstring, cin: channel, cout: channel) =
   event MachSendReq(t, k, mreq(m));
   out(cout, (nameR, (t, FRAME, aenc(split1(c2), N0, ad(t), (DATA, mreq(m)))))).
 
-(* R answers a machine: the key id must name the caller's machine; Peer
-   refuses a revoked machine, Valid (before each frame) a revoked id. *)
+(* R answers a machine: the key id must be For(caller), the caller's
+   machine (a2a_e2ee.go:347-353); For refuses a revoked machine (:347),
+   Valid (before each frame, :380, :397) a revoked id. *)
 let RootFrame(src: bitstring, t: bitstring, k: bitstring, c2: key) =
   in(xDown, (=src, (=t, =FRAME, ct3: bitstring)));
   let (=DATA, z: bitstring) = adec(split1(c2), N0, ad(t), ct3) in
   event RootRecvReq(t, k, z);
-  out(xUp, (src, (t, FRAME, aenc(split2(c2), N0, ad(t), (DATA, rrespTo(k)))))).
+  out(xUp, (src, (t, FRAME, aenc(back(c2), N0, ad(t), (DATA, rrespTo(k)))))).
 
 let RootFrameRevoked(src: bitstring, t: bitstring, k: bitstring, c2: key) =
   in(xDown, (=src, (=t, =FRAME, ct3: bitstring)));

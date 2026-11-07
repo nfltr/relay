@@ -1,3 +1,7 @@
+(* Wire v1, removed in favour of wire v2 (a2a_machine.pv); kept as the
+   evidence of findings F1-F3 and F5. Lines cite relay 3977c04
+   (git show 3977c04:client/rpcclient/a2a_e2ee.go). *)
+
 (* A2A E2EE as it is today: the interactive handshake, the frames, the
    per-machine keys and their revoke (client/rpcclient a2a_e2ee.go; machine
    keys and keyring: nfltr internal/application/a2akeys). Dolev-Yao: the
