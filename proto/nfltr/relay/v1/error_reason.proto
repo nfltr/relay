@@ -80,4 +80,10 @@ enum ErrorReason {
   // answered HTTP 402. On gRPC it is FailedPrecondition, on a data
   // connection HTTP 402 or the session's abort code.
   ERROR_REASON_BALANCE_EXHAUSTED = 50;
+  // The credential is known but names no enrolled machine (a key from
+  // before machines, or one whose machine was removed): enrol the machine
+  // (`nfltr config login`, the dashboard's Add machine, a group enrolment
+  // token). Retrying does not help. On gRPC it is Unauthenticated, on a
+  // data connection HTTP 401.
+  ERROR_REASON_MACHINE_NOT_ENROLLED = 51;
 }
