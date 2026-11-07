@@ -14,7 +14,11 @@
    (Cremers et al., IEEE S&P 2017, Tamarin; Bhargavan et al., IEEE S&P
    2017, ProVerif/CryptoVerif). What is modelled is ours: where the pin
    comes from, the pin check, the open's answer, the agent's choice of the
-   target, rotation.
+   target, rotation, and the agent's check of the client's key (finding 2,
+   lane E2EEFIX2: client pins; the design model was e2ee_tcp_clientauth.pv,
+   folded in here). TLS 1.3 CertificateVerify is the client's signature
+   over a hash of the session key and the server's key (the transcript);
+   crypto/tls checks it against the certificate's key.
 
    Code (nfltr = github.com/nfltr/nfltr; the rest github.com/nfltr/relay):
      client/relaytrust/relaytrust.go:29-46   pin = SHA-256 of the leaf certificate DER
@@ -22,12 +26,15 @@
      nfltr .../tcp_connect_session.go:133-141  no answer: a pinned session is refused
      nfltr .../tcp_connect_session.go:195-209  TLS 1.3, VerifyPeerCertificate: fingerprint == pin
      nfltr cmd/nfltr/internal/upcli/agent.go:135 the pin comes from the agent's own output
-     client/agent/session_plan.go:76,89-90    target: the table's, --forward's, else the relay's TargetAddr
-     client/agent/session_plan.go:104-118     E2EE only: pinned -> TLS here, unpinned refused
-     client/agent/session_plan.go:113-114     E2EE only without --forward: a pinned session refused (finding 1)
-     client/agent/agent.go:351-353            TCPE2EEOnly without TCPForwardAddr: Connect fails
-     client/agent/session_plan.go:333-345     serveE2EETCP: TLS, then the plaintext to the dialled target
-     client/agent/tls.go:165-179              no client authentication
+     client/agent/session_plan.go:77,90-91    target: the table's, --forward's, else the relay's TargetAddr
+     client/agent/session_plan.go:105-126     E2EE only: pinned -> TLS here, unpinned refused
+     client/agent/session_plan.go:114-115     E2EE only without --forward: a pinned session refused (finding 1)
+     client/agent/agent.go:362-364            TCPE2EEOnly without TCPForwardAddr: Connect fails
+     client/agent/session_plan.go:337-348     serveE2EETCP: TLS, then the plaintext to the dialled target
+     client/agent/agent.go:170,365-369        TCPE2EEClients: the allow-list (services.go:122-126: a service's)
+     client/agent/e2ee_client_keys.go:50      RequireAnyClientCert: CertificateVerify against the certificate's key
+     client/agent/e2ee_client_keys.go:53-63   VerifyConnection (resumption too): the key's fingerprint on the list, no CA
+     client/relaytrust/relaytrust.go:39-41    a client key's fingerprint: SHA-256 of its SubjectPublicKeyInfo
      client/agent/tls.go:202-216              rotateCert: one certificate at a time *)
 
 free c: channel.
@@ -40,17 +47,23 @@ fun aenc(bitstring, pkey): bitstring.
 reduc forall m: bitstring, k: skey; adec(aenc(m, pk(k)), k) = m.
 fun senc(bitstring, bitstring): bitstring.
 reduc forall m: bitstring, k: bitstring; sdec(senc(m, k), k) = m.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+fun h(bitstring): bitstring.          (* the transcript hash: it shows nothing of the key *)
 
 const svcAddr: bitstring.           (* the target the agent means: its table's, --forward's *)
 const answerOK, answerNone: bitstring.
 const c2s, s2c: bitstring.            (* TLS keys each direction apart *)
 
 free payloadFixed, payloadRelayTarget, payloadNew, payloadOld, payloadTofu: bitstring [private].
-free svcData: bitstring [private].  (* what the agent's service answers anyone *)
+free svcData: bitstring [private].  (* what the agent's service answers an allowed client *)
+free csk: skey [private].           (* the owner's client key, on every agent's list *)
+free cskOld: skey [private].        (* a client key removed from the list, leaked *)
 
 event ClientRecv(bitstring, bitstring, bitstring).   (* pin, session key, response *)
 event AgentSent(bitstring, bitstring, bitstring).    (* fp of its key, session key, response *)
-event ServiceGot(bitstring).
+event ServiceGot(pkey, bitstring).                   (* the client key it allowed, its bytes *)
+event ClientSent(pkey, bitstring).
 free sk1: skey [private].
 
 (* The pinned client: opens with E2Ee set, needs the relay's answer, runs
@@ -67,6 +80,8 @@ let Client(pin: bitstring, m: bitstring) =
   if true then (* ONLY:skip-pin-check *)
   new k: bitstring;
   out(c, aenc(k, spk));
+  out(c, (pk(csk), sign(h((k, spk)), csk)));         (* Certificate + CertificateVerify *)
+  event ClientSent(pk(csk), m);
   out(c, senc((c2s, m), k));
   in(c, e: bitstring);
   let (=s2c, r: bitstring) = sdec(e, k) in (* NOT:agreement-without-key-check *)
@@ -87,12 +102,15 @@ let Agent(sk: skey, fixed: bool) =
   let t = t0 in (* NOT:relay-names-target-with-forward *)
   let t = target in (* ONLY:relay-names-target-with-forward *)
   out(c, pk(sk));
-  in(c, ek: bitstring);                              (* no client authentication (tls.go:165-179) *)
+  in(c, ek: bitstring);
   let k = adec(ek, sk) in
+  in(c, (cpk: pkey, cv: bitstring));
+  if cpk = pk(csk) then                              (* e2ee_client_keys.go:58: the list *) (* NOT:any-client-cert *)
+  if checksign(cv, cpk) = h((k, pk(sk))) then        (* CertificateVerify (crypto/tls) *) (* NOT:skip-certificate-verify *)
   in(c, e: bitstring);
   let (=c2s, m: bitstring) = sdec(e, k) in
   if t = svcAddr then (
-    event ServiceGot(m);                            (* to its own service, on its machine *)
+    event ServiceGot(cpk, m);                       (* to its own service, on its machine *)
     new r: bitstring;
     event AgentSent(fp(pk(sk)), k, (r, svcData));
     out(c, senc((s2c, (r, svcData)), k))
@@ -124,14 +142,26 @@ query attacker(payloadOld).
    without --host-key) *)
 (* expect false *)
 query attacker(payloadTofu).
-(* 5. LIMIT: no client authentication: the relay opens a pinned session of
-   its own and gets the agent's service; E2EE only is not access control
-   against the relay *)
-(* expect false *)
+(* 5. the service, against the relay: only an allowed client reaches it
+   (finding 2 fixed: the agent's list of client keys; before, the relay
+   opened a pinned session of its own and got the service: mutant
+   any-client-cert, an agent without a list, is that case and also a
+   relay-CA client certificate, which the relay can mint) *)
+(* expect true *)
 query attacker(svcData).
+(* 6. a removed client key (leaked) reaches nothing: removal is revocation *)
+(* expect true *)
+query m: bitstring; event(ServiceGot(pk(cskOld), m)).
+(* 7. what reaches the service was sent by the allowed client *)
+(* expect true *)
+query ck: pkey, m: bitstring; event(ServiceGot(ck, m)) ==> event(ClientSent(ck, m)).
+(* 8. witness: an allowed client does reach the service *)
+(* expect false *)
+query ck: pkey, m: bitstring; event(ServiceGot(ck, m)).
 
 process
   new sk2: skey; new skOld: skey; new skNew: skey; new sk4: skey;
+  out(c, pk(csk)); out(c, cskOld);
   (
     (* 1 *) (!Agent(sk1, true)) | (!Client(fp(pk(sk1)), payloadFixed))
     (* 2 *) | (!Agent(sk2, false)) | (!Client(fp(pk(sk2)), payloadRelayTarget))

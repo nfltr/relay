@@ -206,35 +206,23 @@ service table's `e2ee: true` service).
 | 4 | rotation: the old key leaks; a client pinned to the new certificate | holds |
 | 5 | ... a client still pinned to the old certificate | attack: a rotation revokes no pin; re-pin |
 | 6 | first use: a pin taken from what the relay shows (dashboard), or an SSH host key on first use (`nfltr shell`: OpenSSH known_hosts; a new key every start without `--host-key`) | attack |
-| 7 | the agent's service against the relay | attack: no client authentication; E2EE only is not access control against the relay |
+| 7 | the agent's service, against the relay | holds: the agent requires a client certificate whose key is on its list (`TCPE2EEClients`, a service's `E2EEClients`; finding 2, lane E2EEFIX2); before, no client authentication (mutant `any-client-cert`: an agent without a list, and a relay-CA client certificate, which the relay can mint) |
+| 8 | a removed client key (leaked) reaches nothing: removal from the list is revocation | holds |
+| 9 | what reaches the service was sent by the allowed client | holds |
+| 10 | witness: an allowed client reaches the service | attack (reachable), as it must |
 
 Mutants: skip the pin check, a relay-supplied pin, plaintext when the relay
 gives no answer, the relay's target without `--forward` (finding 1 before
 its fix), the relay's target despite `--forward`, accept a response
-without the session key.
-
-### e2ee_tcp_clientauth.pv: client pins at the agent (design for finding 2)
-
-Query 7 of `e2ee_tcp.pv` is a limit: the agent authenticates no client, so
-a relay opens a pinned session of its own and reaches the service. This
-model is the design lane E2EEFIX chose for it (code queued as E2EEFIX2;
-nfltr `docs/decisions/e2ee-fix-2026-11-07.md` "Finding 2"): the client
-presents a TLS client certificate for a key of its own, the agent requires
-one and accepts only a key on its own allow-list, filled out of band as the
-client's server pin is. The attacker also holds the relay's CA and a
-client key once allowed and then removed.
-
-| # | query | result |
-|---|---|---|
-| 1 | the agent's service, against the relay | holds |
-| 2 | what reaches the service was sent by the allowed client | holds |
-| 3 | the client's payload secret; injective agreement on its responses | holds |
-| 4 | a removed client key (leaked) reaches nothing | holds |
-| 5 | witness: an allowed client reaches the service | attack (reachable), as it must |
-
-Mutants: the agent takes any client certificate (`any-client-cert`: a
-relay-CA client certificate is this case, the relay can mint one), skips
-CertificateVerify (`skip-certificate-verify`).
+without the session key, the agent takes any client certificate
+(`any-client-cert`), skips CertificateVerify (`skip-certificate-verify`).
+A client-side mutant leaves 7-9 holding: the agent's check of the client
+does not depend on the client's check of the agent. An agent with an
+empty list is `any-client-cert`: the SDK's zero value authenticates no
+client, and the default of nfltr's agent commands is nfltr's
+(`docs/decisions/e2ee-fix-2026-11-07.md` "Lane E2EEFIX2").
+The design model `e2ee_tcp_clientauth.pv` (lane E2EEFIX) is folded into
+this one and deleted.
 
 ### wg_exit.pv: WireGuard client and exit (Track B)
 
@@ -305,7 +293,8 @@ E2EEFIX a failed write spends its number and ends the SignalConn
 | e2ee_tcp.pv | client/agent/session_plan.go |
 | e2ee_tcp.pv | client/agent/tls.go |
 | e2ee_tcp.pv | client/agent/agent.go |
-| e2ee_tcp_clientauth.pv | client/agent/tls.go |
+| e2ee_tcp.pv | client/agent/e2ee_client_keys.go |
+| e2ee_tcp.pv | client/agent/services.go |
 | wg_exit.pv | client/wg/keys.go |
 | wg_exit.pv | client/wg/tunnel.go |
 | wg_exit.pv | client/agent/wgexit/wgexit.go |
