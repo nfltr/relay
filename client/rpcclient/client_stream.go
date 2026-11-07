@@ -5,7 +5,7 @@ package rpcclient
 
 import (
 	"context"
-	"crypto/rand"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -60,7 +60,6 @@ type clientStream struct {
 	header        MD
 	headerCh      chan struct{}
 	e2ee          *a2aE2EEState
-	peerLabel     string // the A2AE2EEStaticLabel value the first flight used
 }
 
 func (cs *clientStream) setResponseError(err error) {
@@ -142,10 +141,7 @@ func (cs *clientStream) Send(data []byte) error {
 	if cs.sendClosed {
 		return io.ErrClosedPipe
 	}
-	if cs.e2ee != nil && len(data) > 0 {
-		if sent, err := cs.sendFirstFlight(data); sent || err != nil {
-			return err
-		}
+	if cs.e2ee != nil {
 		if err := cs.ensureE2EEHandshake(); err != nil {
 			return err
 		}
@@ -161,8 +157,7 @@ func (cs *clientStream) CloseSend() error {
 		return nil
 	}
 	cs.sendClosed = true
-	// Nothing follows a 0-RTT first flight until the peer took or refused it.
-	if cs.e2ee != nil && cs.e2ee.awaitingHandshake() {
+	if cs.e2ee != nil {
 		if err := cs.ensureE2EEHandshake(); err != nil {
 			return err
 		}
@@ -171,18 +166,23 @@ func (cs *clientStream) CloseSend() error {
 }
 
 func (cs *clientStream) sendMsg(data []byte, eom bool) error {
-	if cs.e2ee != nil && len(data) > 0 {
-		ciphertext, err := cs.e2ee.encrypt(cs.txnID, data)
-		if err != nil {
-			return fmt.Errorf("rpcclient: encrypt request payload: %w", err)
-		}
-		data = ciphertext
-	}
-
 	// A data frame takes one of the call's credit (the target's
 	// RequestWindow); the request's end takes none.
 	if !eom && !cs.agent.callCredit.Acquire(cs.txnID, 1) {
 		return cs.sendEnded()
+	}
+	// An E2EE call seals every frame, its end too (END), after its credit:
+	// a sealed frame is always sent, so the counters stay in step.
+	if cs.e2ee != nil {
+		t := a2aFrameData
+		if eom {
+			t = a2aFrameEnd
+		}
+		ciphertext, err := cs.e2ee.seal(t, data)
+		if err != nil {
+			return fmt.Errorf("rpcclient: encrypt request payload: %w", err)
+		}
+		data = ciphertext
 	}
 	if eom {
 		traceCC(cs.agent, "Eom", cs.txnID, 0)
@@ -242,96 +242,12 @@ func (cs *clientStream) sendControl(messageType string, payload []byte) error {
 	})
 }
 
-// sendFirstFlight sends data as the 0-RTT first flight when the call knows
-// the peer's static key and has sent nothing; sent is false otherwise.
-func (cs *clientStream) sendFirstFlight(data []byte) (sent bool, err error) {
-	payload, ok, err := cs.e2ee.firstFlight(data, time.Now(), rand.Reader)
-	if !ok {
-		return false, nil
-	}
-	if err == nil {
-		cs.sentFirst = true
-		err = cs.sendControl(a2aE2EEInit0RTTMessageType, payload)
-	}
-	if err != nil {
-		err = fmt.Errorf("rpcclient: send A2A E2EE 0-RTT first flight: %w", err)
-		cs.e2ee.fail(err)
-	}
-	return true, err
-}
-
-// onE2EERetry handles the peer's refusal of the first flight: the
-// interactive handshake on the same call, then the request again, before
-// anything else of the call is sent. A refusal that must not be retried
-// ends the call.
-func (cs *clientStream) onE2EERetry(payload []byte) {
-	inner, early, reason, err := cs.e2ee.takeRetry(payload, time.Now())
-	if err != nil {
-		cs.failE2EE(status.Error(codes.FailedPrecondition, err.Error()))
-		return
-	}
-	if inner == nil {
-		return
-	}
-	if reason == refuseStale {
-		forgetA2AE2EEPeer(cs.targetAgentID, cs.peerLabel)
-	}
-	go func() {
-		err := cs.ensureHandshake(inner)
-		if err == nil {
-			err = cs.resendEarly(inner, early)
-		}
-		if err == nil {
-			err = cs.e2ee.adopt(inner)
-		}
-		if err != nil {
-			cs.failE2EE(err)
-		}
-	}()
-}
-
-func (cs *clientStream) resendEarly(s *a2aE2EEState, data []byte) error {
-	ciphertext, err := s.encrypt(cs.txnID, data)
-	if err != nil {
-		return err
-	}
-	if !cs.agent.callCredit.Acquire(cs.txnID, 1) {
-		return cs.sendEnded()
-	}
-	traceCC(cs.agent, "Send", cs.txnID, 0)
-	return cs.agent.sendFrame(&pb.TunnelFrame{
-		Payload:       ciphertext,
-		MessageType:   cs.msgType,
-		TransactionId: cs.txnID,
-		Timestamps:    &pb.Timestamps{RequestAtAgent: time.Now().UnixMilli()},
-		Routing:       &pb.RoutingInfo{AgentId: cs.sourceAgentID, TargetAgentId: cs.targetAgentID},
-		Continuation:  true, // after the call's handshake
-	})
-}
-
 // failE2EE ends the call: its waiting sends and receives get err.
 func (cs *clientStream) failE2EE(err error) {
 	cs.e2ee.fail(err)
 	cs.setResponseError(err)
 	cs.closeResponses()
 	cs.agent.pending.Delete(cs.txnID)
-}
-
-func (cs *clientStream) statusDetail(msg *pb.TunnelFrame) string {
-	if detail := msg.GetStatusDetail(); detail != "" {
-		return detail
-	}
-	data := msg.GetPayload()
-	if len(data) == 0 {
-		return ""
-	}
-	if cs.e2ee != nil {
-		plaintext, err := cs.e2ee.decrypt(cs.txnID, data)
-		if err == nil {
-			return string(plaintext)
-		}
-	}
-	return string(data)
 }
 
 // Recv receives a single response. Returns io.EOF when the target has
@@ -363,33 +279,29 @@ func (cs *clientStream) Recv() (*Response, error) {
 		cs.agent.callCredit.Consumed(cs.txnID, 1) // may send a window update
 	}
 
+	if cs.e2ee != nil {
+		return cs.recvE2EE(msg)
+	}
+
 	// Error from proxy (e.g., target not connected).
 	if msg.GetMessageType() == "error" {
 		code := codes.Code(msg.GetStatusCode())
 		if code == 0 {
 			code = codes.Internal
 		}
-		return nil, status.Error(code, cs.statusDetail(msg))
+		return nil, status.Error(code, statusDetail(msg))
 	}
 
-	// Status trailer: EOM with optional encrypted detail (sent by library after handler returns).
+	// Status trailer: EOM, its detail in the clear (sent by library after handler returns).
 	data := msg.GetPayload()
 	if msg.GetEom() {
 		code := codes.Code(msg.GetStatusCode())
 		if code != 0 && code != codes.OK {
-			return nil, status.Error(code, cs.statusDetail(msg))
+			return nil, status.Error(code, statusDetail(msg))
 		}
 		if len(data) == 0 {
 			return nil, io.EOF
 		}
-	}
-
-	if cs.e2ee != nil && len(data) > 0 {
-		plaintext, err := cs.e2ee.decrypt(cs.txnID, data)
-		if err != nil {
-			return nil, fmt.Errorf("rpcclient: decrypt response payload: %w", err)
-		}
-		data = plaintext
 	}
 
 	// Capture initial metadata from first response.
@@ -401,6 +313,52 @@ func (cs *clientStream) Recv() (*Response, error) {
 	})
 
 	return &Response{Data: data}, nil
+}
+
+func statusDetail(msg *pb.TunnelFrame) string {
+	if detail := msg.GetStatusDetail(); detail != "" {
+		return detail
+	}
+	return string(msg.GetPayload())
+}
+
+// recvE2EE is Recv of an established E2EE call: a frame in the clear (an
+// error, an empty end) is the relay's; a sealed one is the peer's data, end
+// or error; one that does not open ends the call.
+func (cs *clientStream) recvE2EE(msg *pb.TunnelFrame) (*Response, error) {
+	data := msg.GetPayload()
+	if msg.GetMessageType() == "error" || len(data) == 0 {
+		code := codes.Code(msg.GetStatusCode())
+		if code == codes.OK && msg.GetMessageType() == "error" {
+			code = codes.Internal
+		}
+		return nil, errA2AE2EERelayEnded(code, msg.GetStatusDetail())
+	}
+	t, body, err := cs.e2ee.open(data)
+	switch {
+	case err != nil:
+	case msg.GetEom() && t == a2aFrameEnd:
+		return nil, io.EOF
+	case msg.GetEom() && t == a2aFrameError:
+		code, detail, ok := parseA2AErrorBody(body)
+		if ok {
+			return nil, status.Error(code, detail)
+		}
+		err = errors.New("rpcclient: a malformed A2A E2EE error frame")
+	case !msg.GetEom() && t == a2aFrameData:
+		cs.headerOnce.Do(func() {
+			if im := msg.GetRouting().GetInitialMetadata(); len(im) > 0 {
+				cs.header = MD(im)
+			}
+			close(cs.headerCh)
+		})
+		return &Response{Data: body}, nil
+	default:
+		err = fmt.Errorf("rpcclient: an A2A E2EE frame of type %d out of place", t)
+	}
+	err = fmt.Errorf("rpcclient: decrypt response payload: %w", err)
+	cs.refuse(err)
+	return nil, err
 }
 
 // Header returns the initial metadata from the target agent's first response.

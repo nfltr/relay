@@ -52,7 +52,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"strconv"
 	"strings"
 	"sync"
@@ -120,9 +119,7 @@ type Agent struct {
 	// a2aKeyring, when set, authenticates every E2EE handshake: a peer must
 	// prove a key it names (WithA2AE2EEPairingKeyFile, WithA2AE2EEKeyring).
 	a2aKeyring atomic.Pointer[A2AE2EEKeyring]
-	// a2aStatic, when set, replaces the process's A2A E2EE static key
 	// (tests: a restarted responder).
-	a2aStatic atomic.Pointer[a2aE2EEStatic]
 
 	// sendCh buffers outgoing TunnelFrames. A dedicated sendLoop goroutine
 	// drains this channel and sends to the gRPC stream, eliminating mutex
@@ -305,18 +302,6 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 	}
 
 	// ── Fleet Labels ────────────────────────────────────────────────────
-	// An E2EE agent advertises its static key (A2AE2EEStaticLabel) for
-	// callers' 0-RTT first flights.
-	if do.a2aE2EE {
-		if st, stErr := processA2AE2EEStatic(); stErr == nil {
-			labels := maps.Clone(do.labels)
-			if labels == nil {
-				labels = map[string]string{}
-			}
-			labels[A2AE2EEStaticLabel] = st.label(do.agentID, keyring)
-			do.labels = labels
-		}
-	}
 	if labels := agentwire.EncodeLabels(do.labels); labels != "" {
 		streamCtx = grpcmd.AppendToOutgoingContext(streamCtx, agentwire.LabelsKey, labels)
 	}
@@ -520,13 +505,7 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 	// A stream to the relay's own agent ends at the relay: E2EE to it would
 	// protect nothing TLS does not, and the relay cannot hold a pairing key.
 	if a.a2aE2EEOutbound.Load() && targetAgentID != RelayAgentID {
-		cs.e2ee = newA2AE2EEState(cs.txnID, a.keyring())
-		if v := a2aE2EEPeer(targetAgentID); v != "" {
-			if static, name, kid, key, ok := parseA2AE2EEStaticLabel(v, cs.e2ee.kr); ok {
-				cs.e2ee.peerStatic, cs.e2ee.peerName, cs.peerLabel = static, name, v
-				cs.e2ee.kid, cs.e2ee.pk = kid, key
-			}
-		}
+		cs.e2ee = newA2AE2EEState(cs.txnID, a.agentID, targetAgentID, a.keyring())
 	}
 	a.callCredit.Open(cs.txnID)
 	traceCCOpen(a, cs.txnID, true)
@@ -749,14 +728,15 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 		traceCL(a, a.handleE2EEInit(msg), txnID, msg)
 		clUnlock()
 		return
-	case a2aE2EEInit0RTTMessageType:
+	case a2aE2EEv1InitMessageType, a2aE2EEv1Init0RTTMessageType: // wire v1's call start
 		clLock()
-		traceCL(a, a.handleE2EEInit0RTT(msg), txnID, msg)
+		a.sendA2AControlError(txnID, codes.FailedPrecondition, "rpcclient: "+a2aE2EEv1Refusal+" (this agent speaks v2)")
+		traceCL(a, "Refuse", txnID, msg)
 		clUnlock()
 		return
-	case a2aE2EERetryMessageType:
-		if val, ok := a.pending.Load(txnID); ok {
-			val.(*clientStream).onE2EERetry(msg.GetPayload())
+	case a2aE2EEv1AckMessageType, a2aE2EEv1RetryMessageType:
+		if val, ok := a.pending.Load(txnID); ok && val.(*clientStream).e2ee != nil {
+			val.(*clientStream).failE2EE(status.Error(codes.FailedPrecondition, "rpcclient: the target answered with "+a2aE2EEv1Refusal))
 		}
 		return
 	case AgentDrainAckMessageType:
@@ -796,9 +776,6 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 
 		if cs.e2ee != nil && cs.e2ee.awaitingHandshake() && msg.GetMessageType() == "error" {
 			detail := msg.GetStatusDetail()
-			if detail == "" {
-				detail = string(msg.GetPayload())
-			}
 			code := codes.Code(msg.GetStatusCode())
 			if code == 0 {
 				code = codes.FailedPrecondition
@@ -900,7 +877,7 @@ func (a *Agent) handleRequest(msg *pb.TunnelFrame) string {
 		return "Refuse"
 	}
 
-	ss := a.newServerStream(msg, nil, nil)
+	ss := a.newServerStream(msg, nil)
 	a.incoming.Store(txnID, ss)
 	// A fresh call's credit and buffer always take its first frame, so it
 	// is never refused here (TestFirstFrameFitsAFreshCall;
@@ -958,12 +935,18 @@ func (a *Agent) handleCall(ss *serverStream, h Handler) {
 		}
 	}
 
+	// An E2EE call's end is sealed (END, or ERROR with the code and
+	// detail): the caller takes it only from the handler.
 	var statusPayload []byte
-	if ss.e2ee != nil && detail != "" {
-		ciphertext, encErr := ss.e2ee.encrypt(ss.txnID, []byte(detail))
+	if ss.e2ee != nil {
+		t, body := a2aFrameEnd, []byte(nil)
+		if code != codes.OK {
+			t, body = a2aFrameError, a2aErrorBody(code, detail)
+		}
+		ciphertext, encErr := ss.e2ee.seal(t, body)
 		if encErr != nil {
 			// Never the handler's words in the clear: the reason it could not be sealed (a revoked key).
-			log.Printf("rpcclient: failed to encrypt status detail for txn %s: %v", ss.txnID, encErr)
+			log.Printf("rpcclient: failed to seal the end of txn %s: %v", ss.txnID, encErr)
 			detail = encErr.Error()
 		} else {
 			statusPayload = ciphertext

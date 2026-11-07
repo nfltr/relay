@@ -98,7 +98,7 @@ var errPastWindow = status.Error(codes.ResourceExhausted, "rpcclient: the peer s
 
 // newServerStream makes the stream of a call this agent serves, its credit
 // open until the call ends (end; the agent's end closes every credit).
-func (a *Agent) newServerStream(msg *pb.TunnelFrame, e2ee *a2aE2EEState, early []byte) *serverStream {
+func (a *Agent) newServerStream(msg *pb.TunnelFrame, e2ee *a2aE2EEState) *serverStream {
 	ssCtx, ssCancel := context.WithCancel(a.ctx)
 	txnID := msg.GetTransactionId()
 	a.serveCredit.Open(txnID)
@@ -112,7 +112,6 @@ func (a *Agent) newServerStream(msg *pb.TunnelFrame, e2ee *a2aE2EEState, early [
 		cancel:        ssCancel,
 		requestCh:     make(chan *pb.TunnelFrame, RequestWindow+1), // + the request's end
 		e2ee:          e2ee,
-		early:         early,
 	}
 }
 

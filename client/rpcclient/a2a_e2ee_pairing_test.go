@@ -63,16 +63,13 @@ func keyedAgent(id string, kr A2AE2EEKeyring) func(AgentTunnel) *Agent {
 
 const secretA = "0123456789abcdef0123456789abcdef-machines-of-user-a"
 
-// mitmRelay is an active relay: it answers each end's handshake with its own
-// X25519 key and tries to read the request the caller then encrypts.
+// mitmRelay is an active relay: it puts its own X25519 key in place of
+// the caller's (init) or the responder's (ack) and keeps the rest; it does
+// not hold the pairing key, so it cannot compute a new handshake.
 type mitmRelay struct {
 	testRelay
 	priv              *ecdh.PrivateKey
 	swapInit, swapAck bool
-
-	mu         sync.Mutex
-	callerPub  []byte
-	stolenText [][]byte
 }
 
 func newMITMRelay(t *testing.T, swapInit, swapAck bool) *mitmRelay {
@@ -86,61 +83,32 @@ func newMITMRelay(t *testing.T, swapInit, swapAck bool) *mitmRelay {
 	return m
 }
 
-// swapPub replaces the leading public key and keeps whatever tag followed:
-// the relay does not hold the pairing key, so it cannot compute a new one.
-// allow:wrapper — names the attack step both swap directions use.
-func (m *mitmRelay) swapPub(payload []byte) []byte {
-	return append(append([]byte(nil), m.priv.PublicKey().Bytes()...), payload[a2aE2EEPubLen:]...)
+// swapPub replaces the X25519 key at off in payload.
+func (m *mitmRelay) swapPub(payload []byte, off int) []byte {
+	out := append([]byte(nil), payload...)
+	copy(out[off:], m.priv.PublicKey().Bytes())
+	return out
+}
+
+// initMsg1 is where message 1 starts in an init: after caller, callee and
+// key id.
+func initMsg1(payload []byte) int {
+	off := 0
+	for range 3 {
+		off += bytes.IndexByte(payload[off:], 0) + 1
+	}
+	return off
 }
 
 func (m *mitmRelay) intercept(fromCaller bool, f *pb.TunnelFrame) *pb.TunnelFrame {
 	f = cloneFrame(f)
 	switch {
-	case fromCaller && f.GetMessageType() == a2aE2EEInitMessageType:
-		m.mu.Lock()
-		m.callerPub = append([]byte(nil), f.GetPayload()[:a2aE2EEPubLen]...)
-		m.mu.Unlock()
-		if m.swapInit {
-			f.Payload = m.swapPub(f.GetPayload())
-		}
+	case fromCaller && f.GetMessageType() == a2aE2EEInitMessageType && m.swapInit:
+		f.Payload = m.swapPub(f.GetPayload(), initMsg1(f.GetPayload()))
 	case !fromCaller && f.GetMessageType() == a2aE2EEAckMessageType && m.swapAck:
-		f.Payload = m.swapPub(f.GetPayload())
-	case fromCaller && len(f.GetPayload()) > 0:
-		m.tryRead(f)
+		f.Payload = m.swapPub(f.GetPayload(), 0)
 	}
 	return f
-}
-
-// tryRead decrypts a caller frame with the key the caller would share with
-// the relay if it had accepted the relay's key (unkeyed v1 KDF).
-func (m *mitmRelay) tryRead(f *pb.TunnelFrame) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if m.callerPub == nil {
-		return
-	}
-	pub, err := ecdh.X25519().NewPublicKey(m.callerPub)
-	if err != nil {
-		return
-	}
-	shared, err := m.priv.ECDH(pub)
-	if err != nil {
-		return
-	}
-	if plain, err := newEstablishedA2AE2EEState(deriveA2AE2EEKey(shared)).decrypt(f.GetTransactionId(), f.GetPayload()); err == nil {
-		m.stolenText = append(m.stolenText, plain)
-	}
-}
-
-func (m *mitmRelay) stole(secret string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, p := range m.stolenText {
-		if bytes.Contains(p, []byte(secret)) {
-			return true
-		}
-	}
-	return false
 }
 
 func cloneFrame(f *pb.TunnelFrame) *pb.TunnelFrame {
@@ -148,16 +116,40 @@ func cloneFrame(f *pb.TunnelFrame) *pb.TunnelFrame {
 }
 
 // Without a pairing key the ephemeral keys are unauthenticated: an active
-// relay that swaps them reads the caller's request. This is the gap the
-// pairing key closes; the test pins it so the claim stays honest.
+// relay that answers the caller's handshake itself reads the caller's
+// request. This is the gap the pairing key closes; the test pins it so the
+// claim stays honest.
 func TestA2AE2EEWithoutPairingKeyIsOpenToAnActiveRelay(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	relay := newMITMRelay(t, true, true)
-	caller, _, _ := echoPair(t, ctx, pairedAgent("hub", nil), pairedAgent("node-1", nil), &relay.testRelay)
+	var mu sync.Mutex
+	var mine *a2aE2EEState
+	var stolen []string
+	caller, _ := hostilePair(t, ctx, pairedAgent("hub", nil), pairedAgent("node-1", nil), func(fromA bool, f *pb.TunnelFrame) (back, on []*pb.TunnelFrame) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case fromA && f.GetMessageType() == a2aE2EEInitMessageType:
+			st, ack, err := newServerA2AE2EEState(f.GetTransactionId(), "node-1", f.GetPayload(), nil, rand.Reader)
+			if err != nil {
+				t.Errorf("the relay's own handshake: %v", err)
+				return nil, nil
+			}
+			mine = st
+			return one(&pb.TunnelFrame{MessageType: a2aE2EEAckMessageType, TransactionId: f.GetTransactionId(), Payload: ack}), nil
+		case fromA && mine != nil && isData(f, "a2a-request"):
+			if body, err := mine.openData(f.GetPayload()); err == nil {
+				stolen = append(stolen, string(body))
+			}
+			return nil, nil
+		}
+		return nil, one(f)
+	})
 	_, _ = caller.Invoke(ctx, "node-1", []byte("SECRET-BRIEF"))
-	if !relay.stole("SECRET-BRIEF") {
-		t.Fatal("expected the unauthenticated handshake to be readable by a key-swapping relay")
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(strings.Join(stolen, ""), "SECRET-BRIEF") {
+		t.Fatal("expected the unauthenticated handshake to be readable by a relay that answers it")
 	}
 }
 
@@ -185,9 +177,6 @@ func TestA2AE2EEPairingKeyRefusesRelayKeySwap(t *testing.T) {
 			}
 			if ran.Load() != 0 {
 				t.Fatal("the responder ran a request over a swapped handshake")
-			}
-			if relay.stole("SECRET-BRIEF") {
-				t.Fatal("the relay read the brief")
 			}
 			for _, f := range relay.sentByA() {
 				if bytes.Contains(f.GetPayload(), []byte("SECRET-BRIEF")) {

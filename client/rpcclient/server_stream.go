@@ -55,7 +55,6 @@ type serverStream struct {
 	header     MD
 	headerSent bool
 	e2ee       *a2aE2EEState
-	early      []byte // a 0-RTT call's first request, already decrypted
 }
 
 // errCallEnded: a frame for a call that ended (it is dropped).
@@ -103,13 +102,6 @@ func (ss *serverStream) closeRequests() {
 // Recv returns the next request message's data. Returns io.EOF after the
 // source has called CloseSend (all request messages consumed).
 func (ss *serverStream) Recv() ([]byte, error) {
-	ss.mu.Lock()
-	early := ss.early
-	ss.early = nil
-	ss.mu.Unlock()
-	if early != nil {
-		return early, nil
-	}
 	select {
 	case msg, ok := <-ss.requestCh:
 		if !ok {
@@ -120,16 +112,12 @@ func (ss *serverStream) Recv() ([]byte, error) {
 			ss.agent.serveCredit.Consumed(ss.txnID, 1) // may send a window update
 		}
 		data := msg.GetPayload()
+		if ss.e2ee != nil {
+			return ss.recvE2EE(msg)
+		}
 		// Empty-data EOM is the CloseSend marker — return EOF.
 		if msg.GetEom() && len(data) == 0 {
 			return nil, io.EOF
-		}
-		if ss.e2ee != nil && len(data) > 0 {
-			plaintext, err := ss.e2ee.decrypt(ss.txnID, data)
-			if err != nil {
-				return nil, fmt.Errorf("rpcclient: decrypt request payload: %w", err)
-			}
-			data = plaintext
 		}
 		return data, nil
 	case <-ss.ctx.Done():
@@ -154,13 +142,6 @@ func (ss *serverStream) Send(data []byte) error {
 	}
 	ss.mu.Unlock()
 
-	if ss.e2ee != nil && len(data) > 0 {
-		ciphertext, err := ss.e2ee.encrypt(ss.txnID, data)
-		if err != nil {
-			return fmt.Errorf("rpcclient: encrypt response payload: %w", err)
-		}
-		data = ciphertext
-	}
 	// One of the call's credit (the caller's ResponseWindow): a caller
 	// that stops reading holds this handler, never the agent's other calls.
 	if !ss.agent.serveCredit.Acquire(ss.txnID, 1) {
@@ -168,6 +149,13 @@ func (ss *serverStream) Send(data []byte) error {
 			return err
 		}
 		return ss.agent.connectionClosed()
+	}
+	if ss.e2ee != nil { // sealed after its credit: a sealed frame is sent
+		ciphertext, err := ss.e2ee.seal(a2aFrameData, data)
+		if err != nil {
+			return fmt.Errorf("rpcclient: encrypt response payload: %w", err)
+		}
+		data = ciphertext
 	}
 	traceCC(ss.agent, "Send", ss.txnID, 0)
 
@@ -178,6 +166,26 @@ func (ss *serverStream) Send(data []byte) error {
 		Timestamps:    &pb.Timestamps{ResponseAtAgent: time.Now().UnixMilli()},
 		Routing:       md,
 	})
+}
+
+// recvE2EE is Recv of an E2EE call's request frame: an empty end is the
+// relay's, a sealed one the caller's data or end; one that does not open
+// ends the call.
+func (ss *serverStream) recvE2EE(msg *pb.TunnelFrame) ([]byte, error) {
+	if len(msg.GetPayload()) == 0 {
+		return nil, errors.New("rpcclient: the relay ended the request stream (not the caller's end, not end-to-end authenticated)")
+	}
+	t, body, err := ss.e2ee.open(msg.GetPayload())
+	switch {
+	case err != nil:
+	case msg.GetEom() && t == a2aFrameEnd:
+		return nil, io.EOF
+	case !msg.GetEom() && t == a2aFrameData:
+		return body, nil
+	default:
+		err = fmt.Errorf("rpcclient: an A2A E2EE frame of type %d out of place", t)
+	}
+	return nil, fmt.Errorf("rpcclient: decrypt request payload: %w", err)
 }
 
 // SetHeader stores initial metadata to include with the first response

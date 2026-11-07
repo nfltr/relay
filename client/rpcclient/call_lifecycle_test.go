@@ -125,7 +125,7 @@ func TestFirstFrameFitsAFreshCall(t *testing.T) {
 	a := NewAgent(testTargetAgentId, newMockStream(t.Context()))
 	defer a.Close() //nolint:errcheck
 	msg := &pb.TunnelFrame{TransactionId: "txn", Payload: []byte("x"), Routing: &pb.RoutingInfo{AgentId: "agent-a"}}
-	ss := a.newServerStream(msg, nil, nil)
+	ss := a.newServerStream(msg, nil)
 	defer ss.end()
 	if err := ss.pushRequest(msg); err != nil {
 		t.Fatalf("a fresh call's first frame: %v", err)

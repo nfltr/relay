@@ -22,11 +22,11 @@ func TestServedCallCreditEndsWithTheCall(t *testing.T) {
 	defer a.Close() //nolint:errcheck
 	msg := &pb.TunnelFrame{TransactionId: "txn", Routing: &pb.RoutingInfo{AgentId: "agent-b"}}
 
-	if allocs := testing.AllocsPerRun(100, func() { a.newServerStream(msg, nil, nil).end() }); allocs > 8 {
+	if allocs := testing.AllocsPerRun(100, func() { a.newServerStream(msg, nil).end() }); allocs > 8 {
 		t.Fatalf("a served call's stream and end allocate %.0f times, want <= 8", allocs)
 	}
 
-	ss := a.newServerStream(msg, nil, nil)
+	ss := a.newServerStream(msg, nil)
 	for range ResponseWindow {
 		if !a.serveCredit.Acquire(ss.txnID, 1) {
 			t.Fatal("Acquire within the window failed")
@@ -49,7 +49,7 @@ func TestServedCallCreditEndsWithTheCall(t *testing.T) {
 func TestConcurrentSendersShareAGrant(t *testing.T) {
 	a := NewAgent("agent-a", newMockStream(t.Context()))
 	defer a.Close() //nolint:errcheck
-	ss := a.newServerStream(&pb.TunnelFrame{TransactionId: "txn", Routing: &pb.RoutingInfo{AgentId: "agent-b"}}, nil, nil)
+	ss := a.newServerStream(&pb.TunnelFrame{TransactionId: "txn", Routing: &pb.RoutingInfo{AgentId: "agent-b"}}, nil)
 	defer ss.end()
 	for range ResponseWindow {
 		if !a.serveCredit.Acquire(ss.txnID, 1) {

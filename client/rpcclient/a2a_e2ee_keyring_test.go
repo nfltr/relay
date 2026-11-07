@@ -8,8 +8,10 @@ package rpcclient
 // structural here: A2AE2EEKeyring has no method that writes.
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -61,37 +63,41 @@ func (s *testStore) rotate(name string) {
 	s.mu.Unlock()
 }
 
-func (s *testStore) Own() (string, []byte) { return "", s.root }
+// For: an agent ref names its machine before its first "-" (TENANTSID's
+// <machine id>-<service>); a ref of no machine in the store is a root
+// holder's, under the root key.
+func (s *testStore) For(ref string) (string, []byte, error) {
+	name, _, _ := strings.Cut(ref, "-")
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	gen, ok := s.gen[name]
+	if !ok {
+		return "", s.root, nil
+	}
+	if s.rev[name] {
+		return "", nil, fmt.Errorf("machine key %s.%d is revoked", name, gen)
+	}
+	return name + "." + strconv.Itoa(gen), testMachineKey(s.root, name, gen), nil
+}
 
-func (s *testStore) Peer(id string) ([]byte, error) {
+func (s *testStore) Valid(id string) bool {
 	if id == "" {
-		return s.root, nil
+		return true
 	}
 	name, g, _ := strings.Cut(id, ".")
 	gen, _ := strconv.Atoi(g)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if cur, ok := s.gen[name]; !ok || cur != gen || s.rev[name] {
-		return nil, fmt.Errorf("machine key %s is unknown, revoked or rotated", id)
-	}
-	return testMachineKey(s.root, name, gen), nil
+	cur, ok := s.gen[name]
+	return ok && cur == gen && !s.rev[name]
 }
-
-func (s *testStore) Valid(id string) bool { _, err := s.Peer(id); return err == nil }
 
 type testMachine struct {
 	id  string
 	key []byte
 }
 
-func (m testMachine) Own() (string, []byte) { return m.id, m.key }
-
-func (m testMachine) Peer(id string) ([]byte, error) {
-	if id != m.id {
-		return nil, errors.New("a machine holds its own key only")
-	}
-	return m.key, nil
-}
+func (m testMachine) For(string) (string, []byte, error) { return m.id, m.key, nil }
 
 func (m testMachine) Valid(id string) bool { return id == m.id }
 
@@ -116,22 +122,15 @@ func invokeRefused(t *testing.T, caller *Agent, target string, ran interface{ Lo
 	}
 }
 
-// A root holder and a machine talk both ways, interactive and 0-RTT; the
-// root-only pairing key keeps today's wire (vectors unchanged).
+// A root holder and a machine talk both ways.
 func TestA2AE2EEKeyringRootAndMachine(t *testing.T) {
 	store := newTestStore(t, "m1")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	m1, _, _ := echoPair(t, ctx, keyedAgent("kr-m1", store.machine("m1")), keyedAgent("kr-hub", store), &testRelay{})
-	invokeOK(t, m1, "kr-hub")
-	relay := &testRelay{}
-	hub, node, _ := echoPair(t, ctx, keyedAgent("kr-hub2", store), keyedAgent("kr-node", store.machine("m1")), relay)
-	invokeOK(t, hub, "kr-node")
-	learn0RTT(t, node, store.machine("m1"))
-	invokeOK(t, hub, "kr-node")
-	if types := frameTypes(relay.sentByA()); !contains(types, a2aE2EEInit0RTTMessageType) {
-		t.Fatalf("root to machine with a learned label took no first flight: %v", types)
-	}
+	m1, _, _ := echoPair(t, ctx, keyedAgent("m1-kr", store.machine("m1")), keyedAgent("hub-kr", store), &testRelay{})
+	invokeOK(t, m1, "hub-kr")
+	hub, _, _ := echoPair(t, ctx, keyedAgent("hub-kr2", store), keyedAgent("m1-node", store.machine("m1")), &testRelay{})
+	invokeOK(t, hub, "m1-node")
 }
 
 // AcceptedIsSender: a machine cannot be accepted as another, by naming
@@ -141,52 +140,54 @@ func TestA2AE2EEKeyringNoMachineSpeaksAsAnother(t *testing.T) {
 	store := newTestStore(t, "m1", "m2")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	relabel := &testRelay{rewrite: func(fromA bool, f *pb.TunnelFrame) *pb.TunnelFrame {
-		if fromA && f.GetMessageType() == a2aE2EEInitMessageType {
-			f = cloneFrame(f)
-			f.Payload = append(f.GetPayload()[:a2aE2EEPubLen+a2aE2EEPairingTagLen:a2aE2EEPubLen+a2aE2EEPairingTagLen], "m2.1"...)
-		}
-		return f
-	}}
-	caller, _, ran := echoPair(t, ctx, keyedAgent("as-m1", store.machine("m1")), keyedAgent("as-hub", store), relabel)
-	invokeRefused(t, caller, "as-hub", ran)
+	// The relay relabels m1's init: m2's key id, then m2's ref and key id.
+	for _, fields := range [][2]string{{"m1-as", "m2.1"}, {"m2-as", "m2.1"}} {
+		relabel := &testRelay{rewrite: func(fromA bool, f *pb.TunnelFrame) *pb.TunnelFrame {
+			if fromA && f.GetMessageType() == a2aE2EEInitMessageType {
+				f = cloneFrame(f)
+				parts := bytes.SplitN(f.GetPayload(), []byte{0}, 4)
+				f.Payload = append([]byte(fields[0]+"\x00"+string(parts[1])+"\x00"+fields[1]+"\x00"), parts[3]...)
+			}
+			return f
+		}}
+		caller, _, ran := echoPair(t, ctx, keyedAgent("m1-as", store.machine("m1")), keyedAgent("hub-as", store), relabel)
+		invokeRefused(t, caller, "hub-as", ran)
+	}
 	m1 := store.machine("m1").(testMachine)
-	forged, _, ran := echoPair(t, ctx, keyedAgent("as-forged", testMachine{id: "m2.1", key: m1.key}), keyedAgent("as-hub2", store), &testRelay{})
-	invokeRefused(t, forged, "as-hub2", ran)
-	peer, _, ran := echoPair(t, ctx, keyedAgent("as-m1b", m1), keyedAgent("as-m2", store.machine("m2")), &testRelay{})
-	invokeRefused(t, peer, "as-m2", ran)
+	forged, _, ran := echoPair(t, ctx, keyedAgent("m2-forged", testMachine{id: "m2.1", key: m1.key}), keyedAgent("hub-as2", store), &testRelay{})
+	invokeRefused(t, forged, "hub-as2", ran)
+	peer, _, ran := echoPair(t, ctx, keyedAgent("m1-b", m1), keyedAgent("m2-x", store.machine("m2")), &testRelay{})
+	invokeRefused(t, peer, "m2-x", ran)
 }
 
 // NoMessageFromRevokedMachine and OtherMachinesUnaffected: after revoking
-// m1 its handshakes are refused both ways (0-RTT label included) while m2
+// m1 its handshakes are refused both ways while m2
 // is served; rotating m1 refuses its old file and admits the new one.
 func TestA2AE2EEKeyringRevokeRefusesOnlyThatMachine(t *testing.T) {
 	store := newTestStore(t, "m1", "m2")
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	oldM1 := store.machine("m1")
-	m1, _, m1Ran := echoPair(t, ctx, keyedAgent("rv-m1", oldM1), keyedAgent("rv-hub1", store), &testRelay{})
-	m2, _, _ := echoPair(t, ctx, keyedAgent("rv-m2", store.machine("m2")), keyedAgent("rv-hub2", store), &testRelay{})
-	hub1, node1, node1Ran := echoPair(t, ctx, keyedAgent("rv-hub3", store), keyedAgent("rv-node1", oldM1), &testRelay{})
-	hub2, _, _ := echoPair(t, ctx, keyedAgent("rv-hub4", store), keyedAgent("rv-node2", store.machine("m2")), &testRelay{})
-	invokeOK(t, m1, "rv-hub1")
-	invokeOK(t, hub1, "rv-node1")
+	m1, _, m1Ran := echoPair(t, ctx, keyedAgent("m1-rv", oldM1), keyedAgent("hub-rv1", store), &testRelay{})
+	m2, _, _ := echoPair(t, ctx, keyedAgent("m2-rv", store.machine("m2")), keyedAgent("hub-rv2", store), &testRelay{})
+	hub1, _, node1Ran := echoPair(t, ctx, keyedAgent("hub-rv3", store), keyedAgent("m1-node", oldM1), &testRelay{})
+	hub2, _, _ := echoPair(t, ctx, keyedAgent("hub-rv4", store), keyedAgent("m2-node", store.machine("m2")), &testRelay{})
+	invokeOK(t, m1, "hub-rv1")
+	invokeOK(t, hub1, "m1-node")
 
 	store.revoke("m1")
 	m1Ran.Store(0)
 	node1Ran.Store(0)
-	invokeRefused(t, m1, "rv-hub1", m1Ran)
-	invokeRefused(t, hub1, "rv-node1", node1Ran)
-	learn0RTT(t, node1, oldM1)
-	invokeRefused(t, hub1, "rv-node1", node1Ran)
-	invokeOK(t, m2, "rv-hub2")
-	invokeOK(t, hub2, "rv-node2")
+	invokeRefused(t, m1, "hub-rv1", m1Ran)
+	invokeRefused(t, hub1, "m1-node", node1Ran)
+	invokeOK(t, m2, "hub-rv2")
+	invokeOK(t, hub2, "m2-node")
 
 	store.rotate("m1")
-	invokeRefused(t, m1, "rv-hub1", m1Ran)
-	m1New, _, _ := echoPair(t, ctx, keyedAgent("rv-m1-new", store.machine("m1")), keyedAgent("rv-hub5", store), &testRelay{})
-	invokeOK(t, m1New, "rv-hub5")
-	invokeOK(t, m2, "rv-hub2")
+	invokeRefused(t, m1, "hub-rv1", m1Ran)
+	m1New, _, _ := echoPair(t, ctx, keyedAgent("m1-new", store.machine("m1")), keyedAgent("hub-rv5", store), &testRelay{})
+	invokeOK(t, m1New, "hub-rv5")
+	invokeOK(t, m2, "hub-rv2")
 }
 
 // NoMessageFromRevokedMachine for frames: a revoke ends calls in flight at
@@ -238,9 +239,9 @@ func TestA2AE2EEKeyringRevokeEndsCallsInFlight(t *testing.T) {
 		}
 		return err
 	}
-	toRoot := open(store.machine("m1"), store, "fl-m1", "fl-hub")
-	fromRoot := open(store, store.machine("m1"), "fl-hub2", "fl-node1")
-	other := open(store.machine("m2"), store, "fl-m2", "fl-hub3")
+	toRoot := open(store.machine("m1"), store, "m1-fl", "hub-fl")
+	fromRoot := open(store, store.machine("m1"), "hub-fl2", "m1-node")
+	other := open(store.machine("m2"), store, "m2-fl", "hub-fl3")
 	for _, c := range []call{toRoot, fromRoot, other} {
 		if err := roundTrip(c); err != nil {
 			t.Fatalf("before the revoke: %v", err)
@@ -265,43 +266,32 @@ func TestA2AE2EEKeyringRevokeEndsCallsInFlight(t *testing.T) {
 	}
 }
 
-func learn0RTT(t *testing.T, target *Agent, kr A2AE2EEKeyring) {
-	t.Helper()
-	LearnA2AE2EEPeer(target.agentID, map[string]string{A2AE2EEStaticLabel: target.e2eeStatic().label(target.agentID, kr)})
-	t.Cleanup(func() { LearnA2AE2EEPeer(target.agentID, nil) })
-}
-
-func contains(xs []string, x string) bool {
-	for _, y := range xs {
-		if y == x {
-			return true
-		}
-	}
-	return false
-}
-
-// The keyed handshake payload is pub ‖ tag ‖ key id: a root-key id ("")
-// adds nothing (today's 64 bytes), an id longer than a2aE2EEKeyIDMax is
-// refused.
+// The init is caller 0 callee 0 key id 0 message 1: a machine names its
+// own key id, a root holder calling a root holder "" (message 1 of
+// NNpsk0, 48 bytes), and an id longer than a2aE2EEKeyIDMax is refused.
 func TestA2AE2EEKeyIDOnTheWire(t *testing.T) {
 	store := newTestStore(t, "m1")
-	m := newA2AE2EEState("txn", store.machine("m1"))
-	var init []byte
-	if err := m.ensureClientHandshake(context.Background(), nil, nil, func(p []byte) error { init = p; return errors.New("stop") }); err == nil {
-		t.Fatal("want the stop")
+	initOf := func(caller, callee string, kr A2AE2EEKeyring) []byte {
+		var init []byte
+		s := newA2AE2EEState("txn", caller, callee, kr)
+		if err := s.ensureClientHandshake(context.Background(), nil, nil, func(p []byte) error { init = p; return errors.New("stop") }); err == nil {
+			t.Fatal("want the stop")
+		}
+		return init
 	}
-	if got := string(init[a2aE2EEPubLen+a2aE2EEPairingTagLen:]); got != "m1.1" {
-		t.Fatalf("init key id = %q", got)
+	if got, want := initOf("m1-a", "hub-a", store.machine("m1")), "m1-a\x00hub-a\x00m1.1\x00"; len(got) != len(want)+a2aE2EEKeyedMsg1Len || string(got[:len(want)]) != want {
+		t.Fatalf("machine init = %q", got)
 	}
-	r := newA2AE2EEState("txn", store)
-	if err := r.ensureClientHandshake(context.Background(), nil, nil, func(p []byte) error { init = p; return errors.New("stop") }); err == nil {
-		t.Fatal("want the stop")
+	if got, want := initOf("hub-b", "m1-node", store), "hub-b\x00m1-node\x00m1.1\x00"; string(got[:len(want)]) != want {
+		t.Fatalf("root to machine init = %q", got)
 	}
-	if len(init) != a2aE2EEPubLen+a2aE2EEPairingTagLen {
-		t.Fatalf("root init is %d bytes, want %d (unchanged wire)", len(init), a2aE2EEPubLen+a2aE2EEPairingTagLen)
+	root := initOf("hub-b", "hub-c", store)
+	if want := "hub-b\x00hub-c\x00\x00"; len(root) != len(want)+a2aE2EEKeyedMsg1Len || string(root[:len(want)]) != want {
+		t.Fatalf("root to root init = %q", root)
 	}
-	long := append(append([]byte(nil), init...), strings.Repeat("x", a2aE2EEKeyIDMax+1)...)
-	if _, _, err := newServerA2AE2EEState("txn", long, store); err == nil || !errors.Is(err, errA2AE2EEPairing) {
+	parts := bytes.SplitN(root, []byte{0}, 4)
+	long := append([]byte("hub-b\x00hub-c\x00"+strings.Repeat("x", a2aE2EEKeyIDMax+1)+"\x00"), parts[3]...)
+	if _, _, err := newServerA2AE2EEState("txn", "hub-c", long, store, rand.Reader); err == nil || !errors.Is(err, errA2AE2EEPairing) {
 		t.Fatalf("an over-long key id: %v", err)
 	}
 }

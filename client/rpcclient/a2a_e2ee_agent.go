@@ -62,13 +62,12 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
 		return "Refuse"
 	}
 
-	// A call this agent already serves (its 0-RTT first flight was taken)
-	// is never started a second time.
+	// A call this agent already serves is never started a second time.
 	if _, serving := a.incoming.Load(msg.GetTransactionId()); serving {
 		log.Printf("rpcclient: dropped an A2A E2EE init for txn %s, a call this agent already serves", msg.GetTransactionId())
 		return "" // a second start of a served call: dropped, not traced
 	}
-	state, responderPub, err := newServerA2AE2EEState(msg.GetTransactionId(), msg.GetPayload(), a.keyring())
+	state, ack, err := newServerA2AE2EEState(msg.GetTransactionId(), a.agentID, msg.GetPayload(), a.keyring(), rand.Reader)
 	if err != nil {
 		code := codes.InvalidArgument
 		if errors.Is(err, errA2AE2EEPairing) {
@@ -78,11 +77,11 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
 		return "Refuse"
 	}
 
-	ss := a.newServerStream(msg, state, nil)
+	ss := a.newServerStream(msg, state)
 	a.incoming.Store(ss.txnID, ss)
 
 	if err := a.sendFrame(&pb.TunnelFrame{
-		Payload:       responderPub,
+		Payload:       ack,
 		MessageType:   a2aE2EEAckMessageType,
 		TransactionId: ss.txnID,
 		Timestamps:    &pb.Timestamps{ResponseAtAgent: time.Now().UnixMilli()},
@@ -94,81 +93,6 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
 		return "Refuse"
 	}
 
-	a.wg.Add(1)
-	go a.handleCall(ss, h)
-	return "Start"
-}
-
-// e2eeStatic is this agent's static key: the process's, unless replaced.
-func (a *Agent) e2eeStatic() *a2aE2EEStatic {
-	if st := a.a2aStatic.Load(); st != nil {
-		return st
-	}
-	st, _ := processA2AE2EEStatic()
-	return st
-}
-
-// handleE2EEInit0RTT takes a 0-RTT first flight (a2a_e2ee_0rtt.go): it
-// answers message 2 at once and starts the handler with the request, or
-// refuses it with a2a-e2ee-retry and the caller runs the interactive
-// handshake on the same call.
-func (a *Agent) handleE2EEInit0RTT(msg *pb.TunnelFrame) string {
-	txnID := msg.GetTransactionId()
-	if !a.a2aE2EEInbound.Load() {
-		a.sendA2AControlError(txnID, codes.FailedPrecondition,
-			"target agent does not support A2A E2EE; retry with --e2ee=false or upgrade the target")
-		return "Refuse"
-	}
-	a.handlerMu.RLock()
-	h := a.handler
-	a.handlerMu.RUnlock()
-	if h == nil {
-		a.sendA2AControlError(txnID, codes.Unimplemented, "target agent has no A2A handler registered")
-		return "Refuse"
-	}
-	if _, serving := a.incoming.Load(txnID); serving {
-		log.Printf("rpcclient: dropped an A2A E2EE first flight for txn %s, a call this agent already serves", txnID)
-		return "" // a second start of a served call: dropped, not traced
-	}
-	kr := a.keyring()
-	var ownID string
-	var pairing []byte
-	if kr != nil {
-		ownID, pairing = kr.Own()
-	}
-	var accepted a2aE2EEAccepted
-	var e []byte
-	refusal := refuseBad
-	if st := a.e2eeStatic(); st != nil {
-		accepted, e, refusal = st.accept(pairing, txnID, msg.GetPayload(), time.Now(), rand.Reader)
-	}
-	if refusal != 0 {
-		if err := a.sendFrame(&pb.TunnelFrame{
-			Payload:       retryPayload(pairing, a.agentID, txnID, e, refusal),
-			MessageType:   a2aE2EERetryMessageType,
-			TransactionId: txnID,
-			Timestamps:    &pb.Timestamps{ResponseAtAgent: time.Now().UnixMilli()},
-			Routing:       &pb.RoutingInfo{AgentId: a.agentID},
-		}); err != nil {
-			log.Printf("rpcclient: failed to send A2A E2EE retry for txn %s: %v", txnID, err)
-		}
-		return "" // the caller starts the call again with an init
-	}
-	accepted.state.kr, accepted.state.kid, accepted.state.pk = kr, ownID, pairing
-	ss := a.newServerStream(msg, accepted.state, accepted.request)
-	a.incoming.Store(txnID, ss)
-	if err := a.sendFrame(&pb.TunnelFrame{
-		Payload:       accepted.ack,
-		MessageType:   a2aE2EEAckMessageType,
-		TransactionId: txnID,
-		Timestamps:    &pb.Timestamps{ResponseAtAgent: time.Now().UnixMilli()},
-		Routing:       &pb.RoutingInfo{AgentId: a.agentID},
-	}); err != nil {
-		ss.end()
-		a.incoming.Delete(txnID)
-		log.Printf("rpcclient: failed to send A2A E2EE ack for txn %s: %v", txnID, err)
-		return "Refuse"
-	}
 	a.wg.Add(1)
 	go a.handleCall(ss, h)
 	return "Start"
