@@ -21,7 +21,7 @@ which uses the SDK). **Docs:** this file, [CONTRIBUTING.md](CONTRIBUTING.md),
 | Module | Import path | What it holds |
 |---|---|---|
 | [`proto/`](proto) | `github.com/nfltr/relay/proto` | the v1 protos (`nfltr.relay.v1`, `nfltr.blob.v1`, `nfltr.mailbox.v1`, `nfltr.presence.v1`) with their generated Go, `pb` (the agent wire: the `rpcserver.Dispatcher` gRPC service agents and clients connect over), and `wire/*`: the hand-written codecs both ends speak (agent-wire metadata, data plane, WebSocket frames, blob headers, WireGuard endpoint protocol) |
-| [`client/`](client) | `github.com/nfltr/relay/client` | the SDK: `agent` (expose a local HTTP service through the relay; `agent/wgexit` makes it a WireGuard exit, so only programs that import it link wireguard-go and gvisor), `rpcclient` (agent-to-agent calls), `grpcclient` (dialing, mTLS), `p2p`, `relayblob`, `mailboxclient`, `presenceclient`, `wg`, `relayoutage`, `relaytrust` |
+| [`client/`](client) | `github.com/nfltr/relay/client` | the SDK: `agent` (expose a local HTTP service through the relay; `agent/wgexit` makes it a WireGuard exit, so only programs that import it link wireguard-go and gvisor), `rpcclient` (agent-to-agent calls), `grpcclient` (dialing, mTLS), `p2p`, `relayblob`, `mailboxclient`, `presenceclient`, `wg`, `relayoutage`, `relaytrust`, `machinecert` (a machine's key, CSR and certificate renewal) |
 
 The modules are versioned on their own: tags `proto/vX.Y.Z` and
 `client/vX.Y.Z`.
