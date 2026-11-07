@@ -102,9 +102,13 @@ depth 14, every action taken (`-coverage 1`), about 4 s at low load.
   `reorder` (a frame put before earlier ones on the direct path):
   `PathOrdered`. Witnesses `W_PathOrdered`, `W_ReadBound`, `W_Stall`.
 - **L4, L5 (low, fixed, lane WGFIX2)**: a frame no path took stays out of
-  the replay window and its number is reused (`WriteFrame` returned an
-  error for a frame a later `AddPath` replayed:
-  `TestSignalConnFailedWriteIsNotReplayed`); a frame too large for the
+  the replay window (`WriteFrame` returned an error for a frame a later
+  `AddPath` replayed); since lane E2EEFIX it also ends the SignalConn and
+  its number is never reused: the number is a sealed path's AES-GCM nonce
+  and the write may have gone out in part (E2EEPROOF finding 4,
+  `TestSignalConnFailedWriteEndsIt`; below the model, which has no
+  partial writes: the code's behaviours after it are a subset of the
+  model's); a frame too large for the
   relay window is refused before it is numbered (it closed the relay path
   and so the data fallback: `TestSignalConnOversizeFrameKeepsPaths`). The
   model's `Write`, disabled with no live path, is the fixed behaviour.

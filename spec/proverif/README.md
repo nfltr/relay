@@ -202,15 +202,39 @@ service table's `e2ee: true` service).
 |---|---|---|
 | 1 | payload secret (pin from the agent's own output, target fixed by the agent) | holds |
 | 2 | injective agreement: a response the client accepts came from the pinned key in that session | holds |
-| 3 | `nfltr tcp --e2ee` without `--forward`: payload secret | **attack**: the relay names the target, the agent sends the client's plaintext there (finding) |
+| 3 | `nfltr tcp --e2ee` without `--forward`: payload secret | holds: the agent refuses a pinned session without a target of its own (`ErrE2EENoFixedTarget`, `ERROR_REASON_TARGET_REFUSED`); before lane E2EEFIX it dialled the relay's target (finding 1, mutant `relay-names-target`) |
 | 4 | rotation: the old key leaks; a client pinned to the new certificate | holds |
 | 5 | ... a client still pinned to the old certificate | attack: a rotation revokes no pin; re-pin |
 | 6 | first use: a pin taken from what the relay shows (dashboard), or an SSH host key on first use (`nfltr shell`: OpenSSH known_hosts; a new key every start without `--host-key`) | attack |
 | 7 | the agent's service against the relay | attack: no client authentication; E2EE only is not access control against the relay |
 
 Mutants: skip the pin check, a relay-supplied pin, plaintext when the relay
-gives no answer, the relay's target despite `--forward`, accept a response
+gives no answer, the relay's target without `--forward` (finding 1 before
+its fix), the relay's target despite `--forward`, accept a response
 without the session key.
+
+### e2ee_tcp_clientauth.pv: client pins at the agent (design for finding 2)
+
+Query 7 of `e2ee_tcp.pv` is a limit: the agent authenticates no client, so
+a relay opens a pinned session of its own and reaches the service. This
+model is the design lane E2EEFIX chose for it (code queued as E2EEFIX2;
+nfltr `docs/decisions/e2ee-fix-2026-11-07.md` "Finding 2"): the client
+presents a TLS client certificate for a key of its own, the agent requires
+one and accepts only a key on its own allow-list, filled out of band as the
+client's server pin is. The attacker also holds the relay's CA and a
+client key once allowed and then removed.
+
+| # | query | result |
+|---|---|---|
+| 1 | the agent's service, against the relay | holds |
+| 2 | what reaches the service was sent by the allowed client | holds |
+| 3 | the client's payload secret; injective agreement on its responses | holds |
+| 4 | a removed client key (leaked) reaches nothing | holds |
+| 5 | witness: an allowed client reaches the service | attack (reachable), as it must |
+
+Mutants: the agent takes any client certificate (`any-client-cert`: a
+relay-CA client certificate is this case, the relay can mint one), skips
+CertificateVerify (`skip-certificate-verify`).
 
 ### wg_exit.pv: WireGuard client and exit (Track B)
 
@@ -243,9 +267,11 @@ side's fingerprint is fixed before the relay picks its second key).
 Mutants: no pairing salt, skip the responder's confirmation check, old
 protocol in plaintext, accept any DTLS fingerprint, the SDP unsealed,
 fingerprints not compared. Below the model (nonces are not symbolic): a
-SignalConn frame no path took gives its sequence number back
-(`sigconn.go` `sendSeq--`), so a frame partly written before its error is
-followed by another sealed under the same nonce (finding, LEFTOVERS).
+SignalConn frame no path took gave its sequence number back
+(`sigconn.go` `sendSeq--`), so a frame partly written before its error was
+followed by another sealed under the same nonce (finding 4); since lane
+E2EEFIX a failed write spends its number and ends the SignalConn
+(`TestSignalConnFailedWriteEndsIt`).
 
 ### First use
 
@@ -278,6 +304,8 @@ followed by another sealed under the same nonce (finding, LEFTOVERS).
 | e2ee_tcp.pv | client/relaytrust/relaytrust.go |
 | e2ee_tcp.pv | client/agent/session_plan.go |
 | e2ee_tcp.pv | client/agent/tls.go |
+| e2ee_tcp.pv | client/agent/agent.go |
+| e2ee_tcp_clientauth.pv | client/agent/tls.go |
 | wg_exit.pv | client/wg/keys.go |
 | wg_exit.pv | client/wg/tunnel.go |
 | wg_exit.pv | client/agent/wgexit/wgexit.go |

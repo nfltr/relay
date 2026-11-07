@@ -22,9 +22,11 @@
      nfltr .../tcp_connect_session.go:133-141  no answer: a pinned session is refused
      nfltr .../tcp_connect_session.go:195-209  TLS 1.3, VerifyPeerCertificate: fingerprint == pin
      nfltr cmd/nfltr/internal/upcli/agent.go:135 the pin comes from the agent's own output
-     client/agent/session_plan.go:62,75-76    target: the table's, --forward's, else the relay's TargetAddr
-     client/agent/session_plan.go:90-106      E2EE only: pinned -> TLS here, unpinned refused
-     client/agent/session_plan.go:314-326     serveE2EETCP: TLS, then the plaintext to the dialled target
+     client/agent/session_plan.go:76,89-90    target: the table's, --forward's, else the relay's TargetAddr
+     client/agent/session_plan.go:104-118     E2EE only: pinned -> TLS here, unpinned refused
+     client/agent/session_plan.go:113-114     E2EE only without --forward: a pinned session refused (finding 1)
+     client/agent/agent.go:351-353            TCPE2EEOnly without TCPForwardAddr: Connect fails
+     client/agent/session_plan.go:333-345     serveE2EETCP: TLS, then the plaintext to the dialled target
      client/agent/tls.go:165-179              no client authentication
      client/agent/tls.go:202-216              rotateCert: one certificate at a time *)
 
@@ -72,12 +74,17 @@ let Client(pin: bitstring, m: bitstring) =
   event ClientRecv(pin, k, r).
 
 (* The agent: E2EE only; refuses an unpinned session; after TLS bridges the
-   plaintext to the target. fixed = the target is the agent's (a service
-   table, --forward); otherwise it is the open's, i.e. the relay's. *)
+   plaintext to the target. fixed = the agent has a target of its own (a
+   service table, --forward); without one a pinned session is refused, the
+   open's target being the relay's. relay-names-target: before finding 1's
+   fix, the agent without one dialled the open's target. *)
 let Agent(sk: skey, fixed: bool) =
   in(c, (target: bitstring, e2ee: bool));
-  if e2ee = true then                                (* session_plan.go:101-106: unpinned refused *)
-  let t = if fixed then svcAddr else target in       (* session_plan.go:62,75-76 *) (* NOT:relay-names-target-with-forward *)
+  if e2ee = true then                                (* session_plan.go:120-125: unpinned refused *)
+  let t0 = if fixed then svcAddr else target in (* ONLY:relay-names-target *)
+  if fixed = true then                               (* session_plan.go:113-114: no fixed target, refused *) (* NOT:relay-names-target *)
+  let t0 = svcAddr in                                (* session_plan.go:76,89-90 *) (* NOT:relay-names-target *)
+  let t = t0 in (* NOT:relay-names-target-with-forward *)
   let t = target in (* ONLY:relay-names-target-with-forward *)
   out(c, pk(sk));
   in(c, ek: bitstring);                              (* no client authentication (tls.go:165-179) *)
@@ -98,9 +105,11 @@ query attacker(payloadFixed).
 (* expect true *)
 query k: bitstring, r: bitstring;
   inj-event(ClientRecv(fp(pk(sk1)), k, r)) ==> inj-event(AgentSent(fp(pk(sk1)), k, r)).
-(* 2. FINDING: nfltr tcp --e2ee without --forward: the relay names the
-   target, the agent dials it and sends it the client's plaintext *)
-(* expect false *)
+(* 2. nfltr tcp --e2ee without --forward: the relay names the target; the
+   agent refuses the session (finding 1 fixed: before, it dialled the
+   relay's target and sent it the client's plaintext; mutant
+   relay-names-target) *)
+(* expect true *)
 query attacker(payloadRelayTarget).
 (* 3. rotation: the old key leaks after RotateE2EECert; a client pinned to
    the new certificate keeps its secrecy, one still pinned to the old one

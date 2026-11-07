@@ -50,7 +50,6 @@ func TestPinnedSessionToTunnelTargetCarriesBytes(t *testing.T) {
 		target  string
 		kind    sessionKind
 	}{
-		{"bytes, a port's target", sessionTargets{e2eeOnly: true, defaultBackend: "http://" + target}, target, sessionE2EETCP},
 		{"bytes, forward", sessionTargets{e2eeOnly: true, forwardAddr: target, defaultBackend: "http://" + target}, "localhost:1", sessionE2EETCP},
 		{"bytes, SNI share marker", sessionTargets{e2eeOnly: true, defaultBackend: "http://" + target}, "__e2ee__", sessionE2EE},
 		{"bytes, no raw targets", sessionTargets{e2eeOnly: true, noRaw: true, defaultBackend: "http://" + target}, target, sessionE2EE},
@@ -73,9 +72,9 @@ func TestPinnedSessionToTunnelTargetCarriesBytes(t *testing.T) {
 	want := sha256.Sum256(payload)
 	pin := sha256.Sum256(cert.Certificate[0])
 
-	l := &linkSessions{ctx: t.Context(), targets: sessionTargets{e2eeOnly: true, defaultBackend: "http://" + target}, e2ee: e2ee, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+	l := &linkSessions{ctx: t.Context(), targets: sessionTargets{e2eeOnly: true, forwardAddr: target, defaultBackend: "http://" + target}, e2ee: e2ee, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 	s, c := sessionPair(t)
-	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: target, E2Ee: true, Answer: true})
+	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: "localhost:1", E2Ee: true, Answer: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,6 +186,42 @@ func TestE2EEOnlyTunnelRefusesUnpinnedSessions(t *testing.T) {
 	go l.accept("", h, s)
 	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED {
 		t.Fatalf("answer %v, %v; want ERROR_REASON_E2EE_REQUIRED", a, err)
+	}
+}
+
+// With Config.TCPE2EEOnly a pinned session goes only to the target the
+// agent fixed (Config.TCPForwardAddr): one the relay names is refused with
+// ERROR_REASON_TARGET_REFUSED, never dialled, and an agent configured
+// without a fixed target does not start. Before: the agent dialled the
+// open's TargetAddr, which the relay writes, and sent it the pinned
+// client's plaintext (E2EEPROOF finding 1, spec/proverif/e2ee_tcp.pv query 3).
+func TestE2EEOnlyTunnelRefusesRelayNamedTarget(t *testing.T) {
+	cert, _, err := generateSelfSignedCert("agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e2ee := newE2EETLSConfig(cert, "agent")
+	relayTarget := echoTarget(t) // reachable: only the plan keeps it from being dialled
+	only := sessionTargets{e2eeOnly: true, defaultBackend: "http://" + relayTarget}
+	_, err = planSession(&pb.TCPData{Open: true, TargetAddr: relayTarget, E2Ee: true, Answer: true}, only, e2ee)
+	if got := refusalReason(err); err == nil || got != relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED {
+		t.Fatalf("pinned open to the relay's target: %v (reason %v), want ERROR_REASON_TARGET_REFUSED", err, got)
+	}
+
+	l := &linkSessions{ctx: t.Context(), targets: only, e2ee: e2ee, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+	s, c := sessionPair(t)
+	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: relayTarget, E2Ee: true, Answer: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go l.accept("", h, s)
+	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED {
+		t.Fatalf("answer %v, %v; want ERROR_REASON_TARGET_REFUSED", a, err)
+	}
+
+	a := New(Config{AgentID: "a", TCPTunnel: true, TCPE2EEOnly: true}, WithSelfSignedTLS())
+	if err := a.Connect(t.Context()); !errors.Is(err, ErrE2EENoFixedTarget) {
+		t.Fatalf("Connect without TCPForwardAddr: %v, want ErrE2EENoFixedTarget", err)
 	}
 }
 

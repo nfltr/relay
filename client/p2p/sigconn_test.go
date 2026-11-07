@@ -315,33 +315,59 @@ func TestSignalConnStalledRelayDoesNotBlockDirect(t *testing.T) {
 	}
 }
 
-// failWritePath refuses every write and keeps its reader open.
-type failWritePath struct{ quit chan struct{} }
+// failWritePath takes each write's sequence number, as a write that went
+// partly out before its error (a write deadline, a buffered Send) does,
+// fails it, and keeps its reader open.
+type failWritePath struct {
+	quit chan struct{}
+	seqs chan uint64
+}
 
-func (p failWritePath) WriteFrame(*Frame) error { return errors.New("write refused") }
+func (p failWritePath) WriteFrame(f *Frame) error {
+	p.seqs <- f.Seq
+	return errors.New("write refused")
+}
 func (p failWritePath) ReadFrame() (*Frame, error) {
 	<-p.quit
 	return nil, io.EOF
 }
 func (p failWritePath) Close() error { return nil }
 
-// A frame no path took is not replayed to a later path (review r2 L4): the
-// caller saw an error for it.
-func TestSignalConnFailedWriteIsNotReplayed(t *testing.T) {
-	first := failWritePath{make(chan struct{})}
+// A frame no path took ends the SignalConn: its sequence number (a sealed
+// path's AES-GCM nonce) may have reached the wire in part, so it is never
+// given back and sealed again for another frame, and the frames after it
+// would leave the peer a gap. Before (E2EEPROOF finding 4): sendSeq-- gave
+// the number back and the next frame was sealed under the same nonce. Not
+// replayed to a later path either (review r2 L4): a path added after it
+// is closed.
+func TestSignalConnFailedWriteEndsIt(t *testing.T) {
+	first := failWritePath{make(chan struct{}), make(chan uint64, 4)}
 	defer close(first.quit)
 	sc := NewSignalConn(first)
 	defer sc.Close() //nolint:errcheck
 	if err := sc.WriteFrame(&Frame{Type: FrameChat, Text: "failed"}); err == nil {
 		t.Fatal("a write no path took succeeded")
 	}
+	if err := sc.WriteFrame(&Frame{Type: FrameChat, Text: "b"}); !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("a write after a failed one: %v, want io.ErrClosedPipe", err)
+	}
 	later := newChanPath()
 	sc.AddPath(later)
-	if err := sc.WriteFrame(&Frame{Type: FrameChat, Text: "b"}); err != nil {
-		t.Fatal(err)
+	select {
+	case <-later.closed:
+	case f := <-later.written:
+		t.Fatalf("a path added after the failed write carried %q seq %d", f.Text, f.Seq)
 	}
-	if f := <-later.written; f.Text != "b" || f.Seq != 1 {
-		t.Fatalf("the later path carried %q seq %d first, want b seq 1", f.Text, f.Seq)
+	close(first.seqs)
+	var seqs []uint64
+	for q := range first.seqs {
+		seqs = append(seqs, q)
+	}
+	if len(seqs) != 1 || seqs[0] != 1 {
+		t.Fatalf("sequence numbers handed to the path %v, want [1]", seqs)
+	}
+	if _, err := sc.ReadFrame(); !errors.Is(err, io.EOF) {
+		t.Fatalf("read after the failed write: %v, want io.EOF", err)
 	}
 }
 

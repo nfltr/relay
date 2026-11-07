@@ -45,6 +45,12 @@ type sessionPlan struct {
 // share session to a whole agent (relay-core TCPDispatcher.RouteConnection).
 const e2eeShareTarget = "__e2ee__"
 
+// ErrE2EENoFixedTarget: Config.TCPE2EEOnly without Config.TCPForwardAddr.
+// An end-to-end encrypted session's plaintext goes only to a target the
+// agent fixed; the relay names a session's target, so one it names is
+// refused (spec/proverif/e2ee_tcp.pv query 3).
+var ErrE2EENoFixedTarget = errors.New("an end-to-end encrypted tunnel needs a fixed target (TCPForwardAddr): the agent never dials a target the relay names")
+
 var (
 	errNoHTTPSessions = errors.New("this agent serves no HTTP sessions")
 	errNoRawTargets   = errors.New("this agent serves no tcp targets")
@@ -98,10 +104,15 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 		case targets.e2eeOnly && open.GetTargetAddr() != e2eeShareTarget && !targets.noRaw:
 			// Config.TCPE2EEOnly (nfltr tcp --e2ee): a pinned session to
 			// a target of a tunnel without a table ends TLS here and its
-			// bytes go to the target a raw session dials; the SNI marker
-			// stays an E2EE share's HTTP. Without the option a pinned
-			// session is HTTP to the default route (relay-core
+			// bytes go to the agent's fixed target (TCPForwardAddr), never
+			// to the open's, which the relay writes (E2EEPROOF finding 1;
+			// guard TestE2EEOnlyTunnelRefusesRelayNamedTarget); the SNI
+			// marker stays an E2EE share's HTTP. Without the option a
+			// pinned session is HTTP to the default route (relay-core
 			// TestCoreProcessTLSAndE2EE). Guard: TestPinnedSessionToTunnelTargetCarriesBytes.
+			if targets.forwardAddr == "" {
+				return sessionPlan{}, &ServiceRefusedError{Target: open.GetTargetAddr(), E2EE: true, Answer: relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED, Reason: ErrE2EENoFixedTarget.Error()}
+			}
 			p.kind = sessionE2EETCP
 		}
 		return p, nil

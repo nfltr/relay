@@ -200,7 +200,8 @@ const maxFrameJSON = (muxSignalMax-256)/4*3 - 16 - 32
 var errFrameTooLarge = errors.New("p2p: signaling frame too large for the relay window")
 
 // WriteFrame numbers f and writes it on every open path. It fails only when
-// no path took it; such a frame is not numbered or replayed to a later path.
+// no path took it; that ends the SignalConn (its number is spent, never
+// reused or replayed to a later path).
 func (sc *SignalConn) WriteFrame(f *Frame) error {
 	if b, err := json.Marshal(f); err != nil {
 		return fmt.Errorf("p2p: marshal frame: %w", err)
@@ -238,7 +239,14 @@ func (sc *SignalConn) WriteFrame(f *Frame) error {
 		sc.sent = append(sc.sent, &g)
 		return nil
 	}
-	sc.sendSeq-- // no path took it: the caller sees the error, no peer the frame
+	// No path took it, but a write may have gone out in part (a write
+	// deadline, a buffered Send): its number, a sealed path's AES-GCM
+	// nonce, is never given back, and the frames after it would leave the
+	// peer a gap, so the SignalConn ends (E2EEPROOF finding 4; guard
+	// TestSignalConnFailedWriteEndsIt). Every path it had failed and is
+	// closed.
+	sc.closed = true
+	sc.once.Do(func() { close(sc.done) })
 	if err == nil {
 		err = io.ErrClosedPipe
 	}

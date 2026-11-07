@@ -1,0 +1,103 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   e2ee_tcp_clientauth.pv: the DESIGN for E2EEPROOF finding 2 (lane
+   E2EEFIX, code queued as lane E2EEFIX2): a pinned TCP session (e2ee_tcp.pv)
+   whose agent also authenticates the client, so a relay can no longer open
+   a pinned session of its own and reach the agent's service (e2ee_tcp.pv
+   query 7). spec/proverif/README.md "e2ee_tcp_clientauth.pv"; nfltr
+   docs/decisions/e2ee-fix-2026-11-07.md "Finding 2".
+
+   Chosen: client pins. The client presents a TLS client certificate for a
+   key of its own (crypto/tls Certificates; self-signed, no CA); the agent
+   requires one (tls.RequireAnyClientCert) and accepts it only if the
+   key's fingerprint is on its own allow-list (VerifyPeerCertificate), which
+   the owner fills out of band, as the client fills its server pin. TLS 1.3
+   CertificateVerify is modelled as the client's signature over a hash of
+   the session key and the server key (the transcript). The attacker owns the relay,
+   the network, the relay's CA (it can mint any certificate, so a relay-CA
+   client certificate is no check: mutant any-client-cert, the agent taking
+   any certificate, is that case) and one client key the owner once allowed
+   and then removed (revocation is removal from the list). *)
+
+free c: channel.
+
+type skey.
+type pkey.
+fun pk(skey): pkey.
+fun fp(pkey): bitstring.
+fun aenc(bitstring, pkey): bitstring.
+reduc forall m: bitstring, k: skey; adec(aenc(m, pk(k)), k) = m.
+fun senc(bitstring, bitstring): bitstring.
+reduc forall m: bitstring, k: bitstring; sdec(senc(m, k), k) = m.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+fun h(bitstring): bitstring.                (* the transcript hash: it shows nothing of the key *)
+
+const svcAddr, answerOK, c2s, s2c: bitstring.
+
+free payload: bitstring [private].
+free cskOld: skey [private].                (* a client key removed from the list, leaked *)
+free svcData: bitstring [private].          (* what the agent's service answers an allowed client *)
+
+event ClientRecv(bitstring, bitstring, bitstring).   (* server pin, session key, response *)
+event AgentSent(bitstring, bitstring, bitstring).
+event ServiceGot(pkey, bitstring).                   (* the allowed client key, its bytes *)
+event ClientSent(pkey, bitstring).
+
+(* The pinned client with a key of its own. *)
+let Client(pin: bitstring, csk: skey, m: bitstring) =
+  out(c, (svcAddr, true));
+  in(c, answer: bitstring);
+  if answer = answerOK then
+  in(c, spk: pkey);
+  if fp(spk) = pin then
+  new k: bitstring;
+  out(c, aenc(k, spk));
+  out(c, (pk(csk), sign(h((k, spk)), csk)));          (* Certificate + CertificateVerify *)
+  event ClientSent(pk(csk), m);
+  out(c, senc((c2s, m), k));
+  in(c, e: bitstring);
+  let (=s2c, r: bitstring) = sdec(e, k) in
+  event ClientRecv(pin, k, r).
+
+(* The agent: a fixed target (finding 1), and a client key on its list. *)
+let Agent(sk: skey, allowed: pkey) =
+  in(c, (target: bitstring, e2ee: bool));
+  if e2ee = true then
+  out(c, pk(sk));
+  in(c, ek: bitstring);
+  let k = adec(ek, sk) in
+  in(c, (cpk: pkey, cv: bitstring));
+  if cpk = allowed then                               (* the allow-list *) (* NOT:any-client-cert *)
+  if checksign(cv, cpk) = h((k, pk(sk))) then         (* CertificateVerify *) (* NOT:skip-certificate-verify *)
+  in(c, e: bitstring);
+  let (=c2s, m: bitstring) = sdec(e, k) in
+  event ServiceGot(cpk, m);
+  new r: bitstring;
+  event AgentSent(fp(pk(sk)), k, (r, svcData));
+  out(c, senc((s2c, (r, svcData)), k)).
+
+(* 1. the service, against the relay: only an allowed client reaches it *)
+(* expect true *)
+query attacker(svcData).
+(* 2. what reaches the service was sent by the allowed client *)
+(* expect true *)
+query ck: pkey, m: bitstring; event(ServiceGot(ck, m)) ==> event(ClientSent(ck, m)).
+(* 3. the client's payload stays secret, its responses come from the pin *)
+(* expect true *)
+query attacker(payload).
+(* expect true *)
+query k: bitstring, r: bitstring, p: bitstring;
+  inj-event(ClientRecv(p, k, r)) ==> inj-event(AgentSent(p, k, r)).
+(* 4. a removed client key (leaked) reaches nothing: the list is the check *)
+(* expect true *)
+query m: bitstring; event(ServiceGot(pk(cskOld), m)).
+(* 5. witness: an allowed client does reach the service *)
+(* expect false *)
+query ck: pkey, m: bitstring; event(ServiceGot(ck, m)).
+
+process
+  new sk: skey; new csk: skey;
+  out(c, pk(sk)); out(c, pk(csk)); out(c, cskOld);
+  ( (!Agent(sk, pk(csk))) | (!Client(fp(pk(sk)), csk, payload)) )

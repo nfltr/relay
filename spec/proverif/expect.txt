@@ -30,14 +30,19 @@ a2a_machine clear-end TTTTTTTTTFTTFFF
 # Part 3: the agent-side E2EE paths (e2ee_tcp: pinned TCP; wg_exit:
 # WireGuard client and exit; p2p_e2e: p2p). Queries in README "E2EE paths";
 # an F on the base line is a finding or a documented limit there.
-e2ee_tcp - TTFTFFF
+e2ee_tcp - TTTTFFF
 wg_exit - TTFTFF
 p2p_e2e - TTTTFT
 e2ee_tcp skip-pin-check FFFFFFF
 e2ee_tcp relay-supplied-pin FFFFFFF
 e2ee_tcp plaintext-without-answer FTFFFFF
-e2ee_tcp relay-names-target-with-forward FTFFFFF
-e2ee_tcp agreement-without-key-check TFFTFFF
+e2ee_tcp relay-names-target TTFTFFF
+e2ee_tcp relay-names-target-with-forward FTTFFFF
+e2ee_tcp agreement-without-key-check TFTTFFF
+# The design for finding 2 (code: lane E2EEFIX2): client pins at the agent.
+e2ee_tcp_clientauth - TTTTTF
+e2ee_tcp_clientauth any-client-cert FFTTFF
+e2ee_tcp_clientauth skip-certificate-verify FFTTTF
 wg_exit psk-dropped-on-relay-word FTFFFF
 wg_exit client-no-psk FTFFTF
 wg_exit exit-no-psk TFFTFF

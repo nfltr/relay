@@ -21,7 +21,9 @@
      client/p2p/e2e.go:132-148     confirm = HMAC(k_confirm, role); checkConfirm
      client/p2p/e2e.go:152-156     Fingerprint (80 bits) the CLIs print
      client/p2p/e2e.go:160-206     Answer, FinishOffer, AwaitConfirm
-     client/p2p/e2e.go:340-386     sealed signaling frames (the SDP)
+     client/p2p/e2e.go:340-386     sealed signaling frames (the SDP); nonce = the frame's number
+     client/p2p/sigconn.go:241-249 a failed write spends its number and ends the SignalConn: no nonce
+                                   is sealed twice (below the model: the encryption is ideal)
      client/p2p/rtcdata.go:109     no data path without E2E
      nfltr cmd/nfltr/internal/transportcli/p2p_session.go:199  answer.Proto < SignalProto refused
      nfltr cmd/nfltr/internal/transportcli/p2p_transfer.go:314 offer.Proto < SignalProto refused *)

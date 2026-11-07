@@ -148,12 +148,14 @@ type Config struct {
 	// TCPE2EEOnly makes the TCP tunnel end-to-end encrypted only. An end
 	// to end encrypted session that names a target (a pinned connect
 	// session: tcp-connect/dial --pin) is TLS ended here with the
-	// plaintext bridged to that target, byte for byte as a raw session's;
+	// plaintext bridged to TCPForwardAddr, byte for byte as a raw session's;
 	// any other session to a target (no pin: the relay could read it) is
 	// refused with ERROR_REASON_E2EE_REQUIRED. Without it a pinned session
 	// is HTTP to the default route, as an E2EE share's (the relay's SNI
 	// sessions are that either way), and a plain one is a raw session.
-	// With TCPTunnel and an E2EE certificate.
+	// With TCPTunnel, an E2EE certificate and TCPForwardAddr: the pinned
+	// session's target is that, never the open's (Connect fails with
+	// ErrE2EENoFixedTarget without it).
 	TCPE2EEOnly bool
 
 	// Capabilities is a list of capability identifiers advertised to the
@@ -345,6 +347,9 @@ func New(cfg Config, opts ...Option) Agent {
 	}
 	for _, opt := range opts {
 		opt(a)
+	}
+	if cfg.TCPE2EEOnly && cfg.TCPForwardAddr == "" && a.initErr == nil {
+		a.initErr = ErrE2EENoFixedTarget
 	}
 	a.client = newBackendClient(cfg)
 	if a.wrapTransport != nil {
