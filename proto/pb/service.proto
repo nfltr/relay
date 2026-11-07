@@ -36,7 +36,8 @@ message Timestamps {
 // RoutingInfo carries routing and control information shared by both the HTTP
 // proxy path and the gRPC tunnel path.
 message RoutingInfo {
-  // agent_id is the On-Prem Host ID of the source agent.
+  // agent_id is the source agent: its agent ref (relay-core
+  // identity.AgentRef, "<machine id>-<service>").
   string agent_id = 1;
   // target_agent_id is the destination agent for agent-to-agent (A2A) calls.
   // Empty for normal cloud→agent requests.
@@ -54,6 +55,21 @@ message RoutingInfo {
   // opaque to agents; 0 from a relay that does not number them. The relay's
   // own services apply a call only to the connection that made it.
   uint64 source_session = 5;
+  // caller_group is the source agent's machine's group (its account's
+  // group id), set by the relay on the frames it routes (a value the agent
+  // sends is replaced); "" from a relay that does not send it.
+  string caller_group = 6;
+}
+
+// CallerIdentity is the machine that opened a session, as the relay
+// authenticated it (never anything the caller sent). machine_id, group_id
+// and account are ids; machine_name is the machine's current name, for
+// display only (a rename changes it, nothing keys on it).
+message CallerIdentity {
+  string machine_id   = 1;
+  string group_id     = 2;
+  string account      = 3;
+  string machine_name = 4;
 }
 
 // ---------------------------------------------------------------------------
@@ -184,7 +200,8 @@ message TCPData {
   // session_id uniquely identifies one TCP connection within the stream.
   string session_id  = 1;
 
-  // agent_id of the target agent (set by server on the open frame).
+  // agent_id of the target agent (set by server on the open frame): its
+  // agent ref (relay-core identity.AgentRef, "<machine id>-<service>").
   string agent_id       = 2;
 
   // data is raw TCP payload bytes for this frame (empty on open/close frames).
@@ -242,6 +259,12 @@ message TCPData {
   // a link leg it is link's reset (CLOSE code 2). A receiver that does not
   // know the field closes as before (a FIN).
   bool   abort       = 11;
+
+  // caller, on an open, is the machine that opened the session as the
+  // relay authenticated it (CallerIdentity). Absent from a relay that does
+  // not send it, and on a session no machine opened (a share visitor's):
+  // the agent then knows no caller.
+  CallerIdentity caller = 12;
 }
 
 // ---------------------------------------------------------------------------

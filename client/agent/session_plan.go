@@ -53,6 +53,14 @@ var (
 // planSession resolves a session's open (its frame on a stream, its header
 // on the agent link) against what the tunnel serves; an error refuses it.
 func planSession(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (sessionPlan, error) {
+	p, err := planOpen(open, targets, e2ee)
+	if err == nil && targets.services != nil && targets.services.onSession != nil {
+		targets.services.onSession(Session{Service: open.GetTargetAddr(), caller: open.GetCaller()})
+	}
+	return p, err
+}
+
+func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (sessionPlan, error) {
 	if open.GetTargetAddr() == dataplane.HTTPSessionTarget && !open.GetE2Ee() {
 		if targets.http == nil {
 			return sessionPlan{}, errNoHTTPSessions

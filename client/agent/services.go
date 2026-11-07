@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
+	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 )
 
@@ -44,10 +45,40 @@ type Service struct {
 // refused (closed, logged, counted), never dialled: the agent is no open
 // forwarder. Build it before the tunnel runs; it is read-only after.
 type ServiceTable struct {
-	byName  map[string]*tableService
-	decls   []agentservices.Decl
-	refused atomic.Uint64
+	byName    map[string]*tableService
+	decls     []agentservices.Decl
+	refused   atomic.Uint64
+	onSession func(Session)
 }
+
+// Caller is the machine that opened a session, as the relay authenticated
+// it (pb.CallerIdentity): never anything the caller sent. Machine, Group
+// and Account are ids; MachineName is for display only (a rename changes
+// it).
+type Caller struct {
+	Machine, Group, Account, MachineName string
+}
+
+// Session is a session the relay opened to one of the table's services,
+// as OnSession reports it once the table admitted it.
+type Session struct {
+	Service string
+	caller  *pb.CallerIdentity
+}
+
+// Caller is who opened s; ok is false when the relay named no caller (a
+// share visitor's session, or a relay that does not send one).
+func (s Session) Caller() (c Caller, ok bool) {
+	if s.caller.GetMachineId() == "" {
+		return Caller{}, false
+	}
+	return Caller{Machine: s.caller.GetMachineId(), Group: s.caller.GetGroupId(),
+		Account: s.caller.GetAccount(), MachineName: s.caller.GetMachineName()}, true
+}
+
+// OnSession calls f with each session the table admits, before its target
+// is dialled (f must not block). Call it before the tunnel runs.
+func (t *ServiceTable) OnSession(f func(Session)) { t.onSession = f }
 
 type tableService struct {
 	kind    agentservices.Kind

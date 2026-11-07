@@ -308,3 +308,60 @@ func TestServiceOwnCertificate(t *testing.T) {
 		}
 	}
 }
+
+// The caller the relay names on an open reaches OnSession with the admitted
+// session; an open without one (a share visitor's, an older relay's) has no
+// caller, and a refused session is never reported.
+func TestServiceSessionReportsCaller(t *testing.T) {
+	target, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close() //nolint:errcheck
+	go func() {
+		for {
+			c, err := target.Accept()
+			if err != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	tab, err := NewServiceTable([]Service{{Name: "db", Kind: agentservices.TCP, Target: target.Addr().String()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan Session, 4)
+	tab.OnSession(func(s Session) { got <- s })
+	st := newChanStream(t, 8, 8)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- serveTCPStream(ctx, st, sessionTargets{services: tab}, nil, nil, slog.New(slog.DiscardHandler), nil, nil)
+	}()
+	want := Caller{Machine: "m-aaaaaaaaaaaaaaaaaaaaaaaaaa", Group: "g1", Account: "acct", MachineName: "box"}
+	st.in <- &pb.TCPData{SessionId: "refused", Open: true, TargetAddr: "nope"}
+	st.in <- &pb.TCPData{SessionId: "a", Open: true, TargetAddr: "db", Caller: &pb.CallerIdentity{
+		MachineId: want.Machine, GroupId: want.Group, Account: want.Account, MachineName: want.MachineName}}
+	st.in <- &pb.TCPData{SessionId: "b", Open: true, TargetAddr: "db"}
+	for _, wantOK := range []bool{true, false} {
+		select {
+		case s := <-got:
+			c, ok := s.Caller()
+			if s.Service != "db" || ok != wantOK || (ok && c != want) {
+				t.Fatalf("session = %+v caller %+v %v, want db caller %+v %v", s, c, ok, want, wantOK)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no session reported")
+		}
+	}
+	select {
+	case s := <-got:
+		t.Fatalf("extra session reported: %+v", s)
+	default:
+	}
+	cancel()
+	st.closeIn()
+	<-done
+}

@@ -4,6 +4,7 @@
 package pb
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -68,5 +69,35 @@ func TestDispatcherMethods(t *testing.T) {
 		if got[i] != want[i] {
 			t.Fatalf("Dispatcher methods = %v, want %v", got, want)
 		}
+	}
+}
+
+// TestTCPDataCallerWireVector pins the open's caller (field 12, a
+// CallerIdentity) and RoutingInfo.caller_group (field 6) on the wire, and
+// that a frame from a relay that sends neither decodes as no caller.
+func TestTCPDataCallerWireVector(t *testing.T) {
+	open := &TCPData{SessionId: "s", Open: true, Caller: &CallerIdentity{
+		MachineId: "m-aaaaaaaaaaaaaaaaaaaaaaaaaa", GroupId: "g1", Account: "acct", MachineName: "box"}}
+	// field 12 (0x62), 45 bytes: machine_id (0x0a), group_id (0x12), account (0x1a), machine_name (0x22)
+	const want = "0a01732801622d0a1c6d2d6161616161616161616161616161616161616161616161616161120267311a04616363742203626f78"
+	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hex.EncodeToString(b); got != want {
+		t.Fatalf("wire = %s, want %s", got, want)
+	}
+	back := &TCPData{}
+	if err := proto.Unmarshal(b, back); err != nil || !proto.Equal(back, open) {
+		t.Fatalf("round trip = %v (%v), want %v", back, err, open)
+	}
+	old, _ := hex.DecodeString("0a01732801") // session_id "s", open: no caller
+	back = &TCPData{}
+	if err := proto.Unmarshal(old, back); err != nil || back.GetCaller() != nil || back.GetCaller().GetMachineId() != "" {
+		t.Fatalf("old frame caller = %v (%v), want none", back.GetCaller(), err)
+	}
+	ri := &RoutingInfo{AgentId: "a", CallerGroup: "g1"}
+	if b, _ = proto.Marshal(ri); hex.EncodeToString(b) != "0a016132026731" {
+		t.Fatalf("routing info wire = %x", b)
 	}
 }
