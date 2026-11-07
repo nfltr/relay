@@ -25,6 +25,7 @@ type registeringRelay struct {
 	delay      time.Duration
 	refuse     bool
 	registered atomic.Bool
+	header     grpcmd.MD // the accept headers (none when nil)
 }
 
 func (r *registeringRelay) AgentTunnel(s grpc.BidiStreamingServer[pb.TunnelFrame, pb.TunnelFrame]) error {
@@ -33,7 +34,11 @@ func (r *registeringRelay) AgentTunnel(s grpc.BidiStreamingServer[pb.TunnelFrame
 	}
 	time.Sleep(r.delay)
 	r.registered.Store(true)
-	_ = s.SendHeader(grpcmd.MD{})
+	h := r.header
+	if h == nil {
+		h = grpcmd.MD{}
+	}
+	_ = s.SendHeader(h)
 	<-s.Context().Done()
 	return nil
 }

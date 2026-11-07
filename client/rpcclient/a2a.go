@@ -105,6 +105,7 @@ type Handler func(stream ServerStream) error
 // (server role). Heartbeats are consumed silently.
 type Agent struct {
 	agentID string
+	ref     string           // the ref the relay registered it under (Ref)
 	conn    *grpc.ClientConn // nil when created via NewAgent
 	stream  AgentTunnel
 
@@ -330,12 +331,17 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 
 	client := pb.NewDispatcherClient(conn)
 	upStream, err := client.AgentTunnel(streamCtx)
+	ref := do.agentID
 	if err == nil {
 		// The relay sends its headers once it has registered the agent:
 		// from Dial's return the agent is routable. A stream that ended
 		// first (nil headers) says why on Recv.
-		if md, _ := upStream.Header(); md == nil {
+		md, _ := upStream.Header()
+		if md == nil {
 			_, err = upStream.Recv()
+		}
+		if v := md.Get(agentwire.AgentRefKey); len(v) > 0 {
+			ref = v[0]
 		}
 	}
 	if err != nil {
@@ -343,7 +349,7 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 		return nil, fmt.Errorf("rpcclient: upstream: %w", err)
 	}
 
-	a := newAgent(do.agentID, upStream, ctx, do.heartbeatInterval, true, do.a2aE2EE, do.a2aE2EE, liveness)
+	a := newAgent(do.agentID, ref, upStream, ctx, do.heartbeatInterval, true, do.a2aE2EE, do.a2aE2EE, liveness)
 	a.a2aRelayRequests.Store(do.a2aRelayRequests)
 	if keyring != nil {
 		a.a2aKeyring.Store(&keyring)
@@ -359,13 +365,18 @@ func NewAgent(agentID string, s AgentTunnel, opts ...AgentOption) *Agent {
 	for _, opt := range opts {
 		opt(&options)
 	}
-	return newAgent(agentID, s, context.Background(), 0, !options.noHeartbeat, options.a2aE2EEInbound, false, agentwire.LivenessDefault)
+	ref := options.ref
+	if ref == "" {
+		ref = agentID
+	}
+	return newAgent(agentID, ref, s, context.Background(), 0, !options.noHeartbeat, options.a2aE2EEInbound, false, agentwire.LivenessDefault)
 }
 
-func newAgent(agentID string, s AgentTunnel, ctx context.Context, heartbeatInterval time.Duration, heartbeat, a2aE2EEInbound, a2aE2EEOutbound bool, liveness agentwire.Liveness) *Agent {
+func newAgent(agentID, ref string, s AgentTunnel, ctx context.Context, heartbeatInterval time.Duration, heartbeat, a2aE2EEInbound, a2aE2EEOutbound bool, liveness agentwire.Liveness) *Agent {
 	agentCtx, cancel := context.WithCancel(ctx)
 	a := &Agent{
 		agentID:           agentID,
+		ref:               ref,
 		stream:            s,
 		ctx:               agentCtx,
 		cancel:            cancel,
@@ -403,6 +414,11 @@ func newAgent(agentID string, s AgentTunnel, ctx context.Context, heartbeatInter
 // running on the stream included (closing the connection ends them). The
 // AgentTunnel given to NewAgent is its caller's: a Send or Recv blocked on
 // it ends when the caller ends that tunnel, not by Close.
+// Ref is the ref the relay registered this agent under ("<machine
+// id>-<service>", its AgentRefKey header on Dial), else its agent id: the
+// callee its A2A E2EE calls name, and the caller its calls state.
+func (a *Agent) Ref() string { return a.ref }
+
 func (a *Agent) Close() error {
 	a.cancel()
 	a.wg.Wait()
@@ -511,7 +527,7 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 		if s, c := a.sessions.takeCall(targetAgentID, kr); s != nil {
 			cs.e2ee = newResumedA2AE2EEState(cs.txnID, s, c, kr)
 		} else {
-			cs.e2ee = newA2AE2EEState(cs.txnID, a.agentID, targetAgentID, kr)
+			cs.e2ee = newA2AE2EEState(cs.txnID, a.ref, targetAgentID, kr)
 		}
 	}
 	a.callCredit.Open(cs.txnID)

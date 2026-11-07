@@ -410,12 +410,13 @@ func TestA2AE2EEv2Vectors(t *testing.T) {
 			t.Errorf("%s = %s, want %s", name, got, want)
 		}
 	}
-	// prologue(t, caller, callee, k)
-	check("prologue", string(a2aE2EEPrologue(txn, caller, callee, kr.id)), "nfltr-a2a-e2ee-v2\x00txn-1\x00hub-1\x00m1-node\x00m1.1")
+	// prologue(t, ROLER, caller, callee, k): a root holder calls the machine
+	check("role", a2aE2EERole(testRootOf{kr}, kr.id, true)+" "+a2aE2EERole(kr, kr.id, false), "root root")
+	check("prologue", string(a2aE2EEPrologue(txn, a2aE2EERoleRoot, caller, callee, kr.id)), "nfltr-a2a-e2ee-v2\x00txn-1\x00root\x00hub-1\x00m1-node\x00m1.1")
 	// psk(K) = mackey(K, Lpsk)
 	check("psk", hexOf(a2aE2EEPsk(key)), vecPsk)
 
-	c := newA2AE2EEState(txn, caller, callee, kr)
+	c := newA2AE2EEState(txn, caller, callee, testRootOf{kr})
 	c.rng = fixedReader(0x11) // x
 	gotInit, err := c.initMessage()
 	if err != nil {
@@ -481,8 +482,8 @@ func TestA2AE2EEv2Vectors(t *testing.T) {
 
 const (
 	vecPsk     = "6914e1a63b6a74ec97936d4e02afa84aff21f4273c9f75905f4ed2bbdf9b8519"
-	vecInit    = "6875622d31006d312d6e6f6465006d312e31007b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f13131803158a37ccb6b6021c5a180e038b"
-	vecAck     = "0faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f203c78c10ef365f50e32c6c2d798bca50fea" // payload: the session offer
+	vecInit    = "6875622d31006d312d6e6f6465006d312e31007b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f1354233398ee248381f21047032c97690f"
+	vecAck     = "0faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f203cd75c6324d264ab20eea9f933e04a96ac" // payload: the session offer
 	vecCaller0 = "e4d486e8ba453b8a993edb7d7b9cfe8f1e78abcdee15"
 	vecCaller1 = "a1a3de51011cc2f367e1fc50fae58cde02"
 	vecCallee0 = "a40687c006692ef89a440e4f87f3e22aad14c46f737d"

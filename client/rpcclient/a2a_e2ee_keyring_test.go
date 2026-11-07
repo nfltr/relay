@@ -80,6 +80,8 @@ func (s *testStore) For(ref string) (string, []byte, error) {
 	return name + "." + strconv.Itoa(gen), testMachineKey(s.root, name, gen), nil
 }
 
+func (*testStore) Machine() bool { return false }
+
 func (s *testStore) Valid(id string) bool {
 	if id == "" {
 		return true
@@ -100,6 +102,7 @@ type testMachine struct {
 func (m testMachine) For(string) (string, []byte, error) { return m.id, m.key, nil }
 
 func (m testMachine) Valid(id string) bool { return id == m.id }
+func (testMachine) Machine() bool          { return true }
 
 func invokeOK(t *testing.T, caller *Agent, target string) {
 	t.Helper()
@@ -295,3 +298,8 @@ func TestA2AE2EEKeyIDOnTheWire(t *testing.T) {
 		t.Fatalf("an over-long key id: %v", err)
 	}
 }
+
+// testRootOf is a root holder that calls m's machine under m's key.
+type testRootOf struct{ testMachine }
+
+func (testRootOf) Machine() bool { return false }

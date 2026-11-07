@@ -452,6 +452,7 @@ type swapKeyring struct {
 
 func (k swapKeyring) For(ref string) (string, []byte, error) { return (*k.p.Load()).For(ref) }
 func (k swapKeyring) Valid(id string) bool                   { return (*k.p.Load()).Valid(id) }
+func (k swapKeyring) Machine() bool                          { return (*k.p.Load()).Machine() }
 
 // A responder restart (it lost its sessions): the resume is answered
 // unknown, the caller handshakes once on the same call and sends its

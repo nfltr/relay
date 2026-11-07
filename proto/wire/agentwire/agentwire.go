@@ -50,6 +50,12 @@ const HeartbeatKey = "x-relay-heartbeat-ms"
 // an older relay ignores it.
 const HeartbeatAskKey = "x-agent-heartbeat-ms"
 
+// AgentRefKey, in the relay's response headers on an agent stream, is the
+// ref the relay registered the agent under ("<machine id>-<service>"): the
+// callee A2A E2EE calls name. A relay could state any ref; the A2A key, not
+// this header, binds a call to its machine.
+const AgentRefKey = "x-nfltr-agent-ref"
+
 // LinkLivenessKey, set to "1" in the relay's response headers on an
 // agent's ConnectHTTP stream, says the relay takes that agent's liveness
 // from its agent link (dataplane.AgentLinkHeader) while the link is up: the

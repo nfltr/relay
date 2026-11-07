@@ -67,7 +67,7 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
 		log.Printf("rpcclient: dropped an A2A E2EE init for txn %s, a call this agent already serves", msg.GetTransactionId())
 		return "" // a second start of a served call: dropped, not traced
 	}
-	state, ack, err := newServerA2AE2EEState(msg.GetTransactionId(), a.agentID, msg.GetPayload(), a.keyring(), rand.Reader)
+	state, ack, err := newServerA2AE2EEState(msg.GetTransactionId(), a.ref, msg.GetPayload(), a.keyring(), rand.Reader)
 	if err != nil {
 		code := codes.InvalidArgument
 		if errors.Is(err, errA2AE2EEPairing) {

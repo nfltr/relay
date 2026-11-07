@@ -92,6 +92,11 @@ type A2AE2EEKeyring interface {
 	// asked before each later frame of the call is sealed or opened, so a
 	// revoke ends calls in flight at their next frame.
 	Valid(id string) bool
+	// Machine reports whether this end is a machine (one machine key, no
+	// root key). The handshake binds the initiator's role: a machine
+	// answers root holders only, so a relay that returns a machine's call
+	// to that machine or another agent of it is refused (a2aE2EERole).
+	Machine() bool
 }
 
 // a2aE2EEPairingKey is the keyring of a root pairing key alone: id "" only.
@@ -100,6 +105,30 @@ type a2aE2EEPairingKey []byte
 func (k a2aE2EEPairingKey) For(string) (string, []byte, error) { return "", k, nil }
 
 func (k a2aE2EEPairingKey) Valid(id string) bool { return id == "" }
+
+func (a2aE2EEPairingKey) Machine() bool { return false }
+
+// The initiator's role in the prologue (model ROLER, ROLEM).
+const (
+	a2aE2EERoleRoot    = "root"
+	a2aE2EERoleMachine = "machine"
+)
+
+// a2aE2EERole is the role of the initiator of a call sealed under key id
+// kid at the end whose keyring is kr: the initiator's own role (initiator
+// true), or the one a responder answers (false). A machine calls as a
+// machine and answers root holders only; a root holder calls as root and
+// answers a machine key id from a machine, the root key ("") from a root
+// holder. Without a keyring the call is unkeyed, root to root.
+func a2aE2EERole(kr A2AE2EEKeyring, kid string, initiator bool) string {
+	machine := kr != nil && kr.Machine()
+	switch {
+	case initiator && machine, !initiator && !machine && kid != "":
+		return a2aE2EERoleMachine
+	default:
+		return a2aE2EERoleRoot
+	}
+}
 
 // errA2AE2EEPairing marks a handshake refused because a peer did not prove
 // the key its call needs.
@@ -129,11 +158,12 @@ func a2aE2EEPsk(key []byte) []byte {
 	return m.Sum(nil)
 }
 
-// a2aE2EEPrologue is v2 0 txn 0 caller 0 callee 0 key id (model:
-// prologue(t, caller, callee, k)); no field holds a 0 byte, so it is
-// injective.
-func a2aE2EEPrologue(txnID, caller, callee, kid string) []byte {
-	return []byte(a2aE2EEProtocol + "\x00" + txnID + "\x00" + caller + "\x00" + callee + "\x00" + kid)
+// a2aE2EEPrologue is v2 0 txn 0 role 0 caller 0 callee 0 key id (model:
+// prologue(t, r, caller, callee, k)); no field holds a 0 byte, so it is
+// injective. The role is the initiator's (a2aE2EERole); it is not sent:
+// each end puts the one it expects, so a mismatch fails message 1.
+func a2aE2EEPrologue(txnID, role, caller, callee, kid string) []byte {
+	return []byte(a2aE2EEProtocol + "\x00" + txnID + "\x00" + role + "\x00" + caller + "\x00" + callee + "\x00" + kid)
 }
 
 // a2aE2EEFieldsOK reports whether the handshake's fields fit the prologue.
@@ -245,7 +275,7 @@ func (s *a2aE2EEState) initMessage() ([]byte, error) {
 	if err := a2aE2EEFieldsOK(s.txnID, s.caller, s.callee, kid); err != nil {
 		return nil, err
 	}
-	hs, err := newA2AE2EEHandshake(true, a2aE2EEPrologue(s.txnID, s.caller, s.callee, kid), key, s.rng)
+	hs, err := newA2AE2EEHandshake(true, a2aE2EEPrologue(s.txnID, a2aE2EERole(s.kr, kid, true), s.caller, s.callee, kid), key, s.rng)
 	if err != nil {
 		return nil, fmt.Errorf("rpcclient: A2A E2EE handshake: %w", err)
 	}
@@ -362,9 +392,10 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 	if err := a2aE2EEFieldsOK(txnID, caller, callee, kid); err != nil {
 		return nil, nil, err
 	}
-	// The relay's key scope prefixes a target ("<scope>.<name>", relay-core
-	// resolveA2ATargetAgentId); any other callee is a call for another agent.
-	if callee != own && !bytes.HasSuffix([]byte(callee), []byte("."+own)) {
+	// own is the ref the relay registered this agent under (Agent.Ref); any
+	// other callee is a call for another agent. The relay states own, so
+	// this check only names a misroute: the key below binds the call.
+	if callee != own {
 		return nil, nil, fmt.Errorf("rpcclient: an A2A E2EE call for %s reached %s (the relay routed it here): %w", callee, own, errA2AE2EEPairing)
 	}
 	var key, offer []byte
@@ -388,7 +419,7 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 		}
 		key, offer = k, a2aSessionOffer
 	}
-	hs, err := newA2AE2EEHandshake(false, a2aE2EEPrologue(txnID, caller, callee, kid), key, rng)
+	hs, err := newA2AE2EEHandshake(false, a2aE2EEPrologue(txnID, a2aE2EERole(kr, kid, false), caller, callee, kid), key, rng)
 	if err != nil {
 		return nil, nil, fmt.Errorf("rpcclient: A2A E2EE handshake: %w", err)
 	}

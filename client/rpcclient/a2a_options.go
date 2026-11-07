@@ -19,6 +19,7 @@ type DialOption func(*dialOptions)
 type AgentOption func(*agentOptions)
 
 type agentOptions struct {
+	ref            string // the agent ref (Agent.Ref); "" is the agent id
 	a2aE2EEInbound bool
 	noHeartbeat    bool
 }
