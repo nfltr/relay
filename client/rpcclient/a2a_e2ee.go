@@ -45,9 +45,11 @@ type a2aE2EEState struct {
 	key     []byte
 	priv    *ecdh.PrivateKey
 	err     error
-	txnID   string // initiator: the transaction the handshake tags bind to
-	pairing []byte // initiator: pairing key the peer must prove, or nil
-	recvKey []byte // the peer's direction when it differs from key (0-RTT)
+	txnID   string         // initiator: the transaction the handshake tags bind to
+	kr      A2AE2EEKeyring // this end's keys, or nil (unkeyed)
+	kid     string         // the call's key id: Own's until the peer's ack (or label) names it
+	pk      []byte         // the key kid names: the call's tag and session key input
+	recvKey []byte         // the peer's direction when it differs from key (0-RTT)
 
 	// 0-RTT initiator (a2a_e2ee_0rtt.go): the peer's advertised static key
 	// and, with a pairing key, the name its label proves; while the first
@@ -62,9 +64,54 @@ type a2aE2EEState struct {
 	inner      *a2aE2EEState // the interactive handshake run after a refusal
 }
 
-func newA2AE2EEState(txnID string, pairing []byte) *a2aE2EEState {
-	return &a2aE2EEState{waitCh: make(chan struct{}), txnID: txnID, pairing: pairing}
+func newA2AE2EEState(txnID string, kr A2AE2EEKeyring) *a2aE2EEState {
+	s := &a2aE2EEState{waitCh: make(chan struct{}), txnID: txnID, kr: kr}
+	if kr != nil {
+		s.kid, s.pk = kr.Own()
+	}
+	return s
 }
+
+// A2AE2EEKeyring is one end's A2A E2EE pairing keys
+// (WithA2AE2EEKeyring). A key id names a key: "" is the root pairing key
+// (LoadA2AE2EEPairingKey), which every root holder has; any other id is a
+// machine key the caller manages (nfltr derives one per machine from the
+// root key, docs/decisions/a2a-per-machine-keys-2026-11-07.md).
+//
+// Wire: a keyed handshake payload is pub ‖ tag ‖ key id (the id in the
+// clear, at most a2aE2EEKeyIDMax bytes; none is ""), the tag
+// HMAC-SHA256 under the key the id names. The initiator's init carries
+// Own(); the responder answers under the init's id (a machine end that
+// gets a root holder's "" answers under its own id and key: only a holder
+// of that key derives the session key) and its ack names the id it used,
+// which the initiator resolves with Peer. The static label carries Own()'s
+// id as "~" + base64url(id) after its tag; a 0-RTT first flight and its
+// retry are under the label's key. A refused id refuses the handshake
+// before any key is used.
+type A2AE2EEKeyring interface {
+	// Own is this end's key id and key: the tags it starts with.
+	Own() (id string, key []byte)
+	// Peer is the key a peer's key id names; an error refuses the handshake.
+	Peer(id string) ([]byte, error)
+	// Valid reports whether an established call's key id still holds. It is
+	// asked before each later frame of the call is sealed or opened, so a
+	// revoke ends calls in flight at their next frame.
+	Valid(id string) bool
+}
+
+// a2aE2EEPairingKey is the keyring of a root pairing key alone: id "" only.
+type a2aE2EEPairingKey []byte
+
+func (k a2aE2EEPairingKey) Own() (string, []byte) { return "", k }
+
+func (k a2aE2EEPairingKey) Peer(id string) ([]byte, error) {
+	if id != "" {
+		return nil, fmt.Errorf("this end holds the pairing key only, no machine keys")
+	}
+	return k, nil
+}
+
+func (k a2aE2EEPairingKey) Valid(id string) bool { return id == "" }
 
 // errA2AE2EEPairing marks a handshake refused because a peer did not prove
 // the pairing key (or proved one this end does not use).
@@ -76,6 +123,7 @@ const (
 	a2aE2EEPairingMinSecret  = 32
 	a2aE2EEPairingRemedy     = "set the same --e2ee-key-file / NFLTR_A2A_E2EE_KEY_FILE on both ends"
 	a2aE2EEPairingKeyContext = "nfltr-a2a-e2ee-pairing-v1"
+	a2aE2EEKeyIDMax          = 128
 )
 
 // LoadA2AE2EEPairingKey reads a pairing key file and derives the 32-byte key
@@ -109,22 +157,42 @@ func a2aE2EEPairingTag(key []byte, label, txnID string, keys ...[]byte) []byte {
 }
 
 // splitA2AE2EEHandshake splits a handshake payload into the public key and,
-// with a pairing key, verifies the tag the peer computed over wantTag's
-// inputs. Unkeyed ends exchange a bare public key.
-func splitA2AE2EEHandshake(payload, pairing []byte, wantTag func(pub []byte) []byte) ([]byte, error) {
+// with a keyring, the tag and the key id beside it. Unkeyed ends exchange a
+// bare public key.
+func splitA2AE2EEHandshake(payload []byte, kr A2AE2EEKeyring) (pub, tag []byte, kid string, err error) {
+	keyed := len(payload) >= a2aE2EEPubLen+a2aE2EEPairingTagLen
 	switch {
-	case pairing == nil && len(payload) == a2aE2EEPubLen+a2aE2EEPairingTagLen:
-		return nil, fmt.Errorf("rpcclient: peer authenticates A2A E2EE with a pairing key this end does not have; %s: %w", a2aE2EEPairingRemedy, errA2AE2EEPairing)
-	case pairing == nil:
-		return payload, nil
-	case len(payload) != a2aE2EEPubLen+a2aE2EEPairingTagLen:
-		return nil, fmt.Errorf("rpcclient: peer did not authenticate its A2A E2EE key with the pairing key (no pairing key there, or an older nfltr); %s: %w", a2aE2EEPairingRemedy, errA2AE2EEPairing)
+	case kr == nil && keyed:
+		return nil, nil, "", fmt.Errorf("rpcclient: peer authenticates A2A E2EE with a pairing key this end does not have; %s: %w", a2aE2EEPairingRemedy, errA2AE2EEPairing)
+	case kr == nil:
+		return payload, nil, "", nil
+	case !keyed:
+		return nil, nil, "", fmt.Errorf("rpcclient: peer did not authenticate its A2A E2EE key with the pairing key (no pairing key there, or an older nfltr); %s: %w", a2aE2EEPairingRemedy, errA2AE2EEPairing)
+	case len(payload) > a2aE2EEPubLen+a2aE2EEPairingTagLen+a2aE2EEKeyIDMax:
+		return nil, nil, "", fmt.Errorf("rpcclient: peer's A2A E2EE key id is longer than %d bytes: %w", a2aE2EEKeyIDMax, errA2AE2EEPairing)
 	}
-	pub, tag := payload[:a2aE2EEPubLen], payload[a2aE2EEPubLen:]
-	if !hmac.Equal(tag, wantTag(pub)) {
+	return payload[:a2aE2EEPubLen], payload[a2aE2EEPubLen : a2aE2EEPubLen+a2aE2EEPairingTagLen], string(payload[a2aE2EEPubLen+a2aE2EEPairingTagLen:]), nil
+}
+
+// verifyA2AE2EETag resolves kid with the keyring and checks tag under its
+// key (want computes the expected tag for a key): the key, or a refusal.
+func verifyA2AE2EETag(kr A2AE2EEKeyring, kid string, tag []byte, want func(key []byte) []byte) ([]byte, error) {
+	key, err := kr.Peer(kid)
+	if err != nil {
+		return nil, fmt.Errorf("rpcclient: peer's A2A E2EE key id %q refused: %v; %s: %w", kid, err, a2aE2EEPairingRemedy, errA2AE2EEPairing)
+	}
+	if !hmac.Equal(tag, want(key)) {
 		return nil, fmt.Errorf("rpcclient: peer's A2A E2EE key failed pairing-key verification (a different key, or a relay in the middle); %s: %w", a2aE2EEPairingRemedy, errA2AE2EEPairing)
 	}
-	return pub, nil
+	return key, nil
+}
+
+// checkA2AE2EEKey is the per-frame check: the call's key id still holds.
+func checkA2AE2EEKey(kr A2AE2EEKeyring, kid string) error {
+	if kr != nil && !kr.Valid(kid) {
+		return fmt.Errorf("rpcclient: A2A E2EE key %q was revoked or rotated; this call ends: %w", kid, errA2AE2EEPairing)
+	}
+	return nil
 }
 
 // deriveA2AE2EESessionKey binds the session key to the pairing key and both
@@ -225,8 +293,8 @@ func (s *a2aE2EEState) ensureClientHandshake(ctx context.Context, transportDone 
 	s.started = true
 	s.priv = priv
 	pub := append([]byte(nil), priv.PublicKey().Bytes()...)
-	if s.pairing != nil {
-		pub = append(pub, a2aE2EEPairingTag(s.pairing, "init", s.txnID, pub)...)
+	if s.kr != nil {
+		pub = append(append(pub, a2aE2EEPairingTag(s.pk, "init", s.txnID, pub)...), s.kid...)
 	}
 	waitCh := s.waitCh
 	s.mu.Unlock()
@@ -288,9 +356,13 @@ func (s *a2aE2EEState) complete(peerPub []byte) error {
 		return fmt.Errorf("rpcclient: A2A E2EE handshake was not started")
 	}
 	ownPub := priv.PublicKey().Bytes()
-	peerPub, err := splitA2AE2EEHandshake(peerPub, s.pairing, func(pub []byte) []byte {
-		return a2aE2EEPairingTag(s.pairing, "ack", s.txnID, ownPub, pub)
-	})
+	peerPub, tag, kid, err := splitA2AE2EEHandshake(peerPub, s.kr)
+	var pk []byte
+	if err == nil && s.kr != nil {
+		pk, err = verifyA2AE2EETag(s.kr, kid, tag, func(key []byte) []byte {
+			return a2aE2EEPairingTag(key, "ack", s.txnID, ownPub, peerPub)
+		})
+	}
 	if err != nil {
 		s.fail(err)
 		return err
@@ -308,14 +380,14 @@ func (s *a2aE2EEState) complete(peerPub []byte) error {
 		s.fail(wrapped)
 		return wrapped
 	}
-	key := deriveA2AE2EESessionKey(s.pairing, shared, ownPub, peerPub)
+	key := deriveA2AE2EESessionKey(pk, shared, ownPub, peerPub)
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return s.err
 	}
-	s.key = key
+	s.key, s.kid, s.pk = key, kid, pk
 	s.ready = true
 	if waitCh != nil {
 		close(waitCh)
@@ -324,12 +396,25 @@ func (s *a2aE2EEState) complete(peerPub []byte) error {
 	return nil
 }
 
-// newServerA2AE2EEState answers an init: with a pairing key it first
-// verifies the initiator's tag, and its ack carries a tag over both keys.
-func newServerA2AE2EEState(txnID string, initPayload, pairing []byte) (*a2aE2EEState, []byte, error) {
-	peerPub, err := splitA2AE2EEHandshake(initPayload, pairing, func(pub []byte) []byte {
-		return a2aE2EEPairingTag(pairing, "init", txnID, pub)
-	})
+// newServerA2AE2EEState answers an init: with a keyring it first verifies
+// the initiator's tag under the key its id names, and its ack carries a tag
+// over both keys and the id it used.
+func newServerA2AE2EEState(txnID string, initPayload []byte, kr A2AE2EEKeyring) (*a2aE2EEState, []byte, error) {
+	peerPub, tag, kid, err := splitA2AE2EEHandshake(initPayload, kr)
+	var pairing []byte
+	if err == nil && kr != nil {
+		if ownID, ownKey := kr.Own(); kid == "" && ownID != "" {
+			// A root holder's init to a machine: the machine cannot check a
+			// root-key tag, so it answers under its own key. Only a holder of
+			// that key verifies the ack and derives the session key, so
+			// nothing anyone else sends on this call decrypts.
+			kid, pairing = ownID, ownKey
+		} else {
+			pairing, err = verifyA2AE2EETag(kr, kid, tag, func(key []byte) []byte {
+				return a2aE2EEPairingTag(key, "init", txnID, peerPub)
+			})
+		}
+	}
 	if err != nil {
 		return nil, nil, err
 	}
@@ -347,9 +432,10 @@ func newServerA2AE2EEState(txnID string, initPayload, pairing []byte) (*a2aE2EES
 	}
 	ownPub := priv.PublicKey().Bytes()
 	state := newEstablishedA2AE2EEState(deriveA2AE2EESessionKey(pairing, shared, peerPub, ownPub))
+	state.kr, state.kid, state.pk = kr, kid, pairing
 	ack := append([]byte(nil), ownPub...)
-	if pairing != nil {
-		ack = append(ack, a2aE2EEPairingTag(pairing, "ack", txnID, peerPub, ownPub)...)
+	if kr != nil {
+		ack = append(append(ack, a2aE2EEPairingTag(pairing, "ack", txnID, peerPub, ownPub)...), kid...)
 	}
 	return state, ack, nil
 }
@@ -358,6 +444,12 @@ func (s *a2aE2EEState) encrypt(txnID string, plaintext []byte) ([]byte, error) {
 	key := s.readyKey()
 	if len(key) == 0 {
 		return nil, fmt.Errorf("rpcclient: A2A E2EE is not established")
+	}
+	s.mu.Lock()
+	kr, kid := s.kr, s.kid
+	s.mu.Unlock()
+	if err := checkA2AE2EEKey(kr, kid); err != nil {
+		return nil, err
 	}
 	return a2aE2EESeal(key, rand.Reader, txnID, plaintext)
 }
@@ -368,10 +460,13 @@ func (s *a2aE2EEState) decrypt(txnID string, ciphertext []byte) ([]byte, error) 
 	if key == nil {
 		key = s.key
 	}
-	ready := s.ready
+	ready, kr, kid := s.ready, s.kr, s.kid
 	s.mu.Unlock()
 	if !ready || len(key) == 0 {
 		return nil, fmt.Errorf("rpcclient: A2A E2EE is not established")
+	}
+	if err := checkA2AE2EEKey(kr, kid); err != nil {
+		return nil, err
 	}
 	return a2aE2EEOpen(key, txnID, ciphertext)
 }

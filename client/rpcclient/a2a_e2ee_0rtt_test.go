@@ -44,7 +44,7 @@ var vectorTime = time.UnixMilli(1760000000000)
 // flight is one first flight from a fresh initiator state to st.
 func flight(t testing.TB, st *a2aE2EEStatic, pairing []byte, txnID string, data []byte, now time.Time, rng io.Reader) (*a2aE2EEState, []byte) {
 	t.Helper()
-	s := newA2AE2EEState(txnID, pairing)
+	s := newA2AE2EEState(txnID, keyringOf(pairing))
 	s.peerStatic, s.peerName = st.key.Public, "node-1"
 	payload, ok, err := s.firstFlight(data, now, rng)
 	if !ok || err != nil {
@@ -88,7 +88,7 @@ func TestA2AE2EE0RTTKeyScheduleVectors(t *testing.T) {
 				t.Fatal("the two ends' directional keys differ, or both directions share one")
 			}
 			got := map[string]string{
-				"label":  st.label("node-1", tc.pairing),
+				"label":  st.label("node-1", keyringOf(tc.pairing)),
 				"flight": hexSum(payload), "ack": hexSum(acc.ack),
 				"i2r": hex.EncodeToString(s.key[:8]), "r2i": hex.EncodeToString(s.recvKey[:8]),
 			}
@@ -105,7 +105,7 @@ func TestA2AE2EE0RTTKeyScheduleVectors(t *testing.T) {
 // learn puts target's advertised label in the book for the test.
 func learn(t *testing.T, target *Agent, pairing []byte) string {
 	t.Helper()
-	v := target.e2eeStatic().label(target.agentID, pairing)
+	v := target.e2eeStatic().label(target.agentID, keyringOf(pairing))
 	LearnA2AE2EEPeer(target.agentID, map[string]string{A2AE2EEStaticLabel: v})
 	t.Cleanup(func() { LearnA2AE2EEPeer(target.agentID, nil) })
 	return v
@@ -421,11 +421,11 @@ func TestA2AE2EE0RTTLabelMustProvePairingKey(t *testing.T) {
 		wantErr   string
 	}{
 		{"relay swapped the key", func(target *Agent) string {
-			genuine := target.e2eeStatic().label("zr-node", key)
+			genuine := target.e2eeStatic().label("zr-node", keyringOf(key))
 			return a2aE2EEB64.EncodeToString(relayStatic.key.Public) + genuine[strings.Index(genuine, "."):]
 		}, key, ""},
 		{"relay's own unkeyed label", func(*Agent) string { return relayStatic.label("zr-node", nil) }, key, ""},
-		{"responder's other pairing key", func(target *Agent) string { return target.e2eeStatic().label("zr-node", other) }, other, "failed pairing-key verification"},
+		{"responder's other pairing key", func(target *Agent) string { return target.e2eeStatic().label("zr-node", keyringOf(other)) }, other, "failed pairing-key verification"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -464,7 +464,7 @@ func TestA2AE2EE0RTTLabelMustProvePairingKey(t *testing.T) {
 func TestA2AE2EE0RTTWithoutPairingKeyIsOpenToAnActiveRelay(t *testing.T) {
 	relayStatic, _ := newA2AE2EEStatic(newDetRand("relay"))
 	s := newA2AE2EEState("txn", nil)
-	s.peerStatic, _, _ = parseA2AE2EEStaticLabel(relayStatic.label("zr-node", nil), nil)
+	s.peerStatic, _, _, _, _ = parseA2AE2EEStaticLabel(relayStatic.label("zr-node", nil), nil)
 	payload, _, _ := s.firstFlight([]byte("SECRET-BRIEF"), vectorTime, newDetRand("a"))
 	acc, _, r := relayStatic.accept(nil, "txn", payload, vectorTime, newDetRand("r"))
 	if r != 0 || string(acc.request) != "SECRET-BRIEF" {

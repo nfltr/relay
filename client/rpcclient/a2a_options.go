@@ -29,6 +29,7 @@ type dialOptions struct {
 	a2aE2EE           bool                        // transparently encrypt A2A payloads end to end
 	a2aRelayRequests  bool                        // with a2aE2EE: still serve relay-originated plaintext requests
 	a2aPairingKeyFile string                      // with a2aE2EE: authenticate handshakes with this pairing key
+	a2aKeyring        A2AE2EEKeyring              // with a2aE2EE: authenticate handshakes with these keys
 	labels            map[string]string           // optional fleet labels for this agent
 	capabilities      []string                    // optional: advertised capabilities (e.g. "p2p", "ssh", "http")
 	tlsEnable         bool                        // enable TLS for the gRPC connection
@@ -89,6 +90,15 @@ func WithA2AAcceptRelayRequests() DialOption {
 // machines", not which one. An empty path sets nothing.
 func WithA2AE2EEPairingKeyFile(path string) DialOption {
 	return func(o *dialOptions) { o.a2aPairingKeyFile = path }
+}
+
+// WithA2AE2EEKeyring authenticates every E2EE handshake with kr's keys
+// (A2AE2EEKeyring): a root holder answers machines by their key ids and a
+// machine proves its own; a key kr no longer holds (Valid) ends the calls
+// under it at their next frame. Exclusive with WithA2AE2EEPairingKeyFile;
+// Dial fails when E2EE is off.
+func WithA2AE2EEKeyring(kr A2AE2EEKeyring) DialOption {
+	return func(o *dialOptions) { o.a2aKeyring = kr }
 }
 
 // CheckA2AE2EEPairingKeyFile reports why a pairing key file would fail Dial,

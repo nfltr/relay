@@ -39,11 +39,23 @@ func testPairingKey(t *testing.T, secret string) []byte {
 	return key
 }
 
+// keyringOf is the keyring of a root pairing key, or nil for none.
+func keyringOf(key []byte) A2AE2EEKeyring {
+	if key == nil {
+		return nil
+	}
+	return a2aE2EEPairingKey(key)
+}
+
 func pairedAgent(id string, key []byte) func(AgentTunnel) *Agent {
+	return keyedAgent(id, keyringOf(key))
+}
+
+func keyedAgent(id string, kr A2AE2EEKeyring) func(AgentTunnel) *Agent {
 	return func(s AgentTunnel) *Agent {
 		a := e2eeAgent(id, false)(s)
-		if key != nil {
-			a.a2aPairingKey.Store(&key)
+		if kr != nil {
+			a.a2aKeyring.Store(&kr)
 		}
 		return a
 	}
@@ -233,7 +245,8 @@ func TestPairedAgentRefusesRelayAuthoredRequests(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		ms := newMockStream(ctx)
 		worker := e2eeAgent("worker-1", true)(ms)
-		worker.a2aPairingKey.Store(&key)
+		kr := keyringOf(key)
+		worker.a2aKeyring.Store(&kr)
 		var ran bool
 		worker.Handle(func(s ServerStream) error { ran = true; return nil })
 		ms.recvCh <- &pb.TunnelFrame{TransactionId: "txn-" + tc.mtype, MessageType: tc.mtype, Payload: []byte("task.assign"), Eom: true,

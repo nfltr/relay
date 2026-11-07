@@ -84,36 +84,49 @@ func newA2AE2EEStatic(rng io.Reader) (*a2aE2EEStatic, error) {
 // connection must not get a fresh key (and an empty register) from the redial.
 var processA2AE2EEStatic = sync.OnceValues(func() (*a2aE2EEStatic, error) { return newA2AE2EEStatic(rand.Reader) })
 
-// label is the A2AE2EEStaticLabel value: the key, and with a pairing key a
-// tag binding it and this agent's name to the key.
-func (st *a2aE2EEStatic) label(name string, pairing []byte) string {
+// label is the A2AE2EEStaticLabel value: the key, and with a keyring a tag
+// binding it and this agent's name to Own()'s key, followed by "~" and
+// base64url(Own()'s id) when that id is not "" (pub.tag[~id].name).
+func (st *a2aE2EEStatic) label(name string, kr A2AE2EEKeyring) string {
 	s := a2aE2EEB64.EncodeToString(st.key.Public)
-	if pairing == nil {
+	if kr == nil {
 		return s
 	}
-	return s + "." + a2aE2EEB64.EncodeToString(a2aE2EEPairingTag(pairing, "static", name, st.key.Public)) + "." + name
+	id, key := kr.Own()
+	tag := a2aE2EEB64.EncodeToString(a2aE2EEPairingTag(key, "static", name, st.key.Public))
+	if id != "" {
+		tag += "~" + a2aE2EEB64.EncodeToString([]byte(id))
+	}
+	return s + "." + tag + "." + name
 }
 
-// parseA2AE2EEStaticLabel is the peer key a label offers this initiator, and
-// with a pairing key the peer name its tag proves; ok is false when the
-// initiator must take the interactive handshake instead.
-func parseA2AE2EEStaticLabel(v string, pairing []byte) (static []byte, name string, ok bool) {
+// parseA2AE2EEStaticLabel is the peer key a label offers this initiator,
+// and with a keyring the peer name its tag proves and the key id and key it
+// was proved under; ok is false when the initiator must take the
+// interactive handshake instead (no key for the label's id here included).
+func parseA2AE2EEStaticLabel(v string, kr A2AE2EEKeyring) (static []byte, name, kid string, key []byte, ok bool) {
 	parts := strings.SplitN(v, ".", 3)
 	s, err := a2aE2EEB64.DecodeString(parts[0])
 	if err != nil || len(s) != a2aE2EEPubLen {
-		return nil, "", false
+		return nil, "", "", nil, false
 	}
-	if pairing == nil {
-		return s, "", len(parts) == 1
+	if kr == nil {
+		return s, "", "", nil, len(parts) == 1
 	}
 	if len(parts) != 3 {
-		return nil, "", false
+		return nil, "", "", nil, false
 	}
-	tag, err := a2aE2EEB64.DecodeString(parts[1])
-	if err != nil || !hmac.Equal(tag, a2aE2EEPairingTag(pairing, "static", parts[2], s)) {
-		return nil, "", false
+	tagPart, idPart, _ := strings.Cut(parts[1], "~")
+	tag, err := a2aE2EEB64.DecodeString(tagPart)
+	id, idErr := a2aE2EEB64.DecodeString(idPart)
+	if err != nil || idErr != nil {
+		return nil, "", "", nil, false
 	}
-	return s, parts[2], true
+	key, err = verifyA2AE2EETag(kr, string(id), tag, func(key []byte) []byte { return a2aE2EEPairingTag(key, "static", parts[2], s) })
+	if err != nil {
+		return nil, "", "", nil, false
+	}
+	return s, parts[2], string(id), key, true
 }
 
 // The peers' advertised keys this process has seen, by agent id.
@@ -195,7 +208,7 @@ func (s *a2aE2EEState) firstFlight(data []byte, now time.Time, rng io.Reader) (p
 	head := make([]byte, a2aE2EE0RTTHeadLen)
 	head[0] = a2aE2EE0RTTVersion
 	binary.BigEndian.PutUint64(head[1:], uint64(now.UnixMilli()))
-	hs, err := a2aE2EE0RTTHandshake(true, s.txnID, head, s.pairing, noise.DHKey{}, s.peerStatic, rng)
+	hs, err := a2aE2EE0RTTHandshake(true, s.txnID, head, s.pk, noise.DHKey{}, s.peerStatic, rng)
 	if err != nil {
 		return nil, true, fmt.Errorf("rpcclient: A2A E2EE 0-RTT handshake: %w", err)
 	}
@@ -250,8 +263,9 @@ type a2aE2EEAccepted struct {
 	request []byte // the call's first request
 }
 
-// accept takes or refuses a first flight; e is its ephemeral key when the
-// payload was long enough to carry one (a refusal's tag binds it).
+// accept takes or refuses a first flight under pairing, this end's own key
+// (the one its label offers); e is its ephemeral key when the payload was
+// long enough to carry one (a refusal's tag binds it).
 func (st *a2aE2EEStatic) accept(pairing []byte, txnID string, payload []byte, now time.Time, rng io.Reader) (acc a2aE2EEAccepted, e []byte, refusal a2aE2EERefusal) {
 	if len(payload) < a2aE2EE0RTTMinLen {
 		return acc, nil, refuseBad
@@ -348,8 +362,8 @@ func (s *a2aE2EEState) takeRetry(payload []byte, now time.Time) (inner *a2aE2EES
 		return nil, nil, 0, nil
 	}
 	reason = a2aE2EERefusal(payload[0])
-	if s.pairing != nil {
-		want := a2aE2EEPairingTag(s.pairing, "retry", s.txnID, s.eph, payload[:1], []byte(s.peerName))
+	if s.pk != nil {
+		want := a2aE2EEPairingTag(s.pk, "retry", s.txnID, s.eph, payload[:1], []byte(s.peerName))
 		if !hmac.Equal(payload[1:], want) {
 			return nil, nil, reason, fmt.Errorf("rpcclient: peer's A2A E2EE 0-RTT refusal failed pairing-key verification (a relay in the middle, or another agent); %s: %w", a2aE2EEPairingRemedy, errA2AE2EEPairing)
 		}
@@ -357,7 +371,7 @@ func (s *a2aE2EEState) takeRetry(payload []byte, now time.Time) (inner *a2aE2EES
 	if reason == refuseReplay || reason < refuseStale || reason > refuseReplay {
 		return nil, nil, reason, fmt.Errorf("rpcclient: peer refused this call's A2A E2EE first flight (reason %d: a replayed flight)", reason)
 	}
-	inner = newA2AE2EEState(s.txnID, s.pairing)
+	inner = newA2AE2EEState(s.txnID, s.kr)
 	early, s.inner, s.hs, s.early = s.early, inner, nil, nil
 	return inner, early, reason, nil
 }
@@ -365,12 +379,15 @@ func (s *a2aE2EEState) takeRetry(payload []byte, now time.Time) (inner *a2aE2EES
 // adopt takes the keys of the interactive handshake run after a refusal.
 func (s *a2aE2EEState) adopt(inner *a2aE2EEState) error {
 	key := inner.readyKey()
+	inner.mu.Lock()
+	kid, pk := inner.kid, inner.pk
+	inner.mu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.err != nil {
 		return s.err
 	}
-	s.key, s.recvKey, s.ready, s.inner = key, nil, true, nil
+	s.key, s.recvKey, s.ready, s.inner, s.kid, s.pk = key, nil, true, nil, kid, pk
 	if s.waitCh != nil {
 		close(s.waitCh)
 		s.waitCh = nil

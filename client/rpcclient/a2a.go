@@ -117,9 +117,9 @@ type Agent struct {
 	// a2aRelayRequests exempts relay-originated plaintext requests from the
 	// downgrade refusal (WithA2AAcceptRelayRequests).
 	a2aRelayRequests atomic.Bool
-	// a2aPairingKey, when set, authenticates every E2EE handshake: a peer
-	// must prove it holds the same key (WithA2AE2EEPairingKeyFile).
-	a2aPairingKey atomic.Pointer[[]byte]
+	// a2aKeyring, when set, authenticates every E2EE handshake: a peer must
+	// prove a key it names (WithA2AE2EEPairingKeyFile, WithA2AE2EEKeyring).
+	a2aKeyring atomic.Pointer[A2AE2EEKeyring]
 	// a2aStatic, when set, replaces the process's A2A E2EE static key
 	// (tests: a restarted responder).
 	a2aStatic atomic.Pointer[a2aE2EEStatic]
@@ -249,16 +249,19 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 	if do.agentID == "" {
 		return nil, fmt.Errorf("rpcclient: AgentID required (use WithAgentID)")
 	}
-	var pairingKey []byte
+	keyring := do.a2aKeyring
 	if do.a2aPairingKeyFile != "" {
-		if !do.a2aE2EE {
-			return nil, fmt.Errorf("rpcclient: an A2A E2EE pairing key needs E2EE on (--e2ee / NFLTR_A2A_E2EE)")
+		if keyring != nil {
+			return nil, fmt.Errorf("rpcclient: give an A2A E2EE pairing key file or a keyring, not both")
 		}
 		key, err := LoadA2AE2EEPairingKey(do.a2aPairingKeyFile)
 		if err != nil {
 			return nil, err
 		}
-		pairingKey = key
+		keyring = a2aE2EEPairingKey(key)
+	}
+	if keyring != nil && !do.a2aE2EE {
+		return nil, fmt.Errorf("rpcclient: an A2A E2EE pairing key needs E2EE on (--e2ee / NFLTR_A2A_E2EE)")
 	}
 
 	host, port := parseTarget(target)
@@ -310,7 +313,7 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 			if labels == nil {
 				labels = map[string]string{}
 			}
-			labels[A2AE2EEStaticLabel] = st.label(do.agentID, pairingKey)
+			labels[A2AE2EEStaticLabel] = st.label(do.agentID, keyring)
 			do.labels = labels
 		}
 	}
@@ -355,8 +358,8 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 
 	a := newAgent(do.agentID, upStream, ctx, do.heartbeatInterval, true, do.a2aE2EE, do.a2aE2EE, liveness)
 	a.a2aRelayRequests.Store(do.a2aRelayRequests)
-	if pairingKey != nil {
-		a.a2aPairingKey.Store(&pairingKey)
+	if keyring != nil {
+		a.a2aKeyring.Store(&keyring)
 	}
 	a.conn = conn
 	return a, nil
@@ -517,10 +520,11 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 	// A stream to the relay's own agent ends at the relay: E2EE to it would
 	// protect nothing TLS does not, and the relay cannot hold a pairing key.
 	if a.a2aE2EEOutbound.Load() && targetAgentID != RelayAgentID {
-		cs.e2ee = newA2AE2EEState(cs.txnID, a.pairingKey())
+		cs.e2ee = newA2AE2EEState(cs.txnID, a.keyring())
 		if v := a2aE2EEPeer(targetAgentID); v != "" {
-			if static, name, ok := parseA2AE2EEStaticLabel(v, cs.e2ee.pairing); ok {
+			if static, name, kid, key, ok := parseA2AE2EEStaticLabel(v, cs.e2ee.kr); ok {
 				cs.e2ee.peerStatic, cs.e2ee.peerName, cs.peerLabel = static, name, v
+				cs.e2ee.kid, cs.e2ee.pk = kid, key
 			}
 		}
 	}
@@ -958,7 +962,9 @@ func (a *Agent) handleCall(ss *serverStream, h Handler) {
 	if ss.e2ee != nil && detail != "" {
 		ciphertext, encErr := ss.e2ee.encrypt(ss.txnID, []byte(detail))
 		if encErr != nil {
+			// Never the handler's words in the clear: the reason it could not be sealed (a revoked key).
 			log.Printf("rpcclient: failed to encrypt status detail for txn %s: %v", ss.txnID, encErr)
+			detail = encErr.Error()
 		} else {
 			statusPayload = ciphertext
 			detail = ""

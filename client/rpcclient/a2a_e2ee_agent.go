@@ -35,11 +35,12 @@ func (a *Agent) refusesPlaintext(msg *pb.TunnelFrame) bool {
 		return false
 	}
 	relayOriginated := msg.GetRouting().GetAgentId() == RelayAgentID || msg.GetMessageType() == fleetInvokeMessageType
-	return !relayOriginated || !a.a2aRelayRequests.Load() || a.pairingKey() != nil
+	return !relayOriginated || !a.a2aRelayRequests.Load() || a.keyring() != nil
 }
 
-func (a *Agent) pairingKey() []byte {
-	if k := a.a2aPairingKey.Load(); k != nil {
+// keyring is this agent's A2A E2EE keys, or nil (unkeyed).
+func (a *Agent) keyring() A2AE2EEKeyring {
+	if k := a.a2aKeyring.Load(); k != nil {
 		return *k
 	}
 	return nil
@@ -67,7 +68,7 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
 		log.Printf("rpcclient: dropped an A2A E2EE init for txn %s, a call this agent already serves", msg.GetTransactionId())
 		return "" // a second start of a served call: dropped, not traced
 	}
-	state, responderPub, err := newServerA2AE2EEState(msg.GetTransactionId(), msg.GetPayload(), a.pairingKey())
+	state, responderPub, err := newServerA2AE2EEState(msg.GetTransactionId(), msg.GetPayload(), a.keyring())
 	if err != nil {
 		code := codes.InvalidArgument
 		if errors.Is(err, errA2AE2EEPairing) {
@@ -129,7 +130,12 @@ func (a *Agent) handleE2EEInit0RTT(msg *pb.TunnelFrame) string {
 		log.Printf("rpcclient: dropped an A2A E2EE first flight for txn %s, a call this agent already serves", txnID)
 		return "" // a second start of a served call: dropped, not traced
 	}
-	pairing := a.pairingKey()
+	kr := a.keyring()
+	var ownID string
+	var pairing []byte
+	if kr != nil {
+		ownID, pairing = kr.Own()
+	}
 	var accepted a2aE2EEAccepted
 	var e []byte
 	refusal := refuseBad
@@ -148,6 +154,7 @@ func (a *Agent) handleE2EEInit0RTT(msg *pb.TunnelFrame) string {
 		}
 		return "" // the caller starts the call again with an init
 	}
+	accepted.state.kr, accepted.state.kid, accepted.state.pk = kr, ownID, pairing
 	ss := a.newServerStream(msg, accepted.state, accepted.request)
 	a.incoming.Store(txnID, ss)
 	if err := a.sendFrame(&pb.TunnelFrame{
