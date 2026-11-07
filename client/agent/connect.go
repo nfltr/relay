@@ -534,8 +534,8 @@ func (a *agent) connectOnce(ctx context.Context, since time.Time, attempts int) 
 	if key != "" {
 		md.Set("x-api-key", key)
 	}
-	if a.cfg.AgentID != "" {
-		md.Set("x-agent-id", a.cfg.AgentID)
+	if a.name != "" {
+		md.Set("x-agent-id", a.name)
 	}
 	if names := a.routes.routeNames(); names != "" {
 		md.Set("x-routes", names)

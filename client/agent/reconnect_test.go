@@ -7,6 +7,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,9 +21,14 @@ import (
 type fakeRelay struct {
 	pb.UnimplementedDispatcherServer
 	connected chan struct{}
+	names     chan string // when set: each stream's x-agent-id
 }
 
 func (f *fakeRelay) ConnectHTTP(stream grpc.BidiStreamingServer[pb.HTTPProxyResponse, pb.HTTPProxyRequest]) error {
+	if f.names != nil {
+		md, _ := metadata.FromIncomingContext(stream.Context())
+		f.names <- strings.Join(md.Get("x-agent-id"), ",")
+	}
 	_ = stream.SendHeader(metadata.Pairs("x-resolved-agent-id", "resolved")) // the agent reads the stream headers first
 	f.connected <- struct{}{}
 	<-stream.Context().Done()
@@ -88,6 +94,34 @@ func TestAgentReconnectsSoonAfterRelayRestart(t *testing.T) {
 		cancel()
 		<-a.Done()
 		stop()
+	}
+}
+
+// TestAgentReconnectsUnderItsName: the name an agent asks for (a machine's
+// service) is what every connection sends, also after the relay resolved
+// it to another id (its agent ref): a relay admits only a bound service
+// as a name, so a reconnect under the resolved id would be refused.
+func TestAgentReconnectsUnderItsName(t *testing.T) {
+	f := &fakeRelay{connected: make(chan struct{}, 4), names: make(chan string, 4)}
+	addr, stop := startFakeRelay(t, "127.0.0.1:0", f)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	a := New(Config{ServerAddr: addr, AgentID: "svc", Retries: 12, Logger: slog.New(slog.DiscardHandler)})
+	if err := a.Connect(ctx); err != nil {
+		t.Fatal(err)
+	}
+	waitConnected(t, f, 5*time.Second, "first connection")
+	stop()
+	_, stop = startFakeRelay(t, addr, f)
+	defer stop()
+	waitConnected(t, f, 10*time.Second, "after restart")
+	for i, want := range []string{"svc", "svc"} {
+		if got := <-f.names; got != want {
+			t.Fatalf("connection %d sent x-agent-id %q, want %q", i+1, got, want)
+		}
+	}
+	if a.AgentID() != "resolved" {
+		t.Fatalf("AgentID() = %q, want the relay's resolved id", a.AgentID())
 	}
 }
 

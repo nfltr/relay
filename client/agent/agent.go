@@ -350,6 +350,7 @@ func New(cfg Config, opts ...Option) Agent {
 
 	a := &agent{
 		cfg:          cfg,
+		name:         cfg.AgentID,
 		routes:       routes,
 		logger:       logger.With("agent_id", cfg.AgentID),
 		moveRetryFor: moveRetryFor,
@@ -406,6 +407,7 @@ func applyDefaults(cfg *Config) {
 
 type agent struct {
 	cfg    Config
+	name   string    // the name every connection asks for (cfg.AgentID as given); cfg.AgentID becomes the relay's resolved id
 	park   *linkPark // the agent link between primaries (RelayDialer.park)
 	routes routeTable
 	logger *slog.Logger
