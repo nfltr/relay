@@ -22,9 +22,10 @@
 
    Code (nfltr = github.com/nfltr/nfltr; the rest github.com/nfltr/relay):
      client/relaytrust/relaytrust.go:29-46   pin = SHA-256 of the leaf certificate DER
-     nfltr cmd/nfltr/internal/transportcli/tcp_connect_session.go:117      E2Ee = pin != ""
-     nfltr .../tcp_connect_session.go:133-141  no answer: a pinned session is refused
-     nfltr .../tcp_connect_session.go:195-209  TLS 1.3, VerifyPeerCertificate: fingerprint == pin
+     nfltr cmd/nfltr/internal/transportcli/tcp_connect_session.go:195      E2Ee = pin != ""
+     nfltr .../tcp_connect_session.go:210-213  no answer: a pinned session is refused
+                                               (before TLS; Open and the pipelined OpenPipelined alike)
+     nfltr .../tcp_connect_session.go:277-295  TLS 1.3, VerifyPeerCertificate: fingerprint == pin
      nfltr cmd/nfltr/internal/upcli/agent.go:135 the pin comes from the agent's own output
      client/agent/session_plan.go:77,90-91    target: the table's, --forward's, else the relay's TargetAddr
      client/agent/session_plan.go:105-126     E2EE only: pinned -> TLS here, unpinned refused
@@ -71,12 +72,12 @@ free sk1: skey [private].
 let Client(pin: bitstring, m: bitstring) =
   out(c, (svcAddr, true));                           (* the open: target and E2Ee *)
   in(c, answer: bitstring);
-  if answer = answerOK then                          (* tcp_connect_session.go:133-141 *) (* NOT:plaintext-without-answer *)
+  if answer = answerOK then                          (* tcp_connect_session.go:210-213 *) (* NOT:plaintext-without-answer *)
   if answer = answerNone then out(c, m) else (* ONLY:plaintext-without-answer *)
   in(c, spk: pkey);                                  (* the certificate the session presents *)
   let pin2 = pin in                                  (* the pin is the client's own, never the relay's *) (* NOT:relay-supplied-pin *)
   in(c, pin2: bitstring); (* ONLY:relay-supplied-pin *)
-  if fp(spk) = pin2 then                             (* tcp_connect_session.go:204 *) (* NOT:skip-pin-check *)
+  if fp(spk) = pin2 then                             (* tcp_connect_session.go:289 *) (* NOT:skip-pin-check *)
   if true then (* ONLY:skip-pin-check *)
   new k: bitstring;
   out(c, aenc(k, spk));
