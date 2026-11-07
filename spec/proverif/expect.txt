@@ -24,7 +24,13 @@ a2a_machine drop-psk FFFFFFFFFFTTTFTFFFFFFTTT
 a2a_machine drop-txn TTTTFFFFFFTTTTTFFFFFFTTT
 a2a_machine skip-revoke TTTTTTTTTTFFTTTTTTFFFTTT
 a2a_machine relay-cert FFFFFFFFFFTTTFTFFFFFFTTT
-a2a_machine no-target-check FTTTFTTTFTTTTTTTTTFFFTTT
+# no-target-check also fails 14: the callee's own ref is the relay's, so
+# only the key id R picks binds its call to the target.
+a2a_machine no-target-check FTTTFTTTFTTTTFTTTTFFFTTT
+# drop-role: the initiator's role out of the prologue; a machine's call to
+# R, returned to that machine told it is R, is answered (7, 16).
+a2a_machine drop-role TTTTTTFTTTTTTTTFTTFFFTTT
+a2a_machine sess,drop-role TTTTTTFTTTTTTTTFTTFFFFFF
 # wire v1's findings put back: F1 (one key both ways) fails no reflection
 # (9; 7, 8 not proved), F2 (the end in the clear) fails the authenticated end (10).
 a2a_machine one-key TTTTTT??FTTTTTT??TFFFTTT

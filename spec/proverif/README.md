@@ -41,7 +41,7 @@ and pin.
 |---|---|
 | `a2a_today.pv` | wire v1 (removed; relay 3977c04, the findings' evidence): interactive handshake, frames, machine keys, revoke; root holder R on relay X, machines B, E (honest), C (leaked), D (leaked, revoked at phase 1) on relay Y |
 | `a2a_today_unkeyed.pv` | wire v1 without a pairing key (v2's unkeyed Noise NN has the same attack) |
-| `a2a_machine.pv` | wire v2, what `client/rpcclient` ships: Noise NNpsk0 under the owner-derived machine key, key id from the called agent id, prologue binding txn, caller, callee and key id, per-direction counter keys, authenticated end; each rule cites its code |
+| `a2a_machine.pv` | wire v2, what `client/rpcclient` ships: Noise NNpsk0 under the owner-derived machine key, key id from the called agent id, prologue binding txn, the initiator's role, caller, callee and key id (the callee's own ref the relay's), per-direction counter keys, authenticated end; each rule cites its code |
 
 Wire v2 is interactive only: v1's 0-RTT first flight (Noise NK to a
 static key advertised as a connect label, its replay register and NK's
@@ -109,16 +109,16 @@ root key, so every machine key: forward secrecy of all earlier calls):
 | 1-4 | secrecy of both directions, R calling B and B calling R, with C and D leaked and the relays' CA the attacker's | T | `drop-psk`, `relay-cert`; 1 also `no-target-check` |
 | 5 | R as caller agrees with the target it called (txn, keys, key id), injective | T | `drop-psk`, `relay-cert`, `drop-txn`, `no-target-check` |
 | 6 | R as callee: the caller it answered as machine n is n, on that txn and key (non-injective: msg1 replays, and gets no frame accepted, 8) | T | `drop-psk`, `relay-cert`, `drop-txn` |
-| 7 | each request B handles was sent once by R | T | `drop-psk`, `relay-cert`, `drop-txn` |
+| 7 | each request B handles was sent once by R | T | `drop-psk`, `relay-cert`, `drop-txn`, `drop-role` (F6) |
 | 8 | each request R handles under B's key id was sent once by B | T | `drop-psk`, `relay-cert`, `drop-txn` |
 | 9 | no reflection | T | `drop-psk`, `relay-cert`, `drop-txn`, `no-target-check`, `one-key` (F1) |
 | 10 | the end of a stream is the sender's | T | `drop-psk`, `relay-cert`, `drop-txn`, `clear-end` (F2) |
 | 11 | no frame of revoked D after the revoke | T | `skip-revoke` |
 | 12 | no handshake of revoked D after the revoke | T | `skip-revoke` |
 | 13 | revoke ends the session: no resumed call of revoked D answered after the revoke | T | `survive-revoke` |
-| 14 | a session is its pair's: R's request to B is never handled by E | T | `sess-unbound` |
+| 14 | a session is its pair's: R's request to B is never handled by E | T | `sess-unbound`, `no-target-check` |
 | 15 | no nonce reuse: a key seals at one nonce in one call only | T | `counter-reset` |
-| 16-18 | 7, 8, 10 for every call, handshake or resumed (non-injective): no cross-call splice or replay into another call | T | `txn-unbound` (16-18), `drop-psk`, `relay-cert`, `drop-txn` |
+| 16-18 | 7, 8, 10 for every call, handshake or resumed (non-injective): no cross-call splice or replay into another call | T | `txn-unbound` (16-18), `drop-psk`, `relay-cert`, `drop-txn`, `drop-role` (16, F6) |
 | 19-21 | witnesses: R gets B's response, B's request, B gets R's end, on a handshake | F (reachable) | |
 | 22-24 | the same on a resumed call | F (reachable) | |
 
@@ -192,6 +192,19 @@ per finding (`client/rpcclient/a2a_e2ee_v2_test.go`: F1
   (no frame of such a call decrypts for anyone without the machine's key,
   query 5 holds), but anyone can start the machine's handler. v2 removes
   the case (the caller names the callee's key id).
+- **F6 (medium, lane A2AREF, fixed before release) reflection to the
+  caller's own machine.** A callee's own ref is the one the relay states
+  at connect (`agentwire.AgentRefKey`, `Agent.Ref`): the model takes it
+  from the attacker at every answer. With the prologue binding only txn,
+  caller, callee and key id, a relay returns a machine's call to R to that
+  machine, or to another agent of it (same machine key), told "you are
+  R"; it answers and handles its own request as R's (queries 7, 16).
+  Fixed by the initiator's role in the prologue (`a2aE2EERole`: a machine
+  answers root holders only, a root holder a machine key id from a
+  machine; `A2AE2EEKeyring.Machine`); mutant `drop-role`; test
+  `TestA2AE2EEMachineInitNotAnsweredByAMachine` (sibling and itself).
+  Root holders hold one root key and stay interchangeable: a relay can
+  route a call between them whatever the callee check (Open item 2).
 - Revocation holds at the root holder (10, 11; each check alone is caught
   by its mutant). A revoked machine itself learns nothing: frames a root
   holder sealed before the revoke still open there, which is harmless.

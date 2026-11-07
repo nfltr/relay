@@ -11,21 +11,29 @@
    id, the first label of every agent id the machine registers, so a caller
    derives the key id from the agent id it calls.
 
-   Handshake: Noise NNpsk0 (github.com/flynn/noise, a2a_e2ee.go:155
+   Handshake: Noise NNpsk0 (github.com/flynn/noise, a2a_e2ee.go:185
    newA2AE2EEHandshake), psk = HMAC(K_kid, "nfltr-a2a-e2ee-v2-psk")
-   (:126), prologue = v2 0 txn 0 caller agent id 0 callee agent id 0 key
-   id (:135). -> psk, e (empty payload: its AEAD tag proves the psk); <- e,
-   ee (empty payload). The init carries caller, callee and key id in the
-   clear before message 1 (:238). Frames: Noise transport keys, one per
-   direction, counter nonces, AD = txn (:383, :400), plaintext = type ||
+   (:155), prologue = v2 0 txn 0 role 0 caller agent ref 0 callee agent
+   ref 0 key id (:165), the role the initiator's (:123 a2aE2EERole: a
+   machine calls as a machine and answers root holders only; a root
+   holder calls as root and answers a machine key id from a machine); the
+   role is not sent, each end puts the one it expects. -> psk, e (empty
+   payload: its AEAD tag proves the psk); <- e, ee (empty payload). The
+   init carries caller, callee and key id in the clear before message 1
+   (:291). Frames: Noise transport keys, one per direction, counter
+   nonces, AD = txn (:459, :480), plaintext = type ||
    body: DATA, END and ERROR (:66-70); ERROR is sealed as END is and ends
    the stream the same way, so the model's END stands for both.
 
    Abstractions: the key id is mid(n, gen) and an agent id is its machine
    name; the code's key id is opaque and A2AE2EEKeyring.For(ref) maps an
-   agent ref to it (:74-95; nfltr a2akeys, by machine id with TENANTS2). A
-   callee also answers a ref under the relay's key scope ("<scope>.<own>",
-   :332), which the attacker chooses anyway; the key id is the binding.
+   agent ref to it (:87-100; nfltr a2akeys, by machine id with TENANTS2).
+   A callee's own ref is the one the relay told it at connect (a2a.go
+   Dial, agentwire.AgentRefKey; the callee check :398), so the model takes
+   it from the attacker at every answer: the key id and the role are the
+   binding. Without the role a relay returns a machine's call to R to that
+   machine (or another agent of it, same key) told "you are R", which
+   answers it (queries 7 and 16; mutant drop-role).
 
    Topology as a2a_today.pv: R (root holder) on relay X; B, E honest, C
    compromised, D compromised and revoked at phase 1, all on relay Y; the
@@ -33,7 +41,7 @@
    certificate; nothing here trusts one). Flag leak: phase 2 leaks the root
    key (so every machine key): forward secrecy of what came before.
    Mutants (run.sh flags): drop-psk, drop-txn, skip-revoke, relay-cert,
-   no-target-check, and wire v1's findings put back: one-key (F1: one key
+   no-target-check, drop-role, and wire v1's findings put back: one-key (F1: one key
    both ways), clear-end (F2: the end of a stream in the clear).
 
    Sessions (lane A2ASESS, a2a_e2ee_session.go): a keyed handshake leaves
@@ -69,6 +77,7 @@ fun split2(key): key.          (* responder -> initiator *)
 
 const Lpsk, Lempty, N0, N1, DATA, END: bitstring.
 const INIT, ACK, FRAME, V2: bitstring.
+const ROLER, ROLEM: bitstring.   (* the initiator's role: root holder, machine *)
 const RESUME, I2R, R2I, HS, RS: bitstring.
 
 (* Sessions, a2a_e2ee_session.go *)
@@ -110,14 +119,17 @@ free yDownB, yDownE: channel [private].  (* ONLY:honestY *)
 letfun mkey(n: bitstring, gen: bitstring) =
   hkdf(Kroot, n, gen).        (* NOT:relay-cert *)
   hkdf(KrelayCA, n, gen).     (* ONLY:relay-cert *)
-letfun psk(K: key) =             (* a2a_e2ee.go:126 a2aE2EEPsk *)
+letfun psk(K: key) =             (* a2a_e2ee.go:155 a2aE2EEPsk *)
   mackey(K, Lpsk).            (* NOT:drop-psk *)
   PublicPsk.                  (* ONLY:drop-psk *)
-(* a2a_e2ee.go:135 a2aE2EEPrologue *)
-letfun prologue(t: bitstring, caller: bitstring, callee: bitstring, k: bitstring) =
-  (V2, t, caller, callee, k).       (* NOT:drop-txn *)
-  (V2, caller, callee, k).          (* ONLY:drop-txn *)
-letfun ad(t: bitstring) =           (* a2a_e2ee.go:383, :400: AD = txn *)
+(* a2a_e2ee.go:165 a2aE2EEPrologue; the role :123, or (mutant drop-role) none *)
+letfun prole(r: bitstring) =
+  r.                                (* NOT:drop-role *)
+  Lempty.                           (* ONLY:drop-role *)
+letfun prologue(t: bitstring, r: bitstring, caller: bitstring, callee: bitstring, k: bitstring) =
+  (V2, t, prole(r), caller, callee, k).       (* NOT:drop-txn *)
+  (V2, prole(r), caller, callee, k).          (* ONLY:drop-txn *)
+letfun ad(t: bitstring) =           (* a2a_e2ee.go:459, :480: AD = txn *)
   t.                                (* NOT:drop-txn *)
   Lempty.                           (* ONLY:drop-txn *)
 (* The responder -> initiator key: split2, or (mutant one-key, finding F1)
@@ -221,12 +233,12 @@ query t: bitstring; event(RootRecvReq(RS, t, mid(nameB, G1), mreq(nameB))).
 query t: bitstring; event(MachRecvEnd(RS, t, mid(nameB, G1))).
 
 (* R calls agent tgt: the key id is the target's machine id at the store's
-   generation (a2a_e2ee.go:222 For(callee)); nothing the relay or the peer
-   says picks it. Message 1 :233, the ack :302 (complete), a request frame
+   generation (a2a_e2ee.go:271 For(callee)); nothing the relay or the peer
+   says picks it. Message 1 :266 (role root), the ack :355 (complete), a request frame
    client_stream.go:181 (seal after its credit), its END there too
    (CloseSend), the response client_stream.go:328-354 (recvE2EE: a frame
    in the clear is the relay's, one that does not open ends the call,
-   a2a_e2ee.go:400). *)
+   a2a_e2ee.go:480). *)
 let RootInit(tgt: bitstring) =
   in(att, pick: bitstring);                 (* ONLY:no-target-check *)
   let n = pick in                           (* ONLY:no-target-check *)
@@ -235,7 +247,7 @@ let RootInit(tgt: bitstring) =
   let k = mid(n, G1) in
   let K = mkey(n, G1) in
   new t: bitstring; new x: exponent; let i = exp(g, x) in
-  let h1 = (prologue(t, nameR, tgt, k), i) in
+  let h1 = (prologue(t, ROLER, nameR, tgt, k), i) in
   let c1 = ck1(psk(K), i) in
   let ct1 = aenc(c1, N0, h1, Lempty) in
   out(xUp, (tgt, (t, INIT, nameR, tgt, k, i, ct1)));
@@ -272,15 +284,17 @@ let MachServe(via: bitstring, m: bitstring, cin: channel, cout: channel, t: bits
      out(cout, (caller, (t, FRAME, aenc(kout, N0, a, (DATA, respFrom(m))))))) ).
 
 (* Machine m answers (a2a_e2ee_agent.go:70 -> a2a_e2ee.go
-   newServerA2AE2EEState): the callee its own agent (:332), the key id the
-   one For gives for the caller, a machine's own (:347-353), message 1 opens
-   under it (:360), the ack :363; requests and their END
+   newServerA2AE2EEState): the callee the ref the relay told it (:398),
+   the key id the one For gives for the caller, a machine's own
+   (:413-419), message 1 opens under it with the role root (:426), the ack
+   :430; requests and their END
    server_stream.go:174-189, the response server_stream.go:154. *)
 let MachResp(m: bitstring, cin: channel, cout: channel) =
   ! in(cin, (t: bitstring, =INIT, caller: bitstring, callee: bitstring, k: bitstring, i: G, ct1: bitstring));
-  if callee = m && k = mid(m, G1) then
+  in(att, own: bitstring);           (* the ref the relay told m: the attacker's *)
+  if callee = own && k = mid(m, G1) then
   let K = mkey(m, G1) in
-  let h1 = (prologue(t, caller, callee, k), i) in
+  let h1 = (prologue(t, ROLER, caller, callee, k), i) in
   let c1 = ck1(psk(K), i) in
   if adec(c1, N0, h1, ct1) = Lempty then
   new y: exponent; let r = exp(g, y) in
@@ -290,12 +304,13 @@ let MachResp(m: bitstring, cin: channel, cout: channel) =
   out(cout, (caller, (t, ACK, r, aenc(c2, N0, (h1, ct1, r), Lempty))));
   MachServe(HS, m, cin, cout, t, caller, k, split1(c2), back(c2), ad(t)).
 
-(* Machine m calls R: For(callee) is its own key id (a2a_e2ee.go:222). *)
+(* Machine m calls R: For(callee) is its own key id (a2a_e2ee.go:271),
+   the role machine. *)
 let MachInit(m: bitstring, cin: channel, cout: channel) =
   let k = mid(m, G1) in
   let K = mkey(m, G1) in
   new t: bitstring; new x: exponent; let i = exp(g, x) in
-  let h1 = (prologue(t, m, nameR, k), i) in
+  let h1 = (prologue(t, ROLEM, m, nameR, k), i) in
   let c1 = ck1(psk(K), i) in
   let ct1 = aenc(c1, N0, h1, Lempty) in
   event MachStart(t, k, i);
@@ -310,8 +325,9 @@ let MachInit(m: bitstring, cin: channel, cout: channel) =
   out(cout, (nameR, (t, FRAME, aenc(split1(c2), N0, ad(t), (DATA, mreq(m)))))).
 
 (* R answers a machine: the key id must be For(caller), the caller's
-   machine (a2a_e2ee.go:347-353); For refuses a revoked machine (:347),
-   Valid (before each frame, :380, :397) a revoked id. *)
+   machine (a2a_e2ee.go:413-419), the role machine (:123); For refuses a
+   revoked machine (:413), Valid (before each frame, :456, :477) a revoked
+   id. *)
 let RootFrame(via: bitstring, src: bitstring, t: bitstring, k: bitstring, kin: key, kout: key, a: bitstring) =
   in(xDown, (=src, (=t, =FRAME, ct3: bitstring)));
   let (=DATA, z: bitstring) = adec(kin, N0, a, ct3) in
@@ -328,11 +344,12 @@ let RootFrameRevoked(via: bitstring, src: bitstring, t: bitstring, k: bitstring,
 
 let RootResp =
   ! in(xDown, (src: bitstring, (t: bitstring, =INIT, caller: bitstring, callee: bitstring, k: bitstring, i: G, ct1: bitstring)));
-  if callee = nameR then
+  in(att, own: bitstring);           (* the ref the relay told R: the attacker's *)
+  if callee = own then
   let mid(n, gen) = k in
   if n = caller && gen = G1 && known(n) then
   let K = mkey(n, gen) in
-  let h1 = (prologue(t, caller, callee, k), i) in
+  let h1 = (prologue(t, ROLEM, caller, callee, k), i) in
   let c1 = ck1(psk(K), i) in
   if adec(c1, N0, h1, ct1) = Lempty then
   new y: exponent; let r = exp(g, y) in
@@ -345,12 +362,13 @@ let RootResp =
 (* After the revoke: Peer refuses D. *)
 let RootRespAfter =
   ! in(xDown, (src: bitstring, (t: bitstring, =INIT, caller: bitstring, callee: bitstring, k: bitstring, i: G, ct1: bitstring)));
-  if callee = nameR then
+  in(att, own: bitstring);           (* the ref the relay told R: the attacker's *)
+  if callee = own then
   let mid(n, gen) = k in
   if n = caller && gen = G1 && known(n) then
   if n <> nameD then                              (* NOT:skip-revoke *)
   let K = mkey(n, gen) in
-  let h1 = (prologue(t, caller, callee, k), i) in
+  let h1 = (prologue(t, ROLEM, caller, callee, k), i) in
   let c1 = ck1(psk(K), i) in
   if adec(c1, N0, h1, ct1) = Lempty then
   new y: exponent; let r = exp(g, y) in
