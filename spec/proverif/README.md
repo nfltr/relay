@@ -115,7 +115,29 @@ root key, so every machine key: forward secrecy of all earlier calls):
 | 10 | the end of a stream is the sender's | T | `drop-psk`, `relay-cert`, `drop-txn`, `clear-end` (F2) |
 | 11 | no frame of revoked D after the revoke | T | `skip-revoke` |
 | 12 | no handshake of revoked D after the revoke | T | `skip-revoke` |
-| 13-15 | witnesses: R gets B's response, B's request, B gets R's end | F (reachable) | |
+| 13 | revoke ends the session: no resumed call of revoked D answered after the revoke | T | `survive-revoke` |
+| 14 | a session is its pair's: R's request to B is never handled by E | T | `sess-unbound` |
+| 15 | no nonce reuse: a key seals at one nonce in one call only | T | `counter-reset` |
+| 16-18 | 7, 8, 10 for every call, handshake or resumed (non-injective): no cross-call splice or replay into another call | T | `txn-unbound` (16-18), `drop-psk`, `relay-cert`, `drop-txn` |
+| 19-21 | witnesses: R gets B's response, B's request, B gets R's end, on a handshake | F (reachable) | |
+| 22-24 | the same on a resumed call | F (reachable) | |
+
+Sessions (lane A2ASESS, flag `sess`: the lines without it are wire v2
+with a handshake every call, where 13-18 hold trivially and the resumed
+witnesses 22-24 read T, unreachable): 5-8 and 10 are over handshake calls (`HS`), as
+ProVerif's injectivity cannot hold across a table read and write; a
+resumed call is served at most once by the callee's replay window, which
+`spec/A2ASession.tla` checks (`AtMostOnce`, mutant `AS:no-window`), with
+the callee's restart, expiry and the one rehandshake after a refusal. The
+model's resume, tag and call keys are `client/rpcclient/a2a_e2ee_session.go`;
+each query and mutant has a test in `a2a_e2ee_session_test.go`
+(`TestA2AE2EESessionBoundToPair` 14, `TestA2AE2EEResumedFrameNotInAnotherCall`
+16-18, `TestA2AE2EEResumedCallReplayRefused` and `TestA2AE2EESessionWindow`
+the window, `TestA2AE2EECallKeysUnique` 15, `TestA2AE2EERevokeEndsSession` 13,
+`TestA2AE2EERotationRekeys`, `TestA2AE2EEResponderRestartRehandshakes`); the
+wire vectors gain the session secret, its id, a resume and its first frames.
+The retry after an unknown (its message 1 names the resume it retries) is
+a state property, `spec/A2ASession.tla` (finding S1 there).
 
 `expect.txt` lists every result exactly, mutants included (a mutant
 also fails queries it does not target, e.g. `drop-txn` breaks agreement
@@ -285,6 +307,7 @@ E2EEFIX a failed write spends its number and ends the SignalConn
 | model | code |
 |---|---|
 | handshake, keys, frames | client/rpcclient/a2a_e2ee.go |
+| sessions: resume, call keys, window | client/rpcclient/a2a_e2ee_session.go, client/rpcclient/a2a_e2ee_session_test.go |
 | responder policy | client/rpcclient/a2a_e2ee_agent.go |
 | frames on the streams, the end of a served call, v1 refused | client/rpcclient/client_stream.go, client/rpcclient/server_stream.go, client/rpcclient/a2a.go |
 | one test per finding, wire vectors | client/rpcclient/a2a_e2ee_v2_test.go |

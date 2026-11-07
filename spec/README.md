@@ -593,5 +593,90 @@ traces, three runs (`CL_TRACE_TESTS`, `CL_TRACE_COUNT`).
 |---|---|
 | `Serve`, `Start`, `Drop`, `Refuse`, `Return` | client/rpcclient/a2a.go, client/rpcclient/a2a_e2ee_agent.go |
 | `Send`, `CloseSend`, `Cancel` | client/rpcclient/client_stream.go |
+| `Retry` (an E2EE resume answered unknown; `Retries`, `CallLifecycleRetry.cfg`, mutant `CL:retry-runs-again`) | client/rpcclient/client_stream.go (`rehandshake`), client/rpcclient/a2a_e2ee_session.go (`retry`) |
 | the mark | proto/pb/service.proto |
 | trace recorder | client/rpcclient/trace_callcredit_on.go |
+
+## A2ASession.tla: E2EE sessions reused across agent-to-agent calls
+
+Wire v2 (`client/rpcclient/a2a_e2ee*.go`) handshakes once per call: one
+more round trip before the first request frame. A keyed handshake now also
+makes a session at both ends; a later call between the same root holder
+and machine resumes it in the request's first frame
+(`a2a-e2ee-v2-resume`: session id, call number, tag), sends its request
+frames at once and derives its own keys `HKDF(S, txn, number, direction)`.
+The message exchange (secrecy, agreement, binding to the pair and the
+call, revoke) is `spec/proverif/a2a_machine.pv` "Sessions"; this model
+holds what ProVerif does not: the callee's replay window, the callee's
+restart, expiry, revoke, and the one retry after an unknown. One caller,
+one callee; the relay may drop, delay, duplicate and reorder every resume
+(`net` is a set) and forge the callee's answer (resumed and unknown are
+not sealed: a callee that lost the session has no key to seal with).
+
+The callee answers a resume it does not take `unknown`; the caller then
+handshakes once on the same call (a retry) and sends its request frames
+again. The retry's message 1 names the resume it retries (session id,
+call number, when it was taken; sealed under the pairing key). Without
+that, an unknown the relay forged in place of `resumed`, or a resume the
+relay held back and delivered after the retry, ran one request twice
+(TLC found both; finding S1 below). The callee refuses a retry whose call
+number its session took, takes the number when it answers one (so the
+held resume is refused), refuses another pair's session and one older
+than `a2aRetryBound` (5 min, either clock); it keeps a session
+`a2aSessionCalleeIdle` (15 min) past its last call, so a session it no
+longer knows inside the bound was lost to a restart.
+
+| invariant | holds because |
+|---|---|
+| `AtMostOnce` | a call is served at most once, unless the callee restarted between serving it and its retry (`lost`: limit L1) |
+| `NoKeyReuse` | a session's call number is used once, so no call key (and no nonce under it) is used twice |
+| `RevokeEnds` | nothing is served after the revoke: both ends drop the machine's sessions (`takeCall`, `resume` check the keyring) |
+| `OnceRetry` | an unknown makes one retry; an unknown after that fails the call |
+
+| mutant (`make spec-mutants`) | caught by |
+|---|---|
+| `AS:counter-reset` (call number restarts per call) | `NoKeyReuse` |
+| `AS:no-window` | `AtMostOnce` |
+| `AS:restart-keeps-sessions` (sessions persisted, windows not) | `AtMostOnce` |
+| `AS:survive-revoke` | `RevokeEnds` |
+| `AS:retry-loop` (retry again on a second unknown) | `OnceRetry` |
+| `AS:no-retry-check` (S1: the callee answers a retry without its call number) | `AtMostOnce` |
+| `AS:retry-no-take` (S1: answering a retry leaves the number untaken) | `AtMostOnce` |
+| `AS:no-retry-bound` (the callee may have let the session expire) | `AtMostOnce` |
+
+Witnesses `W_Resumed`, `W_Rehandshake`, `W_Failed`, `W_ForgedRefused`,
+`W_Lost` are violated (a resumed call confirmed, one served after its
+retry, one failed, a forged unknown on a served call refused, a call lost
+to a restart). `A2ASession.cfg`: three calls, three sessions, a window of
+1: 35924 states, depth 15, about 9 s, every action taken (`COVERAGE=1`).
+`CallLifecycle.tla` has the retry too (`Retry`, `Retries`;
+`CallLifecycleRetry.cfg`, mutant `CL:retry-runs-again`), so the traces of
+the session tests are its behaviours.
+
+### Findings (lane A2ASESS, 2026-11-07)
+
+| id | severity | finding | status |
+|---|---|---|---|
+| S1 | high (design, before landing) | a retry after an unknown ran the request twice when the unknown was the relay's: in place of `resumed` (the callee had run the call), or with the resume held back and delivered after the retry | fixed before landing: the retry names its resume, the callee refuses it or takes its number (`a2aSessions.retry`); `TestA2AE2EELateResumeAfterRetryRefused`, `TestA2AE2EERetryChecks`, `TestA2AE2EEForgedUnknownEndsCall` |
+| L1 | low (limit) | a callee that restarts after serving a resumed call, with the relay forging its unknown within `a2aRetryBound`, runs that call again: nothing of the session survives a restart | open, documented (nfltr decision doc "Session reuse") |
+| T1 | low | `make spec-traces`: the CallLifecycle traces of tests whose relay drops a call's first frame (`TestA2AE2EERefusesDroppedFrame`, and here `TestA2AE2EELateResumeAfterRetryRefused`) are rejected: the model's network loses nothing (2 such transactions on main before this lane) | open: a `Lose` step for hostile-relay tests, or those tests out of `CL_TRACE_TESTS` |
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| The relay may drop, delay, duplicate, reorder and replay any frame and forge resumed and unknown; it cannot forge a sealed frame or a retry (tags, AEAD, the pairing key) | `spec/proverif/a2a_machine.pv` queries 13-18 |
+| A restarted callee has no sessions (they live in memory only) | `a2aSessions` in `Agent` |
+| A keyring answers `Valid`/`For` for a revoked machine with a refusal from the revoke on | nfltr `internal/application/a2akeys` |
+| The two ends' clocks differ by less than `a2aRetryBound` (else a retry is refused: the call fails, it never runs twice) | `a2aSessions.retry` |
+| The callee does not evict a session within `a2aRetryBound` of its last call (it holds `a2aSessionMax` = 1024 per agent) | `evictA2ASession` |
+
+### Code map (A2ASession.tla)
+
+| actions | code |
+|---|---|
+| `Handshake`, `Resume`, `ExpireCaller` | client/rpcclient/a2a.go (`NewStream`), client/rpcclient/a2a_e2ee_session.go (`takeCall`) |
+| `Deliver`, `ExpireCallee`, `Restart` | client/rpcclient/a2a_e2ee_agent.go (`handleE2EEResume`), client/rpcclient/a2a_e2ee_session.go (`resume`, `takeCallNumber`) |
+| `Confirm`, `Unknown` (the retry) | client/rpcclient/client_stream.go (`resumeAnswered`, `rehandshake`), client/rpcclient/a2a_e2ee_agent.go (`handleE2EEInit`), client/rpcclient/a2a_e2ee_session.go (`retry`) |
+| `Revoke` | client/rpcclient/a2a_e2ee_session.go (`takeCall`, `resume`: the keyring check) |
+| trace recorder | none yet (the session tests' traces are checked against CallLifecycle.tla; an A2ASession recorder is open) |

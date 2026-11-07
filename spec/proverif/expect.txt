@@ -11,21 +11,35 @@ a2a_today skip-peer-revoke FTTTTFF?FTFFF
 # Part 2: wire v2, on the machine identity, what client/rpcclient ships.
 # Every query holds; each mutant fails the ones it targets. With X's hops
 # private ProVerif finds no trace for the first witness (?): it is
-# reachable in the other variants.
-a2a_machine - TTTTTTTTTTTTFFF
-a2a_machine honestX TTTTTTTTTTTT?FF
-a2a_machine honestY TTTTTTTTTTTTFFF
-a2a_machine honestX,honestY TTTTTTTTTTTT?FF
-a2a_machine leak TTTTTTTTTTTTFFF
-a2a_machine drop-psk FFFFFFFFFFTTFFF
-a2a_machine drop-txn TTTTFFFFFFTTFFF
-a2a_machine skip-revoke TTTTTTTTTTFFFFF
-a2a_machine relay-cert FFFFFFFFFFTTFFF
-a2a_machine no-target-check FTTTFTTTFTTTFFF
+# reachable in the other variants. Without the flag sess every call
+# handshakes (13-18 hold trivially, the resumed witnesses 22-24 read T:
+# unreachable); with it a call resumes its pair's session (README
+# "Sessions").
+a2a_machine - TTTTTTTTTTTTTTTTTTFFFTTT
+a2a_machine honestX TTTTTTTTTTTTTTTTTT?FFTTT
+a2a_machine honestY TTTTTTTTTTTTTTTTTTFFFTTT
+a2a_machine honestX,honestY TTTTTTTTTTTTTTTTTT?FFTTT
+a2a_machine leak TTTTTTTTTTTTTTTTTTFFFTTT
+a2a_machine drop-psk FFFFFFFFFFTTTFTFFFFFFTTT
+a2a_machine drop-txn TTTTFFFFFFTTTTTFFFFFFTTT
+a2a_machine skip-revoke TTTTTTTTTTFFTTTTTTFFFTTT
+a2a_machine relay-cert FFFFFFFFFFTTTFTFFFFFFTTT
+a2a_machine no-target-check FTTTFTTTFTTTTTTTTTFFFTTT
 # wire v1's findings put back: F1 (one key both ways) fails no reflection
 # (9; 7, 8 not proved), F2 (the end in the clear) fails the authenticated end (10).
-a2a_machine one-key TTTTTT??FTTTFFF
-a2a_machine clear-end TTTTTTTTTFTTFFF
+a2a_machine one-key TTTTTT??FTTTTTT??TFFFTTT
+a2a_machine clear-end TTTTTTTTTFTTTTTTTFFFFTTT
+# Sessions (lane A2ASESS): every query holds with calls resumed; each
+# mutant fails its query: sess-unbound 14, txn-unbound 9 and 16-18,
+# survive-revoke 13, counter-reset 15.
+a2a_machine sess TTTTTTTTTTTTTTTTTTFFFFFF
+a2a_machine sess,honestX TTTTTTTTTTTTTTTTTT?FFFFF
+a2a_machine sess,honestY TTTTTTTTTTTTTTTTTTFFFFFF
+a2a_machine sess,leak TTTTTTTTTTTTTTTTTTFFFFFF
+a2a_machine sess,sess-unbound TTTTTTTTTTTTTFTTTTFFFFFF
+a2a_machine sess,txn-unbound TTTTTTTTFTTTTTFFFFFFFFFF
+a2a_machine sess,survive-revoke TTTTTTTTTTTTFTTTTTFFFFFF
+a2a_machine sess,counter-reset TTTTTTTTTTTTTTFTTTFFFFFF
 #
 # Part 3: the agent-side E2EE paths (e2ee_tcp: pinned TCP; wg_exit:
 # WireGuard client and exit; p2p_e2e: p2p). Queries in README "E2EE paths";

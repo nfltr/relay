@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # spec.sh check|mutants: the TLA+ models of spec/ (spec/README.md).
-#   check    TLC on spec/SignalConn.cfg, spec/CallCredit.cfg,
+#   check    TLC on spec/SignalConn.cfg, spec/A2ASession.cfg, spec/CallCredit.cfg,
 #            spec/CallCreditBoth.cfg and spec/CallCreditSenders.cfg: their
 #            invariants and liveness
 #            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg).
@@ -130,6 +130,7 @@ CONSTANTS
     Call = "$3"
     Txns <- TraceTxns
     N <- TraceLen
+    Retries <- TraceRetries
     Mutant = "$m"
 INIT TraceInit
 NEXT TraceNext
@@ -174,12 +175,14 @@ clrun() {
 }
 
 fail=0
+cfg=
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle"
+	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge"
 	for c in $cfgs; do
 		m=${c%Large}
+		m=${m%Retry}
 		echo "== $c.cfg"
 		st=0
 		tlc $c.cfg $m.tla >"$work/out" 2>&1 || st=$?
@@ -189,12 +192,12 @@ check)
 	done
 	;;
 mutants)
-	# expect NAME SED...: $model.cfg edited must violate a property.
+	# expect NAME SED...: $model.cfg (or $cfg.cfg) edited must violate a property.
 	model=SignalConn
 	expect() {
 		name=$1
 		shift
-		sed "$@" spec/$model.cfg >"$work/Mutant.cfg"
+		sed "$@" spec/${cfg:-$model}.cfg >"$work/Mutant.cfg"
 		if tlc "$work/Mutant.cfg" $model.tla >"$work/m.out" 2>&1; then
 			echo "$name: not caught"
 			fail=1
@@ -268,6 +271,23 @@ mutants)
 	expect witness:LateFrame -e 's/^    NoEndedEntry$/    W_LateFrame/'
 	expect witness:LateData -e 's/^    NoEndedEntry$/    W_LateData/'
 	expect witness:BothRun -e 's/^    NoEndedEntry$/    W_BothRun/'
+	cfg=CallLifecycleRetry
+	expect CL:retry-runs-again -e 's/Mutant = "none"/Mutant = "retry-runs-again"/'
+	cfg=
+	model=A2ASession
+	expect AS:counter-reset -e 's/Mutant = "none"/Mutant = "counter-reset"/'
+	expect AS:no-window -e 's/Mutant = "none"/Mutant = "no-window"/'
+	expect AS:restart-keeps-sessions -e 's/Mutant = "none"/Mutant = "restart-keeps-sessions"/'
+	expect AS:survive-revoke -e 's/Mutant = "none"/Mutant = "survive-revoke"/'
+	expect AS:retry-loop -e 's/Mutant = "none"/Mutant = "retry-loop"/'
+	expect witness:Resumed -e 's/^    AtMostOnce$/    W_Resumed/'
+	expect witness:Rehandshake -e 's/^    AtMostOnce$/    W_Rehandshake/'
+	expect witness:Failed -e 's/^    AtMostOnce$/    W_Failed/'
+	expect AS:no-retry-check -e 's/Mutant = "none"/Mutant = "no-retry-check"/'
+	expect AS:no-retry-bound -e 's/Mutant = "none"/Mutant = "no-retry-bound"/'
+	expect AS:retry-no-take -e 's/Mutant = "none"/Mutant = "retry-no-take"/'
+	expect witness:ForgedRefused -e 's/^    AtMostOnce$/    W_ForgedRefused/'
+	expect witness:Lost -e 's/^    AtMostOnce$/    W_Lost/'
 	exit $fail
 	;;
 cltraces)

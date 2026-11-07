@@ -7,8 +7,9 @@
    Start: a new call; Drop; Refuse: refused at its start) and a served
    call's entry going (Return). Each frame line carries the frame's kind
    and continuation mark, which must be the head frame's. The caller's
-   steps (Send, CloseSend, Cancel) are not logged: TLC takes them only when
-   the next logged step needs them; a transaction no frame of which is
+   steps (Send, CloseSend, Cancel, Retry) are not logged: TLC takes them only when
+   the next logged step needs them (Retry: an E2EE resume's handshake
+   after an unknown, its frame logged as a first data frame); a transaction no frame of which is
    marked is checked with an old caller (Mutant "old-caller": tests that
    play the caller by hand mark nothing). Accepted when TLC reaches the trace's
    end: TraceNotDone is then violated (scripts/spec.sh traces). *)
@@ -18,6 +19,7 @@ CONSTANTS TraceFile, Agent, Call
 
 Log == SelectSeq(ndJsonDeserialize(TraceFile), LAMBDA e : e.a = Agent /\ e.c = Call)
 TraceTxns == {Call}
+TraceRetries == {Call}
 \* A bound on the frames a caller sends: the run's own.
 TraceLen == Len(Log) + 1
 
@@ -36,7 +38,7 @@ Step ==
       [] OTHER -> Print(<<"unknown event", E>>, FALSE)
 
 \* The caller's steps the next logged one waits for.
-CallerStep == Send(Call) \/ CloseSend(Call) \/ Cancel(Call)
+CallerStep == Send(Call) \/ CloseSend(Call) \/ Cancel(Call) \/ Retry(Call)
 
 TraceInit == Init /\ l = 1
 TraceNext ==

@@ -26,26 +26,28 @@
    NoEndedEntry), "refused-first-kept" (a call refused at its start keeps
    its entry: the code before, for a first frame past the call's window),
    "drop-unknown" (every frame of an unknown transaction is dropped:
-   AllServed). *)
+   AllServed), "retry-runs-again" (an E2EE retry of a call that ran starts
+   it again: AtMostOneCall). *)
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS
     Txns,    \* the calls' transaction ids
     N,       \* data frames each caller may send
+    Retries, \* the calls whose caller may retry (an E2EE resume answered unknown)
     Mutant
 
 ASSUME N >= 1
 
-VARIABLES sent, closed, cancelled, net, incoming, running, calls, refused, late
-vars == <<sent, closed, cancelled, net, incoming, running, calls, refused, late>>
-caller == <<sent, closed, cancelled>>
+VARIABLES sent, closed, cancelled, retried, net, incoming, running, calls, refused, late
+vars == <<sent, closed, cancelled, retried, net, incoming, running, calls, refused, late>>
+caller == <<sent, closed, cancelled, retried>>
 target == <<incoming, running, calls, refused, late>>
 
-Frame == [t : Txns, kind : {"data", "eom", "cancel"}, cont : BOOLEAN]
+Frame == [t : Txns, kind : {"data", "eom", "cancel"}, cont : BOOLEAN, retry : BOOLEAN]
 
 TypeOK ==
     /\ sent \in [Txns -> 0..N] /\ closed \in [Txns -> BOOLEAN]
-    /\ cancelled \in [Txns -> BOOLEAN]
+    /\ cancelled \in [Txns -> BOOLEAN] /\ retried \in [Txns -> BOOLEAN]
     /\ \A i \in 1..Len(net) : net[i] \in Frame
     /\ incoming \subseteq Txns /\ running \subseteq Txns
     /\ calls \in [Txns -> 0..N] /\ refused \subseteq Txns /\ late \in BOOLEAN
@@ -54,6 +56,7 @@ Init ==
     /\ sent = [t \in Txns |-> 0]
     /\ closed = [t \in Txns |-> FALSE]
     /\ cancelled = [t \in Txns |-> FALSE]
+    /\ retried = [t \in Txns |-> FALSE]
     /\ net = <<>>
     /\ incoming = {} /\ running = {}
     /\ calls = [t \in Txns |-> 0]
@@ -67,23 +70,34 @@ Send(t) ==
     /\ sent[t] < N /\ ~closed[t]
     /\ sent' = [sent EXCEPT ![t] = @ + 1]
     /\ net' = Append(net, [t |-> t, kind |-> "data",
-                           cont |-> sent[t] > 0 /\ Mutant # "old-caller"])
-    /\ UNCHANGED <<closed, cancelled>> /\ UNCHANGED target
+                           cont |-> sent[t] > 0 /\ Mutant # "old-caller", retry |-> FALSE])
+    /\ UNCHANGED <<closed, cancelled, retried>> /\ UNCHANGED target
 
 \* clientStream.CloseSend: the empty EOM (sent even after the call ended).
 CloseSend(t) ==
     /\ ~closed[t]
     /\ closed' = [closed EXCEPT ![t] = TRUE]
     /\ net' = Append(net, [t |-> t, kind |-> "eom",
-                           cont |-> sent[t] > 0 /\ Mutant # "old-caller"])
-    /\ UNCHANGED <<sent, cancelled>> /\ UNCHANGED target
+                           cont |-> sent[t] > 0 /\ Mutant # "old-caller", retry |-> FALSE])
+    /\ UNCHANGED <<sent, cancelled, retried>> /\ UNCHANGED target
 
 \* clientStream.sendCancel: the caller left.
 Cancel(t) ==
     /\ sent[t] > 0 /\ ~cancelled[t]
     /\ cancelled' = [cancelled EXCEPT ![t] = TRUE]
-    /\ net' = Append(net, [t |-> t, kind |-> "cancel", cont |-> FALSE])
-    /\ UNCHANGED <<sent, closed>> /\ UNCHANGED target
+    /\ net' = Append(net, [t |-> t, kind |-> "cancel", cont |-> FALSE, retry |-> FALSE])
+    /\ UNCHANGED <<sent, closed, retried>> /\ UNCHANGED target
+
+\* clientStream.rehandshake (an E2EE resume answered unknown, spec
+\* A2ASession.tla Unknown): once per call, before its request end, the
+\* caller starts the call again with a handshake that names the resume it
+\* retries; its request frames follow as continuations.
+Retry(t) ==
+    /\ t \in Retries
+    /\ sent[t] > 0 /\ ~closed[t] /\ ~retried[t]
+    /\ retried' = [retried EXCEPT ![t] = TRUE]
+    /\ net' = Append(net, [t |-> t, kind |-> "data", cont |-> FALSE, retry |-> TRUE])
+    /\ UNCHANGED <<sent, closed, cancelled>> /\ UNCHANGED target
 
 \* The frame may start a call (handleMessage's new-call branch).
 Starts(f) ==
@@ -104,6 +118,9 @@ Start ==
     /\ net # <<>>
     /\ LET f == Head(net) IN
        /\ f.t \notin incoming /\ Starts(f)
+       \* a retry of a call that ran is refused (a2aSessions.retry: its
+       \* session took the call number; retry-runs-again: it is not)
+       /\ ~f.retry \/ calls[f.t] = 0 \/ Mutant = "retry-runs-again"
        /\ calls' = [calls EXCEPT ![f.t] = @ + 1]
        /\ incoming' = incoming \cup {f.t}
        /\ running' = running \cup {f.t}
@@ -141,7 +158,7 @@ Return(t) ==
     /\ UNCHANGED caller /\ UNCHANGED <<net, calls, refused, late>>
 
 Next ==
-    \/ \E t \in Txns : Send(t) \/ CloseSend(t) \/ Cancel(t) \/ Return(t)
+    \/ \E t \in Txns : Send(t) \/ CloseSend(t) \/ Cancel(t) \/ Retry(t) \/ Return(t)
     \/ Deliver
 
 Spec == Init /\ [][Next]_vars /\ WF_vars(Deliver)
