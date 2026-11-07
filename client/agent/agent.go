@@ -158,6 +158,17 @@ type Config struct {
 	// ErrE2EENoFixedTarget without it).
 	TCPE2EEOnly bool
 
+	// TCPE2EEClients, with TCPE2EEOnly, are the client keys allowed to
+	// open a pinned session (relaytrust.ClientKeyFingerprint, any form
+	// relaytrust.ParsePin takes): its TLS then requires a client
+	// certificate whose key is listed, so a relay, which holds none,
+	// cannot reach TCPForwardAddr through a pinned session of its own
+	// (spec/proverif/e2ee_tcp.pv query 7). Empty: no client
+	// authentication (anyone who reaches the agent, the relay included).
+	// The list is read once: a removed key is refused from the next
+	// session on; a session in flight runs until it ends.
+	TCPE2EEClients []string
+
 	// Capabilities is a list of capability identifiers advertised to the
 	// server via the x-agent-capabilities metadata header (e.g. "terminal").
 	// The server uses these to enable UI features like the dashboard Term button.
@@ -351,6 +362,11 @@ func New(cfg Config, opts ...Option) Agent {
 	if cfg.TCPE2EEOnly && cfg.TCPForwardAddr == "" && a.initErr == nil {
 		a.initErr = ErrE2EENoFixedTarget
 	}
+	if keys, err := newClientKeys(cfg.TCPE2EEClients); err != nil && a.initErr == nil {
+		a.initErr = err
+	} else {
+		a.e2eeClients = keys
+	}
 	a.client = newBackendClient(cfg)
 	if a.wrapTransport != nil {
 		a.client.Transport = a.wrapTransport(a.client.Transport)
@@ -422,6 +438,8 @@ type agent struct {
 
 	// initErr captures errors from functional options so Connect() can surface them.
 	initErr error
+	// e2eeClients is Config.TCPE2EEClients, parsed; nil: none.
+	e2eeClients clientKeys
 
 	// lifecycle
 	cancel context.CancelFunc

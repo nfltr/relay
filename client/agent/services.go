@@ -37,6 +37,10 @@ type Service struct {
 	// an http service whose share takes the tunnel's ACME certificate
 	// under one agent identity.
 	Cert *E2EESetup
+	// E2EEClients of a TCP service with E2EE On: the client keys allowed
+	// to open its pinned sessions, as Config.TCPE2EEClients; empty: no
+	// client authentication.
+	E2EEClients []string
 }
 
 // ServiceTable is the services an agent serves under its identity: the
@@ -89,6 +93,7 @@ type tableService struct {
 	shares  []string // share codes whose policy wrap enforces
 	wrap    func(http.Handler) http.Handler
 	cert    *e2eeTLSConfig // Service.Cert; nil: the tunnel's
+	clients clientKeys     // Service.E2EEClients; nil: any client
 }
 
 // NewServiceTable validates services and returns their table.
@@ -111,6 +116,14 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if s.E2EE != agentservices.E2EEDefault && (s.Kind != agentservices.TCP || (s.E2EE != agentservices.E2EEOn && s.E2EE != agentservices.E2EEOff)) {
 			return nil, fmt.Errorf("service %q: e2ee %q (want %q or %q on a tcp service)", s.Name, s.E2EE, agentservices.E2EEOn, agentservices.E2EEOff)
 		}
+		if len(s.E2EEClients) > 0 && (s.Kind != agentservices.TCP || s.E2EE != agentservices.E2EEOn) {
+			return nil, fmt.Errorf("service %q: e2ee clients need a tcp service with e2ee %q", s.Name, agentservices.E2EEOn)
+		}
+		clients, err := newClientKeys(s.E2EEClients)
+		if err != nil {
+			return nil, fmt.Errorf("service %q: %w", s.Name, err)
+		}
+		e.clients = clients
 		switch s.Kind {
 		case agentservices.TCP:
 			e.network, e.addr = "tcp", s.Target

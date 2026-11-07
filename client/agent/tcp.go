@@ -835,7 +835,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 						return
 					}
 					if p.kind == sessionE2EETCP {
-						serveE2EETCP(newSessionConn(t, id, q), conn, p.e2ee, logger)
+						serveE2EETCP(newSessionConn(t, id, q), conn, p, logger)
 						return
 					}
 					t.pump(id, q, conn)
@@ -925,6 +925,7 @@ type sessionTargets struct {
 	http           http.Handler  // serves sessions to dataplane.HTTPSessionTarget
 	noRaw          bool          // refuses sessions that would dial a target
 	e2eeOnly       bool          // Config.TCPE2EEOnly: a pinned session to a target is its bytes, not HTTP; others refused
+	clients        clientKeys    // Config.TCPE2EEClients: who may open an e2eeOnly pinned session; nil: anyone
 }
 
 // RunServiceTunnel serves the ConnectTCP stream of an agent that serves

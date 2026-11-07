@@ -198,7 +198,7 @@ func (a *agent) tunnelTargets(t *Tunnel) (targets sessionTargets, e2ee *e2eeTLSC
 	}
 	targets = sessionTargets{http: a.httpHandler, noRaw: !a.cfg.TCPTunnel}
 	if a.cfg.TCPTunnel {
-		targets.forwardAddr, e2ee, targets.e2eeOnly = a.cfg.TCPForwardAddr, a.e2eeTLS, a.cfg.TCPE2EEOnly
+		targets.forwardAddr, e2ee, targets.e2eeOnly, targets.clients = a.cfg.TCPForwardAddr, a.e2eeTLS, a.cfg.TCPE2EEOnly, a.e2eeClients
 		if def := a.routes.defaultRoute(); def != nil {
 			targets.defaultBackend = def.backend.String()
 		}

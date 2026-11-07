@@ -39,6 +39,7 @@ type sessionPlan struct {
 	wrap            func(http.Handler) http.Handler
 	client          netip.Addr     // an E2EE session's visitor, from the relay (pb.TCPData.ClientAddr); zero: unknown
 	e2ee            *e2eeTLSConfig // the certificate an E2EE session ends with: its service's, else the tunnel's
+	clients         clientKeys     // a sessionE2EETCP's allowed client keys; nil: any client
 }
 
 // e2eeShareTarget is the target the relay's SNI router names for an E2EE
@@ -98,8 +99,8 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 		p.client = clientAddr(open.GetClientAddr())
 		switch {
 		case targets.services != nil:
-			if targets.services.byName[open.GetTargetAddr()].kind == agentservices.TCP {
-				p.kind = sessionE2EETCP
+			if svc := targets.services.byName[open.GetTargetAddr()]; svc.kind == agentservices.TCP {
+				p.kind, p.clients = sessionE2EETCP, svc.clients
 			}
 		case targets.e2eeOnly && open.GetTargetAddr() != e2eeShareTarget && !targets.noRaw:
 			// Config.TCPE2EEOnly (nfltr tcp --e2ee): a pinned session to
@@ -113,7 +114,7 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 			if targets.forwardAddr == "" {
 				return sessionPlan{}, &ServiceRefusedError{Target: open.GetTargetAddr(), E2EE: true, Answer: relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED, Reason: ErrE2EENoFixedTarget.Error()}
 			}
-			p.kind = sessionE2EETCP
+			p.kind, p.clients = sessionE2EETCP, targets.clients
 		}
 		return p, nil
 	}
@@ -229,7 +230,7 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 			return
 		}
 		if p.kind == sessionE2EETCP {
-			serveE2EETCP(s, target, p.e2ee, l.logger)
+			serveE2EETCP(s, target, p, l.logger)
 			return
 		}
 		_ = peerlink.Join(s, target)
@@ -328,10 +329,13 @@ func refuseAnswered(s net.Conn, reason relayv1.ErrorReason, err error) {
 
 // serveE2EETCP serves an end-to-end encrypted session of a tcp service:
 // TLS with the agent's E2EE certificate on s (the client verifies it
-// against the pin it got from the agent), the plaintext bridged to target,
-// each side's end passed on as a half close (TLS close_notify on s).
-func serveE2EETCP(s, target net.Conn, cfg *e2eeTLSConfig, logger *slog.Logger) {
-	tc := tls.Server(s, cfg.tlsConfig)
+// against the pin it got from the agent; with p.clients the agent verifies
+// the client's key against its list), the plaintext bridged to target,
+// each side's end passed on as a half close (TLS close_notify on s). A
+// refused client gets a TLS alert and the target only a connection that
+// closes: no byte of it is read or written.
+func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
+	tc := tls.Server(s, p.clients.serverConfig(p.e2ee.tlsConfig, logger))
 	_ = tc.SetDeadline(time.Now().Add(e2eeHeaderTimeout))
 	if err := tc.Handshake(); err != nil {
 		logger.Debug("e2ee tcp: handshake failed", "error", err)
