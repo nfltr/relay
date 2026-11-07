@@ -175,8 +175,27 @@ type a2aE2EEState struct {
 	caller, callee string         // the agent refs the prologue binds
 	kr             A2AE2EEKeyring // this end's keys, or nil (unkeyed: Noise NN)
 	kid            string         // the call's key id
+	keyFP          [sha256.Size]byte
 	hs             *noise.HandshakeState
-	send, recv     *noise.CipherState
+	send, recv     a2aCipher
+
+	// Sessions (a2a_e2ee_session.go): established is the session a keyed
+	// handshake left; a resumed call has session, its resume and
+	// confirmed (closed once the callee took it), and keeps what it sent
+	// until then (sent).
+	established *a2aSession
+	session     *a2aSession
+	resume      []byte
+	retry       []byte // caller: the retry its handshake after an unknown names; callee: the one an init named
+	confirmed   chan struct{}
+	sent        []a2aSentFrame
+}
+
+// a2aCipher is one direction's transport key: a Noise CipherState (a
+// handshake's call) or a resumed call's key.
+type a2aCipher interface {
+	Encrypt(out, ad, plaintext []byte) ([]byte, error)
+	Decrypt(out, ad, ciphertext []byte) ([]byte, error)
 }
 
 // newA2AE2EEState is the caller's state of a call from caller to callee.
@@ -230,16 +249,29 @@ func (s *a2aE2EEState) initMessage() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("rpcclient: A2A E2EE handshake: %w", err)
 	}
-	msg1, _, _, err := hs.WriteMessage(nil, nil)
+	var payload []byte
+	if s.resume == nil {
+		payload = s.retry // a retry (restart); nil on a first handshake
+	}
+	msg1, _, _, err := hs.WriteMessage(nil, payload)
 	if err != nil {
 		return nil, fmt.Errorf("rpcclient: A2A E2EE handshake: %w", err)
 	}
-	s.kid, s.hs = kid, hs
+	s.kid, s.hs, s.keyFP = kid, hs, sha256.Sum256(key)
 	return append([]byte(s.caller+"\x00"+s.callee+"\x00"+kid+"\x00"), msg1...), nil
 }
 
-func (s *a2aE2EEState) ensureClientHandshake(ctx context.Context, transportDone <-chan struct{}, transportErr func() error, sendInit func(payload []byte) error) error {
+func (s *a2aE2EEState) ensureClientHandshake(ctx context.Context, transportDone <-chan struct{}, transportErr func() error, send func(messageType string, payload []byte) error) error {
 	s.mu.Lock()
+	if s.resume != nil && !s.started { // a resumed call: its resume, then its frames at once
+		s.started = true
+		resume := s.resume
+		s.mu.Unlock()
+		if err := send(a2aE2EEResumeMessageType, resume); err != nil {
+			return fmt.Errorf("rpcclient: send A2A E2EE resume: %w", err)
+		}
+		return nil
+	}
 	if s.ready || s.err != nil {
 		err := s.err
 		s.mu.Unlock()
@@ -255,7 +287,7 @@ func (s *a2aE2EEState) ensureClientHandshake(ctx context.Context, transportDone 
 			return err
 		}
 		s.mu.Unlock()
-		if err := sendInit(payload); err != nil {
+		if err := send(a2aE2EEInitMessageType, payload); err != nil {
 			wrapped := fmt.Errorf("rpcclient: send A2A E2EE init: %w", err)
 			s.fail(wrapped)
 			return wrapped
@@ -299,7 +331,7 @@ func (s *a2aE2EEState) complete(ack []byte) error {
 	if s.hs == nil {
 		return fmt.Errorf("rpcclient: A2A E2EE handshake was not started")
 	}
-	_, toPeer, fromPeer, err := s.hs.ReadMessage(nil, ack)
+	offer, toPeer, fromPeer, err := s.hs.ReadMessage(nil, ack)
 	if err == nil && (toPeer == nil || fromPeer == nil) {
 		err = errors.New("the handshake did not complete")
 	}
@@ -307,6 +339,9 @@ func (s *a2aE2EEState) complete(ack []byte) error {
 		s.err = fmt.Errorf("rpcclient: peer's A2A E2EE key failed pairing-key verification (a different key, or a relay in the middle; key id %q for %s): %v; %s: %w", s.kid, s.callee, err, a2aE2EEPairingRemedy, errA2AE2EEPairing)
 	} else {
 		s.send, s.recv, s.ready = toPeer, fromPeer, true
+		if s.kr != nil && bytes.Equal(offer, a2aSessionOffer) {
+			s.established = newA2ASession(toPeer, fromPeer, s.caller, s.callee, s.kid, s.keyFP, time.Now())
+		}
 	}
 	s.hs = nil
 	close(s.waitCh)
@@ -332,8 +367,8 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 	if callee != own && !bytes.HasSuffix([]byte(callee), []byte("."+own)) {
 		return nil, nil, fmt.Errorf("rpcclient: an A2A E2EE call for %s reached %s (the relay routed it here): %w", callee, own, errA2AE2EEPairing)
 	}
-	var key []byte
-	switch keyed := len(msg1) == a2aE2EEKeyedMsg1Len; {
+	var key, offer []byte
+	switch keyed := len(msg1) == a2aE2EEKeyedMsg1Len || len(msg1) == a2aE2EEKeyedMsg1Len+a2aRetryLen; {
 	case kr == nil && keyed:
 		return nil, nil, fmt.Errorf("rpcclient: peer authenticates A2A E2EE with a pairing key this end does not have; %s: %w", a2aE2EEPairingRemedy, errA2AE2EEPairing)
 	case kr == nil && len(msg1) == a2aE2EEPubLen && kid == "":
@@ -351,20 +386,27 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 		if want != kid {
 			return nil, nil, fmt.Errorf("rpcclient: caller %s named A2A E2EE key id %q, this end answers it only under %q; %s: %w", caller, kid, want, a2aE2EEPairingRemedy, errA2AE2EEPairing)
 		}
-		key = k
+		key, offer = k, a2aSessionOffer
 	}
 	hs, err := newA2AE2EEHandshake(false, a2aE2EEPrologue(txnID, caller, callee, kid), key, rng)
 	if err != nil {
 		return nil, nil, fmt.Errorf("rpcclient: A2A E2EE handshake: %w", err)
 	}
-	if _, _, _, err := hs.ReadMessage(nil, msg1); err != nil {
+	retry, _, _, err := hs.ReadMessage(nil, msg1)
+	if err != nil {
 		return nil, nil, fmt.Errorf("rpcclient: peer's A2A E2EE key failed pairing-key verification (a different key, or a relay in the middle); %s: %w", a2aE2EEPairingRemedy, errA2AE2EEPairing)
 	}
-	ack, fromPeer, toPeer, err := hs.WriteMessage(nil, nil)
+	ack, fromPeer, toPeer, err := hs.WriteMessage(nil, offer)
 	if err != nil {
 		return nil, nil, fmt.Errorf("rpcclient: A2A E2EE handshake: %w", err)
 	}
 	s := &a2aE2EEState{started: true, ready: true, txnID: txnID, caller: caller, callee: callee, kr: kr, kid: kid, send: toPeer, recv: fromPeer}
+	if len(retry) > 0 {
+		s.retry = retry
+	}
+	if offer != nil {
+		s.established = newA2ASession(fromPeer, toPeer, caller, callee, kid, sha256.Sum256(key), time.Now())
+	}
 	return s, ack, nil
 }
 
@@ -374,13 +416,20 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 func (s *a2aE2EEState) seal(t byte, body []byte) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.err != nil { // a refused resume's handshake failed (rehandshake)
+		return nil, s.err
+	}
 	if !s.ready || s.send == nil {
 		return nil, fmt.Errorf("rpcclient: A2A E2EE is not established")
 	}
 	if err := checkA2AE2EEKey(s.kr, s.kid); err != nil {
 		return nil, err
 	}
-	return s.send.Encrypt(nil, []byte(s.txnID), append([]byte{t}, body...))
+	ct, err := s.send.Encrypt(nil, []byte(s.txnID), append([]byte{t}, body...))
+	if err == nil {
+		s.keep(t, body)
+	}
+	return ct, err
 }
 
 // open is the next frame from the peer: one that does not open (replayed,

@@ -76,20 +76,76 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
 		a.sendA2AControlError(msg.GetTransactionId(), code, err.Error())
 		return "Refuse"
 	}
+	if state.retry != nil {
+		if err := a.sessions.retry(state.retry, state.caller, state.kid); err != nil {
+			a.sendA2AControlError(msg.GetTransactionId(), codes.Aborted, err.Error())
+			return "Refuse"
+		}
+	}
 
+	if state.established != nil {
+		a.sessions.putIn(state.established)
+	}
+	return a.startE2EECall(msg, state, a2aE2EEAckMessageType, ack)
+}
+
+// handleE2EEResume starts a call on a session (a2a_e2ee_session.go): one
+// this agent keeps, its tag, a call number not taken, a key that still
+// holds; else it answers unknown (not the call's end: the relay keeps the
+// call's route for the caller's handshake).
+func (a *Agent) handleE2EEResume(msg *pb.TunnelFrame) string {
+	if !a.a2aE2EEInbound.Load() {
+		a.sendA2AControlError(msg.GetTransactionId(), codes.FailedPrecondition,
+			"target agent does not support A2A E2EE; retry with --e2ee=false or upgrade the target")
+		return "Refuse"
+	}
+	a.handlerMu.RLock()
+	h := a.handler
+	a.handlerMu.RUnlock()
+	if h == nil {
+		a.sendA2AControlError(msg.GetTransactionId(), codes.Unimplemented,
+			"target agent has no A2A handler registered")
+		return "Refuse"
+	}
+	if _, serving := a.incoming.Load(msg.GetTransactionId()); serving {
+		log.Printf("rpcclient: dropped an A2A E2EE resume for txn %s, a call this agent already serves", msg.GetTransactionId())
+		return ""
+	}
+	kr := a.keyring()
+	s, c, err := a.sessions.resume(msg.GetTransactionId(), msg.GetPayload(), kr)
+	if err != nil {
+		if sendErr := a.sendFrame(&pb.TunnelFrame{
+			MessageType:   a2aE2EEUnknownMessageType,
+			TransactionId: msg.GetTransactionId(),
+			Timestamps:    &pb.Timestamps{ResponseAtAgent: time.Now().UnixMilli()},
+			Routing:       &pb.RoutingInfo{AgentId: a.agentID},
+		}); sendErr != nil {
+			log.Printf("rpcclient: failed to answer an unknown A2A E2EE session for txn %s: %v", msg.GetTransactionId(), sendErr)
+		}
+		return "Refuse"
+	}
+	return a.startE2EECall(msg, newResumedServerA2AE2EEState(msg.GetTransactionId(), s, c, kr), a2aE2EEResumedMessageType, nil)
+}
+
+// startE2EECall serves an E2EE call whose start this agent took: its
+// answer (the ack, or resumed), then the handler.
+func (a *Agent) startE2EECall(msg *pb.TunnelFrame, state *a2aE2EEState, answerType string, answer []byte) string {
+	a.handlerMu.RLock()
+	h := a.handler
+	a.handlerMu.RUnlock()
 	ss := a.newServerStream(msg, state)
 	a.incoming.Store(ss.txnID, ss)
 
 	if err := a.sendFrame(&pb.TunnelFrame{
-		Payload:       ack,
-		MessageType:   a2aE2EEAckMessageType,
+		Payload:       answer,
+		MessageType:   answerType,
 		TransactionId: ss.txnID,
 		Timestamps:    &pb.Timestamps{ResponseAtAgent: time.Now().UnixMilli()},
 		Routing:       &pb.RoutingInfo{AgentId: a.agentID},
 	}); err != nil {
 		ss.end()
 		a.incoming.Delete(ss.txnID)
-		log.Printf("rpcclient: failed to send A2A E2EE ack for txn %s: %v", ss.txnID, err)
+		log.Printf("rpcclient: failed to send A2A E2EE %s for txn %s: %v", answerType, ss.txnID, err)
 		return "Refuse"
 	}
 

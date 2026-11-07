@@ -274,7 +274,7 @@ func TestA2AE2EEKeyIDOnTheWire(t *testing.T) {
 	initOf := func(caller, callee string, kr A2AE2EEKeyring) []byte {
 		var init []byte
 		s := newA2AE2EEState("txn", caller, callee, kr)
-		if err := s.ensureClientHandshake(context.Background(), nil, nil, func(p []byte) error { init = p; return errors.New("stop") }); err == nil {
+		if err := s.ensureClientHandshake(context.Background(), nil, nil, func(_ string, p []byte) error { init = p; return errors.New("stop") }); err == nil {
 			t.Fatal("want the stop")
 		}
 		return init

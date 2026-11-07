@@ -52,8 +52,12 @@ type clientStream struct {
 	mu         sync.Mutex
 	sentFirst  bool
 	sendClosed bool
+	// wireMu orders an E2EE call's seal and send: its sender's frames and
+	// a refused resume's handshake and frames sent again (rehandshake).
+	wireMu sync.Mutex
 
 	responseOnce  sync.Once
+	responseMu    sync.Mutex // orders pushResponse and closeResponses: rehandshake ends a call off the receive loop
 	responseErrMu sync.RWMutex
 	responseErr   error
 	headerOnce    sync.Once
@@ -81,6 +85,8 @@ func (cs *clientStream) responseError() error {
 
 func (cs *clientStream) closeResponses() {
 	cs.responseOnce.Do(func() {
+		cs.responseMu.Lock()
+		defer cs.responseMu.Unlock()
 		close(cs.responseCh)
 		if cs.done != nil {
 			close(cs.done)
@@ -104,6 +110,8 @@ func (cs *clientStream) pushResponse(msg *pb.TunnelFrame) (err error) {
 			return errPastWindow
 		}
 	}
+	cs.responseMu.Lock()
+	defer cs.responseMu.Unlock()
 	select {
 	case cs.responseCh <- msg:
 		return nil
@@ -171,6 +179,16 @@ func (cs *clientStream) sendMsg(data []byte, eom bool) error {
 	if !eom && !cs.agent.callCredit.Acquire(cs.txnID, 1) {
 		return cs.sendEnded()
 	}
+	// A resumed call's end waits for its callee to take the resume: the
+	// relay ends a call's request side at its end, and a refused resume
+	// sends the call again (rehandshake).
+	if eom && cs.e2ee != nil {
+		if err := cs.awaitResumed(); err != nil {
+			return err
+		}
+	}
+	cs.wireMu.Lock()
+	defer cs.wireMu.Unlock()
 	// An E2EE call seals every frame, its end too (END), after its credit:
 	// a sealed frame is always sent, so the counters stay in step.
 	if cs.e2ee != nil {
@@ -221,9 +239,81 @@ func (cs *clientStream) ensureE2EEHandshake() error {
 func (cs *clientStream) ensureHandshake(s *a2aE2EEState) error {
 	return s.ensureClientHandshake(cs.ctx, cs.agent.Done(), func() error {
 		return cs.agent.connectionClosed()
-	}, func(pub []byte) error {
-		return cs.sendControl(a2aE2EEInitMessageType, pub)
-	})
+	}, cs.sendControl)
+}
+
+// awaitResumed waits until a resumed call's callee took the resume (or the
+// handshake after its refusal completed); other calls do not wait.
+func (cs *clientStream) awaitResumed() error {
+	cs.e2ee.mu.Lock()
+	ch := cs.e2ee.confirmed
+	cs.e2ee.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case <-ch:
+		return nil
+	case <-cs.done:
+	case <-cs.ctx.Done():
+	case <-cs.agent.Done():
+	}
+	select {
+	case <-ch:
+		return nil
+	default:
+		return cs.sendEnded()
+	}
+}
+
+// resumeAnswered takes the callee's answer to the call's resume: taken, or
+// not (the session is unknown there: the call handshakes and sends again).
+func (cs *clientStream) resumeAnswered(taken bool) {
+	if taken {
+		if cs.e2ee.resuming() {
+			cs.e2ee.confirm()
+		}
+		return
+	}
+	go cs.rehandshake() // the receive loop never waits on a send
+}
+
+// rehandshake answers a refused resume: the session goes, the call runs
+// the v2 handshake on its txn (the callee never served it) and sends again
+// what it sent, under the handshake's keys. Once: a second refusal, or one
+// after the resume was taken, ends the call.
+func (cs *clientStream) rehandshake() {
+	cs.wireMu.Lock()
+	defer cs.wireMu.Unlock()
+	s := cs.e2ee
+	sent, err := s.restart()
+	if err != nil {
+		cs.failE2EE(err)
+		return
+	}
+	cs.agent.sessions.dropOut(cs.targetAgentID, s.session)
+	if err := cs.ensureHandshake(s); err != nil {
+		cs.failE2EE(err)
+		return
+	}
+	for _, f := range sent {
+		ct, err := s.seal(f.t, f.body)
+		if err == nil {
+			err = cs.agent.sendFrame(&pb.TunnelFrame{
+				Payload:       ct,
+				MessageType:   cs.msgType,
+				TransactionId: cs.txnID,
+				Timestamps:    &pb.Timestamps{RequestAtAgent: time.Now().UnixMilli()},
+				Routing:       &pb.RoutingInfo{AgentId: cs.sourceAgentID, TargetAgentId: cs.targetAgentID},
+				Continuation:  true,
+			})
+		}
+		if err != nil {
+			cs.failE2EE(fmt.Errorf("rpcclient: send A2A E2EE request again after a handshake: %w", err))
+			return
+		}
+	}
+	s.confirm()
 }
 
 // sendControl sends one of the call's handshake frames (they carry the

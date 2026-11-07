@@ -119,6 +119,8 @@ type Agent struct {
 	// a2aKeyring, when set, authenticates every E2EE handshake: a peer must
 	// prove a key it names (WithA2AE2EEPairingKeyFile, WithA2AE2EEKeyring).
 	a2aKeyring atomic.Pointer[A2AE2EEKeyring]
+	// sessions are the keyed handshakes later calls reuse (a2a_e2ee_session.go).
+	sessions a2aSessions
 	// (tests: a restarted responder).
 
 	// sendCh buffers outgoing TunnelFrames. A dedicated sendLoop goroutine
@@ -505,7 +507,12 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 	// A stream to the relay's own agent ends at the relay: E2EE to it would
 	// protect nothing TLS does not, and the relay cannot hold a pairing key.
 	if a.a2aE2EEOutbound.Load() && targetAgentID != RelayAgentID {
-		cs.e2ee = newA2AE2EEState(cs.txnID, a.agentID, targetAgentID, a.keyring())
+		kr := a.keyring()
+		if s, c := a.sessions.takeCall(targetAgentID, kr); s != nil {
+			cs.e2ee = newResumedA2AE2EEState(cs.txnID, s, c, kr)
+		} else {
+			cs.e2ee = newA2AE2EEState(cs.txnID, a.agentID, targetAgentID, kr)
+		}
 	}
 	a.callCredit.Open(cs.txnID)
 	traceCCOpen(a, cs.txnID, true)
@@ -728,6 +735,16 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 		traceCL(a, a.handleE2EEInit(msg), txnID, msg)
 		clUnlock()
 		return
+	case a2aE2EEResumeMessageType: // a call's start on a session
+		clLock()
+		traceCL(a, a.handleE2EEResume(msg), txnID, msg)
+		clUnlock()
+		return
+	case a2aE2EEResumedMessageType, a2aE2EEUnknownMessageType:
+		if val, ok := a.pending.Load(txnID); ok && val.(*clientStream).e2ee != nil {
+			val.(*clientStream).resumeAnswered(msg.GetMessageType() == a2aE2EEResumedMessageType)
+		}
+		return
 	case a2aE2EEv1InitMessageType, a2aE2EEv1Init0RTTMessageType: // wire v1's call start
 		clLock()
 		a.sendA2AControlError(txnID, codes.FailedPrecondition, "rpcclient: "+a2aE2EEv1Refusal+" (this agent speaks v2)")
@@ -751,6 +768,8 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 			if cs.e2ee != nil {
 				if err := cs.e2ee.complete(msg.GetPayload()); err != nil {
 					log.Printf("rpcclient: failed to complete A2A E2EE handshake for txn %s: %v", txnID, err)
+				} else if s := cs.e2ee.established; s != nil {
+					a.sessions.putOut(cs.targetAgentID, s)
 				}
 			}
 		}
@@ -774,7 +793,7 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 	if val, ok := a.pending.Load(txnID); ok {
 		cs := val.(*clientStream)
 
-		if cs.e2ee != nil && cs.e2ee.awaitingHandshake() && msg.GetMessageType() == "error" {
+		if cs.e2ee != nil && (cs.e2ee.awaitingHandshake() || cs.e2ee.resuming()) && msg.GetMessageType() == "error" {
 			detail := msg.GetStatusDetail()
 			code := codes.Code(msg.GetStatusCode())
 			if code == 0 {
