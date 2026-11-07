@@ -1,0 +1,51 @@
+(* A2A E2EE without a pairing key (client/rpcclient a2a_e2ee.go: an
+   unkeyed end sends a bare X25519 key, :162-175, and derives the v1
+   session key SHA-256("nfltr-a2a-e2ee-v1" || shared), :509): nothing
+   authenticates either key, so the relay can run one handshake with each
+   end and read every frame. Expected: an attack; the docs say so. *)
+
+type key.
+type exponent.
+type G.
+
+const g: G [data].
+fun exp(G, exponent): G.
+equation forall x: exponent, y: exponent; exp(exp(g, x), y) = exp(exp(g, y), x).
+
+fun sha(G): key.
+fun aenc(key, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: key, n: bitstring, a: bitstring, m: bitstring; adec(k, n, a, aenc(k, n, a, m)) = m.
+fun aadOf(bitstring): bitstring [data].
+const INIT, ACK, DATA: bitstring.
+
+free request: bitstring [private].
+free c: channel.
+
+event CallerAccept(bitstring, G, G).
+event CalleeAnswer(bitstring, G, G).
+
+query attacker(request).
+query t: bitstring, i: G, r: G; event(CallerAccept(t, i, r)) ==> event(CalleeAnswer(t, i, r)).
+
+(* Witness (must read F: reachable): the honest flow completes. *)
+event CalleeGot(bitstring).
+query x: bitstring; event(CalleeGot(request)).
+
+let Caller =
+  new t: bitstring; new x: exponent; let i = exp(g, x) in
+  out(c, (t, INIT, i));
+  in(c, (=t, =ACK, r: G));
+  event CallerAccept(t, i, r);
+  new n: bitstring;
+  out(c, (t, DATA, n, aenc(sha(exp(r, x)), n, aadOf(t), request))).
+
+let Callee =
+  in(c, (t: bitstring, =INIT, i: G));
+  new y: exponent; let r = exp(g, y) in
+  event CalleeAnswer(t, i, r);
+  out(c, (t, ACK, r));
+  in(c, (=t, =DATA, n: bitstring, ct: bitstring));
+  let z = adec(sha(exp(i, y)), n, aadOf(t), ct) in
+  event CalleeGot(z).
+
+process ! Caller | ! Callee

@@ -1,0 +1,270 @@
+(* A2A E2EE on the machine identity, the design of
+   nfltr docs/decisions/a2a-machine-identity-2026-11-07.md (wire v2), as
+   TENANTS2 implements it in client/rpcclient. Interactive handshake.
+
+   Trust anchor: the owner's root pairing key, never a relay. A machine's
+   key K_m = HKDF(root, machine id, generation) (nfltr a2akeys Derive), its
+   key id <machine id>.<generation>; the machine id is the TENANTS machine
+   id, the first label of every agent id the machine registers, so a caller
+   derives the key id from the agent id it calls.
+
+   Handshake: Noise NNpsk0 (github.com/flynn/noise), psk = HMAC(K_kid,
+   "psk-v2"), prologue = v2 0 txn 0 caller agent id 0 callee agent id 0 key
+   id. -> psk, e (empty payload: its AEAD tag proves the psk); <- e, ee
+   (empty payload). Frames: Noise transport keys, one per direction, counter
+   nonces, AD = txn, plaintext = type || body with an authenticated END.
+
+   Topology as a2a_today.pv: R (root holder) on relay X; B, E honest, C
+   compromised, D compromised and revoked at phase 1, all on relay Y; the
+   relays' CA is the attacker's (a compromised relay mints any machine
+   certificate; nothing here trusts one). Flag leak: phase 2 leaks the root
+   key (so every machine key): forward secrecy of what came before.
+   Mutants (run.sh flags): drop-psk, drop-txn, skip-revoke, relay-cert,
+   no-target-check. *)
+
+type key.
+type exponent.
+type G.
+
+const g: G [data].
+fun exp(G, exponent): G.
+equation forall x: exponent, y: exponent; exp(exp(g, x), y) = exp(exp(g, y), x).
+
+fun mackey(key, bitstring): key.
+fun hkdf(key, bitstring, bitstring): key.
+fun aenc(key, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: key, n: bitstring, a: bitstring, m: bitstring; adec(k, n, a, aenc(k, n, a, m)) = m.
+fun ck1(key, G): key.          (* MixKey(psk), MixKey(e) *)
+fun ck2(key, G, G): key.       (* MixKey(re), MixKey(DH(ee)) *)
+fun split1(key): key.          (* initiator -> responder *)
+fun split2(key): key.          (* responder -> initiator *)
+
+const Lpsk, Lempty, N0, N1, DATA, END: bitstring.
+const INIT, ACK, FRAME, V2: bitstring.
+fun mid(bitstring, bitstring): bitstring [data].
+const G1: bitstring.
+const nameR, nameB, nameE, nameC, nameD: bitstring.
+
+fun reqTo(bitstring): bitstring [private].
+fun respFrom(bitstring): bitstring [private].
+fun mreq(bitstring): bitstring [private].
+fun rrespTo(bitstring): bitstring [private].
+
+free Kroot: key [private].
+free KrelayCA: key.            (* the relays' issuing CA: the attacker's *)
+free PublicPsk: key.
+free att: channel.
+
+free xUp: channel.                (* NOT:honestX *)
+free xUp: channel [private].      (* ONLY:honestX *)
+free xDown: channel.              (* NOT:honestX *)
+free xDown: channel [private].    (* ONLY:honestX *)
+free l1, l2: channel.
+free yUpB, yUpE: channel.                (* NOT:honestY *)
+free yUpB, yUpE: channel [private].      (* ONLY:honestY *)
+free yDownB, yDownE: channel.            (* NOT:honestY *)
+free yDownB, yDownE: channel [private].  (* ONLY:honestY *)
+
+(* A machine's A2A key: the owner's derivation, or (mutant relay-cert) a
+   credential the relays' CA issues. *)
+letfun mkey(n: bitstring, gen: bitstring) =
+  hkdf(Kroot, n, gen).        (* NOT:relay-cert *)
+  hkdf(KrelayCA, n, gen).     (* ONLY:relay-cert *)
+letfun psk(K: key) =
+  mackey(K, Lpsk).            (* NOT:drop-psk *)
+  PublicPsk.                  (* ONLY:drop-psk *)
+letfun prologue(t: bitstring, caller: bitstring, callee: bitstring, k: bitstring) =
+  (V2, t, caller, callee, k).       (* NOT:drop-txn *)
+  (V2, caller, callee, k).          (* ONLY:drop-txn *)
+letfun ad(t: bitstring) =
+  t.                                (* NOT:drop-txn *)
+  Lempty.                           (* ONLY:drop-txn *)
+letfun known(n: bitstring) = n = nameB || n = nameE || n = nameC || n = nameD.
+
+event RootAccept(bitstring, bitstring, bitstring, G, G).
+event MachAnswer(bitstring, bitstring, bitstring, G, G).
+event RootSendReq(bitstring, bitstring, bitstring).
+event RootSendEnd(bitstring, bitstring).
+event MachRecvReq(bitstring, bitstring, bitstring).
+event MachRecvEnd(bitstring, bitstring).
+event MachSendResp(bitstring, bitstring, bitstring).
+event RootRecvResp(bitstring, bitstring, bitstring, bitstring).
+event MachAccept(bitstring, bitstring, G, G).
+event MachStart(bitstring, bitstring, G).
+event RootAnswer(bitstring, bitstring, bitstring, G, G).
+event MachSendReq(bitstring, bitstring, bitstring).
+event RootRecvReq(bitstring, bitstring, bitstring).
+event RootFrameAfterRevoke(bitstring, bitstring).
+event RootHandshakeAfterRevoke(bitstring, bitstring).
+event Leaked(bitstring).
+
+(* 1-4 secrecy between R and honest B, with relays, their CA and C, D the
+   attacker's (and, with leak, every key after the fact). *)
+query attacker(reqTo(nameB)).
+query attacker(respFrom(nameB)).
+query attacker(mreq(nameB)).
+query attacker(rrespTo(mid(nameB, G1))).
+(* 5 R as caller: the callee that answered is the target R called, on the
+   same txn, both keys and key id. *)
+query t: bitstring, tgt: bitstring, k: bitstring, i: G, r: G;
+  inj-event(RootAccept(t, tgt, k, i, r)) ==> inj-event(MachAnswer(t, tgt, k, i, r)).
+(* 6 R as callee: the caller R answered as machine n is n, on that txn
+   with that key (or n leaked); not injective: msg1 is replayable, and a
+   replayed msg1 gets no frame accepted (8). *)
+query t: bitstring, n: bitstring, gen: bitstring, i: G, r: G;
+  event(RootAnswer(t, n, mid(n, gen), i, r)) ==> event(MachStart(t, mid(n, gen), i)) || event(Leaked(n)).
+(* 7 frames, injective, R -> machine: each request handled once, as sent. *)
+query t: bitstring, k: bitstring, x: bitstring;
+  inj-event(MachRecvReq(t, k, x)) ==> inj-event(RootSendReq(t, k, x)).
+(* 8 frames, injective, machine -> R. *)
+query t: bitstring, n: bitstring, gen: bitstring, x: bitstring;
+  inj-event(RootRecvReq(t, mid(n, gen), x)) ==> inj-event(MachSendReq(t, mid(n, gen), x)) || event(Leaked(n)).
+(* 9 frames, direction: no reflection. *)
+query t: bitstring, tgt: bitstring, k: bitstring, x: bitstring;
+  event(RootRecvResp(t, tgt, k, x)) ==> event(MachSendResp(t, k, x)).
+(* 10 the end of a stream is the sender's: no truncation. *)
+query t: bitstring, k: bitstring;
+  inj-event(MachRecvEnd(t, k)) ==> inj-event(RootSendEnd(t, k)).
+(* 11 revoke: no frame of D is handled after its revoke. *)
+query t: bitstring; event(RootFrameAfterRevoke(t, mid(nameD, G1))).
+(* Revoke: no handshake of D is answered after its revoke. *)
+query t: bitstring; event(RootHandshakeAfterRevoke(t, mid(nameD, G1))).
+
+(* Witnesses (must read F: reachable): the honest flows complete. *)
+query t: bitstring; event(RootRecvResp(t, nameB, mid(nameB, G1), respFrom(nameB))).
+query t: bitstring; event(RootRecvReq(t, mid(nameB, G1), mreq(nameB))).
+query t: bitstring; event(MachRecvEnd(t, mid(nameB, G1))).
+
+(* R calls agent tgt: the key id is the target's machine id at the store's
+   generation; nothing the relay or the peer says picks it. *)
+let RootInit(tgt: bitstring) =
+  in(att, pick: bitstring);                 (* ONLY:no-target-check *)
+  let n = pick in                           (* ONLY:no-target-check *)
+  let n = tgt in                            (* NOT:no-target-check *)
+  if known(n) then
+  let k = mid(n, G1) in
+  let K = mkey(n, G1) in
+  new t: bitstring; new x: exponent; let i = exp(g, x) in
+  let h1 = (prologue(t, nameR, tgt, k), i) in
+  let c1 = ck1(psk(K), i) in
+  let ct1 = aenc(c1, N0, h1, Lempty) in
+  out(xUp, (tgt, (t, INIT, nameR, tgt, k, i, ct1)));
+  in(xDown, (src: bitstring, (=t, =ACK, r: G, ct2: bitstring)));
+  let c2 = ck2(c1, r, exp(r, x)) in
+  let z = adec(c2, N0, (h1, ct1, r), ct2) in
+  if z = Lempty then
+  event RootAccept(t, tgt, k, i, r);
+  event RootSendReq(t, k, reqTo(tgt));
+  out(xUp, (tgt, (t, FRAME, aenc(split1(c2), N0, ad(t), (DATA, reqTo(tgt))))));
+  event RootSendEnd(t, k);
+  out(xUp, (tgt, (t, FRAME, aenc(split1(c2), N1, ad(t), (END, Lempty)))));
+  in(xDown, (src2: bitstring, (=t, =FRAME, ct3: bitstring)));
+  let (=DATA, y: bitstring) = adec(split2(c2), N0, ad(t), ct3) in
+  event RootRecvResp(t, tgt, k, y).
+
+(* Machine m answers: the key id must be its own, the callee its own agent. *)
+let MachResp(m: bitstring, cin: channel, cout: channel) =
+  ! in(cin, (t: bitstring, =INIT, caller: bitstring, callee: bitstring, k: bitstring, i: G, ct1: bitstring));
+  if callee = m && k = mid(m, G1) then
+  let K = mkey(m, G1) in
+  let h1 = (prologue(t, caller, callee, k), i) in
+  let c1 = ck1(psk(K), i) in
+  if adec(c1, N0, h1, ct1) = Lempty then
+  new y: exponent; let r = exp(g, y) in
+  let c2 = ck2(c1, r, exp(i, y)) in
+  event MachAnswer(t, m, k, i, r);
+  out(cout, (caller, (t, ACK, r, aenc(c2, N0, (h1, ct1, r), Lempty))));
+  in(cin, (=t, =FRAME, ct3: bitstring));
+  let (=DATA, z: bitstring) = adec(split1(c2), N0, ad(t), ct3) in
+  event MachRecvReq(t, k, z);
+  ( (in(cin, (=t, =FRAME, ct4: bitstring));
+     let (=END, e: bitstring) = adec(split1(c2), N1, ad(t), ct4) in
+     event MachRecvEnd(t, k))
+  | (event MachSendResp(t, k, respFrom(m));
+     out(cout, (caller, (t, FRAME, aenc(split2(c2), N0, ad(t), (DATA, respFrom(m))))))) ).
+
+(* Machine m calls R. *)
+let MachInit(m: bitstring, cin: channel, cout: channel) =
+  let k = mid(m, G1) in
+  let K = mkey(m, G1) in
+  new t: bitstring; new x: exponent; let i = exp(g, x) in
+  let h1 = (prologue(t, m, nameR, k), i) in
+  let c1 = ck1(psk(K), i) in
+  let ct1 = aenc(c1, N0, h1, Lempty) in
+  event MachStart(t, k, i);
+  out(cout, (nameR, (t, INIT, m, nameR, k, i, ct1)));
+  in(cin, (=t, =ACK, r: G, ct2: bitstring));
+  let c2 = ck2(c1, r, exp(r, x)) in
+  if adec(c2, N0, (h1, ct1, r), ct2) = Lempty then
+  event MachAccept(t, k, i, r);
+  event MachSendReq(t, k, mreq(m));
+  out(cout, (nameR, (t, FRAME, aenc(split1(c2), N0, ad(t), (DATA, mreq(m)))))).
+
+(* R answers a machine: the key id must name the caller's machine; Peer
+   refuses a revoked machine, Valid (before each frame) a revoked id. *)
+let RootFrame(src: bitstring, t: bitstring, k: bitstring, c2: key) =
+  in(xDown, (=src, (=t, =FRAME, ct3: bitstring)));
+  let (=DATA, z: bitstring) = adec(split1(c2), N0, ad(t), ct3) in
+  event RootRecvReq(t, k, z);
+  out(xUp, (src, (t, FRAME, aenc(split2(c2), N0, ad(t), (DATA, rrespTo(k)))))).
+
+let RootFrameRevoked(src: bitstring, t: bitstring, k: bitstring, c2: key) =
+  in(xDown, (=src, (=t, =FRAME, ct3: bitstring)));
+  if k <> mid(nameD, G1) then                     (* NOT:skip-revoke *)
+  let (=DATA, z: bitstring) = adec(split1(c2), N0, ad(t), ct3) in
+  event RootFrameAfterRevoke(t, k);
+  event RootRecvReq(t, k, z).
+
+let RootResp =
+  ! in(xDown, (src: bitstring, (t: bitstring, =INIT, caller: bitstring, callee: bitstring, k: bitstring, i: G, ct1: bitstring)));
+  if callee = nameR then
+  let mid(n, gen) = k in
+  if n = caller && gen = G1 && known(n) then
+  let K = mkey(n, gen) in
+  let h1 = (prologue(t, caller, callee, k), i) in
+  let c1 = ck1(psk(K), i) in
+  if adec(c1, N0, h1, ct1) = Lempty then
+  new y: exponent; let r = exp(g, y) in
+  let c2 = ck2(c1, r, exp(i, y)) in
+  event RootAnswer(t, n, k, i, r);
+  out(xUp, (src, (t, ACK, r, aenc(c2, N0, (h1, ct1, r), Lempty))));
+  (RootFrame(src, t, k, c2) | phase 1; if k = mid(nameD, G1) then RootFrameRevoked(src, t, k, c2)).
+
+(* After the revoke: Peer refuses D. *)
+let RootRespAfter =
+  ! in(xDown, (src: bitstring, (t: bitstring, =INIT, caller: bitstring, callee: bitstring, k: bitstring, i: G, ct1: bitstring)));
+  if callee = nameR then
+  let mid(n, gen) = k in
+  if n = caller && gen = G1 && known(n) then
+  if n <> nameD then                              (* NOT:skip-revoke *)
+  let K = mkey(n, gen) in
+  let h1 = (prologue(t, caller, callee, k), i) in
+  let c1 = ck1(psk(K), i) in
+  if adec(c1, N0, h1, ct1) = Lempty then
+  new y: exponent; let r = exp(g, y) in
+  let c2 = ck2(c1, r, exp(i, y)) in
+  event RootAnswer(t, n, k, i, r);
+  event RootHandshakeAfterRevoke(t, k);
+  out(xUp, (src, (t, ACK, r, aenc(c2, N0, (h1, ct1, r), Lempty))));
+  RootFrameRevoked(src, t, k, c2).
+
+let RelayX = (! in(xUp, m: bitstring); out(l1, m)) | (! in(l2, m: bitstring); out(xDown, m)).
+let RelayY =
+  (! in(l1, (dst: bitstring, p: bitstring));
+     if dst = nameB then out(yDownB, p) else if dst = nameE then out(yDownE, p) else out(att, p))
+  | (! in(yUpB, (dst: bitstring, p: bitstring)); out(l2, (nameB, p)))
+  | (! in(yUpE, (dst: bitstring, p: bitstring)); out(l2, (nameE, p)))
+  | (! in(att, (src: bitstring, dst: bitstring, p: bitstring)); if src = nameC || src = nameD then out(l2, (src, p))).
+
+process
+  event Leaked(nameC); out(att, mkey(nameC, G1));
+  event Leaked(nameD); out(att, mkey(nameD, G1));
+  ( RelayX | RelayY
+  | ! RootInit(nameB) | ! RootInit(nameE)
+  | MachResp(nameB, yDownB, yUpB)
+  | MachResp(nameE, yDownE, yUpE)
+  | ! MachInit(nameB, yDownB, yUpB)
+  | RootResp
+  | phase 1; RootRespAfter
+  | phase 2; out(att, Kroot)         (* ONLY:leak *)
+  )

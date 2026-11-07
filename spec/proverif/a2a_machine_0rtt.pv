@@ -1,0 +1,132 @@
+(* A2A E2EE on the machine identity, 0-RTT first flight (wire v2, nfltr
+   docs/decisions/a2a-machine-identity-2026-11-07.md): Noise NKpsk0 to the
+   static key in the callee's label, as today (a2a_today_0rtt.pv), with two
+   changes: the caller takes the key id from the agent id it calls (the
+   label's id and name must be that machine's and that agent's), and the
+   prologue binds caller, callee and key id. C is a compromised machine.
+   Flags: leak (phase 1: B's machine key leaks), leak-static (phase 1: B's
+   machine key and its process's static key leak). Mutant: no-target-check. *)
+
+type key.
+type exponent.
+type G.
+
+const g: G [data].
+fun exp(G, exponent): G.
+equation forall x: exponent, y: exponent; exp(exp(g, x), y) = exp(exp(g, y), x).
+
+fun mac(key, bitstring): bitstring.                 (* a2a_e2ee.go:147 *)
+fun mackey(key, bitstring): key.                    (* :176 0rtt-psk *)
+fun hkdf(key, bitstring, bitstring): key.           (* a2akeys Derive *)
+fun aenc(key, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: key, n: bitstring, a: bitstring, m: bitstring; adec(k, n, a, aenc(k, n, a, m)) = m.
+fun aadOf(bitstring): bitstring [data].
+fun kb(key): bitstring [data].                      (* the early key as msg1's payload *)
+fun nk1(key, G, G): key.                            (* ck1 *)
+fun nk2(key, G, G): key.                            (* ck2 *)
+fun split1(key): key.
+fun split2(key): key.
+
+const Lstatic, Lpsk, Lempty, Lzero, V2, nameR: bitstring.
+const INIT0, ACK, DATA: bitstring.
+fun mid(bitstring, bitstring): bitstring [data].
+const G1: bitstring.
+const nameB, nameC: bitstring.
+
+fun reqTo(bitstring): bitstring [private].
+fun respFrom(bitstring): bitstring [private].
+free Kroot: key [private].
+free c: channel.
+
+event RootSend0(bitstring, bitstring, bitstring, bitstring).
+event RootAccept0(bitstring, bitstring, bitstring, G, G).
+event RootRecvResp0(bitstring, bitstring, bitstring, bitstring).
+event Mach0Accept(bitstring, bitstring, bitstring).
+event Mach0Answer(bitstring, bitstring, G, G).
+event Mach0SendResp(bitstring, bitstring, bitstring).
+event Leaked(bitstring).
+
+(* Secrecy of the early request and of the response. *)
+query attacker(reqTo(nameB)).
+query attacker(respFrom(nameB)).
+(* B took a request on txn t only if R sent it on t (non-injective)... *)
+query t: bitstring, k: bitstring, x: bitstring, tgt: bitstring;
+  event(Mach0Accept(t, k, x)) ==> event(RootSend0(t, tgt, k, x)).
+(* ... and once (injective): NK 0-RTT is replayable by design. *)
+query t: bitstring, k: bitstring, x: bitstring, tgt: bitstring;
+  inj-event(Mach0Accept(t, k, x)) ==> inj-event(RootSend0(t, tgt, k, x)).
+(* R's peer is the machine the label's key id names... *)
+query t: bitstring, tgt: bitstring, n: bitstring, gen: bitstring, e: G, r: G;
+  inj-event(RootAccept0(t, tgt, mid(n, gen), e, r)) ==> inj-event(Mach0Answer(t, mid(n, gen), e, r)) || event(Leaked(n)).
+(* ... but not the target R called. *)
+query t: bitstring, tgt: bitstring, k: bitstring, e: G, r: G;
+  inj-event(RootAccept0(t, tgt, k, e, r)) ==> inj-event(Mach0Answer(t, mid(tgt, G1), e, r)).
+(* Responses: one key per direction (Split), so no reflection. *)
+query t: bitstring, tgt: bitstring, n: bitstring, gen: bitstring, x: bitstring;
+  event(RootRecvResp0(t, tgt, mid(n, gen), x)) ==> event(Mach0SendResp(t, mid(n, gen), x)) || event(Leaked(n)).
+
+(* Witness (must read F: reachable): the honest flow completes. *)
+query t: bitstring; event(RootRecvResp0(t, nameB, mid(nameB, G1), respFrom(nameB))).
+
+letfun known(n: bitstring) = n = nameB || n = nameC.
+
+(* R calls tgt with the label the relay listed for tgt (a2a.go:524-528,
+   parseA2AE2EEStaticLabel a2a_e2ee_0rtt.go:107-130: the tag is checked
+   under the label's key id; nothing compares the id or the name with tgt),
+   firstFlight :202-232, completeZeroRTT :235-257. *)
+let RootInit0(tgt: bitstring) =
+  in(c, (spub: G, ltag: bitstring, k: bitstring, name: bitstring));
+  let mid(n, gen) = k in
+  if n = tgt && name = tgt then                     (* NOT:no-target-check *)
+  if gen = G1 && known(n) then
+  let K = hkdf(Kroot, n, gen) in
+  if ltag = mac(K, (Lstatic, name, spub)) then
+  new t: bitstring; new ts: bitstring;               (* txn, head: version and time *)
+  new e: exponent; let ep = exp(g, e) in
+  let ck1 = nk1(mackey(K, (Lpsk, Lempty)), ep, exp(spub, e)) in
+  let h1 = ((V2, t, nameR, tgt, k, ts), spub, ep) in
+  new early: key; new n0: bitstring;
+  let ct1 = aenc(ck1, Lzero, h1, kb(early)) in
+  event RootSend0(t, tgt, k, reqTo(tgt));
+  out(c, (tgt, (t, INIT0, nameR, tgt, k, ts, spub, ep, ct1, n0, aenc(early, n0, aadOf(t), reqTo(tgt)))));
+  in(c, (=t, =ACK, er: G, ct2: bitstring));
+  let ck2 = nk2(ck1, er, exp(er, e)) in
+  let z = adec(ck2, Lzero, (h1, ct1, er), ct2) in
+  if z = Lempty then
+  event RootAccept0(t, tgt, k, ep, er);
+  ! in(c, (=t, =DATA, n: bitstring, ct: bitstring));
+  let y = adec(split2(ck2), n, aadOf(t), ct) in
+  event RootRecvResp0(t, tgt, k, y).
+
+(* Machine m with its process's static key s (a2a_e2ee_0rtt.go:85),
+   label :90-101, accept :269-313 (the replay register :319, burned
+   before anything else is judged, is not modelled: see README). *)
+let Mach0Session(m: bitstring, Km: key, s: exponent, spub: G, km: bitstring) =
+  in(c, (t: bitstring, =INIT0, caller: bitstring, callee: bitstring, =km, ts: bitstring, rs: G, ep: G, ct1: bitstring, n0: bitstring, sealed: bitstring));
+  if rs = spub && callee = m then
+  let ck1 = nk1(mackey(Km, (Lpsk, Lempty)), ep, exp(ep, s)) in
+  let h1 = ((V2, t, caller, callee, km, ts), spub, ep) in
+  let kb(early) = adec(ck1, Lzero, h1, ct1) in
+  let req = adec(early, n0, aadOf(t), sealed) in
+  event Mach0Accept(t, km, req);
+  new y: exponent; let er = exp(g, y) in
+  let ck2 = nk2(ck1, er, exp(ep, y)) in
+  event Mach0Answer(t, km, ep, er);
+  out(c, (t, ACK, er, aenc(ck2, Lzero, (h1, ct1, er), Lempty)));
+  new n2: bitstring;
+  event Mach0SendResp(t, km, respFrom(m));
+  out(c, (t, DATA, n2, aenc(split2(ck2), n2, aadOf(t), respFrom(m)))).
+
+let Mach0(m: bitstring, Km: key) =
+  new s: exponent; let spub = exp(g, s) in
+  let km = mid(m, G1) in
+  out(c, (spub, mac(Km, (Lstatic, m, spub)), km, m));
+  ( ! Mach0Session(m, Km, s, spub, km)
+  | phase 1; out(c, Km)                  (* ONLY:leak *)
+  | phase 1; out(c, Km); out(c, s)       (* ONLY:leak-static *)
+  ).
+
+process
+  event Leaked(nameC); out(c, hkdf(Kroot, nameC, G1));
+  ( ! RootInit0(nameB)
+  | Mach0(nameB, hkdf(Kroot, nameB, G1)) )

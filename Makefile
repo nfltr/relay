@@ -103,7 +103,7 @@ stress-race:
 # traces the tests record under -tags relaytrace against them (nightly);
 # spec-cltraces is its per-push slice (the stuck-handler test's CallLifecycle
 # traces, about 10 s; in make ci).
-.PHONY: spec spec-mutants spec-traces spec-cltraces
+.PHONY: spec spec-mutants spec-traces spec-cltraces spec-proverif
 spec:
 	./scripts/spec.sh check
 spec-mutants:
@@ -112,6 +112,10 @@ spec-traces:
 	./scripts/spec.sh traces
 spec-cltraces:
 	./scripts/spec.sh cltraces
+# The ProVerif models (spec/proverif/README.md): every line of
+# spec/proverif/expect.txt, mutants included (in make ci).
+spec-proverif:
+	./spec/proverif/run.sh
 
 # Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
 # identical; its test is nfltr's scripts/check_spec_drift_test.sh): every
