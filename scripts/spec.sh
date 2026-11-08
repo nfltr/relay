@@ -18,6 +18,9 @@
 #   cltraces  the CallLifecycle traces of CL_TRACE_TESTS (default: the
 #            stuck-handler test), CL_TRACE_COUNT runs (default 3), checked
 #            against spec/TraceCallLifecycle.tla (in make ci).
+#   cltraces FILE...  each transaction of each recorded CallLifecycle trace
+#            checked against spec/TraceCallLifecycle.tla (relay-core's
+#            two-agent traces: one config, this script's).
 #   cctraces FILE...  each call and direction of each recorded CallCredit
 #            trace (client/rpcclient -tags relaytrace) checked against
 #            spec/TraceCallCredit.tla.
@@ -163,6 +166,7 @@ cltraces() {
 			bad=$((bad + 1))
 			echo "trace $(basename "$1") $ag $call: REJECTED"
 			grep -E 'Error|unknown event' "$1.$ag.$call.out" | head -5
+			[ -z "${TRACE_KEEP:-}" ] || cp "$1" "$1.$ag.$call.out" "$TRACE_KEEP/"
 		fi
 	done
 	echo "$n transactions, $bad rejected"
@@ -417,6 +421,14 @@ mutants)
 	exit $fail
 	;;
 cltraces)
+	shift
+	if [ $# -gt 0 ]; then
+		for f in "$@"; do
+			cp "$f" "$work/"
+			cltraces "$work/$(basename "$f")" || fail=1
+		done
+		exit $fail
+	fi
 	# The per-push slice of traces: the CallLifecycle traces of the tests
 	# whose handler returns before its caller's last frame
 	# (CL_TRACE_TESTS), several runs, so AtMostOneCall is checked where a
