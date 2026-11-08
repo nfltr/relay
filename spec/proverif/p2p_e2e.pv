@@ -10,23 +10,34 @@
    channels) is not re-proven: an ideal channel to the holder of the DTLS
    key whose fingerprint the other end checked (RFC 5763, RFC 8827). What is
    modelled is ours: the ephemeral X25519 exchange through the relay, the
-   HKDF psalt (pairing key), the transcript, the key confirmation, the
+   HKDF psalt (the pair key, below), the transcript, the key confirmation, the
    fingerprint the users compare, the sealed signaling that carries the SDP
    (and so the DTLS fingerprint), and the protocol check.
 
+   Keys (lane A2AFINAL2, E2EEPROOF finding 5): the psalt is HMAC(K,
+   "nfltr-p2p-e2e-v2", the responder's service name, the pair key id), K
+   the pair's A2A key: the root key R between two root holders, else the
+   machine key mk(R, id) of the end that is a machine (nfltr
+   a2akeys.Derive). The offer carries the initiator's key id, the answer
+   the responder's (the relay's word, as A2A's learned machine); a root end
+   derives the machine key of the peer's key id, a machine end holds only
+   its own and takes a root peer or one of its own machine. Each end binds
+   its own name for the responder: the initiator the one it named, the
+   responder its own; neither takes it from the relay.
+
    Code (github.com/nfltr/relay unless named):
-     client/p2p/e2e.go:67-73       fresh ephemeral X25519 per side
-     client/p2p/e2e.go:97-106      th = SHA-256("nfltr-p2p-e2e-v1" sid ipub rpub); prk = HKDF-Extract(shared, psalt=pairing)
-     client/p2p/e2e.go:113-120     every key = HKDF-Expand(prk, label || th)
-     client/p2p/e2e.go:132-148     confirm = HMAC(k_confirm, role); checkConfirm
-     client/p2p/e2e.go:152-156     Fingerprint (80 bits) the CLIs print
-     client/p2p/e2e.go:160-206     Answer, FinishOffer, AwaitConfirm
-     client/p2p/e2e.go:340-386     sealed signaling frames (the SDP); nonce = the frame's number
-     client/p2p/sigconn.go:241-249 a failed write spends its number and ends the SignalConn: no nonce
-                                   is sealed twice (below the model: the encryption is ideal)
-     client/p2p/rtcdata.go:109     no data path without E2E
-     nfltr cmd/nfltr/internal/transportcli/p2p_session.go:199  answer.Proto < SignalProto refused
-     nfltr cmd/nfltr/internal/transportcli/p2p_transfer.go:314 offer.Proto < SignalProto refused *)
+     client/p2p/e2e.go NewE2E, PairSalt   fresh ephemeral X25519 per side; psalt = PairSalt(K, service, key id)
+     client/p2p/e2e.go Complete           th = SHA-256("nfltr-p2p-e2e-v1" sid ipub rpub); prk = HKDF-Extract(shared, psalt)
+     client/p2p/e2e.go key                every key = HKDF-Expand(prk, label || th)
+     client/p2p/e2e.go confirmTag         confirm = HMAC(k_confirm, role); checkConfirm
+     client/p2p/e2e.go Fingerprint        (80 bits) the CLIs print
+     client/p2p/e2e.go Answer, FinishOffer, AwaitConfirm
+     client/p2p/e2e.go sealed signaling frames (the SDP); nonce = the frame's number
+     client/p2p/sigconn.go                a failed write spends its number and ends the SignalConn: no nonce
+                                          is sealed twice (below the model: the encryption is ideal)
+     client/p2p/rtcdata.go                no data path without E2E
+     nfltr cmd/nfltr/internal/transportcli p2p_session.go (answer.Proto < SignalProto refused), p2p_transfer.go
+                                          (offer.Proto refused), the pair key from the key file (a2akeys) *)
 
 free c: channel.
 free oob: channel [private].        (* the two users reading their fingerprints to each other *)
@@ -38,8 +49,8 @@ fun exp(G, exponent): G.
 equation forall x: exponent, y: exponent; exp(exp(g, x), y) = exp(exp(g, y), x).
 
 type psalt.
-fun saltOf(bitstring): psalt.        (* rpcclient LoadA2AE2EEPairingKey *)
-const noSalt: psalt.                  (* no pairing key: HKDF psalt nil *)
+fun hsalt(bitstring, bitstring, bitstring): psalt.   (* PairSalt: HMAC(K, service, key id) *)
+const noSalt: psalt.                  (* no key file: HKDF psalt nil *)
 fun hkdfExtract(G, psalt): bitstring.
 fun th(bitstring, G, G): bitstring.
 fun hkdfExpand(bitstring, bitstring, bitstring): bitstring.
@@ -57,29 +68,77 @@ reduc forall m: bitstring, k: dkey; ddec(denc(m, dpk(k)), k) = m.
 const lConfirm, lFp, lData, lSignal, rInit, rResp: bitstring.
 const proto4, proto3: bitstring.     (* SignalProto and an older one *)
 
-free dataPaired, dataUnpaired, mediaPaired, mediaUnpaired: bitstring [private].
+fun mk(bitstring, bitstring): bitstring.   (* a2akeys.Derive(root, id) *)
+const rootKid, noneKid, groupId, unbound: bitstring.   (* noneKid: no key file *)
+const m1, m2, m3, mL: bitstring.           (* machines; mL leaked *)
+const home1, hub2, home3, office3, home4: bitstring.
 
-event InitDone(psalt, bitstring, G, G).          (* psalt, sid, ipub, rpub *)
-event RespDone(psalt, bitstring, G, G).
-event InitSend(psalt, bitstring, G, G, bitstring).
-event RespRecv(psalt, bitstring, G, G, bitstring).
+letfun machineKey(r: bitstring, id: bitstring) = mk(r, id). (* NOT:group-key *)
+letfun machineKey(r: bitstring, id: bitstring) = mk(r, groupId). (* ONLY:group-key *)
+letfun saltOf(k: bitstring, name: bitstring, kid: bitstring) = hsalt(k, name, kid). (* NOT:name-unbound *)
+letfun saltOf(k: bitstring, name: bitstring, kid: bitstring) = hsalt(k, unbound, kid). (* ONLY:name-unbound *)
+
+(* A key file: root (R, rootKid) or a machine's (mk(R, id), id). *)
+type kf.
+fun rootFile(bitstring): kf [data].
+fun machFile(bitstring, bitstring): kf [data].   (* key id, key *)
+const noFile: kf.
+
+(* The pair key id of my file and the peer's key id, or fail: two root
+   holders use rootKid; a machine end takes a root peer or its own machine. *)
+fun pairKid(kf, bitstring): bitstring
+  reduc forall r: bitstring; pairKid(rootFile(r), rootKid) = rootKid
+  otherwise forall r: bitstring, pk: bitstring; pairKid(rootFile(r), pk) = pk
+  otherwise forall id: bitstring, k: bitstring; pairKid(machFile(id, k), rootKid) = id
+  otherwise forall id: bitstring, k: bitstring; pairKid(machFile(id, k), id) = id
+  otherwise forall pk: bitstring; pairKid(noFile, pk) = noneKid.
+fun pairKey(kf, bitstring): bitstring
+  reduc forall r: bitstring; pairKey(rootFile(r), rootKid) = r
+  otherwise forall r: bitstring, pk: bitstring; pairKey(rootFile(r), pk) = mk(r, pk) (* NOT:group-key *)
+  otherwise forall r: bitstring, pk: bitstring; pairKey(rootFile(r), pk) = mk(r, groupId) (* ONLY:group-key *)
+  otherwise forall id: bitstring, k: bitstring, pk: bitstring; pairKey(machFile(id, k), pk) = k
+  otherwise forall pk: bitstring; pairKey(noFile, pk) = noneKid.
+fun ownKid(kf): bitstring
+  reduc forall r: bitstring; ownKid(rootFile(r)) = rootKid
+  otherwise forall id: bitstring, k: bitstring; ownKid(machFile(id, k)) = id
+  otherwise ownKid(noFile) = noneKid.
+
+letfun salt(f: kf, peerKid: bitstring, name: bitstring) =
+  if f = noFile then noSalt else saltOf(pairKey(f, peerKid), name, pairKid(f, peerKid)).
+
+(* The first bool: paired (a key file); queries 1-4 are about paired ends. *)
+event InitDone(bool, bitstring, psalt, bitstring, G, G).    (* paired, pair kid, psalt, sid, ipub, rpub *)
+event RespDone(bool, bitstring, psalt, bitstring, G, G).
+event InitSend(bool, bitstring, bitstring, bitstring, G, G, bitstring).   (* paired, responder name, pair kid, sid, ipub, rpub, data *)
+event RespRecv(bool, bitstring, bitstring, bitstring, G, G, bitstring).
+event InitMedia(bool, bitstring, bitstring, bitstring).
+event InitData(bool, bitstring, bitstring, bitstring).                   (* paired, responder name, pair kid, data: it exists *)                  (* paired, responder name, pair kid, media *)
 event RespFpMatch(psalt, bitstring, G, G).
+event Leaked(bitstring).
 
-let Initiator(s: psalt, sid: bitstring, data: bitstring, media: bitstring) =
+free dataUnpaired: bitstring [private].
+
+let Initiator(f: kf, name: bitstring, sid: bitstring) =
   new x: exponent;
-  out(c, (sid, exp(g, x), proto4));                     (* offer *)
-  in(c, (rpub: G, tagR: bitstring, proto: bitstring));  (* answer, through the relay *)
-  if proto = proto4 then                                 (* p2p_session.go:199 *) (* NOT:old-protocol-plaintext *)
+  out(c, (sid, name, exp(g, x), ownKid(f), proto4));          (* offer *)
+  in(c, (rpub: G, tagR: bitstring, rkid: bitstring, proto: bitstring));  (* answer, through the relay *)
+  new data: bitstring; new media: bitstring;
+  let data = if f = noFile then dataUnpaired else data in
+  let kid = pairKid(f, rkid) in
+  let pd = (f <> noFile) in
+  event InitData(pd, name, kid, data);
+  if proto = proto4 then                                 (* p2p_session.go *) (* NOT:old-protocol-plaintext *)
   if proto = proto3 then out(c, data) else (* ONLY:old-protocol-plaintext *)
-  if rpub <> g then                                      (* ECDH refuses a low-order point, e2e.go:92 *)
+  if rpub <> g then                                      (* ECDH refuses a low-order point *)
+  let s = salt(f, rkid, name) in
   let prk = hkdfExtract(exp(rpub, x), s) in (* NOT:no-pairing-salt *)
   let prk = hkdfExtract(exp(rpub, x), noSalt) in (* ONLY:no-pairing-salt *)
   let t = th(sid, exp(g, x), rpub) in
   if tagR = hmac(hkdfExpand(prk, lConfirm, t), rResp) then  (* FinishOffer *)
-  event InitDone(s, sid, exp(g, x), rpub);
+  event InitDone(pd, kid, s, sid, exp(g, x), rpub);
   out(c, hmac(hkdfExpand(prk, lConfirm, t), rInit));
   (out(oob, (sid, hkdfExpand(prk, lFp, t))) | (     (* the fingerprint it prints; never waits *)
-  event InitSend(s, sid, exp(g, x), rpub, data);
+  event InitSend(pd, name, kid, sid, exp(g, x), rpub, data);
   out(c, senc(data, hkdfExpand(prk, lData, t)));            (* Secure on any path *)
   (* the browser's DTLS fingerprint, in a sealed signaling frame *)
   in(c, sdp: bitstring);
@@ -88,55 +147,80 @@ let Initiator(s: psalt, sid: bitstring, data: bitstring, media: bitstring) =
   in(c, peerDtls: bitstring);                           (* the DTLS handshake, via TURN *)
   if dfp(peerDtls) = fpPeer then (* NOT:accept-any-dtls *)
   if true then (* ONLY:accept-any-dtls *)
+  event InitMedia(pd, name, kid, media);
   out(c, denc(media, peerDtls)))).
 
-let Responder(s: psalt, d: dkey) =
-  in(c, (sid: bitstring, ipub: G, proto: bitstring));
-  if proto = proto4 then                                 (* p2p_transfer.go:314 *)
+let Responder(f: kf, name: bitstring, d: dkey) =
+  in(c, (sid: bitstring, nameTold: bitstring, ipub: G, ikid: bitstring, proto: bitstring));
+  if proto = proto4 then                                 (* p2p_transfer.go *)
   if ipub <> g then
   new y: exponent;
+  let s = salt(f, ikid, name) in
+  let kid = pairKid(f, ikid) in
+  let pd = (f <> noFile) in
   let prk = hkdfExtract(exp(ipub, y), s) in
   let t = th(sid, ipub, exp(g, y)) in
-  out(c, (exp(g, y), hmac(hkdfExpand(prk, lConfirm, t), rResp), proto4));
+  out(c, (exp(g, y), hmac(hkdfExpand(prk, lConfirm, t), rResp), ownKid(f), proto4));
   in(c, tagI: bitstring);
   if tagI = hmac(hkdfExpand(prk, lConfirm, t), rInit) then  (* AwaitConfirm *) (* NOT:skip-await-confirm *)
   if true then (* ONLY:skip-await-confirm *)
-  event RespDone(s, sid, ipub, exp(g, y));
+  event RespDone(pd, kid, s, sid, ipub, exp(g, y));
   (
-    (in(oob, (=sid, f: bitstring));
-     if f = hkdfExpand(prk, lFp, t) then event RespFpMatch(s, sid, ipub, exp(g, y))) (* NOT:fingerprint-not-compared *)
+    (in(oob, (=sid, fp: bitstring));
+     if fp = hkdfExpand(prk, lFp, t) then event RespFpMatch(s, sid, ipub, exp(g, y))) (* NOT:fingerprint-not-compared *)
      if true then event RespFpMatch(s, sid, ipub, exp(g, y))) (* ONLY:fingerprint-not-compared *)
   | (in(c, e: bitstring);
      let m = sdec(e, hkdfExpand(prk, lData, t)) in
-     event RespRecv(s, sid, ipub, exp(g, y), m))
+     event RespRecv(pd, name, kid, sid, ipub, exp(g, y), m))
   | out(c, senc(dfp(dpk(d)), hkdfExpand(prk, lSignal, t)))
   ).
 
-(* paired: secret data and media, injective agreement both ways *)
+(* 1-2. paired: data and browser media secret unless the pair key id is a
+   leaked machine's (the peer's key id is the relay's word) *)
 (* expect true *)
-query attacker(dataPaired).
+query n: bitstring, kid: bitstring, m: bitstring;
+  event(InitData(true, n, kid, m)) && attacker(m) ==> event(Leaked(kid)).
 (* expect true *)
-query attacker(mediaPaired).
+query n: bitstring, kid: bitstring, m: bitstring;
+  event(InitMedia(true, n, kid, m)) && attacker(m) ==> event(Leaked(kid)).
+(* 3. paired: injective agreement responder <- initiator on the responder's
+   name, the pair key id, sid, both keys and the data (finding 5: a relay
+   rerouting a call of home3 to office3 on the same machine is refused) *)
 (* expect true *)
-query sid: bitstring, i: G, r: G, m: bitstring, k: bitstring;
-  inj-event(RespRecv(saltOf(k), sid, i, r, m)) ==> inj-event(InitSend(saltOf(k), sid, i, r, m)).
+query n: bitstring, kid: bitstring, sid: bitstring, i: G, r: G, m: bitstring;
+  inj-event(RespRecv(true, n, kid, sid, i, r, m)) ==> inj-event(InitSend(true, n, kid, sid, i, r, m)) || event(Leaked(kid)).
+(* 4. paired: injective agreement on the key confirmation *)
 (* expect true *)
-query sid: bitstring, i: G, r: G, k: bitstring;
-  inj-event(RespDone(saltOf(k), sid, i, r)) ==> inj-event(InitDone(saltOf(k), sid, i, r)).
-(* unpaired: the relay in the middle reads the data (documented) ... *)
+query kid: bitstring, s: psalt, sid: bitstring, i: G, r: G;
+  inj-event(RespDone(true, kid, s, sid, i, r)) ==> inj-event(InitDone(true, kid, s, sid, i, r)) || event(Leaked(kid)).
+(* 5. unpaired: the relay in the middle reads the data (documented) ... *)
 (* expect false *)
 query attacker(dataUnpaired).
-(* ... but cannot make the two fingerprints equal: equal fingerprints mean
+(* 6. ... but cannot make the two fingerprints equal: equal fingerprints mean
    both ends hold the same two keys (computationally: an 80-bit second
    preimage, one side's fingerprint being fixed before the relay picks its
    second key) *)
 (* expect true *)
-query s: psalt, sid: bitstring, i: G, r: G;
-  event(RespFpMatch(s, sid, i, r)) ==> event(InitDone(s, sid, i, r)).
+query pd: bool, kid: bitstring, s: psalt, sid: bitstring, i: G, r: G;
+  event(RespFpMatch(s, sid, i, r)) ==> event(InitDone(pd, kid, s, sid, i, r)).
+(* 7. witness: a paired call's data arrives (root initiator, machine m1) *)
+(* expect false *)
+query sid: bitstring, i: G, r: G, m: bitstring; event(RespRecv(true, home1, m1, sid, i, r, m)).
+(* 8. witness: a machine initiator reaches a root responder *)
+(* expect false *)
+query sid: bitstring, i: G, r: G, m: bitstring; event(RespRecv(true, hub2, m2, sid, i, r, m)).
 
 process
-  new k: bitstring; new d1: dkey; new d2: dkey;
+  new R: bitstring; new d1: dkey; new d2: dkey; new d3: dkey; new d4: dkey;
   (
-    (!new sid: bitstring; Initiator(saltOf(k), sid, dataPaired, mediaPaired)) | (!Responder(saltOf(k), d1))
-  | (!new sid: bitstring; out(c, sid); Initiator(noSalt, sid, dataUnpaired, mediaUnpaired)) | (!Responder(noSalt, d2))
+    (* root initiator -> responder on machine m1 *)
+      (!new sid: bitstring; Initiator(rootFile(R), home1, sid)) | (!Responder(machFile(m1, machineKey(R, m1)), home1, d1))
+    (* machine m2 initiator -> root responder *)
+    | (!new sid: bitstring; Initiator(machFile(m2, machineKey(R, m2)), hub2, sid)) | (!Responder(rootFile(R), hub2, d2))
+    (* two responders on machine m3; a root initiator calls home3 *)
+    | (!new sid: bitstring; Initiator(rootFile(R), home3, sid))
+    | (!Responder(machFile(m3, machineKey(R, m3)), home3, d3)) | (!Responder(machFile(m3, machineKey(R, m3)), office3, d3))
+    (* unpaired *)
+    | (!new sid: bitstring; out(c, sid); Initiator(noFile, home4, sid)) | (!Responder(noFile, home4, d4))
+    | (event Leaked(mL); out(c, machineKey(R, mL)))
   )
