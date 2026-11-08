@@ -21,6 +21,51 @@ import (
 // Streams to it end at the relay.
 const RelayAgentID = "nfltr-relay"
 
+// RecheckA2AE2EE ends at once every live A2A E2EE call and session of
+// this agent whose key id no longer holds (A2AE2EEKeyring.Valid): call it
+// when the keyring's keys changed (a revoke, a rotation), so a call idle
+// mid-stream ends now, not at its next frame. A call it ends as caller:
+// Recv and Send get the next-frame refusal's error and the callee is sent
+// a cancel. As callee: the handler's context is cancelled with that error
+// (context.Cause; Recv returns it) and the caller is sent a
+// FailedPrecondition error, in the clear (the key that would seal it no
+// longer holds). A session it drops is never resumed. Every other call
+// goes on.
+func (a *Agent) RecheckA2AE2EE() {
+	kr := a.keyring()
+	if kr == nil {
+		return
+	}
+	a.sessions.dropRevoked(kr)
+	a.pending.Range(func(_, v any) bool {
+		if cs := v.(*clientStream); cs.e2ee != nil {
+			if err := cs.e2ee.revoked(); err != nil {
+				cs.refuse(err)
+			}
+		}
+		return true
+	})
+	a.incoming.Range(func(_, v any) bool {
+		if ss := v.(*serverStream); ss.e2ee != nil {
+			if err := ss.e2ee.revoked(); err != nil {
+				ss.endWith(err)
+				ss.closeRequests() // its later frames are dropped
+				go a.sendA2AControlError(ss.txnID, codes.FailedPrecondition, err.Error())
+			}
+		}
+		return true
+	})
+}
+
+// setKeyring keys this agent; a keyring that says when it changed
+// (A2AE2EEKeyringChanges) gets RecheckA2AE2EE run on each change.
+func (a *Agent) setKeyring(kr A2AE2EEKeyring) {
+	a.a2aKeyring.Store(&kr)
+	if c, ok := kr.(A2AE2EEKeyringChanges); ok {
+		c.OnChange(a.ctx, a.RecheckA2AE2EE)
+	}
+}
+
 // keyring is this agent's A2A E2EE keys, or nil (no E2EE).
 func (a *Agent) keyring() A2AE2EEKeyring {
 	if k := a.a2aKeyring.Load(); k != nil {

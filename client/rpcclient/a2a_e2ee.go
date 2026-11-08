@@ -117,13 +117,25 @@ type A2AE2EEKeyring interface {
 	For(ref string) (id string, key []byte, err error)
 	// Valid reports whether an established call's key id still holds. It is
 	// asked before each later frame of the call is sealed or opened, so a
-	// revoke ends calls in flight at their next frame.
+	// revoke ends calls in flight at their next frame, and by
+	// RecheckA2AE2EE, which ends them at once.
 	Valid(id string) bool
 	// Machine reports whether this end is a machine (one machine key, no
 	// root key). The handshake binds the initiator's role: a machine
 	// answers root holders only, so a relay that returns a machine's call
 	// to that machine or another agent of it is refused (a2aE2EERole).
 	Machine() bool
+}
+
+// A2AE2EEKeyringChanges is a keyring that says when its keys may have
+// changed (a store a revoke rewrites): an agent keyed by one runs
+// RecheckA2AE2EE after each change, so a revoke ends its calls in flight at
+// once, not at their next frame.
+type A2AE2EEKeyringChanges interface {
+	A2AE2EEKeyring
+	// OnChange calls changed after each change until ctx ends; it does
+	// not block.
+	OnChange(ctx context.Context, changed func())
 }
 
 // a2aE2EEPairingKey is the keyring of a root pairing key alone: id "" only.
@@ -270,6 +282,17 @@ func checkA2AE2EEKey(kr A2AE2EEKeyring, kid string) error {
 		return fmt.Errorf("rpcclient: A2A E2EE key %q was revoked or rotated; this call ends: %w", kid, errA2AE2EEPairing)
 	}
 	return nil
+}
+
+// revoked is the per-frame check asked now (RecheckA2AE2EE): the error an
+// established call's next frame would get, or nil.
+func (s *a2aE2EEState) revoked() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.ready {
+		return nil // a handshake not done: its first frame is checked
+	}
+	return checkA2AE2EEKey(s.kr, s.kid)
 }
 
 func (s *a2aE2EEState) awaitingHandshake() bool {

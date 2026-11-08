@@ -196,57 +196,63 @@ func TestA2AE2EEKeyringRevokeRefusesOnlyThatMachine(t *testing.T) {
 // NoMessageFromRevokedMachine for frames: a revoke ends calls in flight at
 // their next frame, both directions (machine calling the root, root calling
 // the machine), and a call of another machine goes on.
+// keyedCall is an echo call between two keyed agents over a test relay.
+type keyedCall struct {
+	a, b    *Agent
+	cs      ClientStream
+	handled chan error // the handler's end
+}
+
+func openKeyedCall(ctx context.Context, t *testing.T, callerKR, targetKR A2AE2EEKeyring, callerID, targetID string) keyedCall {
+	t.Helper()
+	msA, msB := newMockStream(ctx), newMockStream(ctx)
+	a, b := keyedAgent(callerID, callerKR)(msA), keyedAgent(targetID, targetKR)(msB)
+	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+	handled := make(chan error, 1)
+	b.Handle(func(s ServerStream) error {
+		for {
+			data, err := s.Recv()
+			if err == io.EOF {
+				handled <- nil
+				return nil
+			}
+			if err == nil {
+				err = s.Send(append([]byte("echo:"), data...))
+			}
+			if err != nil {
+				handled <- err
+				return err
+			}
+		}
+	})
+	(&testRelay{}).run(ctx, msA, msB)
+	cs, err := a.NewStream(ctx, targetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return keyedCall{a, b, cs, handled}
+}
+
+func (c keyedCall) roundTrip() error {
+	if err := c.cs.Send([]byte("hi")); err != nil {
+		return err
+	}
+	r, err := c.cs.Recv()
+	if err == nil && string(r.Data) != "echo:hi" {
+		err = fmt.Errorf("got %q", r.Data)
+	}
+	return err
+}
+
 func TestA2AE2EEKeyringRevokeEndsCallsInFlight(t *testing.T) {
 	store := newTestStore(t, "m1", "m2")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	type call struct {
-		cs      ClientStream
-		handled chan error
-	}
-	open := func(callerKR, targetKR A2AE2EEKeyring, callerID, targetID string) call {
-		msA, msB := newMockStream(ctx), newMockStream(ctx)
-		a, b := keyedAgent(callerID, callerKR)(msA), keyedAgent(targetID, targetKR)(msB)
-		t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
-		handled := make(chan error, 1)
-		b.Handle(func(s ServerStream) error {
-			for {
-				data, err := s.Recv()
-				if err == io.EOF {
-					handled <- nil
-					return nil
-				}
-				if err == nil {
-					err = s.Send(append([]byte("echo:"), data...))
-				}
-				if err != nil {
-					handled <- err
-					return err
-				}
-			}
-		})
-		(&testRelay{}).run(ctx, msA, msB)
-		cs, err := a.NewStream(ctx, targetID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return call{cs, handled}
-	}
-	roundTrip := func(c call) error {
-		if err := c.cs.Send([]byte("hi")); err != nil {
-			return err
-		}
-		r, err := c.cs.Recv()
-		if err == nil && string(r.Data) != "echo:hi" {
-			err = fmt.Errorf("got %q", r.Data)
-		}
-		return err
-	}
-	toRoot := open(store.machine("m1"), store, "m1-fl", "hub-fl")
-	fromRoot := open(store, store.machine("m1"), "hub-fl2", "m1-node")
-	other := open(store.machine("m2"), store, "m2-fl", "hub-fl3")
-	for _, c := range []call{toRoot, fromRoot, other} {
-		if err := roundTrip(c); err != nil {
+	toRoot := openKeyedCall(ctx, t, store.machine("m1"), store, "m1-fl", "hub-fl")
+	fromRoot := openKeyedCall(ctx, t, store, store.machine("m1"), "hub-fl2", "m1-node")
+	other := openKeyedCall(ctx, t, store.machine("m2"), store, "m2-fl", "hub-fl3")
+	for _, c := range []keyedCall{toRoot, fromRoot, other} {
+		if err := c.roundTrip(); err != nil {
 			t.Fatalf("before the revoke: %v", err)
 		}
 	}
@@ -254,7 +260,7 @@ func TestA2AE2EEKeyringRevokeEndsCallsInFlight(t *testing.T) {
 	store.revoke("m1")
 	// m1 calling the root: its next frame is refused at the root, whose
 	// handler's Recv fails, and the call ends with that refusal.
-	if err := roundTrip(toRoot); err == nil || !strings.Contains(err.Error(), "revoked or rotated") {
+	if err := toRoot.roundTrip(); err == nil || !strings.Contains(err.Error(), "revoked or rotated") {
 		t.Fatalf("m1's frame after the revoke: err = %v, want the revoke", err)
 	}
 	if err := <-toRoot.handled; err == nil || !strings.Contains(err.Error(), "revoked or rotated") {
@@ -264,7 +270,68 @@ func TestA2AE2EEKeyringRevokeEndsCallsInFlight(t *testing.T) {
 	if err := fromRoot.cs.Send([]byte("hi")); err == nil || !strings.Contains(err.Error(), "revoked or rotated") {
 		t.Fatalf("root's frame to m1 after the revoke: err = %v", err)
 	}
-	if err := roundTrip(other); err != nil {
+	if err := other.roundTrip(); err != nil {
+		t.Fatalf("m2's call after m1's revoke: %v", err)
+	}
+}
+
+// RecheckA2AE2EE ends calls idle mid-stream at once: after the revoke no
+// frame is sent, and both ends of each of m1's calls end within a short
+// bound; m2's call goes on.
+func TestA2AE2EERecheckEndsIdleCallsAtOnce(t *testing.T) {
+	store := newTestStore(t, "m1", "m2")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	toRoot := openKeyedCall(ctx, t, store.machine("m1"), store, "m1-fl", "hub-fl")
+	fromRoot := openKeyedCall(ctx, t, store, store.machine("m1"), "hub-fl2", "m1-node")
+	other := openKeyedCall(ctx, t, store.machine("m2"), store, "m2-fl", "hub-fl3")
+	recvs := map[string]chan error{}
+	for name, c := range map[string]keyedCall{"toRoot": toRoot, "fromRoot": fromRoot} {
+		if err := c.roundTrip(); err != nil {
+			t.Fatalf("%s before the revoke: %v", name, err)
+		}
+		ch := make(chan error, 1)
+		go func() { _, err := c.cs.Recv(); ch <- err }() // idle: no frame comes
+		recvs[name] = ch
+	}
+	if err := other.roundTrip(); err != nil {
+		t.Fatalf("m2 before the revoke: %v", err)
+	}
+
+	store.revoke("m1")
+	for _, c := range []keyedCall{toRoot, fromRoot, other} {
+		c.a.RecheckA2AE2EE()
+		c.b.RecheckA2AE2EE()
+	}
+	within := func(what string, ch chan error, want string) {
+		t.Helper()
+		select {
+		case err := <-ch:
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s: err = %v, want %q", what, err, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s did not end after the recheck", what)
+		}
+	}
+	// m1 calling the root: the root's handler ends with the revoke, m1's
+	// Recv with the root's refusal (in the clear: the relay's word only).
+	within("root's handler", toRoot.handled, "revoked or rotated")
+	within("m1's Recv", recvs["toRoot"], "revoked or rotated")
+	// The root calling m1: the root's Recv ends with the revoke, m1's
+	// handler with the root's cancel.
+	within("root's Recv", recvs["fromRoot"], "revoked or rotated")
+	within("m1's handler", fromRoot.handled, "canceled")
+	// The root's sessions under m1's key went with them.
+	fromRoot.a.sessions.mu.Lock()
+	toRoot.b.sessions.mu.Lock()
+	out, in := len(fromRoot.a.sessions.out), len(toRoot.b.sessions.in)
+	toRoot.b.sessions.mu.Unlock()
+	fromRoot.a.sessions.mu.Unlock()
+	if out != 0 || in != 0 {
+		t.Fatalf("root's sessions under m1's key after the recheck: out %d in %d", out, in)
+	}
+	if err := other.roundTrip(); err != nil {
 		t.Fatalf("m2's call after m1's revoke: %v", err)
 	}
 }
@@ -303,3 +370,57 @@ func TestA2AE2EEKeyIDOnTheWire(t *testing.T) {
 type testRootOf struct{ testMachine }
 
 func (testRootOf) Machine() bool { return false }
+
+// notifyingStore is a testStore that says when it changed
+// (A2AE2EEKeyringChanges).
+type notifyingStore struct {
+	*testStore
+	mu      sync.Mutex
+	changed []func()
+}
+
+func (s *notifyingStore) OnChange(_ context.Context, f func()) {
+	s.mu.Lock()
+	s.changed = append(s.changed, f)
+	s.mu.Unlock()
+}
+
+func (s *notifyingStore) revoke(name string) {
+	s.testStore.revoke(name)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, f := range s.changed {
+		f()
+	}
+}
+
+// A keyring that says when it changed ends an idle call on the revoke
+// itself: the agent rechecks on the change, nobody calls RecheckA2AE2EE.
+func TestA2AE2EEKeyringChangesEndIdleCalls(t *testing.T) {
+	store := &notifyingStore{testStore: newTestStore(t, "m1")}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c := openKeyedCall(ctx, t, store, store.machine("m1"), "hub-fl", "m1-node")
+	if err := c.roundTrip(); err != nil {
+		t.Fatal(err)
+	}
+	recv := make(chan error, 1)
+	go func() { _, err := c.cs.Recv(); recv <- err }()
+	store.revoke("m1")
+	select {
+	case err := <-recv:
+		if err == nil || !strings.Contains(err.Error(), "revoked or rotated") {
+			t.Fatalf("Recv after the revoke: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the call did not end on the change")
+	}
+	select {
+	case err := <-c.handled:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("m1's handler: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("m1's handler did not end")
+	}
+}

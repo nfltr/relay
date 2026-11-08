@@ -678,5 +678,5 @@ the session tests are its behaviours.
 | `Handshake`, `Resume`, `ExpireCaller` | client/rpcclient/a2a.go (`NewStream`), client/rpcclient/a2a_e2ee_session.go (`takeCall`) |
 | `Deliver`, `ExpireCallee`, `Restart` | client/rpcclient/a2a_e2ee_agent.go (`handleE2EEResume`), client/rpcclient/a2a_e2ee_session.go (`resume`, `takeCallNumber`) |
 | `Confirm`, `Unknown` (the retry) | client/rpcclient/client_stream.go (`resumeAnswered`, `rehandshake`), client/rpcclient/a2a_e2ee_agent.go (`handleE2EEInit`), client/rpcclient/a2a_e2ee_session.go (`retry`) |
-| `Revoke` | client/rpcclient/a2a_e2ee_session.go (`takeCall`, `resume`: the keyring check) |
+| `Revoke` | client/rpcclient/a2a_e2ee_session.go (`takeCall`, `resume`: the keyring check; `dropRevoked`: both maps at once, run by `RecheckA2AE2EE` in a2a_e2ee_agent.go, which also ends the calls in flight under the revoked key through the existing cancel and `Return`, so CallLifecycle.tla needs no new action) |
 | trace recorder | none yet (the session tests' traces are checked against CallLifecycle.tla; an A2ASession recorder is open) |
