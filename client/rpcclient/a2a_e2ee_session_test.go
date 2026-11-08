@@ -152,40 +152,52 @@ func TestA2AE2EEResumedCallSkipsARoundTrip(t *testing.T) {
 	}
 	delay(msA, msB, "A")
 	delay(msB, msA, "B")
-	timed := func() time.Duration {
-		start := time.Now()
+	// call runs one call and returns its frames (by the txn of its first
+	// frame of type first) in delivery order; the previous call's trailer
+	// may still be in flight, so frames are matched by txn.
+	call := func(first string) []string {
+		mu.Lock()
+		order = nil
+		mu.Unlock()
 		if got, err := a.Invoke(ctx, "m1-node", []byte("q")); err != nil || string(got) != "echo:q" {
 			t.Fatalf("Invoke = %q, %v", got, err)
 		}
-		return time.Since(start)
+		mu.Lock()
+		defer mu.Unlock()
+		var txn string
+		var calls []string
+		for _, e := range order {
+			if txn == "" && e[0] == "A:"+first {
+				txn = e[1]
+			}
+			if txn != "" && e[1] == txn {
+				calls = append(calls, e[0])
+			}
+		}
+		return calls
 	}
-	first := timed()
-	mu.Lock()
-	order = nil
-	mu.Unlock()
-	second := timed()
-	mu.Lock()
-	defer mu.Unlock()
+	// roundTrips counts the caller's turns: each run of caller frames that
+	// the callee answers is one round trip. Counted, not timed, so a
+	// loaded machine cannot fail it.
+	roundTrips := func(calls []string) int {
+		n := 0
+		for i, c := range calls {
+			if strings.HasPrefix(c, "B:") && (i == 0 || strings.HasPrefix(calls[i-1], "A:")) {
+				n++
+			}
+		}
+		return n
+	}
+	firstCall := call(a2aE2EEInitMessageType)
+	second := call(a2aE2EEResumeMessageType)
 	// The resume and the request reach the callee before any frame of the
-	// callee's reaches the caller (the second call's frames: the first
-	// call's trailer may still be in flight).
-	var txn string
-	var calls []string
-	for _, e := range order {
-		if txn == "" && e[0] == "A:"+a2aE2EEResumeMessageType {
-			txn = e[1]
-		}
-		if txn != "" && e[1] == txn {
-			calls = append(calls, e[0])
-		}
+	// callee's reaches the caller.
+	if len(second) < 2 || second[0] != "A:"+a2aE2EEResumeMessageType || second[1] != "A:a2a-request" {
+		t.Fatalf("second call's frames in delivery order %q: want the resume, then the request, first", second)
 	}
-	if len(calls) < 2 || calls[0] != "A:"+a2aE2EEResumeMessageType || calls[1] != "A:a2a-request" {
-		t.Fatalf("second call's frames in delivery order %q: want the resume, then the request, first", calls)
+	if f, s := roundTrips(firstCall), roundTrips(second); s != 1 || f != s+1 {
+		t.Fatalf("round trips: first call %d %q, resumed call %d %q: want the resumed one a single round trip, one fewer", f, firstCall, s, second)
 	}
-	if first-second < rtt/2 || second > rtt+rtt/2 {
-		t.Fatalf("first call %v, second %v at rtt %v: want the second one rtt shorter", first, second, rtt)
-	}
-	t.Logf("rtt %v: first call %v, resumed call %v", rtt, first, second)
 }
 
 // Query 14, mutant sess-unbound: a session is its pair's. Two agents of
