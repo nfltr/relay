@@ -99,8 +99,8 @@ func newACMEE2EEConfig(cfg ACMEConfig, agentID string, logger *slog.Logger) (*e2
 	acmeGetCert := acmeTLS.GetCertificate
 
 	e := &e2eeTLSConfig{
-		agentID:     agentID,
-		fingerprint: "ACME:pending", // updated on first handshake
+		agentID: agentID,
+		// No fingerprint until the first handshake issues the certificate.
 	}
 
 	acmeTLS.GetCertificate = func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {

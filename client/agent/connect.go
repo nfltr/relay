@@ -554,11 +554,7 @@ func (a *agent) connectOnce(ctx context.Context, since time.Time, attempts int) 
 	if labels := agentwire.EncodeLabels(a.labels); labels != "" {
 		md.Set(agentwire.LabelsKey, labels)
 	}
-	// Advertise E2EE TLS certificate fingerprint so the server can store
-	// it in the endpoint registry and expose it via the TLS info API.
-	if a.e2eeTLS != nil {
-		md.Set("x-tls-fingerprint", a.e2eeTLS.Fingerprint())
-	}
+	a.setFingerprintMetadata(md)
 	// processStream reads cancel/ack frames and streams uploads.
 	md.Set(chunking.FlowControlMetadataKey, chunking.FlowControlUploads)
 	if a.canMove() {
@@ -694,4 +690,19 @@ func (a *agent) apiKey() (string, error) {
 		return "", fmt.Errorf("agent: %s: want one credential", a.cfg.APIKeyFile)
 	}
 	return key, nil
+}
+
+// setFingerprintMetadata advertises the E2EE TLS certificate's fingerprint
+// so the server can store it in the endpoint registry and show it. An ACME
+// certificate not issued yet has none, and nothing is sent in its place:
+// a placeholder shown as a fingerprint claimed a key no client could check
+// (TestACMEPendingAdvertisesNoFingerprint); the first handshake's
+// fingerprint control frame tells the relay.
+func (a *agent) setFingerprintMetadata(md metadata.MD) {
+	if a.e2eeTLS == nil {
+		return
+	}
+	if fp := a.e2eeTLS.Fingerprint(); fp != "" {
+		md.Set("x-tls-fingerprint", fp)
+	}
 }

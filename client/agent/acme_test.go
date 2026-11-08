@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"google.golang.org/grpc/metadata"
 )
 
 // ---------------------------------------------------------------------------
@@ -37,8 +39,8 @@ func TestNewACMEE2EEConfig_CreatesConfig(t *testing.T) {
 	if e.tlsConfig == nil {
 		t.Fatal("tlsConfig is nil")
 	}
-	if e.Fingerprint() != "ACME:pending" {
-		t.Errorf("initial fingerprint = %q, want ACME:pending", e.Fingerprint())
+	if e.Fingerprint() != "" {
+		t.Errorf("initial fingerprint = %q, want none before the certificate is issued", e.Fingerprint())
 	}
 }
 
@@ -141,8 +143,8 @@ func TestWithACME_SetsE2EETLS(t *testing.T) {
 	if a.e2eeTLS == nil {
 		t.Fatal("e2eeTLS is nil after WithACME")
 	}
-	if a.e2eeTLS.Fingerprint() != "ACME:pending" {
-		t.Errorf("fingerprint = %q, want ACME:pending", a.e2eeTLS.Fingerprint())
+	if a.e2eeTLS.Fingerprint() != "" {
+		t.Errorf("fingerprint = %q, want none before the certificate is issued", a.e2eeTLS.Fingerprint())
 	}
 }
 
@@ -162,7 +164,27 @@ func TestNewACMEE2EESetup_ReturnsSetup(t *testing.T) {
 	if setup == nil {
 		t.Fatal("setup is nil")
 	}
-	if setup.Fingerprint() != "ACME:pending" {
-		t.Errorf("fingerprint = %q, want ACME:pending", setup.Fingerprint())
+	if setup.Fingerprint() != "" {
+		t.Errorf("fingerprint = %q, want none before the certificate is issued", setup.Fingerprint())
+	}
+}
+
+// TestACMEPendingAdvertisesNoFingerprint: an ACME certificate not issued
+// yet sends no x-tls-fingerprint (it used to send "ACME:pending", which the
+// dashboard showed as the agent's fingerprint); an issued one sends its own.
+func TestACMEPendingAdvertisesNoFingerprint(t *testing.T) {
+	a := &agent{cfg: Config{AgentID: "acme-md-test"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	WithACME(ACMEConfig{Domains: []string{"test.example.com"}, CacheDir: filepath.Join(t.TempDir(), "acme")})(a)
+	md := metadata.MD{}
+	a.setFingerprintMetadata(md)
+	if got := md.Get("x-tls-fingerprint"); len(got) != 0 {
+		t.Fatalf("pending ACME certificate advertised x-tls-fingerprint %q, want none", got)
+	}
+	a.e2eeTLS.mu.Lock()
+	a.e2eeTLS.fingerprint = "AA:BB"
+	a.e2eeTLS.mu.Unlock()
+	a.setFingerprintMetadata(md)
+	if got := md.Get("x-tls-fingerprint"); len(got) != 1 || got[0] != "AA:BB" {
+		t.Fatalf("issued certificate advertised %q, want AA:BB", got)
 	}
 }
