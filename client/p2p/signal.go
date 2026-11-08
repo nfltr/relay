@@ -73,6 +73,10 @@ type SignalMsg struct {
 	Session string `json:"session"`
 	// Key is the sender's ephemeral X25519 public key (hex; offer and answer).
 	Key string `json:"key,omitempty"`
+	// KeyID is the sender's A2A key id (offer and answer; "" the owner's
+	// root key, or unpaired): the relay's word, a wrong one only fails the
+	// key confirmation (E2E.Complete).
+	KeyID string `json:"key_id,omitempty"`
 	// Confirm is a key confirmation (answer and SignalConfirm).
 	Confirm string `json:"confirm,omitempty"`
 	// Candidates is the list of "host:port" addresses that the peer will

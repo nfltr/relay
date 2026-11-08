@@ -46,6 +46,44 @@ func streamPair() (fakeClient, fakeServer) {
 	return fakeClient{out: c2s, in: s2c}, fakeServer{out: s2c, in: c2s}
 }
 
+// rootPair is a root holder's key: the same for every peer.
+type rootPair []byte
+
+func (rootPair) KeyID() string { return "" }
+
+func (k rootPair) Key(string) ([]byte, string, error) { return k, "", nil }
+
+func pairOf(k []byte) Pair {
+	if k == nil {
+		return nil
+	}
+	return rootPair(k)
+}
+
+// Finding 5 (spec/proverif p2p_e2e.pv query 3, mutant name-unbound): a
+// relay that reroutes a call for "home" to "office", both holding the
+// same key, fails the key confirmation.
+func TestE2EPairBindsTheResponder(t *testing.T) {
+	k := pairOf(pairingKey())
+	ini, _ := NewE2E("s1", true, "home", k)
+	res, _ := NewE2E("s1", false, "office", k)
+	answer := &SignalMsg{Session: "s1", Proto: SignalProto}
+	if err := res.Answer(&SignalMsg{Key: ini.PublicKey()}, answer); err != nil {
+		t.Fatal(err)
+	}
+	cs, _ := streamPair()
+	if err := ini.FinishOffer(cs, answer); !errors.Is(err, ErrE2EMismatch) {
+		t.Fatalf("rerouted call: %v, want ErrE2EMismatch", err)
+	}
+	// An agent ref and its service name are one responder.
+	if !bytes.Equal(pairSalt([]byte("k"), "m-abcdefghijklmnopqrstuvwxyz-home", "m1.1"), pairSalt([]byte("k"), "home", "m1.1")) {
+		t.Fatal("an agent ref and its service name differ")
+	}
+	if !bytes.Equal(pairSalt([]byte("k"), "laptop.home", "m1.1"), pairSalt([]byte("k"), "home", "m1.1")) {
+		t.Fatal("a machine name's service and the service differ")
+	}
+}
+
 func pairingKey() []byte {
 	b := make([]byte, 32)
 	_, _ = rand.Read(b)
@@ -56,11 +94,11 @@ func pairingKey() []byte {
 // responder with these pairing keys.
 func e2eHandshake(t *testing.T, pi, pr []byte) (ini, res *E2E, iniErr, resErr error) {
 	t.Helper()
-	ini, _ = NewE2E("s1", true, pi)
-	res, _ = NewE2E("s1", false, pr)
+	ini, _ = NewE2E("s1", true, "home", pairOf(pi))
+	res, _ = NewE2E("s1", false, "home", pairOf(pr))
 	cs, ss := streamPair()
 	answer := &SignalMsg{Session: "s1", Proto: SignalProto}
-	if err := res.Answer(&SignalMsg{Key: ini.PublicKey()}, answer); err != nil {
+	if err := res.Answer(&SignalMsg{Key: ini.PublicKey(), KeyID: ini.KeyID()}, answer); err != nil {
 		t.Fatal(err)
 	}
 	iniErr = ini.FinishOffer(cs, answer)
@@ -102,7 +140,7 @@ func TestE2EPairingKey(t *testing.T) {
 		if !errors.Is(ie, ErrE2EMismatch) {
 			t.Fatalf("%s: initiator %v, want ErrE2EMismatch", name, ie)
 		}
-		if re == nil || !strings.Contains(re.Error(), "pairing keys") {
+		if re == nil || !strings.Contains(re.Error(), "A2A keys") {
 			t.Fatalf("%s: responder %v, want the initiator's reason", name, re)
 		}
 	}
@@ -113,10 +151,10 @@ func TestE2EPairingKey(t *testing.T) {
 // relay cannot confirm either leg.
 func TestE2ERelayInTheMiddle(t *testing.T) {
 	for _, k := range [][]byte{nil, pairingKey()} {
-		a, _ := NewE2E("s1", true, k)
-		b, _ := NewE2E("s1", false, k)
-		mb, _ := NewE2E("s1", true, nil)  // the relay toward b, as initiator
-		ma, _ := NewE2E("s1", false, nil) // the relay toward a, as responder
+		a, _ := NewE2E("s1", true, "home", pairOf(k))
+		b, _ := NewE2E("s1", false, "home", pairOf(k))
+		mb, _ := NewE2E("s1", true, "home", nil)  // the relay toward b, as initiator
+		ma, _ := NewE2E("s1", false, "home", nil) // the relay toward a, as responder
 		ansB := &SignalMsg{}
 		if err := b.Answer(&SignalMsg{Key: mb.PublicKey()}, ansB); err != nil {
 			t.Fatal(err)
@@ -131,7 +169,7 @@ func TestE2ERelayInTheMiddle(t *testing.T) {
 			if errA != nil {
 				t.Fatalf("unpaired leg: %v", errA)
 			}
-			_ = mb.Complete(ansB.Key)
+			_ = mb.Complete(ansB.Key, "")
 			if a.Fingerprint() == b.Fingerprint() {
 				t.Fatal("a relay in the middle left the fingerprints equal")
 			}
@@ -144,7 +182,7 @@ func TestE2ERelayInTheMiddle(t *testing.T) {
 }
 
 func TestE2ERejectsMissingOrBadKey(t *testing.T) {
-	e, _ := NewE2E("s1", false, nil)
+	e, _ := NewE2E("s1", false, "home", nil)
 	for _, k := range []string{"", "zz", strings.Repeat("00", 32)} { // empty, not hex, low order
 		if err := e.Answer(&SignalMsg{Key: k}, &SignalMsg{}); err == nil {
 			t.Fatalf("key %q accepted", k)

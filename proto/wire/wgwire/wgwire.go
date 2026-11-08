@@ -37,6 +37,13 @@ const (
 	// handshakes (--e2ee-key-file), so the relay can refuse a client and exit
 	// that disagree instead of letting their handshake fail silently.
 	PairedHeader = "x-wg-paired"
+	// KeyIDHeader carries a paired exit's A2A key id on connect (absent:
+	// the owner's root key), so a root client derives that machine's key.
+	KeyIDHeader = "x-wg-key-id"
+	// PeerKeyIDHeader tells a client its exit's KeyIDHeader, as the exit
+	// presented it. It is the relay's word: a wrong one only fails the
+	// handshake (spec/proverif wg_exit.pv).
+	PeerKeyIDHeader = "x-wg-peer-key-id"
 
 	// PeerTxnID tags a PeerUpdate the relay sends an exit.
 	PeerTxnID = "__wg_peer__"

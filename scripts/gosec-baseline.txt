@@ -57,7 +57,6 @@ G304 client/p2p/transfer.go 5acad8ba210685ad  # f, err := os.Open(path)
 G304 client/relayblob/relayblob.go 5acad8ba210685ad  # f, err := os.Open(path)
 G304 client/relayblob/relayblob.go 7e76fbbc60205a41  # f, err := os.OpenFile(part, os.O_CREATE|os.O_RDWR, 0o644)
 G304 client/rpcclient/a2a_e2ee.go 40198b332da0a69d  # raw, err := os.ReadFile(path)
-G304 client/wg/keys.go 40198b332da0a69d  # raw, err := os.ReadFile(path)
 G401 client/p2p/ws.go ba2774768b423e0e  # h := sha1.New()
 G402 client/agent/http_tunnel.go 7bbd6a6edc0c064d  # tlsCfg = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // opt-in, dev onl
 G403 client/relaytrust/relaytrusttest/certs.go e7d5b68757efd78c  # weak, err := rsa.GenerateKey(rand.Reader, 1024)

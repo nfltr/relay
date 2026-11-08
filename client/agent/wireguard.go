@@ -14,7 +14,7 @@ import (
 // WireGuardExit makes an agent a WireGuard exit (`nfltr wg serve`). The agent
 // does not link WireGuard itself: package
 // github.com/nfltr/relay/client/agent/wgexit provides an exit and its options
-// (wgexit.WithWireGuard, WithWireGuardKeys, WithWireGuardPairingKeyFile), so
+// (wgexit.WithWireGuard, WithWireGuardKeys, WithWireGuardPairing), so
 // only a program that imports it carries wireguard-go and gvisor.
 type WireGuardExit interface {
 	// Enabled reports whether the agent is an exit (a key is set); a pairing

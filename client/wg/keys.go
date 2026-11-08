@@ -4,12 +4,12 @@
 package wg
 
 import (
-	"bytes"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"os"
+	"strings"
 
 	"golang.org/x/crypto/curve25519"
 )
@@ -69,24 +69,38 @@ func hexKey(b64 string) (string, error) {
 	return fmt.Sprintf("%x", raw), nil
 }
 
-// presharedKeyContext separates the WireGuard preshared key from other keys
-// derived from the same pairing file (the A2A E2EE pairing key).
-const presharedKeyContext = "nfltr-wg-psk-v1"
+// presharedKeyLabel separates the WireGuard preshared key from the other
+// keys of the same A2A key.
+const presharedKeyLabel = "nfltr-wg-psk-v2"
 
-// PresharedKeyFromFile derives a WireGuard preshared key (base64) from a
-// pairing key file (--e2ee-key-file): SHA-256(context ‖ secret). The client
-// and the exit set it on each other, so a relay that swaps in its own public
-// key cannot complete a handshake with either. The secret must be random: a
-// relay sees handshakes and could test guesses of a short one offline.
-func PresharedKeyFromFile(path string) (string, error) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("wg: read pairing key file: %w", err)
+// PresharedKey is the WireGuard preshared key (base64) of the exit named
+// exit: HMAC-SHA256(key, label 0 service 0 keyID), key the exit's A2A key
+// (the owner's root key, keyID ""; or the machine key keyID names). The
+// client and the exit set it on each other, so a relay that swaps in its
+// own public key cannot complete a handshake with either, and one that
+// reroutes a client to another exit holding the same key cannot either:
+// each end binds its own name for the exit, the client the one it named,
+// the exit its own (spec/proverif wg_exit.pv, query 4).
+func PresharedKey(key []byte, exit, keyID string) (string, error) {
+	if len(key) < 32 {
+		return "", fmt.Errorf("wg: an A2A key of %d bytes; want at least 32", len(key))
 	}
-	secret := bytes.TrimSpace(raw)
-	if len(secret) < 32 {
-		return "", fmt.Errorf("wg: pairing key file %s holds %d bytes; want at least 32 bytes of random secret (e.g. openssl rand -hex 32)", path, len(secret))
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte(presharedKeyLabel + "\x00" + ExitService(exit) + "\x00" + keyID))
+	return base64.StdEncoding.EncodeToString(m.Sum(nil)), nil
+}
+
+// ExitService is an exit's service name: the part after an agent ref's
+// machine id ("m-" and 26 base32 characters, then "-"), the part after a
+// machine name and ".", or the name itself.
+// A client may name an exit either way; the exit binds its own the same way.
+func ExitService(name string) string {
+	const machineIDLen = 28 // relay-core identity.MachineIDLen
+	if len(name) > machineIDLen+1 && strings.HasPrefix(name, "m-") && name[machineIDLen] == '-' {
+		return name[machineIDLen+1:]
 	}
-	sum := sha256.Sum256(append([]byte(presharedKeyContext), secret...))
-	return base64.StdEncoding.EncodeToString(sum[:]), nil
+	if _, svc, dotted := strings.Cut(name, "."); dotted {
+		return svc // "<machine name>.<service>" (services hold no ".")
+	}
+	return name
 }

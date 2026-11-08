@@ -16,7 +16,7 @@ import (
 
 // ErrHandshakeFailed reports that no WireGuard handshake completed with a
 // peer in time. The relay forwards sealed packets and cannot tell a wrong
-// pairing key from a right one, so a mismatched --e2ee-key-file shows up
+// A2A key from a right one, so a mismatched --e2ee-key-file shows up
 // only as this: both ends exchange handshake messages and neither completes
 // (R3-G5: the client used to report its SOCKS proxy ready and then hang).
 var ErrHandshakeFailed = errors.New("WireGuard handshake failed; check that --e2ee-key-file matches on both ends")
@@ -45,7 +45,7 @@ func AwaitHandshake(ctx context.Context, t Tunnel, peer string, d time.Duration)
 
 // HandshakeFailed reports whether the peer sent handshake messages but none
 // completed. An exit asks when the relay removes a client (the client ended
-// its session): with pairing keys, a mismatched --e2ee-key-file. A peer that
+// its session): with A2A keys, a mismatched --e2ee-key-file. A peer that
 // sent nothing never tried, so there is nothing to report. (The exit used to
 // watch for 30s on a timer of its own; the client gives up after 20s and
 // the peer was gone before the watch ended, so nothing was logged: R4-G12.)

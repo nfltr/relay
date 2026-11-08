@@ -33,7 +33,7 @@ type TunnelConfig struct {
 	PeerPublicKey string
 
 	// PresharedKey (base64), when set, is mixed into every peer's handshake
-	// (PresharedKeyFromFile): a relay that swaps in its own public key
+	// (PresharedKey): a relay that swaps in its own public key
 	// cannot complete a handshake without it.
 	PresharedKey string
 

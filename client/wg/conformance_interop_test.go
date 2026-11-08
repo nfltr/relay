@@ -12,7 +12,7 @@ package wg
 // carries the sealed packets. TestWGInteropPeer stands in for the relay with
 // a UDP socket, so a stock peer (kernel WireGuard, wireguard-go) sees plain
 // WireGuard on the wire while nfltr's own tunnel code (NewTunnel or
-// NewForwardingTunnel, buildIPC, RelayBind, PresharedKeyFromFile) runs
+// NewForwardingTunnel, buildIPC, RelayBind, PresharedKey) runs
 // unchanged on the other side. The bridge forwards every sealed packet to the
 // stock peer's last source address, as the relay forwards to the current
 // session, and tags inbound packets with the stock peer's key.
@@ -27,9 +27,10 @@ package wg
 // Control (plain HTTP on the real network, for run.sh): /status (last
 // handshake, rx bytes), /get?url= (client: GET through the tunnel, answers
 // "<len> <sha256>"), /rehandshake, /pub?key= (PublicKeyFromPrivate),
-// /psk?file= (PresharedKeyFromFile), /blobsum (sha256 of /blob).
+// /psk?file= (PresharedKey of the file's bytes), /blobsum (sha256 of /blob).
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -73,7 +74,7 @@ func TestWGInteropPeer(t *testing.T) {
 	peer := interopEnv(t, "WG_PEER_PUBLIC_KEY")
 	cfg := TunnelConfig{PrivateKey: interopEnv(t, "WG_PRIVATE_KEY"), LocalAddress: netip.MustParseAddr(interopEnv(t, "WG_LOCAL_ADDR"))}
 	if f := os.Getenv("WG_PSK_FILE"); f != "" {
-		psk, err := PresharedKeyFromFile(f)
+		psk, err := interopPSK(f)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -216,7 +217,7 @@ func TestWGInteropPeer(t *testing.T) {
 		fmt.Fprintln(w, pub)
 	})
 	ctl.HandleFunc("/psk", func(w http.ResponseWriter, r *http.Request) {
-		psk, err := PresharedKeyFromFile(r.URL.Query().Get("file"))
+		psk, err := interopPSK(r.URL.Query().Get("file"))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
@@ -225,4 +226,14 @@ func TestWGInteropPeer(t *testing.T) {
 	})
 	logger.Info("wg interop harness ready", "role", role, "udp", udp.LocalAddr(), "paired", cfg.PresharedKey != "")
 	t.Fatal(http.ListenAndServe(interopEnv(t, "WG_CONTROL"), ctl))
+}
+
+// interopPSK is the preshared key of a key file's bytes (one exit,
+// "interop", the root key id).
+func interopPSK(path string) (string, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	return PresharedKey(bytes.TrimSpace(raw), "interop", "")
 }

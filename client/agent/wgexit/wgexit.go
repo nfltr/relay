@@ -7,7 +7,7 @@
 //
 //	a := agent.New(cfg,
 //		wgexit.WithWireGuard([]string{"192.168.1.0/24"}),
-//		wgexit.WithWireGuardPairingKeyFile("pairing.key"),
+//		wgexit.WithWireGuardPairing(key, "my-server", keyID),
 //	)
 package wgexit
 
@@ -31,7 +31,8 @@ import (
 type exit struct {
 	privateKey   string               // base64 WG private key
 	publicKey    string               // base64 WG public key (derived)
-	presharedKey string               // base64 pairing-derived preshared key, or ""
+	presharedKey string               // base64 preshared key (wg.PresharedKey), or ""
+	keyID        string               // the A2A key id it is of ("": the root key)
 	allow        wg.DestinationPolicy // destinations this agent forwards to
 	isExitNode   bool                 // advertise as an exit (`nfltr wg serve`)
 
@@ -90,13 +91,13 @@ func useKeys(privateKeyB64 string, allow []string) func(*exit) error {
 	return func(x *exit) error { return x.setKeys("WithWireGuardKeys", privateKeyB64, allow) }
 }
 
-func pairingKeyFile(path string) func(*exit) error {
+func pairing(key []byte, name, keyID string) func(*exit) error {
 	return func(x *exit) error {
-		psk, err := wg.PresharedKeyFromFile(path)
+		psk, err := wg.PresharedKey(key, name, keyID)
 		if err != nil {
-			return fmt.Errorf("WithWireGuardPairingKeyFile: %w", err)
+			return fmt.Errorf("WithWireGuardPairing: %w", err)
 		}
-		x.presharedKey = psk
+		x.presharedKey, x.keyID = psk, keyID
 		return nil
 	}
 }
@@ -119,12 +120,15 @@ func WithWireGuardKeys(privateKeyB64 string, allow []string) agent.Option {
 	return configure(useKeys(privateKeyB64, allow))
 }
 
-// WithWireGuardPairingKeyFile mixes a pairing key (--e2ee-key-file, the same
-// file on every client) into each client handshake, so a relay that swaps in
-// its own key cannot complete one. Clients must use the same file. It has
-// no effect without WithWireGuard or WithWireGuardKeys.
-func WithWireGuardPairingKeyFile(path string) agent.Option {
-	return configure(pairingKeyFile(path))
+// WithWireGuardPairing mixes the exit's A2A key into each client
+// handshake (wg.PresharedKey of key, the exit's own name and keyID: ""
+// for the owner's root key, else the machine key's id, which the exit
+// presents so a root client derives that machine's key), so a relay that
+// swaps in its own key, or reroutes a client to another exit, cannot
+// complete one. It has no effect without WithWireGuard or
+// WithWireGuardKeys.
+func WithWireGuardPairing(key []byte, name, keyID string) agent.Option {
+	return configure(pairing(key, name, keyID))
 }
 
 func (x *exit) setKeys(option, privKey string, allow []string) error {
@@ -151,6 +155,9 @@ func (x *exit) ConnectMetadata(md metadata.MD) {
 	}
 	if x.presharedKey != "" {
 		md.Set(wgwire.PairedHeader, "true")
+		if x.keyID != "" {
+			md.Set(wgwire.KeyIDHeader, x.keyID)
+		}
 	}
 }
 

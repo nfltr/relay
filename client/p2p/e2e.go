@@ -29,7 +29,8 @@ import (
 // offer and the
 // answer carry each side's ephemeral X25519 public key; the relay sees only
 // those. Both sides derive, with HKDF-SHA256 over the shared secret (salted
-// with the pairing key when there is one) and the transcript (session ID and
+// with the pair's A2A key bound to the responder's name, pairSalt, when
+// there is one) and the transcript (session ID and
 // both public keys), the keys for:
 //
 //   - the data stream on every path (Secure: AES-256-GCM records),
@@ -38,15 +39,17 @@ import (
 //   - the key confirmation exchanged right after the answer, and
 //   - the session fingerprint both CLIs print.
 //
-// Without a pairing key a relay that replaces both public keys sits in the
+// Without A2A keys a relay that replaces both public keys sits in the
 // middle unnoticed except by the fingerprint (different on the two
-// machines); with the same pairing key on both machines it cannot: the key
-// confirmation fails.
+// machines). With them it cannot, and it cannot reroute the call to
+// another responder: the salt is HMAC(K, responder service, key id), K the
+// machine end's key (or the root key between two root holders), so the
+// key confirmation fails (spec/proverif p2p_e2e.pv).
 
 // ErrE2EMismatch is a failed key confirmation: the two sides derived
 // different keys.
 var ErrE2EMismatch = errors.New("p2p: end-to-end key check failed: the two machines use different " +
-	"pairing keys (--e2ee-key-file / NFLTR_A2A_E2EE_KEY_FILE; set the same file on both, or none), " +
+	"A2A keys (--e2ee-key-file / NFLTR_A2A_E2EE_KEY_FILE: the root key, or a machine key of one of the two; set one on both, or none), " +
 	"or something between them (the relay) replaced the keys")
 
 // errE2ETampered is a record or sealed frame that does not authenticate.
@@ -56,31 +59,61 @@ var errE2ETampered = errors.New("p2p: end-to-end check failed: data was altered 
 type E2E struct {
 	sessionID string
 	initiator bool
-	pairing   []byte
+	responder string // the responder's name: the one the initiator called, the responder's own
+	pair      Pair   // nil: unpaired
 	priv      *ecdh.PrivateKey
 	prk, th   []byte // set by Complete
 }
 
+// Pair is an end's A2A key for p2p sessions (spec/proverif p2p_e2e.pv).
+// KeyID is its own key id, sent in its offer or answer ("" the owner's
+// root key). Key is the pair key and the pair key id with a peer that
+// presents peerKeyID: the root key between two root holders, else the
+// machine end's key (a root holder derives it); an error refuses the
+// session.
+type Pair interface {
+	KeyID() string
+	Key(peerKeyID string) (key []byte, pairKeyID string, err error)
+}
+
 // NewE2E starts this side's key exchange with a fresh ephemeral key.
-// pairing is the 32-byte pairing key (rpcclient.LoadA2AE2EEPairingKey), or
-// nil.
-func NewE2E(sessionID string, initiator bool, pairing []byte) (*E2E, error) {
+// responder names the responder (the initiator: the agent it calls; the
+// responder: its own name); pair is this end's A2A key, or nil (unpaired).
+func NewE2E(sessionID string, initiator bool, responder string, pair Pair) (*E2E, error) {
 	priv, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("p2p: end-to-end key: %w", err)
 	}
-	return &E2E{sessionID: sessionID, initiator: initiator, pairing: pairing, priv: priv}, nil
+	return &E2E{sessionID: sessionID, initiator: initiator, responder: responder, pair: pair, priv: priv}, nil
+}
+
+// KeyID is this end's A2A key id for its offer or answer ("" the root key,
+// or unpaired). allow:wrapper
+func (e *E2E) KeyID() string {
+	if e.pair == nil {
+		return ""
+	}
+	return e.pair.KeyID()
 }
 
 // PublicKey is this side's public key for the offer or answer (hex).
 // allow:wrapper
 func (e *E2E) PublicKey() string { return hex.EncodeToString(e.priv.PublicKey().Bytes()) }
 
-// Paired reports whether a pairing key authenticates the exchange.
-func (e *E2E) Paired() bool { return e.pairing != nil }
+// Paired reports whether A2A keys authenticate the exchange.
+func (e *E2E) Paired() bool { return e.pair != nil }
 
-// Complete derives the session keys from the peer's public key.
-func (e *E2E) Complete(peerKey string) error {
+// Complete derives the session keys from the peer's public key and key
+// id (its offer's or answer's KeyID).
+func (e *E2E) Complete(peerKey, peerKeyID string) error {
+	var salt []byte
+	if e.pair != nil {
+		key, kid, err := e.pair.Key(peerKeyID)
+		if err != nil {
+			return fmt.Errorf("p2p: end-to-end key: %w", err)
+		}
+		salt = pairSalt(key, e.responder, kid)
+	}
 	raw, err := hex.DecodeString(peerKey)
 	if err != nil || len(raw) != 32 {
 		return errors.New("p2p: the peer sent no valid end-to-end key")
@@ -103,7 +136,7 @@ func (e *E2E) Complete(peerKey string) error {
 	h.Write(ip)
 	h.Write(rp)
 	th := h.Sum(nil)
-	prk, err := hkdf.Extract(sha256.New, shared, e.pairing)
+	prk, err := hkdf.Extract(sha256.New, shared, salt)
 	if err != nil {
 		return err
 	}
@@ -120,6 +153,30 @@ func (e *E2E) key(label string, n int) []byte {
 		panic(err) // only for n > 255*32
 	}
 	return k
+}
+
+// pairSalt is the HKDF salt of a pair key: HMAC-SHA256(key, label 0 the
+// responder's service name 0 pair key id), so a relay that reroutes a call
+// to another responder holding the same key cannot complete it
+// (spec/proverif p2p_e2e.pv query 3; E2EEPROOF finding 5).
+func pairSalt(key []byte, responder, kid string) []byte {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte("nfltr-p2p-e2e-v2\x00" + serviceOf(responder) + "\x00" + kid))
+	return m.Sum(nil)
+}
+
+// serviceOf is an agent's service name: the part after an agent ref's
+// machine id ("m-" and 26 base32 characters, then "-"), or the name itself
+// (as wg.ExitService).
+func serviceOf(name string) string {
+	const machineIDLen = 28 // relay-core identity.MachineIDLen
+	if len(name) > machineIDLen+1 && strings.HasPrefix(name, "m-") && name[machineIDLen] == '-' {
+		return name[machineIDLen+1:]
+	}
+	if _, svc, dotted := strings.Cut(name, "."); dotted {
+		return svc // "<machine name>.<service>" (services hold no ".")
+	}
+	return name
 }
 
 func role(initiator bool) string {
@@ -161,10 +218,10 @@ func (e *E2E) DirectToken() []byte { return e.key("direct-tcp", 32) }
 // Answer (responder) completes the exchange with the offer's key and fills
 // the answer's key and key confirmation.
 func (e *E2E) Answer(offer, answer *SignalMsg) error {
-	if err := e.Complete(offer.Key); err != nil {
+	if err := e.Complete(offer.Key, offer.KeyID); err != nil {
 		return err
 	}
-	answer.Key, answer.Confirm = e.PublicKey(), e.Confirm()
+	answer.Key, answer.Confirm, answer.KeyID = e.PublicKey(), e.Confirm(), e.KeyID()
 	return nil
 }
 
@@ -172,7 +229,7 @@ func (e *E2E) Answer(offer, answer *SignalMsg) error {
 // its key confirmation, then sends this side's confirmation on stream, or a
 // hangup naming the failure (the responder prints it).
 func (e *E2E) FinishOffer(stream rpcclient.ClientStream, answer *SignalMsg) error {
-	err := e.Complete(answer.Key)
+	err := e.Complete(answer.Key, answer.KeyID)
 	if err == nil {
 		err = e.checkConfirm(answer.Confirm)
 	}

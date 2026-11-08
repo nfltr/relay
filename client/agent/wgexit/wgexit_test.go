@@ -10,7 +10,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/netip"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -27,13 +26,10 @@ import (
 // (and its pairing flag), and refuses a relay that answers without it rather
 // than starting a tunnel the relay would terminate.
 func TestWireGuardExitSpeaksOnlyEndToEnd(t *testing.T) {
-	pairing := t.TempDir() + "/pairing"
-	if err := os.WriteFile(pairing, []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	key := []byte("0123456789abcdef0123456789abcdef")
 	// The options compose in either order: the pairing key first here.
 	var ax agent.WireGuardExit
-	for _, set := range []func(*exit) error{pairingKeyFile(pairing), generateKeys([]string{"all"})} {
+	for _, set := range []func(*exit) error{pairing(key, "home", "m1.1"), generateKeys([]string{"all"})} {
 		var err error
 		if ax, err = update(ax, set); err != nil {
 			t.Fatal(err)
@@ -45,7 +41,7 @@ func TestWireGuardExitSpeaksOnlyEndToEnd(t *testing.T) {
 	}
 	md := metadata.New(nil)
 	x.ConnectMetadata(md)
-	for k, want := range map[string]string{wgwire.ProtocolHeader: wgwire.Protocol, "x-wg-exit-node": "true", wgwire.PairedHeader: "true", "x-wg-pubkey": x.publicKey} {
+	for k, want := range map[string]string{wgwire.ProtocolHeader: wgwire.Protocol, "x-wg-exit-node": "true", wgwire.PairedHeader: "true", wgwire.KeyIDHeader: "m1.1", "x-wg-pubkey": x.publicKey} {
 		if got := md.Get(k); len(got) != 1 || got[0] != want {
 			t.Errorf("metadata %s = %q; want %q", k, got, want)
 		}
@@ -64,11 +60,7 @@ func TestWireGuardExitSpeaksOnlyEndToEnd(t *testing.T) {
 // TestWireGuardPairingKeyAloneIsNoExit: a pairing key without a key pair
 // leaves the agent an ordinary one (it still moves between replicas).
 func TestWireGuardPairingKeyAloneIsNoExit(t *testing.T) {
-	pairing := t.TempDir() + "/pairing"
-	if err := os.WriteFile(pairing, []byte("0123456789abcdef0123456789abcdef"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	x, err := update(nil, pairingKeyFile(pairing))
+	x, err := update(nil, pairing([]byte("0123456789abcdef0123456789abcdef"), "home", ""))
 	if err != nil {
 		t.Fatal(err)
 	}

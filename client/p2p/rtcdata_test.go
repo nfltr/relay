@@ -140,7 +140,7 @@ func transfer(t *testing.T, src string, mode xferMode, duringSend func(conn *Dat
 			res.recvErr = err
 			return err
 		}
-		e, err := NewE2E(offer.Session, false, nil)
+		e, err := NewE2E(offer.Session, false, "home", nil)
 		if err != nil {
 			res.recvErr = err
 			return err
@@ -185,7 +185,7 @@ func transfer(t *testing.T, src string, mode xferMode, duringSend func(conn *Dat
 	if err != nil {
 		t.Fatal(err)
 	}
-	e, err := NewE2E("s1", true, nil)
+	e, err := NewE2E("s1", true, "home", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
