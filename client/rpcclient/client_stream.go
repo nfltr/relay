@@ -296,6 +296,11 @@ func (cs *clientStream) rehandshake() {
 		cs.failE2EE(err)
 		return
 	}
+	// The ack is the callee's take: confirm before sending again, so the
+	// call's end (CloseSend, waiting on it under wireMu) follows the frames
+	// below, and an answer to them cannot end the call first (CloseSend
+	// would then see an ended, unconfirmed call: io.EOF).
+	s.confirm()
 	for _, f := range sent {
 		ct, err := s.seal(f.t, f.body)
 		if err == nil {
@@ -313,7 +318,6 @@ func (cs *clientStream) rehandshake() {
 			return
 		}
 	}
-	s.confirm()
 }
 
 // sendControl sends one of the call's handshake frames (they carry the
