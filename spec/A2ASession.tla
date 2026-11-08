@@ -7,7 +7,8 @@
    forge the callee's answer to one (resumed and unknown are not sealed:
    a callee that lost the session has no key to seal with).
 
-   A keyed handshake makes a session at both ends (Handshake); a later call
+   A keyed handshake makes a session at both ends (Handshake, or Warm: a
+   handshake with no call); a later call
    takes the caller's next call number on it (Resume) and sends its request
    with the resume; the callee takes a number once, above its window's
    floor, and serves the call (Deliver); a resume it does not take it
@@ -98,6 +99,15 @@ Handshake(k) ==
     /\ st[k] = "idle" /\ cs.id = 0
     /\ HandshakeFor(k)
     /\ UNCHANGED <<hi, seen, net, used, res, fresh, retries, lost, revoked>>
+
+\* WarmA2AE2EE (lane A2AWARM): the handshake alone, with no call; the
+\* session at both ends, nothing served. A no-op with a session.
+Warm ==
+    /\ cs.id = 0 /\ ~revoked /\ nsess < MaxSess
+    /\ nsess' = nsess + 1
+    /\ cs' = [id |-> nsess + 1, next |-> 1]
+    /\ known' = known \cup {nsess + 1}
+    /\ UNCHANGED <<hi, seen, net, used, res, st, fresh, retries, served, lost, revoked, servedAfter>>
 
 \* NewStream on the session: call number next (counter-reset: always 1).
 Resume(k) ==
@@ -211,7 +221,7 @@ Revoke ==
 Next ==
     \/ \E k \in Calls : Handshake(k) \/ Resume(k) \/ Confirm(k) \/ Unknown(k) \/ Late(k)
     \/ \E m \in net : Deliver(m)
-    \/ Restart \/ ExpireCaller \/ \E s \in Ids : ExpireCallee(s)
+    \/ Warm \/ Restart \/ ExpireCaller \/ \E s \in Ids : ExpireCallee(s)
     \/ Revoke
 
 Spec == Init /\ [][Next]_vars

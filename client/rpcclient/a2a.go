@@ -493,6 +493,43 @@ func (a *Agent) Invoke(ctx context.Context, targetAgentID string, data []byte, o
 	return resp.Data, nil
 }
 
+// WarmA2AE2EE runs the A2A E2EE handshake with targetAgentID alone, with
+// no call: the session it leaves makes the next call to it resume, its
+// request sent before anything comes back (a2a_e2ee_session.go). Call it
+// when a peer process appears, so its first call costs no round trip more
+// than later ones. A request never rides the handshake: early data under
+// the key alone would be replayable (spec/proverif mutant early-data). A
+// no-op with a session already, or to the relay's own agent; without keys
+// ErrA2AE2EENoKey.
+func (a *Agent) WarmA2AE2EE(ctx context.Context, targetAgentID string) error {
+	kr := a.keyring()
+	if kr == nil {
+		return ErrA2AE2EENoKey
+	}
+	if targetAgentID == RelayAgentID || a.sessions.hasOut(targetAgentID, kr) {
+		return nil
+	}
+	cs := &clientStream{
+		agent:         a,
+		txnID:         uuid.New().String(),
+		targetAgentID: targetAgentID,
+		sourceAgentID: a.agentID,
+		responseCh:    make(chan *pb.TunnelFrame, 1),
+		done:          make(chan struct{}),
+		ended:         make(chan struct{}),
+		headerCh:      make(chan struct{}),
+		ctx:           ctx,
+	}
+	if dl, ok := ctx.Deadline(); ok {
+		cs.deadlineMs = dl.UnixMilli()
+	}
+	cs.e2ee = newA2AE2EEState(cs.txnID, a.ref, targetAgentID, kr)
+	cs.e2ee.warm = true
+	a.pending.Store(cs.txnID, cs)
+	defer a.pending.Delete(cs.txnID)
+	return cs.ensureE2EEHandshake()
+}
+
 // NewStream opens a bidirectional streaming call to targetAgentID. The returned
 // ClientStream mirrors grpc.ClientStream.
 func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...CallOption) (ClientStream, error) {
@@ -750,6 +787,11 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 		traceCL(a, a.handleE2EEInit(msg), txnID, msg)
 		clUnlock()
 		return
+	case a2aE2EEWarmMessageType: // a handshake with no call
+		clLock()
+		traceCL(a, a.handleE2EEWarm(msg), txnID, msg)
+		clUnlock()
+		return
 	case a2aE2EEResumeMessageType: // a call's start on a session
 		clLock()
 		traceCL(a, a.handleE2EEResume(msg), txnID, msg)
@@ -824,13 +866,17 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 
 		// Resolve Header() on first response so it doesn't block before Recv().
 		// In standard gRPC, Header() returns as soon as the server sends
-		// initial metadata; we mirror that by closing headerCh here.
-		cs.headerOnce.Do(func() {
-			if im := msg.GetRouting().GetInitialMetadata(); len(im) > 0 {
-				cs.header = MD(im)
-			}
-			close(cs.headerCh)
-		})
+		// initial metadata; we mirror that by closing headerCh here. An
+		// E2EE call's headers are sealed with its first response: Recv
+		// resolves them (recvE2EE).
+		if cs.e2ee == nil {
+			cs.headerOnce.Do(func() {
+				if im := msg.GetRouting().GetInitialMetadata(); len(im) > 0 {
+					cs.header = MD(im)
+				}
+				close(cs.headerCh)
+			})
+		}
 
 		switch err := cs.pushResponse(msg); {
 		case errors.Is(err, errPastWindow):
