@@ -68,30 +68,50 @@ const E2EEPolicyHeader = "X-Nfltr-E2EE-Policy"
 // bounds the whole exchange. It returns the relay's 101 header too
 // (AnswerHeader, E2EEPolicyHeader).
 func Upgrade(ctx context.Context, nc net.Conn, host, apiKey string, window int) (*Mux, http.Header, error) {
+	hdr, err := RequestUpgrade(nc, host, apiKey)
+	if err != nil {
+		return nil, nil, err
+	}
+	c, err := link.Client(ctx, nc, ClientConfig(window))
+	if err != nil {
+		return nil, nil, err
+	}
+	return NewMux(Wrap(c)), hdr, nil
+}
+
+// RequestUpgrade is Upgrade's HTTP exchange alone: the request and the
+// relay's 101, whose header it returns. nc is then ready for link.Client
+// with ClientConfig: a link.Pool's Dial (one data connection more when one
+// carries its most sessions) does this, the Pool the link. nc's deadline
+// bounds it.
+func RequestUpgrade(nc net.Conn, host, apiKey string) (http.Header, error) {
 	req := "GET " + UpgradePath + " HTTP/1.1\r\nHost: " + host +
 		"\r\nConnection: Upgrade\r\nUpgrade: " + UpgradeToken +
 		"\r\nX-API-Key: " + apiKey +
 		"\r\n" + agentwire.GenerationKey + ": " + strconv.Itoa(agentwire.Generation) + "\r\n\r\n"
 	if _, err := nc.Write([]byte(req)); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	br := bufio.NewReaderSize(nc, 512)
 	resp, err := http.ReadResponse(br, nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusSwitchingProtocols || !strings.EqualFold(resp.Header.Get("Upgrade"), UpgradeToken) {
-		return nil, nil, &NoUpgradeError{Status: resp.StatusCode}
+		return nil, &NoUpgradeError{Status: resp.StatusCode}
 	}
 	if br.Buffered() > 0 { // the server waits for the hello
-		return nil, nil, link.ErrFrame
+		return nil, link.ErrFrame
 	}
-	c, err := link.Client(ctx, nc, link.Config{Window: window, Auth: link.NoAuth})
-	if err != nil {
-		return nil, nil, err
-	}
-	return NewMux(Wrap(c)), resp.Header, nil
+	return resp.Header, nil
+}
+
+// ClientConfig is the link Config of a client's data connection after the
+// upgrade, window its side's window: no credential in the hello (the
+// request carried it).
+func ClientConfig(window int) link.Config {
+	return link.Config{Window: window, Auth: link.NoAuth}
 }
 
 // Accept answers an upgrade request on its hijacked connection nc with 101

@@ -245,3 +245,71 @@ func TestMuxDrain(t *testing.T) {
 		t.Fatalf("an open session at the drain's deadline: %v, want aborted drain deadline", err)
 	}
 }
+
+// TestPoolPastMaxSessions: a client's link.Pool over upgraded data
+// connections (RequestUpgrade in its Dial, ClientConfig its Link) opens
+// past one connection's MaxSessions on a second, and fails ErrFull only
+// with both full (link spec/Pool.tla FullOnlyAtMax; nfltr's tcp-connect).
+func TestPoolPastMaxSessions(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	var policies atomic.Value
+	go func() {
+		for {
+			nc, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { _ = nc.Close() })
+			go func() {
+				if _, err := http.ReadRequest(bufio.NewReader(nc)); err != nil {
+					return
+				}
+				if m, err := Accept(context.Background(), nc, testWindow, "allow"); err == nil {
+					_ = m.Serve(echoAccept)
+				}
+			}()
+		}
+	}()
+	p, err := link.NewPool(link.PoolConfig{
+		Max:  2,
+		Link: ClientConfig(testWindow),
+		Dial: func(ctx context.Context) (net.Conn, error) {
+			nc, err := (&net.Dialer{}).DialContext(ctx, "tcp", ln.Addr().String())
+			if err != nil {
+				return nil, err
+			}
+			hdr, err := RequestUpgrade(nc, "relay.test", "key")
+			if err != nil {
+				_ = nc.Close()
+				return nil, err
+			}
+			policies.Store(hdr.Get(E2EEPolicyHeader))
+			return nc, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	header, err := OpenHeader(&pb.TCPData{AgentId: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 2 * MaxSessions {
+		s, err := p.Open(context.Background(), header)
+		if err != nil {
+			t.Fatalf("session %d of %d on two connections: %v", i+1, 2*MaxSessions, err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+	}
+	if _, err := p.Open(context.Background(), header); !errors.Is(err, ErrFull) {
+		t.Fatalf("a session past both connections' MaxSessions: %v, want ErrFull", err)
+	}
+	if got, _ := policies.Load().(string); got != "allow" {
+		t.Fatalf("101's E2EE policy %q, want allow", got)
+	}
+}
