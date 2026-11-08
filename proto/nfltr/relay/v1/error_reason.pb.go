@@ -77,6 +77,12 @@ const (
 	// The call carries no Hello, or a protocol version the peer does not
 	// speak: the older side must update (session, 30-33).
 	ErrorReason_ERROR_REASON_PROTOCOL_UNSUPPORTED ErrorReason = 30
+	// The agent's connect names this relay's id (Welcome.relay_id) among the
+	// relays it already holds a link to: this endpoint is another endpoint of
+	// a relay the agent is on, and the connect claimed nothing. The agent
+	// keeps it as an alternate while its link to that relay is up. On gRPC
+	// it is AlreadyExists.
+	ErrorReason_ERROR_REASON_ALREADY_ATTACHED ErrorReason = 31
 	// The agent could not reach the target within its dial bound (a timeout,
 	// no route to it, an unknown host).
 	ErrorReason_ERROR_REASON_TARGET_UNREACHABLE ErrorReason = 40
@@ -126,6 +132,7 @@ var (
 		24: "ERROR_REASON_BLOB_NOT_FOUND",
 		25: "ERROR_REASON_BLOB_UPLOAD_GAP",
 		30: "ERROR_REASON_PROTOCOL_UNSUPPORTED",
+		31: "ERROR_REASON_ALREADY_ATTACHED",
 		40: "ERROR_REASON_TARGET_UNREACHABLE",
 		41: "ERROR_REASON_INVALID_ARGUMENT",
 		42: "ERROR_REASON_E2EE_REQUIRED",
@@ -154,6 +161,7 @@ var (
 		"ERROR_REASON_BLOB_NOT_FOUND":          24,
 		"ERROR_REASON_BLOB_UPLOAD_GAP":         25,
 		"ERROR_REASON_PROTOCOL_UNSUPPORTED":    30,
+		"ERROR_REASON_ALREADY_ATTACHED":        31,
 		"ERROR_REASON_TARGET_UNREACHABLE":      40,
 		"ERROR_REASON_INVALID_ARGUMENT":        41,
 		"ERROR_REASON_E2EE_REQUIRED":           42,
@@ -194,7 +202,7 @@ var File_nfltr_relay_v1_error_reason_proto protoreflect.FileDescriptor
 
 const file_nfltr_relay_v1_error_reason_proto_rawDesc = "" +
 	"\n" +
-	"!nfltr/relay/v1/error_reason.proto\x12\x0enfltr.relay.v1*\xe5\a\n" +
+	"!nfltr/relay/v1/error_reason.proto\x12\x0enfltr.relay.v1*\x88\b\n" +
 	"\vErrorReason\x12\x1c\n" +
 	"\x18ERROR_REASON_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cERROR_REASON_UNAUTHENTICATED\x10\x01\x12 \n" +
@@ -216,7 +224,8 @@ const file_nfltr_relay_v1_error_reason_proto_rawDesc = "" +
 	"\"ERROR_REASON_DIRECTORY_UNAVAILABLE\x10\x15\x12\x1f\n" +
 	"\x1bERROR_REASON_BLOB_NOT_FOUND\x10\x18\x12 \n" +
 	"\x1cERROR_REASON_BLOB_UPLOAD_GAP\x10\x19\x12%\n" +
-	"!ERROR_REASON_PROTOCOL_UNSUPPORTED\x10\x1e\x12#\n" +
+	"!ERROR_REASON_PROTOCOL_UNSUPPORTED\x10\x1e\x12!\n" +
+	"\x1dERROR_REASON_ALREADY_ATTACHED\x10\x1f\x12#\n" +
 	"\x1fERROR_REASON_TARGET_UNREACHABLE\x10(\x12!\n" +
 	"\x1dERROR_REASON_INVALID_ARGUMENT\x10)\x12\x1e\n" +
 	"\x1aERROR_REASON_E2EE_REQUIRED\x10*\x12!\n" +

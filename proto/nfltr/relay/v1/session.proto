@@ -42,6 +42,15 @@ message Welcome {
   uint32 protocol_version = 1;
   // The relay's release version.
   string relay_version = 2;
+  // Which relay this is: one value per directory, so every replica or
+  // region sharing one directory sends the same id and an independent
+  // relay its own (at most 64 bytes of [A-Za-z0-9._+()-]). An agent with
+  // several relays names the ids it holds links to in its connects
+  // ("x-nfltr-agent-relays"); an endpoint whose id is named refuses the
+  // connect with ERROR_REASON_ALREADY_ATTACHED before it claims anything
+  // (relay-core spec/Failover.tla). Empty: a relay without an id, which
+  // refuses no connect for it.
+  string relay_id = 3;
 }
 
 // SessionAnswer is what the opener of a TCP session reads first from the

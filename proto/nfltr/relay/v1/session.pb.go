@@ -158,7 +158,16 @@ type Welcome struct {
 	// The agent-wire protocol the relay uses on this call: 1.
 	ProtocolVersion uint32 `protobuf:"varint,1,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
 	// The relay's release version.
-	RelayVersion  string `protobuf:"bytes,2,opt,name=relay_version,json=relayVersion,proto3" json:"relay_version,omitempty"`
+	RelayVersion string `protobuf:"bytes,2,opt,name=relay_version,json=relayVersion,proto3" json:"relay_version,omitempty"`
+	// Which relay this is: one value per directory, so every replica or
+	// region sharing one directory sends the same id and an independent
+	// relay its own (at most 64 bytes of [A-Za-z0-9._+()-]). An agent with
+	// several relays names the ids it holds links to in its connects
+	// ("x-nfltr-agent-relays"); an endpoint whose id is named refuses the
+	// connect with ERROR_REASON_ALREADY_ATTACHED before it claims anything
+	// (relay-core spec/Failover.tla). Empty: a relay without an id, which
+	// refuses no connect for it.
+	RelayId       string `protobuf:"bytes,3,opt,name=relay_id,json=relayId,proto3" json:"relay_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -203,6 +212,13 @@ func (x *Welcome) GetProtocolVersion() uint32 {
 func (x *Welcome) GetRelayVersion() string {
 	if x != nil {
 		return x.RelayVersion
+	}
+	return ""
+}
+
+func (x *Welcome) GetRelayId() string {
+	if x != nil {
+		return x.RelayId
 	}
 	return ""
 }
@@ -281,10 +297,11 @@ const file_nfltr_relay_v1_session_proto_rawDesc = "" +
 	"\x05build\x18\x03 \x01(\tR\x05build\"f\n" +
 	"\x05Hello\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x122\n" +
-	"\x06client\x18\x02 \x01(\v2\x1a.nfltr.relay.v1.ClientInfoR\x06client\"Y\n" +
+	"\x06client\x18\x02 \x01(\v2\x1a.nfltr.relay.v1.ClientInfoR\x06client\"t\n" +
 	"\aWelcome\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12#\n" +
-	"\rrelay_version\x18\x02 \x01(\tR\frelayVersion\"^\n" +
+	"\rrelay_version\x18\x02 \x01(\tR\frelayVersion\x12\x19\n" +
+	"\brelay_id\x18\x03 \x01(\tR\arelayId\"^\n" +
 	"\rSessionAnswer\x123\n" +
 	"\x06reason\x18\x01 \x01(\x0e2\x1b.nfltr.relay.v1.ErrorReasonR\x06reason\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessageB\xb1\x01\n" +

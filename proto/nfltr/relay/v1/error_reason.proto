@@ -62,6 +62,12 @@ enum ErrorReason {
   // The call carries no Hello, or a protocol version the peer does not
   // speak: the older side must update (session, 30-33).
   ERROR_REASON_PROTOCOL_UNSUPPORTED = 30;
+  // The agent's connect names this relay's id (Welcome.relay_id) among the
+  // relays it already holds a link to: this endpoint is another endpoint of
+  // a relay the agent is on, and the connect claimed nothing. The agent
+  // keeps it as an alternate while its link to that relay is up. On gRPC
+  // it is AlreadyExists.
+  ERROR_REASON_ALREADY_ATTACHED = 31;
   // The agent could not reach the target within its dial bound (a timeout,
   // no route to it, an unknown host).
   ERROR_REASON_TARGET_UNREACHABLE = 40;

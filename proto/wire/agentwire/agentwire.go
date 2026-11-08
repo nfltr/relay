@@ -65,6 +65,38 @@ const AgentRefKey = "x-nfltr-agent-ref"
 // an agent whose heartbeats stop: the agent answers every one.
 const LinkLivenessKey = "x-relay-link-liveness"
 
+// AgentRelaysKey, in an agent's connect metadata (ConnectHTTP, AgentTunnel,
+// ConnectTCP), names the relays the agent already holds a link to, by
+// their Welcome relay_id, comma separated (AgentRelaysPairs). A relay whose
+// own id is named refuses the connect with ERROR_REASON_ALREADY_ATTACHED
+// before it claims anything (NamesRelay; relay-core spec/Failover.tla).
+const AgentRelaysKey = "x-nfltr-agent-relays"
+
+// AgentRelaysPairs is the key/value pair naming ids under AgentRelaysKey;
+// none for no ids.
+func AgentRelaysPairs(ids ...string) []string {
+	if len(ids) == 0 {
+		return nil
+	}
+	return []string{AgentRelaysKey, strings.Join(ids, ",")}
+}
+
+// NamesRelay reports whether the AgentRelaysKey values name id. An empty
+// id (a relay without one) is never named.
+func NamesRelay(vals []string, id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, v := range vals {
+		for named := range strings.SplitSeq(v, ",") {
+			if strings.TrimSpace(named) == id {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // HeartbeatPairs is the key/value pair carrying interval under key
 // (HeartbeatKey or HeartbeatAskKey); none for no interval.
 func HeartbeatPairs(key string, interval time.Duration) []string {
@@ -204,10 +236,30 @@ func ParseHello(md map[string][]string) (Client, error) {
 	return Client{Name: clientField(ci.GetName()), Version: clientField(ci.GetVersion()), Build: clientField(ci.GetBuild())}, nil
 }
 
-// WelcomePairs is the relay's Welcome as response header key/value pairs.
-func WelcomePairs(relayVersion string) []string {
-	b, _ := proto.Marshal(&relayv1.Welcome{ProtocolVersion: ProtocolVersion, RelayVersion: relayVersion})
+// WelcomePairs is the Welcome of a relay without a relay id as response
+// header key/value pairs (WelcomeOf).
+func WelcomePairs(relayVersion string) []string { return WelcomeOf(relayVersion, "") }
+
+// WelcomeOf is the relay's Welcome, naming its relay id (Welcome.relay_id;
+// "": none), as response header key/value pairs.
+func WelcomeOf(relayVersion, relayID string) []string {
+	b, _ := proto.Marshal(&relayv1.Welcome{ProtocolVersion: ProtocolVersion, RelayVersion: relayVersion, RelayId: relayID})
 	return []string{WelcomeKey, string(b)}
+}
+
+// WelcomeRelayID is the relay id the Welcome in response headers names:
+// "" without a v1 Welcome, without an id, or with one that is not at most
+// MaxClientField bytes of [A-Za-z0-9._+()-].
+func WelcomeRelayID(md map[string][]string) string {
+	vals := md[WelcomeKey]
+	var w relayv1.Welcome
+	if len(vals) == 0 || proto.Unmarshal([]byte(vals[0]), &w) != nil || w.GetProtocolVersion() != ProtocolVersion {
+		return ""
+	}
+	if id := clientField(w.GetRelayId()); id != "invalid" {
+		return id
+	}
+	return ""
 }
 
 // HasWelcome reports whether response headers carry a protocol v1 Welcome.

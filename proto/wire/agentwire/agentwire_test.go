@@ -90,3 +90,46 @@ func TestHeartbeatRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// The Welcome names the relay id; an absent, oversized or unsafe one reads
+// as none.
+func TestWelcomeRelayID(t *testing.T) {
+	for id, want := range map[string]string{"": "", "R1": "R1", strings.Repeat("a", MaxClientField+1): "", "a,b": ""} {
+		w := WelcomeOf("v1", id)
+		md := map[string][]string{w[0]: {w[1]}}
+		if got := WelcomeRelayID(md); got != want || !HasWelcome(md) {
+			t.Errorf("WelcomeRelayID(%q) = %q, want %q", id, got, want)
+		}
+	}
+	if got := WelcomeRelayID(nil); got != "" {
+		t.Errorf("no Welcome: %q", got)
+	}
+	w := WelcomePairs("v1")
+	if got := WelcomeRelayID(map[string][]string{w[0]: {w[1]}}); got != "" {
+		t.Errorf("WelcomePairs names %q", got)
+	}
+}
+
+// A connect names the relays the agent holds; a relay is named only by
+// its exact id, and a relay without one never.
+func TestAgentRelaysNamesRelay(t *testing.T) {
+	if AgentRelaysPairs() != nil {
+		t.Fatal("no ids: want no pair")
+	}
+	kv := AgentRelaysPairs("A", "B2")
+	if kv[0] != AgentRelaysKey {
+		t.Fatalf("key %q", kv[0])
+	}
+	vals := []string{kv[1]}
+	for id, want := range map[string]bool{"A": true, "B2": true, "B": false, "": false, "A,B2": false} {
+		if got := NamesRelay(vals, id); got != want {
+			t.Errorf("NamesRelay(%q, %q) = %v, want %v", vals, id, got, want)
+		}
+	}
+	if !NamesRelay([]string{"x", " A , C"}, "C") {
+		t.Error("second value, spaces")
+	}
+	if NamesRelay(nil, "A") || NamesRelay([]string{""}, "") {
+		t.Error("nothing named")
+	}
+}
