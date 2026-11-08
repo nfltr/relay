@@ -4,6 +4,7 @@
 package rpcclient
 
 import (
+	"crypto/tls"
 	"time"
 
 	"github.com/nfltr/relay/proto/pb"
@@ -35,6 +36,7 @@ type dialOptions struct {
 	clientCert        string                      // client cert file for mTLS
 	clientKey         string                      // client key file for mTLS
 	caFile            string                      // CA file for mTLS server verification
+	clientTLS         *tls.Config                 // TLS with the caller's client certificate (WithClientTLS)
 	heartbeatInterval time.Duration               // optional: heartbeat send interval (0 = use default agentHeartbeatInterval)
 	keepalive         *keepalive.ClientParameters // optional: gRPC transport keepalive for long-idle connections
 	liveness          agentwire.Liveness          // optional: zero = agentwire.LivenessDefault
@@ -124,6 +126,17 @@ func WithClientCert(certFile, keyFile, caFile string) DialOption {
 		o.clientKey = keyFile
 		o.caFile = caFile
 		o.tlsEnable = true // mTLS implies TLS
+	}
+}
+
+// WithClientTLS dials over TLS with cfg, which presents the agent's client
+// certificate (a machine certificate the caller renews: GetClientCertificate
+// is asked at each handshake) and verifies the relay. The certificate
+// authenticates the agent; with WithAPIKey as well the relay takes the key.
+func WithClientTLS(cfg *tls.Config) DialOption {
+	return func(o *dialOptions) {
+		o.clientTLS = cfg
+		o.tlsEnable = true
 	}
 }
 

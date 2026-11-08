@@ -272,13 +272,16 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 	grpcClientOpts := []grpcclient.Option{grpcclient.WithKeepalive(keepaliveParams)}
 
 	// mTLS: use client certificate authentication
-	if do.clientCert != "" {
+	switch {
+	case do.clientTLS != nil:
+		conn, err = grpcclient.NewMTLSClientConn(host, port, do.clientTLS, grpcClientOpts...)
+	case do.clientCert != "":
 		tlsCfg, tlsErr := grpcclient.NewMTLSClientConfig(do.clientCert, do.clientKey, do.caFile)
 		if tlsErr != nil {
 			return nil, fmt.Errorf("rpcclient: mTLS config: %w", tlsErr)
 		}
 		conn, err = grpcclient.NewMTLSClientConn(host, port, tlsCfg, grpcClientOpts...)
-	} else {
+	default:
 		conn, err = grpcclient.NewClientConn(do.tlsEnable, host, port, grpcClientOpts...)
 	}
 	if err != nil {
@@ -292,7 +295,7 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 		// Preferred: server-generated API key. The server derives the AgentID
 		// from its key store — the agent cannot forge its own identity.
 		streamCtx = grpcmd.NewOutgoingContext(ctx, grpcmd.Pairs("x-api-key", do.apiKey))
-	case do.clientCert != "":
+	case do.clientCert != "" || do.clientTLS != nil:
 		// mTLS: the TLS handshake already authenticates the agent.
 		streamCtx = ctx
 	default:
