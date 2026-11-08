@@ -165,7 +165,12 @@ cltraces() {
 # recorder; every transaction of their CallLifecycle traces checked.
 clrun() {
 	mkdir -p "$work/cltraces"
-	(cd client && RELAYTRACE=$work/cltraces go test -tags relaytrace -count="$2" -run "$1" ./rpcclient/) >"$work/cltest.out" 2>&1 || {
+	# CL_TRACE_SKIP: tests whose hostile relay loses a call's first frame
+	# (T1): CallLifecycle.tla's network loses nothing (the relay delivers
+	# in order), so their traces are outside the model; what they check is
+	# spec/proverif/a2a_machine.pv's (queries 16-18) and their own asserts.
+	(cd client && RELAYTRACE=$work/cltraces go test -tags relaytrace -count="$2" -run "$1" \
+		-skip "${CL_TRACE_SKIP:-^(TestA2AE2EERefusesDroppedFrame|TestA2AE2EELateResumeAfterRetryRefused)$}" ./rpcclient/) >"$work/cltest.out" 2>&1 || {
 		cat "$work/cltest.out"
 		exit 1
 	}

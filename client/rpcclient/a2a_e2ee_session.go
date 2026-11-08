@@ -30,6 +30,10 @@ const (
 	a2aE2EEResumeMessageType  = "a2a-e2ee-v2-resume"
 	a2aE2EEResumedMessageType = "a2a-e2ee-v2-resumed"
 	a2aE2EEUnknownMessageType = "a2a-e2ee-v2-unknown"
+	// a2aE2EEWarmMessageType is an init with no call (WarmA2AE2EE): the
+	// callee answers it with its ack and keeps the session, starting no
+	// handler; both frames end the route (Eom).
+	a2aE2EEWarmMessageType = "a2a-e2ee-v2-warm"
 
 	a2aSessionLabel   = "nfltr-a2a-e2ee-v2-session"
 	a2aSessionIDLabel = "nfltr-a2a-e2ee-v2-sid"
@@ -216,6 +220,15 @@ func (ss *a2aSessions) putOut(callee string, s *a2aSession) {
 		evictA2ASession(ss.out, ss.clock(), a2aSessionIdle)
 	}
 	ss.out[callee] = s
+}
+
+// hasOut reports whether the caller keeps a session with callee whose key
+// still holds.
+func (ss *a2aSessions) hasOut(callee string, kr A2AE2EEKeyring) bool {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	s := ss.out[callee]
+	return s != nil && !s.expired(ss.clock(), a2aSessionIdle) && s.next < a2aSessionMaxCalls && s.keyHolds(kr, callee)
 }
 
 // putIn keeps a callee's session.

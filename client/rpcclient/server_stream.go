@@ -130,12 +130,18 @@ func (ss *serverStream) Recv() ([]byte, error) {
 func (ss *serverStream) Send(data []byte) error {
 	ss.mu.Lock()
 	md := &pb.RoutingInfo{AgentId: ss.agent.agentID}
+	t, body := a2aFrameData, data
 	if !ss.headerSent {
 		header := ss.header
-		if ss.e2ee != nil {
-			header = withA2AE2EEHeaders(header)
-		}
-		if header != nil {
+		switch {
+		case ss.e2ee != nil: // sealed with the first data: the relay sees no header
+			var err error
+			t = a2aFrameHeader
+			if body, err = a2aHeaderBody(withA2AE2EEHeaders(header), data); err != nil {
+				ss.mu.Unlock()
+				return fmt.Errorf("rpcclient: encode response headers: %w", err)
+			}
+		case header != nil:
 			md.InitialMetadata = map[string]string(header)
 		}
 		ss.headerSent = true
@@ -151,7 +157,7 @@ func (ss *serverStream) Send(data []byte) error {
 		return ss.agent.connectionClosed()
 	}
 	if ss.e2ee != nil { // sealed after its credit: a sealed frame is sent
-		ciphertext, err := ss.e2ee.seal(a2aFrameData, data)
+		ciphertext, err := ss.e2ee.seal(t, body)
 		if err != nil {
 			return fmt.Errorf("rpcclient: encrypt response payload: %w", err)
 		}

@@ -88,6 +88,11 @@ func TestClientStream_SaturatedStreamDoesNotBlockOtherTransactions(t *testing.T)
 	}
 	stalledTxn := stalled.(*clientStream).txnID
 	healthyTxn := healthy.(*clientStream).txnID
+	// The call reached its target (spec CallLifecycle.tla Cancel: sent > 0),
+	// so the refusal below tells the target to stop.
+	if err := stalled.Send([]byte("req")); err != nil {
+		t.Fatalf("Send(stalled): %v", err)
+	}
 
 	for i := range ResponseWindow + 1 { // the last one past the window
 		ms.recvCh <- &pb.TunnelFrame{

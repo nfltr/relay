@@ -495,3 +495,63 @@ const (
 	vecResumed0       = "b58f8f08a0740fa0826a0f6c7b82970e75347bcc9aa7"
 	vecResumedCallee0 = "93d1ae9be1c5cae92a4b5e70483290c8649227636fda"
 )
+
+// E2EEPROOF2: a callee's response headers are sealed with its first data
+// frame (a2aFrameHeader): headers the relay adds in the clear are ignored,
+// and the callee's never cross it in the clear.
+func TestA2AE2EEResponseHeadersAreTheCallees(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var clear []map[string]string
+	var mu sync.Mutex
+	caller, _ := hostilePair(t, ctx, e2eeAgent("hub"), e2eeAgent("node-1"), func(fromA bool, f *pb.TunnelFrame) (back, on []*pb.TunnelFrame) {
+		if !fromA && f.GetMessageType() == "a2a-response" {
+			mu.Lock()
+			clear = append(clear, f.GetRouting().GetInitialMetadata())
+			mu.Unlock()
+			f = cloneFrame(f)
+			f.Routing.InitialMetadata = map[string]string{"x-forged": "relay"}
+		}
+		return nil, one(f)
+	})
+	cs, err := caller.NewStream(ctx, "node-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cs.Send([]byte("q")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cs.Recv(); err != nil {
+		t.Fatal(err)
+	}
+	hdr, err := cs.Header()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hdr["x-forged"] != "" || hdr[a2aE2EEHeaderKey] != "true" {
+		t.Fatalf("headers = %v: want the callee's sealed ones, never the relay's", hdr)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, md := range clear {
+		if len(md) != 0 {
+			t.Fatalf("an E2EE response carried headers in the clear: %v", md)
+		}
+	}
+}
+
+func TestA2AHeaderBodyRoundTrip(t *testing.T) {
+	body, err := a2aHeaderBody(MD{"k": "v"}, []byte("data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	md, data, err := parseA2AHeaderBody(body)
+	if err != nil || md["k"] != "v" || string(data) != "data" {
+		t.Fatalf("round trip = %v %q %v", md, data, err)
+	}
+	for _, bad := range [][]byte{nil, {0x80}, {5, '{'}, {2, 'x', 'y'}} {
+		if _, _, err := parseA2AHeaderBody(bad); err == nil {
+			t.Fatalf("malformed %q accepted", bad)
+		}
+	}
+}

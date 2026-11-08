@@ -11,6 +11,7 @@ package rpcclient
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +19,8 @@ import (
 	"time"
 
 	"github.com/nfltr/relay/proto/pb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // frameLog counts the frames a relay saw, by message type and side.
@@ -650,5 +653,67 @@ func TestA2AE2EERetryChecks(t *testing.T) {
 		if err := ss.retry(tc.msg, tc.caller, tc.kid); (err == nil) != tc.ok {
 			t.Errorf("%s: retry = %v, want ok %v", tc.name, err, tc.ok)
 		}
+	}
+}
+
+// A2AWARM: a warm handshakes with no call (the callee runs no handler),
+// and the first call after it resumes; a second warm is a no-op.
+func TestA2AE2EEWarmLeavesASessionAndNoCall(t *testing.T) {
+	store := newTestStore(t, "m1")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var log frameLog
+	caller, rec := hostilePair(t, ctx, keyedAgent("hub", store), keyedAgent("m1-node", store.machine("m1")), countingRelay(&log, nil))
+	for range 2 {
+		if err := caller.WarmA2AE2EE(ctx, "m1-node"); err != nil {
+			t.Fatalf("warm: %v", err)
+		}
+	}
+	if n := len(rec.requests()); n != 0 {
+		t.Fatalf("a warm ran the handler: %d requests", n)
+	}
+	if got, err := invokeCtx(t, caller, "m1-node", "q"); err != nil || string(got) != "echo:q" {
+		t.Fatalf("call after the warm = %q, %v", got, err)
+	}
+	if w, n, r := log.count(true, a2aE2EEWarmMessageType), log.count(true, a2aE2EEInitMessageType), log.count(true, a2aE2EEResumeMessageType); w != 1 || n != 0 || r != 1 {
+		t.Fatalf("warms %d, inits %d, resumes %d; want 1, 0 and 1", w, n, r)
+	}
+	if err := NewAgent("plain", newMockStream(ctx)).WarmA2AE2EE(ctx, "m1-node"); !errors.Is(err, ErrA2AE2EENoKey) {
+		t.Fatalf("warm without keys: %v", err)
+	}
+}
+
+// Message 1 says whether it is a warm: a relay that retags a warm as a
+// call's init, or an init as a warm, is refused by the callee before any
+// handler or session (model a2a_machine.pv, mutant warm-untyped).
+func TestA2AE2EEWarmRetagRefused(t *testing.T) {
+	store := newTestStore(t, "m1")
+	for _, tc := range []struct{ from, to string }{
+		{a2aE2EEWarmMessageType, a2aE2EEInitMessageType},
+		{a2aE2EEInitMessageType, a2aE2EEWarmMessageType},
+	} {
+		t.Run(tc.from, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			caller, rec := hostilePair(t, ctx, keyedAgent("hub", store), keyedAgent("m1-node", store.machine("m1")),
+				func(fromA bool, f *pb.TunnelFrame) ([]*pb.TunnelFrame, []*pb.TunnelFrame) {
+					if fromA && f.GetMessageType() == tc.from {
+						f.MessageType = tc.to
+					}
+					return nil, one(f)
+				})
+			var err error
+			if tc.from == a2aE2EEWarmMessageType {
+				err = caller.WarmA2AE2EE(ctx, "m1-node")
+			} else {
+				_, err = invokeCtx(t, caller, "m1-node", "q")
+			}
+			if status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "retagged") {
+				t.Fatalf("retagged %s: %v", tc.from, err)
+			}
+			if got := rec.requests(); len(got) != 0 {
+				t.Fatalf("served %q", got)
+			}
+		})
 	}
 }

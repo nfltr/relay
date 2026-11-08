@@ -56,7 +56,11 @@ compromised relay holds its end of it. So the variants are: `-` both
 relays (colluding), `honestY` X alone, `honestX` Y alone,
 `honestX,honestY` the link alone.
 
-- `a2a_machine.pv` (v2) is checked in all four: every query holds.
+- `a2a_machine.pv` (v2) is checked in all four: every query holds. With
+  sessions (`sess`) ProVerif does not terminate on `honestX,honestY`;
+  that variant's `T` results follow from `sess,honestX` (or
+  `sess,honestY`) by the monotonicity below, and its witnesses are
+  checked in the others, so it is not run.
 - `a2a_today.pv`: ProVerif does not terminate on its private-channel
   variants (replicated frame loops behind private forwarders). Its `T`
   results hold for them anyway: making a channel private only takes
@@ -103,11 +107,11 @@ root key, so every machine key: forward secrecy of all earlier calls):
 | # | query | v2 | fails under mutant |
 |---|---|---|---|
 | 1-4 | secrecy of both directions, R calling B and B calling R, with C and D leaked and the relays' CA the attacker's | T | `drop-psk`, `relay-cert`; 1 also `no-target-check` |
-| 5 | R as caller agrees with the target it called (txn, keys, key id), injective | T | `drop-psk`, `relay-cert`, `drop-txn`, `no-target-check` |
+| 5 | R as caller agrees with the target it called (txn, keys, key id), injective | T | `drop-psk`, `relay-cert`, `drop-txn`, `no-target-check`, `warm-untyped` (sessions) |
 | 6 | R as callee: the caller it answered as machine n is n, on that txn and key (non-injective: msg1 replays, and gets no frame accepted, 8) | T | `drop-psk`, `relay-cert`, `drop-txn` |
-| 7 | each request B handles was sent once by R | T | `drop-psk`, `relay-cert`, `drop-txn`, `drop-role` (F6) |
+| 7 | each request B handles was sent once by R | T | `drop-psk`, `relay-cert`, `drop-txn`, `drop-role` (F6), `early-data` (A2AWARM) |
 | 8 | each request R handles under B's key id was sent once by B | T | `drop-psk`, `relay-cert`, `drop-txn` |
-| 9 | no reflection | T | `drop-psk`, `relay-cert`, `drop-txn`, `no-target-check`, `one-key` (F1) |
+| 9 | no reflection | T | `drop-psk`, `relay-cert`, `drop-txn`, `no-target-check`; `one-key` (F1) now only `?` on 8 and 17: the response's first frame is a HEADER, which no request frame is, so in the model (one frame each way) a reflected frame is refused by its type too; the code's later DATA frames are what the split keys keep apart |
 | 10 | the end of a stream is the sender's | T | `drop-psk`, `relay-cert`, `drop-txn`, `clear-end` (F2) |
 | 11 | no frame of revoked D after the revoke | T | `skip-revoke` |
 | 12 | no handshake of revoked D after the revoke | T | `skip-revoke` |
@@ -117,6 +121,7 @@ root key, so every machine key: forward secrecy of all earlier calls):
 | 16-18 | 7, 8, 10 for every call, handshake or resumed (non-injective): no cross-call splice or replay into another call | T | `txn-unbound` (16-18), `drop-psk`, `relay-cert`, `drop-txn`, `drop-role` (16, F6) |
 | 19-21 | witnesses: R gets B's response, B's request, B gets R's end, on a handshake | F (reachable) | |
 | 22-24 | the same on a resumed call | F (reachable) | |
+| 25 | response headers are the callee's: the headers R takes on call t are the machine's on t (sealed with its first response, frame type HEADER) | T | `clear-header`, and the mutants that break the frames' keys |
 
 Sessions (lane A2ASESS, flag `sess`: the lines without it are wire v2
 with a handshake every call, where 13-18 hold trivially and the resumed
@@ -134,6 +139,19 @@ the window, `TestA2AE2EECallKeysUnique` 15, `TestA2AE2EERevokeEndsSession` 13,
 wire vectors gain the session secret, its id, a resume and its first frames.
 The retry after an unknown (its message 1 names the resume it retries) is
 a state property, `spec/A2ASession.tla` (finding S1 there).
+
+Warm (lane A2AWARM, `Agent.WarmA2AE2EE`, `handleE2EEWarm`): a handshake
+with no call, so a peer's first call resumes (no round trip before its
+request). The model runs warms beside calls (`RootWarm`, `MachWarm`,
+with `sess`); every query holds. Message 1's payload says it is a warm
+(`a2aWarmMark`; a call's is empty or a retry), so its AEAD binds the type:
+a relay that retags a warm as an init, or an init as a warm, is refused
+(mutant `warm-untyped`, the warm's payload empty: R accepts a call the
+machine took as a warm, and 5 fails; `TestA2AE2EEWarmRetagRefused`). A request
+never rides the handshake (no 0-RTT): message 1's payload is sealed
+under the psk and the initiator's e alone, so a relay replays it to the
+machine, which opens it again (mutant `early-data`: the request in
+message 1 and served on receipt fails 7, injective delivery).
 
 `expect.txt` lists every result exactly, mutants included (a mutant
 also fails queries it does not target, e.g. `drop-txn` breaks agreement

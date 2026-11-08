@@ -17,6 +17,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -54,6 +55,7 @@ const (
 	a2aE2EEPskLabel = "nfltr-a2a-e2ee-v2-psk" // psk = HMAC(K_kid, label)
 
 	a2aE2EEKeyedMsg1Len      = 32 + 16 // message 1 (NNpsk0: psk, e): an X25519 key and the empty payload's tag
+	a2aWarmMark              = "W"     // a warm's message 1 payload (a call's is empty or a retry): its AEAD binds the type
 	a2aE2EEPairingMinSecret  = 32
 	a2aE2EEPairingRemedy     = "set the same --e2ee-key-file / NFLTR_A2A_E2EE_KEY_FILE on both ends"
 	a2aE2EEPairingKeyContext = "nfltr-a2a-e2ee-pairing-v1"
@@ -66,7 +68,33 @@ const (
 	a2aFrameData  byte = 1
 	a2aFrameEnd   byte = 2
 	a2aFrameError byte = 3 // body: 4-byte big-endian gRPC code, then the detail
+	// a2aFrameHeader is a callee's first data frame: its response headers
+	// (SetHeader) sealed with the data, so they are the callee's. Body:
+	// uvarint length, the headers as JSON, then the data.
+	a2aFrameHeader byte = 4
 )
+
+// a2aHeaderBody is the body of a header frame: md, then data.
+func a2aHeaderBody(md MD, data []byte) ([]byte, error) {
+	enc, err := json.Marshal(md)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(binary.AppendUvarint(nil, uint64(len(enc))), enc...), data...), nil
+}
+
+// parseA2AHeaderBody is a2aHeaderBody's inverse.
+func parseA2AHeaderBody(body []byte) (MD, []byte, error) {
+	n, w := binary.Uvarint(body)
+	if w <= 0 || n > uint64(len(body)-w) { // #nosec G115 -- 0 < w <= len(body)
+		return nil, nil, errors.New("rpcclient: a malformed A2A E2EE header frame")
+	}
+	var md MD
+	if err := json.Unmarshal(body[w:w+int(n)], &md); err != nil { // #nosec G115 -- n <= len(body)
+		return nil, nil, fmt.Errorf("rpcclient: a malformed A2A E2EE header frame: %w", err)
+	}
+	return md, body[w+int(n):], nil // #nosec G115 -- n <= len(body)
+}
 
 var a2aE2EESuite = noise.NewCipherSuite(noise.DH25519, noise.CipherAESGCM, noise.HashSHA256)
 
@@ -219,6 +247,7 @@ type a2aE2EEState struct {
 	session     *a2aSession
 	resume      []byte
 	retry       []byte // caller: the retry its handshake after an unknown names; callee: the one an init named
+	warm        bool   // a handshake with no call (WarmA2AE2EE): the caller's, or the callee's from message 1
 	confirmed   chan struct{}
 	sent        []a2aSentFrame
 }
@@ -278,7 +307,10 @@ func (s *a2aE2EEState) initMessage() ([]byte, error) {
 		return nil, fmt.Errorf("rpcclient: A2A E2EE handshake: %w", err)
 	}
 	var payload []byte
-	if s.resume == nil {
+	switch {
+	case s.warm:
+		payload = []byte(a2aWarmMark) // model RootWarm: a relay cannot retag it as a call
+	case s.resume == nil:
 		payload = s.retry // a retry (restart); nil on a first handshake
 	}
 	msg1, _, _, err := hs.WriteMessage(nil, payload)
@@ -314,8 +346,12 @@ func (s *a2aE2EEState) ensureClientHandshake(ctx context.Context, transportDone 
 			s.fail(err)
 			return err
 		}
+		initType := a2aE2EEInitMessageType
+		if s.warm {
+			initType = a2aE2EEWarmMessageType
+		}
 		s.mu.Unlock()
-		if err := send(a2aE2EEInitMessageType, payload); err != nil {
+		if err := send(initType, payload); err != nil {
 			wrapped := fmt.Errorf("rpcclient: send A2A E2EE init: %w", err)
 			s.fail(wrapped)
 			return wrapped
@@ -396,7 +432,7 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 	if callee != own {
 		return nil, nil, fmt.Errorf("rpcclient: an A2A E2EE call for %s reached %s (the relay routed it here): %w", callee, own, errA2AE2EEPairing)
 	}
-	if len(msg1) != a2aE2EEKeyedMsg1Len && len(msg1) != a2aE2EEKeyedMsg1Len+a2aRetryLen {
+	if n := len(msg1) - a2aE2EEKeyedMsg1Len; n != 0 && n != len(a2aWarmMark) && n != a2aRetryLen {
 		return nil, nil, errors.New("rpcclient: malformed A2A E2EE init")
 	}
 	key, err := a2aE2EEAnswerKey(kr, caller, kid)
@@ -408,7 +444,7 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 	if err != nil {
 		return nil, nil, fmt.Errorf("rpcclient: A2A E2EE handshake: %w", err)
 	}
-	retry, _, _, err := hs.ReadMessage(nil, msg1)
+	payload, _, _, err := hs.ReadMessage(nil, msg1)
 	if err != nil {
 		return nil, nil, fmt.Errorf("rpcclient: peer's A2A E2EE key failed pairing-key verification (a different key, or a relay in the middle); %s: %w", a2aE2EEPairingRemedy, errA2AE2EEPairing)
 	}
@@ -417,8 +453,12 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 		return nil, nil, fmt.Errorf("rpcclient: A2A E2EE handshake: %w", err)
 	}
 	s := &a2aE2EEState{started: true, ready: true, txnID: txnID, caller: caller, callee: callee, kr: kr, kid: kid, send: toPeer, recv: fromPeer}
-	if len(retry) > 0 {
-		s.retry = retry
+	switch string(payload) {
+	case "":
+	case a2aWarmMark:
+		s.warm = true
+	default:
+		s.retry = payload
 	}
 	s.established = newA2ASession(fromPeer, toPeer, caller, callee, kid, sha256.Sum256(key), time.Now())
 	return s, ack, nil

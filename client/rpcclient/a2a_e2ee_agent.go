@@ -30,10 +30,41 @@ func (a *Agent) keyring() A2AE2EEKeyring {
 }
 
 func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
+	state, ack, ev := a.answerE2EEInit(msg, false)
+	if state == nil {
+		return ev
+	}
+	return a.startE2EECall(msg, state, a2aE2EEAckMessageType, ack)
+}
+
+// handleE2EEWarm answers a warm (WarmA2AE2EE): the handshake's ack, which
+// ends the route, and the session; no handler starts. Message 1 says it is
+// a warm (a2aWarmMark), so a call retagged as a warm, or back, is refused.
+func (a *Agent) handleE2EEWarm(msg *pb.TunnelFrame) string {
+	state, ack, ev := a.answerE2EEInit(msg, true)
+	if state == nil {
+		return ev
+	}
+	if err := a.sendFrame(&pb.TunnelFrame{
+		Payload:       ack,
+		MessageType:   a2aE2EEAckMessageType,
+		TransactionId: msg.GetTransactionId(),
+		Timestamps:    &pb.Timestamps{ResponseAtAgent: time.Now().UnixMilli()},
+		Routing:       &pb.RoutingInfo{AgentId: a.agentID},
+		Eom:           true,
+	}); err != nil {
+		log.Printf("rpcclient: failed to answer an A2A E2EE warm for txn %s: %v", msg.GetTransactionId(), err)
+	}
+	return "Refuse" // the start answered with an end: no call
+}
+
+// answerE2EEInit checks an init (or a warm) and keeps its session: the
+// state with its ack, or nil and the trace event of its refusal.
+func (a *Agent) answerE2EEInit(msg *pb.TunnelFrame, warm bool) (*a2aE2EEState, []byte, string) {
 	if a.keyring() == nil {
 		a.sendA2AControlError(msg.GetTransactionId(), codes.FailedPrecondition,
 			"target agent does not serve A2A E2EE: it has no A2A E2EE key (A2A E2EE is keyed only)")
-		return "Refuse"
+		return nil, nil, "Refuse"
 	}
 
 	a.handlerMu.RLock()
@@ -42,13 +73,13 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
 	if h == nil {
 		a.sendA2AControlError(msg.GetTransactionId(), codes.Unimplemented,
 			"target agent has no A2A handler registered")
-		return "Refuse"
+		return nil, nil, "Refuse"
 	}
 
 	// A call this agent already serves is never started a second time.
 	if _, serving := a.incoming.Load(msg.GetTransactionId()); serving {
 		log.Printf("rpcclient: dropped an A2A E2EE init for txn %s, a call this agent already serves", msg.GetTransactionId())
-		return "" // a second start of a served call: dropped, not traced
+		return nil, nil, "" // a second start of a served call: dropped, not traced
 	}
 	state, ack, err := newServerA2AE2EEState(msg.GetTransactionId(), a.ref, msg.GetPayload(), a.keyring(), rand.Reader)
 	if err != nil {
@@ -57,19 +88,23 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
 			code = codes.FailedPrecondition
 		}
 		a.sendA2AControlError(msg.GetTransactionId(), code, err.Error())
-		return "Refuse"
+		return nil, nil, "Refuse"
+	}
+	if state.warm != warm { // message 1 names its type: a relay retagged it (model warm-untyped)
+		a.sendA2AControlError(msg.GetTransactionId(), codes.InvalidArgument, "rpcclient: an A2A E2EE warm and a call differ: the relay retagged this handshake")
+		return nil, nil, "Refuse"
 	}
 	if state.retry != nil {
 		if err := a.sessions.retry(state.retry, state.caller, state.kid); err != nil {
 			a.sendA2AControlError(msg.GetTransactionId(), codes.Aborted, err.Error())
-			return "Refuse"
+			return nil, nil, "Refuse"
 		}
 	}
 
 	if state.established != nil {
 		a.sessions.putIn(state.established)
 	}
-	return a.startE2EECall(msg, state, a2aE2EEAckMessageType, ack)
+	return state, ack, ""
 }
 
 // handleE2EEResume starts a call on a session (a2a_e2ee_session.go): one

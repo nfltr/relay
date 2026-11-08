@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nfltr/relay/proto/pb"
@@ -52,6 +53,10 @@ type clientStream struct {
 	mu         sync.Mutex
 	sentFirst  bool
 	sendClosed bool
+	// reached: a frame of the call went to its target (a request, or an
+	// E2EE handshake or resume); a cancel goes only then (spec
+	// CallLifecycle.tla Cancel: sent > 0).
+	reached atomic.Bool
 	// wireMu orders an E2EE call's seal and send: its sender's frames and
 	// a refused resume's handshake and frames sent again (rehandshake).
 	wireMu sync.Mutex
@@ -61,6 +66,7 @@ type clientStream struct {
 	responseErrMu sync.RWMutex
 	responseErr   error
 	headerOnce    sync.Once
+	gotHeader     bool // E2EE: the callee's header frame came (Recv's goroutine only)
 	header        MD
 	headerCh      chan struct{}
 	e2ee          *a2aE2EEState
@@ -133,6 +139,9 @@ func (cs *clientStream) refuse(err error) {
 // sendCancel tells the call's target that the caller left (the relay
 // forwards it: the target's handler context ends).
 func (cs *clientStream) sendCancel() {
+	if !cs.reached.Load() { // the target never heard of the call (a refused key, say)
+		return
+	}
 	_ = cs.agent.sendFrame(&pb.TunnelFrame{
 		MessageType:   "cancel",
 		TransactionId: cs.txnID,
@@ -220,6 +229,7 @@ func (cs *clientStream) sendMsg(data []byte, eom bool) error {
 	// call drops it (spec/CallLifecycle.tla AtMostOneCall).
 	cont := cs.sentFirst || cs.e2ee != nil
 	cs.sentFirst = true
+	cs.reached.Store(true)
 
 	return cs.agent.sendFrame(&pb.TunnelFrame{
 		Payload:       data,
@@ -321,11 +331,14 @@ func (cs *clientStream) rehandshake() {
 }
 
 // sendControl sends one of the call's handshake frames (they carry the
-// routing and deadline the call's first frame carries).
+// routing and deadline the call's first frame carries). A warm's init is
+// its whole request (Eom).
 func (cs *clientStream) sendControl(messageType string, payload []byte) error {
+	cs.reached.Store(true)
 	return cs.agent.sendFrame(&pb.TunnelFrame{
 		Payload:       payload,
 		MessageType:   messageType,
+		Eom:           messageType == a2aE2EEWarmMessageType,
 		TransactionId: cs.txnID,
 		Timestamps:    &pb.Timestamps{RequestAtAgent: time.Now().UnixMilli()},
 		Routing: &pb.RoutingInfo{
@@ -420,6 +433,9 @@ func statusDetail(msg *pb.TunnelFrame) string {
 // error, an empty end) is the relay's; a sealed one is the peer's data, end
 // or error; one that does not open ends the call.
 func (cs *clientStream) recvE2EE(msg *pb.TunnelFrame) (*Response, error) {
+	// Header resolves at the first frame: the callee's sealed headers, or
+	// none when the call ends without one.
+	defer cs.headerOnce.Do(func() { close(cs.headerCh) })
 	data := msg.GetPayload()
 	if msg.GetMessageType() == "error" || len(data) == 0 {
 		code := codes.Code(msg.GetStatusCode()) // #nosec G115 -- an out-of-range code is an unknown gRPC code, not a crash
@@ -439,13 +455,20 @@ func (cs *clientStream) recvE2EE(msg *pb.TunnelFrame) (*Response, error) {
 			return nil, status.Error(code, detail)
 		}
 		err = errors.New("rpcclient: a malformed A2A E2EE error frame")
-	case !msg.GetEom() && t == a2aFrameData:
+	case !msg.GetEom() && t == a2aFrameHeader && !cs.gotHeader:
+		// The callee's headers, sealed with its first data; any in the
+		// clear are the relay's and ignored.
+		var md MD
+		if md, body, err = parseA2AHeaderBody(body); err != nil {
+			break
+		}
+		cs.gotHeader = true
 		cs.headerOnce.Do(func() {
-			if im := msg.GetRouting().GetInitialMetadata(); len(im) > 0 {
-				cs.header = MD(im)
-			}
+			cs.header = md
 			close(cs.headerCh)
 		})
+		return &Response{Data: body}, nil
+	case !msg.GetEom() && t == a2aFrameData && cs.gotHeader:
 		return &Response{Data: body}, nil
 	default:
 		err = fmt.Errorf("rpcclient: an A2A E2EE frame of type %d out of place", t)
@@ -456,7 +479,9 @@ func (cs *clientStream) recvE2EE(msg *pb.TunnelFrame) (*Response, error) {
 }
 
 // Header returns the initial metadata from the target agent's first response.
-// Blocks until the first response arrives or the context is cancelled.
+// Blocks until the first response arrives or the context is cancelled. On
+// an E2EE call the headers are sealed with the first response, so they are
+// the target's: Header returns once Recv took it (or the call ended).
 // sendEnded is a Send's error once the call's credit ended: the call's
 // context, the agent, or the call itself (its target answered: io.EOF, as
 // gRPC's Send after the server's status).
