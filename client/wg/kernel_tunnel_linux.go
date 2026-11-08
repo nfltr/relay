@@ -83,7 +83,7 @@ func (t *kernelTunnel) Start(_ context.Context, cfg TunnelConfig, bind *RelayBin
 		steps = append(steps, []string{"route", "add", prefix.Masked().String(), "dev", name})
 	}
 	for _, args := range steps {
-		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
+		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil { // #nosec G204 -- fixed "ip" verbs; addresses and prefixes are typed netip values, name the TUN device
 			dev.Close()
 			return fmt.Errorf("wg: ip %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
 		}

@@ -39,8 +39,6 @@ G115 client/p2p/ws.go f4f3fe55bd969a85  # header[8] = byte(n >> 8)
 G115 client/rpcclient/a2a.go 1a9da1053aebab97  # code := codes.Code(msg.GetStatusCode())
 G115 client/rpcclient/a2a.go 31d573c40dfd405a  # StatusCode:    int32(code),
 G115 client/rpcclient/a2a_e2ee_agent.go 31d573c40dfd405a  # StatusCode:    int32(code),
-G115 client/rpcclient/client_stream.go 1a9da1053aebab97  # code := codes.Code(msg.GetStatusCode())
-G115 client/rpcclient/client_stream.go 1a9da1053aebab97  # code := codes.Code(msg.GetStatusCode())
 G115 client/wg/forward_tun.go 03d3ac09c715f4ce  # ep:             channel.New(1024, uint32(mtu), ""),
 G115 proto/wire/grpccodec/codec.go e41f76adf6afbfd4  # head = protowire.AppendVarint(head, uint64(respLen))
 G115 proto/wire/wsframe/wsframe.go 819262fde2349646  # dst = append(dst, 0x80|op, m|byte(n))

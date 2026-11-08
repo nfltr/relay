@@ -375,7 +375,7 @@ func (cs *clientStream) Recv() (*Response, error) {
 
 	// Error from proxy (e.g., target not connected).
 	if msg.GetMessageType() == "error" {
-		code := codes.Code(msg.GetStatusCode())
+		code := codes.Code(msg.GetStatusCode()) // #nosec G115 -- an out-of-range code is an unknown gRPC code, not a crash
 		if code == 0 {
 			code = codes.Internal
 		}
@@ -385,7 +385,7 @@ func (cs *clientStream) Recv() (*Response, error) {
 	// Status trailer: EOM, its detail in the clear (sent by library after handler returns).
 	data := msg.GetPayload()
 	if msg.GetEom() {
-		code := codes.Code(msg.GetStatusCode())
+		code := codes.Code(msg.GetStatusCode()) // #nosec G115 -- an out-of-range code is an unknown gRPC code, not a crash
 		if code != 0 && code != codes.OK {
 			return nil, status.Error(code, statusDetail(msg))
 		}
@@ -418,7 +418,7 @@ func statusDetail(msg *pb.TunnelFrame) string {
 func (cs *clientStream) recvE2EE(msg *pb.TunnelFrame) (*Response, error) {
 	data := msg.GetPayload()
 	if msg.GetMessageType() == "error" || len(data) == 0 {
-		code := codes.Code(msg.GetStatusCode())
+		code := codes.Code(msg.GetStatusCode()) // #nosec G115 -- an out-of-range code is an unknown gRPC code, not a crash
 		if code == codes.OK && msg.GetMessageType() == "error" {
 			code = codes.Internal
 		}

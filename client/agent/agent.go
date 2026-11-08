@@ -207,7 +207,7 @@ type Config struct {
 type Option func(*agent)
 
 // WithLabels sets additional key=value label pairs sent in gRPC metadata.
-// Labels are used by the server for fleet token matching.
+// The relay carries them opaque (presence, listings).
 func WithLabels(labels map[string]string) Option {
 	return func(a *agent) {
 		a.labels = labels

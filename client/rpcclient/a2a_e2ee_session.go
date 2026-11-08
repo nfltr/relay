@@ -350,7 +350,7 @@ func (ss *a2aSessions) retry(msg []byte, caller, kid string) error {
 	}
 	id := [a2aSessionIDLen]byte(msg[:a2aSessionIDLen])
 	c := binary.BigEndian.Uint64(msg[a2aSessionIDLen:])
-	at := time.UnixMilli(int64(binary.BigEndian.Uint64(msg[a2aSessionIDLen+8:])))
+	at := time.UnixMilli(int64(binary.BigEndian.Uint64(msg[a2aSessionIDLen+8:]))) // #nosec G115 -- a wrapped value is a time outside a2aRetryBound, refused below
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	if d := ss.clock().Sub(at); d > a2aRetryBound || d < -a2aRetryBound {

@@ -7,7 +7,8 @@ import "strings"
 
 // RelayKeyAuthorization reports whether an Authorization header value
 // (Bearer or ApiKey) holds a credential of the shape a relay mints: an API
-// key "rpc_<hex>" or a fleet token "fleet_<hex>". A relay credential is for
+// key "rpc_<hex>", or a fleet token "fleet_<hex>" (no relay mints or
+// accepts one since relay-server v0.49.21; still removed). A relay credential is for
 // the relay: whichever edge forwards a visitor's request to a service (the
 // relay, or the agent ending an E2EE session's TLS) removes such a value,
 // whoever sent it.

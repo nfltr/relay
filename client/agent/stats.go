@@ -150,7 +150,7 @@ func (tc *transportCounters) snapshot() TransportStats {
 	ts.SessionsOpened = tc.opened.Load()
 	ts.SessionsAborted = tc.aborted.Load()
 	ts.CreditWaits = tc.waits.Load()
-	ts.CreditWait = time.Duration(tc.waitN.Load())
+	ts.CreditWait = time.Duration(tc.waitN.Load()) // #nosec G115 -- a sum of waits, below 2^63 ns (292 years)
 	tc.mu.Lock()
 	addConnStats(&ts.ConnStats, tc.ended)
 	for src := range tc.live {
@@ -265,7 +265,7 @@ func (o *statsObserver) SessionClose(err error) { o.next.SessionClose(err) }
 func (o *statsObserver) CreditWait(d time.Duration) {
 	if o.tc != nil {
 		o.tc.waits.Add(1)
-		o.tc.waitN.Add(uint64(d))
+		o.tc.waitN.Add(uint64(d)) // #nosec G115 -- a credit wait is a non-negative duration
 	}
 	o.next.CreditWait(d)
 }
