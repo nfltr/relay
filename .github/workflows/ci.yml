@@ -38,6 +38,9 @@ jobs:
       # gosec over first-party code, gated by scripts/gosec-baseline.txt (as in
       # relay-server: findings landed unnoticed while it was not here).
       - run: make check-gosec
+      # semgrep (docker, pinned image and rules), gated by
+      # scripts/semgrep-baseline.txt: a finding landed unnoticed while it was not here.
+      - run: make check-semgrep
       - run: make spec spec-mutants spec-cltraces
       # ProVerif is built from source once (scripts/fetch-proverif.sh).
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

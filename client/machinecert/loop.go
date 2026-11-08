@@ -6,7 +6,7 @@ package machinecert
 import (
 	"context"
 	"errors"
-	"math/rand/v2"
+	"math/rand/v2" // nosemgrep: math-random-used -- renewal jitter spreads machines' renewals; no secret
 	"time"
 )
 
