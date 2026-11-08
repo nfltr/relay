@@ -74,8 +74,10 @@ type SignalMsg struct {
 	// Key is the sender's ephemeral X25519 public key (hex; offer and answer).
 	Key string `json:"key,omitempty"`
 	// KeyID is the sender's A2A key id (offer and answer; "" the owner's
-	// root key, or unpaired): the relay's word, a wrong one only fails the
-	// key confirmation (E2E.Complete).
+	// root key, or unpaired): the relay's word; a root initiator's Pair
+	// takes the answer's only for the machine it named, so a wrong one is
+	// refused or fails the key confirmation (E2E.Complete; spec/proverif
+	// p2p_e2e.pv Initiator).
 	KeyID string `json:"key_id,omitempty"`
 	// Confirm is a key confirmation (answer and SignalConfirm).
 	Confirm string `json:"confirm,omitempty"`

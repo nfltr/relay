@@ -41,8 +41,9 @@ const (
 	// the owner's root key), so a root client derives that machine's key.
 	KeyIDHeader = "x-wg-key-id"
 	// PeerKeyIDHeader tells a client its exit's KeyIDHeader, as the exit
-	// presented it. It is the relay's word: a wrong one only fails the
-	// handshake (spec/proverif wg_exit.pv).
+	// presented it. It is the relay's word: a root client takes it only
+	// when it is the machine the client named, so a wrong one is refused or
+	// fails the handshake (spec/proverif wg_exit.pv RootClient).
 	PeerKeyIDHeader = "x-wg-peer-key-id"
 
 	// PeerTxnID tags a PeerUpdate the relay sends an exit.

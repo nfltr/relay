@@ -278,25 +278,36 @@ this one and deleted.
 The preshared key is HMAC(K, "nfltr-wg-psk-v2", the exit's service name,
 key id), K the exit's A2A key: the root key, or the machine key of the key
 id the exit says (relay-server hands it to the client as
-`x-wg-peer-key-id`, its word, as A2A's learned machine; a root client
-derives that machine's key, a machine client holds only its own). Each end
+`x-wg-peer-key-id`, its word, as A2A's learned machine; a machine client
+holds only its own). A root client takes that key id only when it is the
+machine the client named (lane ROOTNAMEPIN, nfltr a2akeys
+`PairKeys.Target`): the machine id of a ref `<machine id>-<service>`, the
+id its own machine store holds for `<machine name>.<service>` (the name
+the owner gave `machines add`), or the root key for a bare service name;
+never the relay's word. Before, it derived whatever machine the relay
+named, so a relay could steer `m1.lan` to `lan` on another of the owner's
+machines, or, holding a leaked machine key, sit in the middle. Each end
 binds its own name for the exit: the client the one it named, the exit
-its own.
+its own. No wire change: the key id in the preshared key already names
+the machine.
 
 | # | query | result |
 |---|---|---|
-| 1 | paired: a client's payload secret unless the key id it used is a leaked machine's | holds |
-| 2 | paired: injective agreement exit <- client on the exit name, key id, both keys and the payload (an exit on a machine key; one on the root key) | holds |
+| 1 | paired: a client's payload secret unless the machine it named is leaked | holds (before ROOTNAMEPIN only "unless the key id the relay names is a leaked machine's") |
+| 2 | paired: injective agreement exit <- client on the exit name, the machine named (its key id), both keys and the payload (home1 on two machines; an exit on the root key) | holds |
 | 3 | unpaired: payload secret | attack: the relay hands each end its own key (documented) |
 | 4 | two exits on one machine key, the relay reroutes a client to the other: the exit that got it is the one the client named | holds (finding 5 fixed: the name is in the key) |
-| 5 | a leaked machine key reaches no other machine's exit | holds |
-| 6 | witness: a paired payload arrives | reachable |
+| 5 | a client that named m1 gets nothing to a leaked machine key, whatever key id the relay names | holds |
+| 6 | the key id a client used is the machine it named | holds |
+| 7-8 | witnesses: a paired payload arrives at home1 on m1, and at the second home1, on m2 | reachable |
 
 `x-wg-paired` is advisory: each end applies its own preshared key whatever
 the relay says. Mutants: drop the preshared key on the relay's word, no
 preshared key at the client, none at the exit, `group-key` (one key for
 all machines: v1's group secret), `name-unbound` (the exit's name not in
-the preshared key: v1, finding 5).
+the preshared key: v1, finding 5; since the machine check only 4 fails:
+the name keeps apart exits of one machine), `relay-kid` (a root client
+takes the relay's key id: the code before ROOTNAMEPIN; fails 1, 2, 5, 6).
 
 ### p2p_e2e.pv: P2P sessions (calls, file transfer, the call page)
 
@@ -305,8 +316,11 @@ the pair key id), K the pair's A2A key: the root key between two root
 holders, else the machine key of the end that is a machine. The offer
 carries the initiator's key id, the answer the responder's (the relay's
 word); a root end derives the machine key of the peer's key id, a machine
-end holds only its own and takes a root peer or one of its own machine.
-Queries 1-4 are about paired ends (a key file on both).
+end holds only its own and takes a root peer or one of its own machine. A
+root initiator takes the answer's key id only when it is the machine it
+named, from its own store (lane ROOTNAMEPIN, as `wg_exit.pv`); a
+responder names no peer. Queries 1-4 are about paired ends (a key file on
+both).
 
 | # | query | result |
 |---|---|---|
@@ -316,8 +330,12 @@ Queries 1-4 are about paired ends (a key file on both).
 | 4 | paired: injective agreement on the key confirmation | holds |
 | 5 | unpaired: data secret | attack: the relay in the middle (documented) |
 | 6 | unpaired: equal fingerprints on both machines imply the same two keys | holds |
-| 7 | witness: a root initiator's data reaches a responder on a machine key | reachable |
-| 8 | witness: a machine initiator's data reaches a root responder | reachable |
+| 7 | a root initiator's data to home1 secret unless the machine it named is leaked (lane ROOTNAMEPIN; 1 holds only "unless the pair key id is a leaked machine's") | holds |
+| 8 | ... and the pair key id it used is the machine it named | holds |
+| 9 | responder home1 on machine k <- an initiator that named k, injective (home1 on two machines) | holds |
+| 10 | witness: a root initiator's data reaches a responder on a machine key | reachable |
+| 11 | witness: a machine initiator's data reaches a root responder | reachable |
+| 12 | witness: the second home1, on m2, reached by an initiator that named m2 | reachable |
 
 Query 6 is symbolic; computationally it is an 80-bit second preimage (one
 side's fingerprint is fixed before the relay picks its second key).
@@ -325,7 +343,8 @@ Mutants: no pairing salt, skip the responder's confirmation check, old
 protocol in plaintext, accept any DTLS fingerprint, the SDP unsealed,
 fingerprints not compared, `group-key` (one key for all machines: v1's
 group secret), `name-unbound` (the responder's name not in the salt,
-finding 5). Below the model (nonces are not symbolic): a
+finding 5), `relay-kid` (a root initiator takes the relay's key id: the
+code before ROOTNAMEPIN; fails 7-9). Below the model (nonces are not symbolic): a
 SignalConn frame no path took gave its sequence number back
 (`sigconn.go` `sendSeq--`), so a frame partly written before its error was
 followed by another sealed under the same nonce (finding 4); since lane

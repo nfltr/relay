@@ -23,9 +23,13 @@
    A2A key, the owner's root key R or a machine key mk(R, id) (nfltr
    a2akeys.Derive); a root client derives the machine key of the key id the
    relay names (x-wg-peer-key-id: the relay's word, as A2A's learned
-   machine), a machine client holds its own. The preshared key binds the
-   exit's service name, each end's own: the client's the one it named, the
-   exit's its own; neither takes a name from the relay.
+   machine) only when it is the machine the client named (lane
+   ROOTNAMEPIN): the machine id of an agent ref m-<id>-<service>, or the
+   id the client's own machine store holds for <machine name>.<service>;
+   a bare service name names the root key (key id ""). A machine client
+   holds its own. The preshared key binds the exit's service name, each
+   end's own: the client's the one it named, the exit's its own; neither
+   takes a name from the relay.
 
    Code (github.com/nfltr/relay unless named):
      client/wg/keys.go PresharedKey   p = HMAC(K, "nfltr-wg-psk-v2" 0 service 0 key id)
@@ -33,7 +37,8 @@
      client/agent/wgexit/wgexit.go    the exit says x-wg-paired and x-wg-key-id, sets its own p
      proto/wire/wgwire/wgwire.go      x-wg-paired is advisory: each end applies its own p
      relay-server frontend/wireguard  hands each end the other's key and key id (attacker here)
-     nfltr cmd/nfltr/internal/wgcli   K from the key file (a2akeys) *)
+     nfltr cmd/nfltr/internal/wgcli   K from the key file (a2akeys)
+     nfltr a2akeys PairKeys.Exit      the key id must be the machine the client named *)
 
 free c: channel.
 
@@ -54,7 +59,7 @@ fun mk(bitstring, bitstring): bitstring.   (* a2akeys.Derive(root, id) *)
 const rootKid: bitstring.                  (* the root key's key id "" *)
 const groupId: bitstring.
 const unbound: bitstring.
-const m1, m3, mL: bitstring.               (* machines: home1's, home3's and office3's, a leaked one *)
+const m1, m2, m3, mL: bitstring.           (* machines: home1's, a second home1's, home3's and office3's, a leaked one *)
 const home1, home2, home3, office3, home5: bitstring.
 
 (* The machine key of id: one per machine (ONLY:group-key: one for all,
@@ -69,7 +74,7 @@ letfun pskOf(k: bitstring, name: bitstring, kid: bitstring) = hpsk(k, unbound, k
 
 free payloadUnpaired: bitstring [private].
 
-event ClientSend(bitstring, bitstring, G, G, bitstring).   (* exit name, key id, client key, exit key told, payload *)
+event ClientSend(bitstring, bitstring, bitstring, G, G, bitstring).   (* exit name, machine named, key id, client key, exit key told, payload *)
 event ExitRecv(bitstring, bitstring, G, G, bitstring).     (* exit name, key id, client key told, exit key, payload *)
 event Leaked(bitstring).
 
@@ -89,12 +94,16 @@ let Exit(name: bitstring, kid: bitstring, k: bitstring, b: exponent, paired: boo
   let m = sdec(e, sk) in
   event ExitRecv(name, kid, peer, exp(g, b), m).
 
-(* A root client: names an exit, takes the key and key id the relay answers
+(* A root client: names an exit (service name) on machine named (rootKid:
+   a bare name, the root key), takes the key and key id the relay answers
    with (x-wg-peer-pubkey, x-wg-peer-key-id) and the relay's x-wg-paired,
-   derives the key of that key id and applies its own p. *)
-let RootClient(name: bitstring, r: bitstring, a: exponent) =
+   refuses a key id that is not the machine it named (ONLY:relay-kid:
+   takes the relay's, the code before lane ROOTNAMEPIN), derives the key of
+   that key id and applies its own p. *)
+let RootClient(name: bitstring, named: bitstring, r: bitstring, a: exponent) =
   out(c, (name, exp(g, a)));
   in(c, (peer: G, kid: bitstring, peerPaired: bool));
+  if kid = named then (* NOT:relay-kid *)
   new m: bitstring;
   let k = if kid = rootKid then r else machineKey(r, kid) in
   let p = pskOf(k, name, kid) in              (* x-wg-paired never changes p (wgwire.go) *) (* NOT:psk-dropped-on-relay-word *)
@@ -104,7 +113,7 @@ let RootClient(name: bitstring, r: bitstring, a: exponent) =
   out(c, exp(g, x));
   in(c, ey: G);
   let sk = kdf(exp(peer, a), exp(ey, x), p) in
-  event ClientSend(name, kid, exp(g, a), peer, m);
+  event ClientSend(name, named, kid, exp(g, a), peer, m);
   out(c, senc(m, sk)).
 
 (* An unpaired client: no key file. *)
@@ -117,21 +126,21 @@ let PlainClient(name: bitstring, a: exponent, m: bitstring) =
   let sk = kdf(exp(peer, a), exp(ey, x), noPsk) in
   out(c, senc(m, sk)).
 
-(* 1. paired: a client's payload is secret unless the key id it used is a
-   leaked machine's (the relay may name any machine: the key id is its
-   word, as in A2A) *)
+(* 1. paired: a client's payload is secret unless the machine it named is
+   leaked (lane ROOTNAMEPIN; before, "unless the key id the relay names is
+   a leaked machine's") *)
 (* expect true *)
-query n: bitstring, kid: bitstring, pc: G, pe: G, m: bitstring;
-  event(ClientSend(n, kid, pc, pe, m)) && attacker(m) ==> event(Leaked(kid)).
-(* 2. paired: the exit's payload is from a client that named that exit with
-   that key id, on both keys, injective; home1 on machine m1, home5 with the
-   root key *)
-(* expect true *)
-query kid: bitstring, pc: G, pe: G, m: bitstring;
-  inj-event(ExitRecv(home1, kid, pc, pe, m)) ==> inj-event(ClientSend(home1, kid, pc, pe, m)).
+query n: bitstring, mach: bitstring, kid: bitstring, pc: G, pe: G, m: bitstring;
+  event(ClientSend(n, mach, kid, pc, pe, m)) && attacker(m) ==> event(Leaked(mach)).
+(* 2. paired: the exit's payload is from a client that named that exit and
+   its machine (the key id), on both keys, injective; home1 on machines m1
+   and m2, home5 with the root key *)
 (* expect true *)
 query kid: bitstring, pc: G, pe: G, m: bitstring;
-  inj-event(ExitRecv(home5, kid, pc, pe, m)) ==> inj-event(ClientSend(home5, kid, pc, pe, m)).
+  inj-event(ExitRecv(home1, kid, pc, pe, m)) ==> inj-event(ClientSend(home1, kid, kid, pc, pe, m)).
+(* expect true *)
+query kid: bitstring, pc: G, pe: G, m: bitstring;
+  inj-event(ExitRecv(home5, kid, pc, pe, m)) ==> inj-event(ClientSend(home5, kid, kid, pc, pe, m)).
 (* 3. unpaired: the relay hands each end its own key and reads everything
    (the documented MITM: docs/e2ee.md "Track B") *)
 (* expect false *)
@@ -141,25 +150,35 @@ query attacker(payloadUnpaired).
    client named *)
 (* expect true *)
 query kid: bitstring, pc: G, pe: G, m: bitstring;
-  event(ExitRecv(office3, kid, pc, pe, m)) ==> event(ClientSend(office3, kid, pc, pe, m)) || event(Leaked(kid)).
-(* 5. a leaked machine key reaches no other machine's exit: a client of
-   home1 (machine m1) whose relay names m1 *)
+  event(ExitRecv(office3, kid, pc, pe, m)) ==> event(ClientSend(office3, kid, kid, pc, pe, m)).
+(* 5. a leaked machine key reaches no other machine's exit: a client that
+   named home1 on m1, whatever key id the relay names *)
 (* expect true *)
-query pc: G, pe: G, m: bitstring;
-  event(ClientSend(home1, m1, pc, pe, m)) && attacker(m) ==> false.
-(* 6. reachability: a paired payload arrives (the model is not vacuous) *)
+query kid: bitstring, pc: G, pe: G, m: bitstring;
+  event(ClientSend(home1, m1, kid, pc, pe, m)) && attacker(m) ==> false.
+(* 6. the key id a client used names the machine it named (lane
+   ROOTNAMEPIN) *)
+(* expect true *)
+query n: bitstring, mach: bitstring, kid: bitstring, pc: G, pe: G, m: bitstring;
+  event(ClientSend(n, mach, kid, pc, pe, m)) ==> mach = kid.
+(* 7-8. reachability: a paired payload arrives at home1 on m1, and at the
+   second home1, on m2 (the model is not vacuous) *)
 (* expect false *)
 query pc: G, pe: G, m: bitstring; event(ExitRecv(home1, m1, pc, pe, m)).
+(* expect false *)
+query pc: G, pe: G, m: bitstring; event(ExitRecv(home1, m2, pc, pe, m)).
 
 process
   new R: bitstring;
   new b1: exponent; new b2: exponent; new b3: exponent; new b5: exponent; new b6: exponent;
   new a1: exponent; new a2: exponent; new a3: exponent; new a5: exponent;
+  new b7: exponent; new a6: exponent;
   (
-    (!Exit(home1, m1, machineKey(R, m1), b1, true)) | (!RootClient(home1, R, a1))
+    (!Exit(home1, m1, machineKey(R, m1), b1, true)) | (!RootClient(home1, m1, R, a1))
+    | (!Exit(home1, m2, machineKey(R, m2), b7, true)) | (!RootClient(home1, m2, R, a6))
     | (!Exit(home2, rootKid, R, b5, false)) | (!PlainClient(home2, a5, payloadUnpaired))
     | (!Exit(home3, m3, machineKey(R, m3), b2, true)) | (!Exit(office3, m3, machineKey(R, m3), b3, true))
-    | (!RootClient(home3, R, a2))
-    | (!Exit(home5, rootKid, R, b6, true)) | (!RootClient(home5, R, a3))
+    | (!RootClient(home3, m3, R, a2))
+    | (!Exit(home5, rootKid, R, b6, true)) | (!RootClient(home5, rootKid, R, a3))
     | (event Leaked(mL); out(c, machineKey(R, mL)))
   )

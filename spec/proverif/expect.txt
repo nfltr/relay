@@ -54,8 +54,8 @@ a2a_machine sess,clear-header TTTTTTTTTTTTTTTTTTFFFFFFF
 # WireGuard client and exit; p2p_e2e: p2p). Queries in README "E2EE paths";
 # an F on the base line is a finding or a documented limit there.
 e2ee_tcp - TTTTFFTTTF
-wg_exit - TTTFTTF
-p2p_e2e - TTTTFTFF
+wg_exit - TTTFTTTFF
+p2p_e2e - TTTTFTTTTFFF
 e2ee_tcp skip-pin-check FFFFFFTTTF
 e2ee_tcp relay-supplied-pin FFFFFFTTTF
 e2ee_tcp plaintext-without-answer FTFFFFTTTF
@@ -65,18 +65,26 @@ e2ee_tcp agreement-without-key-check TFTTFFTTTF
 # finding 2 (client pins, lane E2EEFIX2) put back: 7-9 fail
 e2ee_tcp any-client-cert TTTTFFFFFF
 e2ee_tcp skip-certificate-verify TTTTFFFTFF
-wg_exit psk-dropped-on-relay-word FTTFTFF
-wg_exit client-no-psk FTTFTFT
-wg_exit exit-no-psk TFFFFTF
+wg_exit psk-dropped-on-relay-word FTTFTFTFF
+wg_exit client-no-psk FTTFTFTTT
+wg_exit exit-no-psk TFFFFTTFF
 # finding 5 (E2EEPROOF, lane A2AFINAL2): one key for all machines, or the
-# exit's name not in the preshared key
-wg_exit group-key FFTFFFF
-wg_exit name-unbound TFFFFTF
-p2p_e2e no-pairing-salt FFTTFFTT
-p2p_e2e skip-await-confirm TTTFFTFF
-p2p_e2e old-protocol-plaintext FTTTFTFF
-p2p_e2e accept-any-dtls TFTTFTFF
-p2p_e2e sdp-not-sealed TFTTFTFF
-p2p_e2e fingerprint-not-compared TTTTFFFF
-p2p_e2e group-key FFFFFTFF
-p2p_e2e name-unbound TTFTFTFF
+# exit's name not in the preshared key (since lane ROOTNAMEPIN only 4
+# fails: a client takes only the machine it named, so the name matters
+# between exits of one machine)
+wg_exit group-key FFTFFFTFF
+wg_exit name-unbound TTTFFTTFF
+# lane ROOTNAMEPIN: a root client takes the relay's key id (the code
+# before): 1, 2 (home1 on m2), 5 and 6 fail
+wg_exit relay-kid FFTFTFFFF
+p2p_e2e no-pairing-salt FFTTFFFTTTTT
+p2p_e2e skip-await-confirm TTTFFTTTTFFF
+p2p_e2e old-protocol-plaintext FTTTFTFTTFFF
+p2p_e2e accept-any-dtls TFTTFTTTTFFF
+p2p_e2e sdp-not-sealed TFTTFTTTTFFF
+p2p_e2e fingerprint-not-compared TTTTFFTTTFFF
+p2p_e2e group-key FFFFFTFTFFFF
+p2p_e2e name-unbound TTFTFTTTFFFF
+# lane ROOTNAMEPIN: a root initiator takes the relay's key id (the code
+# before): 7-9 fail
+p2p_e2e relay-kid TTTTFTFFFFFF
