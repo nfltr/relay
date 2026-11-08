@@ -423,6 +423,7 @@ type agent struct {
 	metadata  []string                          // WithMetadata
 	connected func(Connection) (*Tunnel, error) // WithConnected
 	live      atomic.Int32                      // accepted connections not yet ended (Connected)
+	cycles    sync.WaitGroup                    // connection cycles running; done closes after them
 	stats     *stats                            // Stats
 
 	errMu sync.Mutex

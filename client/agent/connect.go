@@ -223,7 +223,11 @@ func (a *agent) runWithReconnect(
 	streamCtx context.Context,
 	acc accepted,
 ) {
+	// Close returns once every connection ended: done closes after each
+	// cycle ran its defers (live, Done), the old one of a move included.
+	// Guard: TestCloseEndsEveryConnection.
 	defer close(a.done)
+	defer a.cycles.Wait()
 	defer cancel()
 
 	// failures counts consecutive non-graceful drops of connections that did
@@ -262,7 +266,9 @@ func (a *agent) runWithReconnect(
 
 		// Run the message-processing loop until either stream ends.
 		cycle := make(chan error, 1)
+		a.cycles.Add(1)
 		go func(conn io.Closer, stream pb.Dispatcher_ConnectHTTPClient, done chan struct{}, release func()) {
+			defer a.cycles.Done()
 			defer close(done)
 			defer a.live.Add(-1) // before done closes: Connected is current when Done is
 			defer release()
@@ -324,7 +330,9 @@ func (a *agent) runWithReconnect(
 				}
 				if err == nil {
 					close(mv.connected)
+					a.cycles.Add(1)
 					go func() {
+						defer a.cycles.Done()
 						err := <-cycle
 						a.logger.Info("moved to a new relay connection; the old one is closed", "old_end", err)
 					}()

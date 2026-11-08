@@ -487,3 +487,44 @@ func TestAgentStaysConnectedAcrossAMove(t *testing.T) {
 		t.Fatal("Connected after Close")
 	}
 }
+
+// TestCloseEndsEveryConnection: once Close returns, every connection the
+// agent held has ended (its Done is closed) and Connected is false, also the
+// old connection of a move the relay had not ended yet. Close waited only for
+// the reconnect loop, which returned on the current cycle's result before
+// that cycle's deferred live decrement and before the old cycle at all.
+func TestCloseEndsEveryConnection(t *testing.T) {
+	for i := range 20 {
+		f := &moveRelay{
+			streams: make(chan grpc.BidiStreamingServer[pb.HTTPProxyResponse, pb.HTTPProxyRequest], 4),
+			ends:    make(chan chan struct{}, 4),
+		}
+		addr, stop := startMoveRelay(t, f)
+		dones := make(chan (<-chan struct{}), 4)
+		a := New(Config{ServerAddr: addr, AgentID: "mover", Retries: 3, Logger: slog.New(slog.DiscardHandler)},
+			WithConnected(func(c Connection) (*Tunnel, error) { dones <- c.Done; return nil, nil }))
+		if err := a.Connect(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		old := nextStream(t, f, "first connection")
+		if err := old.Send(&pb.HTTPProxyRequest{Move: pb.Move_MOVE_RECONNECT}); err != nil {
+			t.Fatal(err)
+		}
+		nextStream(t, f, "new connection")
+		if m, err := recvNonHeartbeat(t, old); err != nil || m.GetMove() != pb.Move_MOVE_CONNECTED {
+			t.Fatalf("old stream: got %v %v, want MOVE_CONNECTED", m, err)
+		}
+		a.Close()
+		if a.Connected() {
+			t.Fatalf("run %d: Connected after Close", i)
+		}
+		for range 2 {
+			select {
+			case <-<-dones:
+			default:
+				t.Fatalf("run %d: a connection's Done is open after Close", i)
+			}
+		}
+		stop()
+	}
+}
