@@ -48,7 +48,21 @@ type fakeLinkRelay struct {
 
 	refuseTCP atomic.Bool // TCP connections are refused, as another replica does
 	tcpMu     sync.Mutex
-	tcpConns  []net.Conn // the TCP connections taken
+	tcpConns  []net.Conn    // the TCP connections taken
+	tcpDown   chan struct{} // one per TCP agent-link connection that ended, as the relay's Node saw it
+}
+
+// downObserver tells the fake relay a TCP agent-link connection ended.
+type downObserver struct {
+	link.NopObserver
+	r *fakeLinkRelay
+}
+
+func (o downObserver) ConnDown(link.Identity, error) {
+	select {
+	case o.r.tcpDown <- struct{}{}:
+	default:
+	}
 }
 
 // cutTCP closes every TCP agent-link connection the relay took, as a lost
@@ -102,7 +116,7 @@ func newFakeLinkRelay(t *testing.T) *fakeLinkRelay {
 	leaf, _ := x509.ParseCertificate(cert.Certificate[0])
 	pool := x509.NewCertPool()
 	pool.AddCert(leaf)
-	r := &fakeLinkRelay{clientTC: &tls.Config{RootCAs: pool, ServerName: leaf.DNSNames[0], MinVersion: tls.VersionTLS13}}
+	r := &fakeLinkRelay{clientTC: &tls.Config{RootCAs: pool, ServerName: leaf.DNSNames[0], MinVersion: tls.VersionTLS13}, tcpDown: make(chan struct{}, 16)}
 
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", stc)
 	if err != nil {
@@ -138,7 +152,7 @@ func newFakeLinkRelay(t *testing.T) *fakeLinkRelay {
 			}()
 		}
 	}()
-	r.tcp = mustNode(peerlink.New(peerlink.Config{Listener: cl, Link: link.Config{Auth: tokenVerifier{}}}))
+	r.tcp = mustNode(peerlink.New(peerlink.Config{Listener: cl, Link: link.Config{Auth: tokenVerifier{}}, Observer: func(string) link.Observer { return downObserver{r: r} }}))
 
 	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {

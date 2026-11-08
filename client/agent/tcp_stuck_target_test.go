@@ -146,13 +146,25 @@ func TestTCPTunnelStuckTargetDoesNotHoldTheReceiveLoop(t *testing.T) {
 					st.feed(&pb.TCPData{SessionId: "other", Data: chunk})
 				}
 			}()
+			// Bounds only against a hang: on a loaded machine the stall
+			// bound and the sessions' writes are seconds late.
 			select {
 			case <-got:
-			case <-time.After(10 * time.Second):
+			case <-time.After(time.Minute):
 				t.Fatal("another session got nothing beside a stuck target: the receive loop waits on it")
 			}
-			if st.wasClosed("stuck") == credit {
-				t.Fatalf("stuck session closed: %v; want reset only without credit", st.wasClosed("stuck"))
+			if credit {
+				if st.wasClosed("stuck") {
+					t.Fatal("stuck session closed; want reset only without credit")
+				}
+				return
+			}
+			// Its close reaches the stream after the reset, which may come
+			// after the other session's bytes reached their target.
+			for deadline := time.Now().Add(time.Minute); !st.wasClosed("stuck"); time.Sleep(time.Millisecond) {
+				if time.Now().After(deadline) {
+					t.Fatal("stuck session not closed; want reset without credit")
+				}
 			}
 		})
 	}

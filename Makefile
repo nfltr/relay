@@ -16,6 +16,16 @@ test:
 test-race:
 	@for m in $(MODULES); do (cd $$m && go test -count=1 -race ./...) || exit 1; done
 
+# test-under-load: PKGS with -count LOAD_COUNT (5) on a starved machine
+# (scripts/test-under-load.sh, the same file in link, relay and relay-core):
+# a test that waits a fixed time for what a busy machine does later fails
+# here; wait for the event or state instead, with a bound only against a hang.
+LOAD_COUNT ?= 5
+.PHONY: test-under-load
+test-under-load:
+	@test -n "$(PKGS)" || { echo "test-under-load: PKGS='<packages>' is required" >&2; exit 2; }
+	@./scripts/test-under-load.sh $(LOAD_COUNT) $(PKGS)
+
 # FUZZTIME per target (default 10s).
 fuzz-short:
 	./scripts/fuzz-short.sh

@@ -243,10 +243,16 @@ func TestTCPTunnelAdoptRefusedWhileDialling(t *testing.T) {
 	st.in <- &pb.TCPData{SessionId: dataplane.AgentLinkSID, Data: []byte(dataplane.AgentLinkDial)}
 	r.won(t, winner) // the new primary's own link, dialled before it read the park
 	close(gate)
-	for deadline := time.Now().Add(5 * time.Second); dial.park.parked() != ""; time.Sleep(5 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the parked link was neither adopted nor drained")
-		}
+	// Drained: the relay saw its connection end. (Its leaving the park is
+	// not enough: until the relay's Node saw the drain, it could open the
+	// session on the old connection, which the drain then reset.)
+	select {
+	case <-r.tcpDown:
+	case <-time.After(time.Minute):
+		t.Fatal("the parked link was not drained")
+	}
+	if got := dial.park.parked(); got != "" {
+		t.Fatalf("parked %q after the drain, want none", got)
 	}
 	r.echo(t, "on the new primary's link")
 	st.closeIn()

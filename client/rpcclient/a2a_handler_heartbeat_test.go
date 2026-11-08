@@ -201,6 +201,15 @@ func TestHandle_CancelPropagation(t *testing.T) {
 	}
 }
 
+// heartbeatWithin bounds only a hang: a test waits for the frame or the
+// state it needs, not for a time (on a loaded machine an interval of 10 ms
+// is late by seconds).
+const heartbeatWithin = time.Minute
+
+func isHeartbeat(msg *pb.TunnelFrame) bool {
+	return msg.GetTransactionId() == "" && len(msg.GetPayload()) == 0 && !msg.GetEom()
+}
+
 func TestAgent_SendsHeartbeats(t *testing.T) {
 	ctx := t.Context()
 
@@ -212,11 +221,11 @@ func TestAgent_SendsHeartbeats(t *testing.T) {
 	agent := NewAgent("agent-a", ms)
 	defer agent.Close() //nolint:errcheck
 
-	deadline := time.After(250 * time.Millisecond)
+	deadline := time.After(heartbeatWithin)
 	for {
 		select {
 		case msg := <-ms.sendCh:
-			if msg.GetTransactionId() == "" && len(msg.GetPayload()) == 0 && !msg.GetEom() {
+			if isHeartbeat(msg) {
 				return
 			}
 		case <-deadline:
@@ -226,71 +235,90 @@ func TestAgent_SendsHeartbeats(t *testing.T) {
 }
 
 // TestAgent_SuppressesHeartbeatWhileDataFlowing verifies that heartbeats are
-// NOT emitted while data frames are actively being sent on the stream. The
+// NOT emitted while data frames are queued or being sent on the stream. The
 // data frame itself serves as proof-of-life to the server (the relay resets
 // its recvThreshold ticker on any incoming message, heartbeat or data), so an
 // additional empty heartbeat is redundant and — worse — can stall sendLoop
 // behind a slow large-payload Send under cursor-mcp-style bursty workloads.
-// Heartbeats resume immediately once the stream goes idle.
+// Heartbeats resume once the stream goes idle.
+//
+// The backlog is a frame on each of RequestWindow streams, all queued
+// before the first is written (Send is synchronous per stream: frames sent
+// one after another leave the stream idle between them, and on a loaded
+// machine for more than an interval, when a heartbeat is due).
 func TestAgent_SuppressesHeartbeatWhileDataFlowing(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), heartbeatWithin)
 	defer cancel()
 
 	originalInterval := agentHeartbeatInterval
 	agentHeartbeatInterval = 10 * time.Millisecond
 	defer func() { agentHeartbeatInterval = originalInterval }()
 
-	ms := newSlowSendStream(ctx, 5*time.Millisecond)
+	ms := newGatedSendStream(ctx)
 	agent := NewAgent("agent-a", ms)
 	defer agent.Close() //nolint:errcheck
 
-	stream, err := agent.NewStream(ctx, testTargetAgentId)
-	if err != nil {
-		t.Fatalf("NewStream error: %v", err)
+	sent := make(chan error, RequestWindow)
+	for range RequestWindow {
+		stream, err := agent.NewStream(ctx, testTargetAgentId)
+		if err != nil {
+			t.Fatalf("NewStream error: %v", err)
+		}
+		go func() { sent <- stream.Send([]byte("x")) }()
 	}
-	for i := range RequestWindow { // the call's credit: the mock grants none
-		if err := stream.Send([]byte("x")); err != nil {
-			t.Fatalf("Send(%d) error: %v", i, err)
+	// Heartbeats while the agent was idle, before the backlog, are not the
+	// test's: take them until every frame is queued or in flight.
+	for agent.outboundDataPending.Load() < RequestWindow {
+		select {
+		case msg := <-ms.sentCh:
+			if !isHeartbeat(msg) {
+				t.Fatal("a data frame passed the gate")
+			}
+		case <-ctx.Done():
+			t.Fatalf("%d of %d frames queued", agent.outboundDataPending.Load(), RequestWindow)
+		case <-time.After(time.Millisecond):
 		}
 	}
+	for len(ms.sentCh) > 0 {
+		if msg := <-ms.sentCh; !isHeartbeat(msg) {
+			t.Fatal("a data frame passed the gate")
+		}
+	}
+	close(ms.releaseData)
 
-	// While the backlog drains (each frame takes 5ms),
-	// no empty heartbeat frames should appear — data alone is proof-of-life.
-	deadline := time.After(600 * time.Millisecond)
 	dataFrames := 0
-	heartbeatFrames := 0
 	for dataFrames < RequestWindow {
 		select {
 		case msg := <-ms.sentCh:
-			if msg.GetTransactionId() == "" && len(msg.GetPayload()) == 0 && !msg.GetEom() {
-				heartbeatFrames++
-			} else {
-				dataFrames++
+			if isHeartbeat(msg) {
+				t.Fatalf("a heartbeat while data was queued, after %d data frames", dataFrames)
 			}
-		case <-deadline:
-			t.Fatalf("backlog did not drain in time: data=%d heartbeats=%d", dataFrames, heartbeatFrames)
+			dataFrames++
+		case <-ctx.Done():
+			t.Fatalf("backlog did not drain: data=%d", dataFrames)
 		}
 	}
-	if heartbeatFrames != 0 {
-		t.Fatalf("expected zero heartbeats while data was flowing, got %d", heartbeatFrames)
+	for range RequestWindow {
+		if err := <-sent; err != nil {
+			t.Fatalf("Send error: %v", err)
+		}
 	}
 
-	// Stream is now idle. A heartbeat should arrive within ~2 intervals.
-	idleDeadline := time.After(100 * time.Millisecond)
+	// Stream is now idle: heartbeats resume.
 	for {
 		select {
 		case msg := <-ms.sentCh:
-			if msg.GetTransactionId() == "" && len(msg.GetPayload()) == 0 && !msg.GetEom() {
+			if isHeartbeat(msg) {
 				return
 			}
-		case <-idleDeadline:
+		case <-ctx.Done():
 			t.Fatalf("expected heartbeat to resume after stream went idle")
 		}
 	}
 }
 
 func TestAgent_DoesNotQueueHeartbeatBehindInFlightData(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), heartbeatWithin)
 	defer cancel()
 
 	originalInterval := agentHeartbeatInterval
@@ -315,12 +343,27 @@ func TestAgent_DoesNotQueueHeartbeatBehindInFlightData(t *testing.T) {
 	sendDone := make(chan error, 1)
 	go func() { sendDone <- stream.Send([]byte("in-flight")) }()
 
-	select {
-	case <-ms.dataStarted:
-	case <-ctx.Done():
-		t.Fatal("data send did not start")
+	// Heartbeats while the agent was idle, before the data frame (on a
+	// loaded machine NewStream and Send take more than an interval), are
+	// not behind it: take them until the data frame is in flight.
+	for started := false; !started; {
+		select {
+		case <-ms.dataStarted:
+			started = true
+		case msg := <-ms.sentCh:
+			if !isHeartbeat(msg) {
+				t.Fatal("a data frame passed the gate")
+			}
+		case <-ctx.Done():
+			t.Fatal("data send did not start")
+		}
 	}
-	time.Sleep(4 * agentHeartbeatInterval)
+	for len(ms.sentCh) > 0 {
+		if msg := <-ms.sentCh; !isHeartbeat(msg) {
+			t.Fatal("a data frame passed the gate")
+		}
+	}
+	time.Sleep(4 * agentHeartbeatInterval) // ticks of the heartbeat loop while the data is in flight
 	if queued := len(agent.heartbeatCh); queued != 0 {
 		t.Fatalf("heartbeat queued behind an in-flight data frame: %d", queued)
 	}
@@ -331,7 +374,7 @@ func TestAgent_DoesNotQueueHeartbeatBehindInFlightData(t *testing.T) {
 	}
 	select {
 	case msg := <-ms.sentCh:
-		if msg.GetTransactionId() == "" {
+		if isHeartbeat(msg) {
 			t.Fatal("heartbeat was sent before the in-flight data frame")
 		}
 	case <-ctx.Done():
@@ -341,7 +384,7 @@ func TestAgent_DoesNotQueueHeartbeatBehindInFlightData(t *testing.T) {
 	for {
 		select {
 		case msg := <-ms.sentCh:
-			if msg.GetTransactionId() == "" && len(msg.GetPayload()) == 0 && !msg.GetEom() {
+			if isHeartbeat(msg) {
 				return
 			}
 		case <-ctx.Done():
