@@ -347,3 +347,41 @@ func TestRelayNeverSeesTransferPlaintext(t *testing.T) {
 		})
 	}
 }
+
+// failOnceWriter takes part of its first write, fails it (a write deadline
+// mid-record), then takes every write whole.
+type failOnceWriter struct {
+	wire   bytes.Buffer
+	failed bool
+}
+
+func (w *failOnceWriter) Write(p []byte) (int, error) {
+	if !w.failed {
+		w.failed = true
+		n, _ := w.wire.Write(p[:len(p)/2])
+		return n, os.ErrDeadlineExceeded
+	}
+	return w.wire.Write(p)
+}
+
+// A record write that fails (in part on the wire, the relay sees those
+// bytes) spends its nonce and ends the conn: a later Write must never seal
+// other bytes under the same nonce (AES-GCM keystream and authentication
+// key reuse), the data path's twin of TestSignalConnFailedWriteEndsIt.
+// Before: wseq advanced only after a write succeeded, so the next Write
+// sealed its record under the failed one's nonce.
+func TestSecureConnFailedWriteEndsIt(t *testing.T) {
+	ini, _, _, _ := e2eHandshake(t, nil, nil)
+	fw := &failOnceWriter{}
+	w := ini.Secure(recordConn{w: fw})
+	if _, err := w.Write(bytes.Repeat([]byte("a"), 64)); err == nil {
+		t.Fatal("a failed record write succeeded")
+	}
+	sent := fw.wire.Len()
+	if _, err := w.Write(bytes.Repeat([]byte("b"), 64)); err == nil {
+		t.Fatal("a write after a failed one succeeded: its record reuses the failed one's nonce")
+	}
+	if fw.wire.Len() != sent {
+		t.Fatalf("a write after a failed one put %d bytes on the wire", fw.wire.Len()-sent)
+	}
+}

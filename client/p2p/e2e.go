@@ -312,6 +312,7 @@ type secureConn struct {
 
 	wmu  sync.Mutex
 	wseq uint64
+	werr error // the first failed record write: every later Write fails
 
 	rmu  sync.Mutex
 	rseq uint64
@@ -323,15 +324,24 @@ type secureConn struct {
 func (c *secureConn) Write(p []byte) (int, error) {
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
+	if c.werr != nil {
+		return 0, c.werr
+	}
 	n := 0
 	for len(p) > 0 {
 		k := min(len(p), secureRecordMax)
 		rec := c.seal.Seal(make([]byte, 4, 4+k+c.seal.Overhead()), nonce(c.wseq), p[:k], nil)
 		binary.BigEndian.PutUint32(rec, uint32(len(rec)-4))
+		// The nonce is spent once sealed: a failed write may have put part
+		// of the record on the wire, so it is never sealed again for other
+		// bytes (AES-GCM nonce reuse) and the conn writes no more (guard
+		// TestSecureConnFailedWriteEndsIt; the signalling twin is
+		// SignalConn.WriteFrame, E2EEPROOF finding 4).
+		c.wseq++
 		if _, err := c.Conn.Write(rec); err != nil {
+			c.werr = err
 			return n, err
 		}
-		c.wseq++
 		n += k
 		p = p[k:]
 	}

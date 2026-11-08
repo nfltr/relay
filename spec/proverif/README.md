@@ -330,7 +330,12 @@ SignalConn frame no path took gave its sequence number back
 (`sigconn.go` `sendSeq--`), so a frame partly written before its error was
 followed by another sealed under the same nonce (finding 4); since lane
 E2EEFIX a failed write spends its number and ends the SignalConn
-(`TestSignalConnFailedWriteEndsIt`).
+(`TestSignalConnFailedWriteEndsIt`). The data path's records had the same
+gap until lane CLAIMS-A: `e2e.go` `secureConn.Write` advanced its sequence
+number only after a write succeeded, so a record write that failed in part
+(a write deadline) left the next `Write` sealing other bytes under the same
+nonce; a failed record write now spends its number and every later `Write`
+fails (`TestSecureConnFailedWriteEndsIt`).
 
 ### First use
 
