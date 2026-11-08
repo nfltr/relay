@@ -720,3 +720,64 @@ took its number (S1), and S2's run below. 26 tests, 36 pairs accepted
 | `Confirm`, `Unknown` (the retry) | client/rpcclient/client_stream.go (`resumeAnswered`, `rehandshake`), client/rpcclient/a2a_e2ee_agent.go (`handleE2EEInit`), client/rpcclient/a2a_e2ee_session.go (`retry`) |
 | `Revoke` | client/rpcclient/a2a_e2ee_session.go (`takeCall`, `resume`: the keyring check; `dropRevoked`: both maps at once, run by `RecheckA2AE2EE` in a2a_e2ee_agent.go, which also ends the calls in flight under the revoked key through the existing cancel and `Return`, so CallLifecycle.tla needs no new action) |
 | trace recorder | client/rpcclient/trace_a2asession_on.go (`traceAS`; trace_a2asession_off.go without the tag), called from a2a_e2ee_session.go (`takeCall`, `resume`, `dropRevoked`), a2a_e2ee_agent.go (`answerE2EEInit`) and client_stream.go (`resumeAnswered`, `rehandshake`); spec/TraceA2ASession.tla; scripts/spec.sh `astraces` |
+
+## UDPFlow.tla: raw UDP tunnels, the flow lifecycle (design, no code yet)
+
+Lane UDPTUN (2026-11-08). The design is nfltr's
+`docs/decisions/udp-tunnels-2026-11-08.md`: an agent's `udp` service, a
+client's `connect:` mapping with `listen: "udp:..."`, one link session
+per flow (a source address at the client's listener), each datagram
+length-framed inside the session's bytes, one connected UDP socket per
+flow at the agent. This model is that design's state machine, checked
+before any code: the client's one socket reader and flow table, each
+flow's sender queue and session, the agent's flow table, idle expiry at
+both ends (the client's, and the agent's backstop), the open's refusal
+when the agent's table is full, and the death of the link connection
+(relay restart, client gone, agent gone).
+
+Invariants: `NoDeliverAfterClose` (no datagram is handed on, to the
+target or the application, by a side after it closed the flow it came
+on), `TableBounded` (each side's flow table holds at most `MaxFlows`),
+`MemoryBound` (per flow at most `Q` queued at each sender and `W` in
+flight each way), `NoHOL` (the client's reader never waits on one flow
+while another source's datagrams wait); properties `ClosedFinal` (a
+closed flow stays closed: link never reuses a session id) and
+`AllFlowsEnd` (every flow ends at both sides; every step but a cut is
+weakly fair). Mutants, each caught: `UDP:deliver-after-close`
+(`NoDeliverAfterClose`), `UDP:no-client-cap`, `UDP:no-agent-cap`
+(`TableBounded`), `UDP:grow-queue` (a full queue takes the datagram:
+`MemoryBound`), `UDP:block-on-full` (the reader waits on a full flow:
+`NoHOL`), `UDP:no-idle` (no timer at either end) and
+`UDP:agent-only-close` (the agent ends a flow only on the client's close:
+no backstop, the reset ignored; caught after a client death), both
+`AllFlowsEnd` on `UDPFlowLive.cfg`. Witnesses, each violated:
+`W_Refused`, `W_DropFull`, `W_LateReply` (a reply in flight to a flow the
+client closed), `W_LateDatagram` (a datagram in flight to a flow the agent
+closed), `W_Expired`, `W_Reply`, `W_CutRecovered` (a flow opened after a
+cut carries a datagram).
+
+| action | design (no Go yet) |
+|---|---|
+| `AppSend(s)` | the application's datagram to the listener |
+| `Read(s)` | the client's one reader: onto the source's flow queue, a new flow and session, or a counted drop (`queue_full`, `flows_full`) |
+| `PumpC(f)`, `PumpA(f)` | a flow's sender: its queue onto the session, on link credit |
+| `RecvC(f)` | the client reads the session: the open's answer, a reply to the flow's source, the agent's close |
+| `RecvA(f)` | the agent reads the session: the open (a flow and its socket, or a refusal past `max_flows`), a datagram to the target (its reply queued), the client's close |
+| `ExpireC(f)`, `ExpireA(f)` | `udp_idle` (and the open timeout) at the client, `idle_backstop` at the agent |
+| `NoticeC(f)`, `NoticeA(f)` | a side reads its session's error after the connection died |
+| `Cut(who)` | the link connection dies: `relay` (restart, drain deadline), `client`, `agent` (the process) |
+
+| assumption | source |
+|---|---|
+| A session is ordered and credited; data for a session its receiver closed is dropped; ids are never reused on a connection | github.com/nfltr/link `WIRE.md` sections 5 and 7 |
+| A connection's death ends every session on it at both ends, each learning it on its own time | link liveness (`WIRE.md` section 8); relay-core `spec/AgentLink.tla` (`AgentLinkBreak.cfg`): a stream's end resets its sessions |
+| A UDP write never waits (a full socket buffer is a drop) | the design's zero-wait writes; abstracted: a delivery always completes |
+
+`UDPFlow.cfg` (two sources, two session ids, one flow each side, queue
+and credit 1, one cut): invariants and `ClosedFinal`, 24,023 distinct
+states, depth 28, about 2 s. `UDPFlowLive.cfg` (one source, two ids):
+`AllFlowsEnd` too, 2,670 states, about 4 s. `UDPFlowLarge.cfg`
+(`LARGE=1`: two sources, three ids, `AllFlowsEnd`): 153,539 states,
+depth 33, about 5 min. Every action taken in each (`-coverage 1`); the
+14 UDP mutants and witnesses about 20 s. Code map: none yet; the lane
+that builds `client/udpflow` adds it with a trace recorder.

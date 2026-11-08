@@ -4,9 +4,11 @@
 #
 # spec.sh check|mutants: the TLA+ models of spec/ (spec/README.md).
 #   check    TLC on spec/SignalConn.cfg, spec/A2ASession.cfg, spec/CallCredit.cfg,
-#            spec/CallCreditBoth.cfg and spec/CallCreditSenders.cfg: their
+#            spec/CallCreditBoth.cfg, spec/CallCreditSenders.cfg,
+#            spec/UDPFlow.cfg and spec/UDPFlowLive.cfg: their
 #            invariants and liveness
-#            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg).
+#            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg,
+#            UDPFlowLarge.cfg).
 #   mutants  each bug put back must be caught.
 #   traces   client/p2p's SignalConn tests (TRACE_TESTS) run with -tags
 #            relaytrace; each trace, per direction that wrote, checked
@@ -279,11 +281,12 @@ fail=0
 cfg=
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession"
-	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge"
+	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive"
+	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	for c in $cfgs; do
 		m=${c%Large}
 		m=${m%Retry}
+		m=${m%Live}
 		echo "== $c.cfg"
 		st=0
 		tlc $c.cfg $m.tla >"$work/out" 2>&1 || st=$?
@@ -392,6 +395,25 @@ mutants)
 	expect AS:retry-no-take -e 's/Mutant = "none"/Mutant = "retry-no-take"/'
 	expect witness:ForgedRefused -e 's/^    AtMostOnce$/    W_ForgedRefused/'
 	expect witness:Lost -e 's/^    AtMostOnce$/    W_Lost/'
+	model=UDPFlow
+	# UDP tunnels (design, lane UDPTUN): each failure the flow lifecycle
+	# prevents, put in.
+	expect UDP:deliver-after-close -e 's/Mutant = "none"/Mutant = "deliver-after-close"/'
+	expect UDP:no-client-cap -e 's/Mutant = "none"/Mutant = "no-client-cap"/'
+	expect UDP:no-agent-cap -e 's/Mutant = "none"/Mutant = "no-agent-cap"/'
+	expect UDP:grow-queue -e 's/Mutant = "none"/Mutant = "grow-queue"/'
+	expect UDP:block-on-full -e 's/Mutant = "none"/Mutant = "block-on-full"/'
+	expect witness:Refused -e 's/^    NoHOL$/    W_Refused/'
+	expect witness:DropFull -e 's/^    NoHOL$/    W_DropFull/'
+	expect witness:LateReply -e 's/^    NoHOL$/    W_LateReply/'
+	expect witness:LateDatagram -e 's/^    NoHOL$/    W_LateDatagram/'
+	expect witness:Expired -e 's/^    NoHOL$/    W_Expired/'
+	expect witness:Reply -e 's/^    NoHOL$/    W_Reply/'
+	expect witness:CutRecovered -e 's/^    NoHOL$/    W_CutRecovered/'
+	cfg=UDPFlowLive
+	expect UDP:no-idle -e 's/Mutant = "none"/Mutant = "no-idle"/'
+	expect UDP:agent-only-close -e 's/Mutant = "none"/Mutant = "agent-only-close"/'
+	cfg=
 	exit $fail
 	;;
 cltraces)
