@@ -659,7 +659,40 @@ the session tests are its behaviours.
 |---|---|---|---|
 | S1 | high (design, before landing) | a retry after an unknown ran the request twice when the unknown was the relay's: in place of `resumed` (the callee had run the call), or with the resume held back and delivered after the retry | fixed before landing: the retry names its resume, the callee refuses it or takes its number (`a2aSessions.retry`); `TestA2AE2EELateResumeAfterRetryRefused`, `TestA2AE2EERetryChecks`, `TestA2AE2EEForgedUnknownEndsCall` |
 | L1 | low (limit) | a callee that restarts after serving a resumed call, with the relay forging its unknown within `a2aRetryBound`, runs that call again: nothing of the session survives a restart | kept as a documented limit (lane A2AFINAL; nfltr `docs/e2ee.md`, decision doc "Session reuse"): refusing every retry within the bound after a restart would fail each caller's first call after any callee restart, and an authenticated unknown stating the callee's start is a handshake change (both models); the window is the calls in flight at a restart, with an active relay, within 5 min |
+| S2 | high | found by the A2ASession traces (lane A2AFINAL): a rotation while a resumed call waits for its resumed. The callee served the call and dropped the old key's session (`RecheckA2AE2EE`); a relay's forged unknown made the caller retry under the new key, and the callee, keeping no session, answered the retry: the call ran twice. Trace (`reject-a2asession-rotation-retry.ndjson`): `Handshake t1 s1`, `Resume t2 s1 c1`, `Deliver t2 s1 c1`, `DropIn s1`, `Retry t2 s2 (s1, c1)`: the model drops a session only past the retry bound of its waiting calls (`ExpireCallee`), so the retry is refused (`RetryOK`) | fixed: the caller ends a call whose key no longer holds instead of retrying it (`a2aE2EEState.restart`, as `RecheckA2AE2EE` ends it); a callee still on the old key keeps the session and refuses the taken number, one on the new key refuses the old key id; `TestA2AE2EERotationDoesNotRetryAServedCall` |
 | T1 | low | `make spec-traces`: the CallLifecycle traces of tests whose relay drops a call's first frame (`TestA2AE2EERefusesDroppedFrame`, and here `TestA2AE2EELateResumeAfterRetryRefused`) are rejected: the model's network loses nothing (2 such transactions on main before this lane) | closed (lane A2AFINAL): those tests are out of the traces (`CL_TRACE_SKIP`, `scripts/spec.sh` `clrun`): a relay that loses frames is outside CallLifecycle.tla's network; what they check is `a2a_machine.pv`'s (16-18). A `Lose` step for every trace would accept a frame the code lost |
+
+### A2ASession traces
+
+`make spec-astraces` (in `make ci`) runs the A2A E2EE session
+tests of the retry, the restart, the forged unknown, the warm, the revoke
+and the rotations (`AS_TRACE_TESTS`; `make spec-traces` runs every
+`TestA2AE2EE` but `TestA2AE2EEv2Vectors`, whose session no handshake made)
+with `-tags relaytrace`, each in its own process (the tests name their
+agents alike), and checks each caller and callee pair of each trace against
+`TraceA2ASession.tla`: the run must be a behaviour of A2ASession.tla with
+that pair's calls and sessions alone (W = `a2aReplayWindow`). The callee
+logs `Handshake`, `Warm` and `Retry` (a retry answered: `Unknown`'s
+handshake, naming the resume it retries, which must be the call's) when it
+keeps the new session, before its ack goes out; `Deliver` when `resume`
+takes a call number; `DropIn` when it drops a session (`resume`,
+`dropRevoked`); `Restart` (the tests' `restartSessions`) when it loses them
+all. The caller logs `Resume` under the sessions' lock (its session and
+call number must be the model's `cs`), `Confirm`, `Fail` (a retry refused)
+and `DropOut` (`takeCall`, `dropRevoked`). Sessions are numbered per pair
+in the order the trace first names them, the order the model makes them.
+TLC fills in only what no end logs, and only when the next logged step
+needs it: the retry bound passing (`Late`) and the caller losing a session
+the model gave it (`ExpireCaller`: an ack the caller never took). Not
+logged: the relay's steps, an unknown the caller drops as out of place
+(after its retry or its resumed: the model's call is done), eviction past
+`a2aSessionMax`. A revoke shows as the drops it makes (`DropIn`,
+`DropOut`): the keyring does not say revoke from rotation, so `RevokeEnds`
+stays the model's alone. Fixtures `spec/testdata/reject-a2asession-*` must
+be rejected: a call number used twice, a resume taken after the retry that
+took its number (S1), and S2's run below. 26 tests, 36 pairs accepted
+(`spec-traces`, about 15 s); the per-push slice: 8 tests, 9 pairs, about
+8 s.
 
 ### Environment assumptions
 
@@ -679,4 +712,4 @@ the session tests are its behaviours.
 | `Deliver`, `ExpireCallee`, `Restart` | client/rpcclient/a2a_e2ee_agent.go (`handleE2EEResume`), client/rpcclient/a2a_e2ee_session.go (`resume`, `takeCallNumber`) |
 | `Confirm`, `Unknown` (the retry) | client/rpcclient/client_stream.go (`resumeAnswered`, `rehandshake`), client/rpcclient/a2a_e2ee_agent.go (`handleE2EEInit`), client/rpcclient/a2a_e2ee_session.go (`retry`) |
 | `Revoke` | client/rpcclient/a2a_e2ee_session.go (`takeCall`, `resume`: the keyring check; `dropRevoked`: both maps at once, run by `RecheckA2AE2EE` in a2a_e2ee_agent.go, which also ends the calls in flight under the revoked key through the existing cancel and `Return`, so CallLifecycle.tla needs no new action) |
-| trace recorder | none yet (the session tests' traces are checked against CallLifecycle.tla; an A2ASession recorder is open) |
+| trace recorder | client/rpcclient/trace_a2asession_on.go (`traceAS`; trace_a2asession_off.go without the tag), called from a2a_e2ee_session.go (`takeCall`, `resume`, `dropRevoked`), a2a_e2ee_agent.go (`answerE2EEInit`) and client_stream.go (`resumeAnswered`, `rehandshake`); spec/TraceA2ASession.tla; scripts/spec.sh `astraces` |

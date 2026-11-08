@@ -281,6 +281,7 @@ func (cs *clientStream) awaitResumed() error {
 func (cs *clientStream) resumeAnswered(taken bool) {
 	if taken {
 		if cs.e2ee.resuming() {
+			traceAS("Confirm", cs.e2ee.caller, cs.e2ee.callee, cs.txnID, nil, 0, nil)
 			cs.e2ee.confirm()
 		}
 		return
@@ -303,6 +304,7 @@ func (cs *clientStream) rehandshake() {
 	}
 	cs.agent.sessions.dropOut(cs.targetAgentID, s.session)
 	if err := cs.ensureHandshake(s); err != nil {
+		traceAS("Fail", s.caller, s.callee, cs.txnID, nil, 0, nil) // A2ASession.tla Unknown: the retry refused
 		cs.failE2EE(err)
 		return
 	}

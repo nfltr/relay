@@ -242,10 +242,10 @@ func (ss *a2aSessions) putIn(s *a2aSession) {
 	ss.in[s.id] = s
 }
 
-// takeCall gives a call to callee its session and a call number never
+// takeCall gives call txnID to callee its session and a call number never
 // used on it, or nil: no session, or one that expired or whose key no
 // longer holds (it is dropped: the call handshakes).
-func (ss *a2aSessions) takeCall(callee string, kr A2AE2EEKeyring) (*a2aSession, uint64) {
+func (ss *a2aSessions) takeCall(callee, txnID string, kr A2AE2EEKeyring) (*a2aSession, uint64) {
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	s := ss.out[callee]
@@ -255,11 +255,13 @@ func (ss *a2aSessions) takeCall(callee string, kr A2AE2EEKeyring) (*a2aSession, 
 	now := ss.clock()
 	if s.expired(now, a2aSessionIdle) || s.next >= a2aSessionMaxCalls || !s.keyHolds(kr, callee) {
 		delete(ss.out, callee)
+		traceAS("DropOut", s.caller, callee, "", s.id[:], 0, nil)
 		return nil, 0
 	}
 	c := s.next
 	s.next++
 	s.used = now
+	traceAS("Resume", s.caller, callee, txnID, s.id[:], c, nil)
 	return s, c
 }
 
@@ -271,11 +273,13 @@ func (ss *a2aSessions) dropRevoked(kr A2AE2EEKeyring) {
 	for k, s := range ss.out {
 		if !kr.Valid(s.kid) {
 			delete(ss.out, k)
+			traceAS("DropOut", s.caller, s.callee, "", s.id[:], 0, nil)
 		}
 	}
 	for k, s := range ss.in {
 		if !kr.Valid(s.kid) {
 			delete(ss.in, k)
+			traceAS("DropIn", s.caller, s.callee, "", s.id[:], 0, nil)
 		}
 	}
 }
@@ -321,12 +325,14 @@ func (ss *a2aSessions) resume(txnID string, msg []byte, kr A2AE2EEKeyring) (*a2a
 	}
 	if s.expired(now, a2aSessionCalleeIdle) || !s.keyHolds(kr, s.caller) {
 		delete(ss.in, id)
+		traceAS("DropIn", s.caller, s.callee, "", id[:], 0, nil)
 		return nil, 0, errA2ASessionUnknown
 	}
 	if !s.takeCallNumber(c) {
 		return nil, 0, errA2ASessionUnknown
 	}
 	s.used = now
+	traceAS("Deliver", s.caller, s.callee, txnID, id[:], c, nil)
 	return s, c, nil
 }
 
@@ -454,12 +460,17 @@ func (s *a2aE2EEState) confirm() {
 
 // restart turns a refused resume into a fresh handshake on the same call,
 // naming the resume it retries (retry), and gives the frames to send
-// again; once per call.
+// again; once per call. A call whose key no longer holds ends instead: the
+// callee may have served it and dropped the session of that key, so it
+// would answer a retry under the new key (spec/README.md finding S2).
 func (s *a2aE2EEState) restart() ([]a2aSentFrame, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.resume == nil || s.isConfirmed() || s.err != nil || s.broken != nil {
 		return nil, errors.New("rpcclient: an A2A E2EE session refusal out of place (not from the callee: the relay); the call ends")
+	}
+	if err := checkA2AE2EEKey(s.kr, s.kid); err != nil {
+		return nil, err
 	}
 	sent := s.sent
 	s.sent, s.resume = nil, nil // s.retry stays: initMessage sends it

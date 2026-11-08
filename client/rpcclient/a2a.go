@@ -563,7 +563,7 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 	// protect nothing TLS does not, and the relay cannot hold a pairing key.
 	if a.keyring() != nil && targetAgentID != RelayAgentID {
 		kr := a.keyring()
-		if s, c := a.sessions.takeCall(targetAgentID, kr); s != nil {
+		if s, c := a.sessions.takeCall(targetAgentID, cs.txnID, kr); s != nil {
 			cs.e2ee = newResumedA2AE2EEState(cs.txnID, s, c, kr)
 		} else {
 			cs.e2ee = newA2AE2EEState(cs.txnID, a.ref, targetAgentID, kr)

@@ -19,6 +19,12 @@
 #   cctraces FILE...  each call and direction of each recorded CallCredit
 #            trace (client/rpcclient -tags relaytrace) checked against
 #            spec/TraceCallCredit.tla.
+#   astraces  client/rpcclient's A2A E2EE session tests (AS_TRACE_TESTS,
+#            default the retry, restart, forged-unknown, warm, revoke and
+#            rotation ones; traces runs every TestA2AE2EE), each in its own
+#            process with -tags relaytrace; each caller and callee pair of
+#            each trace checked against spec/TraceA2ASession.tla; each
+#            spec/testdata/reject-a2asession-* fixture rejected (in make ci).
 # COVERAGE=1 adds -coverage 1. Java and tla2tools.jar come from
 # scripts/fetch-tla.sh.
 set -eu
@@ -179,6 +185,96 @@ clrun() {
 	done
 }
 
+# astrace FILE CALLER CALLEE: TLC on one pair of a recorded A2ASession
+# trace (spec/TraceA2ASession.tla); 0 when accepted. Its TLC output:
+# FILE.CALLER.CALLEE.out. The window is rpcclient's a2aReplayWindow.
+astrace() {
+	cfg=$work/$(basename "$1").$2.$3.cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Caller = "$2"
+    Callee = "$3"
+    Calls <- TraceCalls
+    MaxSess <- TraceSess
+    W = 256
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    AtMostOnce
+    NoKeyReuse
+    OnceRetry
+    TraceNotDone
+CFG
+	META=$work/states-$(basename "$1").$2.$3 tlc "$cfg" TraceA2ASession.tla >"$1.$2.$3.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.$2.$3.out"
+}
+
+# astraces FILE: each pair of an A2ASession trace; prints one line each,
+# fails on a rejected one or none.
+astraces() {
+	n=0 bad=0
+	for p in $(grep -v '"f":""' "$1" | sed -E 's/.*"f":"([^"]+)","t":"([^"]+)".*/\1>\2/' | sort -u); do
+		fr=${p%%>*} to=${p#*>}
+		n=$((n + 1))
+		if astrace "$1" "$fr" "$to"; then
+			echo "trace $(basename "$1") $fr>$to: $(grep -c "\"f\":\"$fr\",\"t\":\"$to\"" "$1") lines: accepted"
+		else
+			bad=$((bad + 1))
+			echo "trace $(basename "$1") $fr>$to: REJECTED"
+			grep -E 'Error|unknown event' "$1.$fr.$to.out" | head -5
+		fi
+	done
+	echo "$n pairs, $bad rejected"
+	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
+}
+
+# asrun TESTS: the fixtures, then client/rpcclient's tests TESTS, each in
+# its own process (they name their agents alike) with the recorder; every
+# pair of their A2ASession traces checked. AS_TRACE_SKIP: the tests that
+# make a session by hand (TestA2AE2EEv2Vectors: a resume on a session no
+# handshake made), outside A2ASession.tla's runs.
+asrun() {
+	# Every event TraceA2ASession.tla takes is one rpcclient records.
+	asgo=$(grep -hE 'traceAS\(|ev(, txn)? :?= "' client/rpcclient/*.go | grep -ohE '"[A-Z][A-Za-z]+"' | sort -u)
+	for e in $(grep -E 'E\.ev = ' spec/TraceA2ASession.tla | grep -ohE '"[A-Z][A-Za-z]*"' | sort -u); do
+		echo "$asgo" | grep -qx "$e" || { echo "spec/TraceA2ASession.tla: event $e is recorded by no traceAS in client/rpcclient"; return 1; }
+	done
+	for f in spec/testdata/reject-a2asession-*.ndjson; do
+		cp "$f" "$work/"
+		if astraces "$work/$(basename "$f")" >"$work/as.out"; then
+			echo "$f: accepted, want rejected"
+			return 1
+		fi
+		for o in "$work/$(basename "$f")".*.out; do
+			grep -q 'distinct states found' "$o" || { echo "$f: TLC failed:"; tail -20 "$o"; return 1; }
+		done
+		echo "$f: rejected"
+	done
+	# One process per test: the tests name their agents alike.
+	(cd client && go test -c -tags relaytrace -o "$work/rpcclient.test" ./rpcclient/) || return 1
+	nt=0
+	for t in $("$work/rpcclient.test" -test.list "$1"); do
+		echo "$t" | grep -qE "${AS_TRACE_SKIP:-^TestA2AE2EEv2Vectors\$}" && continue
+		mkdir -p "$work/astraces/$t"
+		(cd client/rpcclient && RELAYTRACE=$work/astraces/$t "$work/rpcclient.test" -test.run "^$t\$" -test.count 1) >"$work/astest.out" 2>&1 || {
+			cat "$work/astest.out"
+			return 1
+		}
+		for f in "$work/astraces/$t"/a2asession-*.ndjson; do
+			[ -s "$f" ] || continue
+			mv "$f" "$work/astraces/$t.ndjson"
+			nt=$((nt + 1))
+			astraces "$work/astraces/$t.ndjson" || fail=1
+		done
+	done
+	echo "$nt tests traced"
+	[ "$nt" -gt 0 ] || fail=1
+	return $fail
+}
+
 fail=0
 cfg=
 case ${1:-} in
@@ -302,6 +398,12 @@ cltraces)
 	# late frame reaches the target.
 	clrun "${CL_TRACE_TESTS:-^TestStuckHandlerDoesNotHoldTheReceiveLoop$}" "${CL_TRACE_COUNT:-3}"
 	;;
+astraces)
+	# The per-push slice: the session tests of the retry, the restart, the
+	# forged unknown, the warm, the revoke and the rotation.
+	asrun "${AS_TRACE_TESTS:-^TestA2AE2EE(SessionReused|ResponderRestartRehandshakes|ForgedUnknownEndsCall|LateResumeAfterRetryRefused|RevokeEndsSession|RotationRekeys|RotationDoesNotRetryAServedCall|WarmLeavesASessionAndNoCall)\$}" || fail=1
+	exit $fail
+	;;
 cctraces)
 	# CallCredit traces recorded elsewhere (relay-core's two-agent tests:
 	# its scripts/spec.sh traces runs this from the required relay version).
@@ -355,6 +457,7 @@ traces)
 		echo "$f: rejected"
 	done
 	clrun "${CL_TRACE_TESTS:-.}" 1
+	asrun "${AS_TRACE_TESTS:-^TestA2AE2EE}" || exit 1
 	for f in spec/testdata/reject-*.ndjson; do
 		case $f in *reject-callcredit-* | *reject-calllifecycle-*) continue ;; esac
 		cp "$f" "$work/"
@@ -402,7 +505,7 @@ traces)
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
 	;;
 *)
-	echo "usage: spec.sh check|mutants|traces|cltraces|cctraces FILE..." >&2
+	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|cctraces FILE..." >&2
 	exit 2
 	;;
 esac

@@ -64,6 +64,15 @@ func awaitEnded(t *testing.T, ctx context.Context, b *Agent, txn string) {
 	}
 }
 
+// restartSessions is a callee's restart, as far as its sessions go: it
+// loses them (spec/A2ASession.tla Restart).
+func restartSessions(b *Agent) {
+	b.sessions.mu.Lock()
+	b.sessions.in = nil
+	b.sessions.mu.Unlock()
+	traceAS("Restart", "", b.ref, "", nil, 0, nil)
+}
+
 func invokeCtx(t *testing.T, caller *Agent, target, req string) ([]byte, error) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -500,9 +509,7 @@ func TestA2AE2EEResponderRestartRehandshakes(t *testing.T) {
 	if _, err := invokeCtx(t, a, "m1-node", "one"); err != nil {
 		t.Fatal(err)
 	}
-	b.sessions.mu.Lock()
-	b.sessions.in = nil // the restart
-	b.sessions.mu.Unlock()
+	restartSessions(b)
 	if got, err := invokeCtx(t, a, "m1-node", "SECRET two"); err != nil || string(got) != "echo:SECRET two" {
 		t.Fatalf("after the responder's restart = %q, %v", got, err)
 	}
@@ -556,9 +563,7 @@ func TestA2AE2EEForgedUnknownEndsCall(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.restart {
-				b.sessions.mu.Lock()
-				b.sessions.in = nil
-				b.sessions.mu.Unlock()
+				restartSessions(b)
 			}
 			armed.Store(true)
 			inits := log.count(true, a2aE2EEInitMessageType)
@@ -727,5 +732,61 @@ func TestA2AE2EEWarmRetagRefused(t *testing.T) {
 				t.Fatalf("served %q", got)
 			}
 		})
+	}
+}
+
+// A rotation while a resumed call waits for its resumed: the callee served
+// the call and dropped the session of the old key; an unknown the relay
+// forges then must not make the caller retry under the new key (the
+// callee, keeping no session, would answer the retry and serve the call
+// again). The caller ends a call whose key no longer holds instead of
+// retrying it (spec/README.md finding S2; TraceA2ASession.tla rejected
+// this run's trace: a session dropped within the retry bound, then a
+// retry answered).
+func TestA2AE2EERotationDoesNotRetryAServedCall(t *testing.T) {
+	store := newTestStore(t, "m1")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var mach atomic.Pointer[A2AE2EEKeyring]
+	k := store.machine("m1")
+	mach.Store(&k)
+	var armed atomic.Bool
+	var txn atomic.Value
+	caller, b, msA, _, rec := relayPair(t, ctx, keyedAgent("hub", store), keyedAgent("m1-node", swapKeyring{&mach}), func(fromA bool, f *pb.TunnelFrame) ([]*pb.TunnelFrame, []*pb.TunnelFrame) {
+		if armed.Load() && fromA && f.GetMessageType() == a2aE2EEResumeMessageType {
+			txn.Store(f.GetTransactionId())
+		}
+		if armed.Load() && !fromA && f.GetTransactionId() == txn.Load() {
+			return nil, nil // the callee's resumed and answer: held
+		}
+		return nil, one(f)
+	})
+	if _, err := invokeCtx(t, caller, "m1-node", "one"); err != nil {
+		t.Fatal(err)
+	}
+	armed.Store(true)
+	done := make(chan error, 1)
+	go func() {
+		cctx, ccancel := context.WithTimeout(ctx, 3*time.Second)
+		defer ccancel()
+		_, err := caller.Invoke(cctx, "m1-node", []byte("pay 100"))
+		done <- err
+	}()
+	if !waitFor(ctx, func() bool { return len(rec.requests()) == 2 }) {
+		t.Fatal("the resumed call was not served")
+	}
+	id, _ := txn.Load().(string)
+	awaitEnded(t, ctx, b, id)
+	store.rotate("m1")
+	k2 := store.machine("m1")
+	mach.Store(&k2)
+	b.RecheckA2AE2EE() // the callee drops the old key's session
+	armed.Store(false)
+	msA.recvCh <- &pb.TunnelFrame{MessageType: a2aE2EEUnknownMessageType, TransactionId: id}
+	if err := <-done; err == nil {
+		t.Fatal("a call whose resumed the relay held succeeded")
+	}
+	if got := rec.requests(); len(got) != 2 {
+		t.Fatalf("served %q: the call ran twice", got)
 	}
 }

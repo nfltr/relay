@@ -148,6 +148,15 @@ func (a *Agent) answerE2EEInit(msg *pb.TunnelFrame, warm bool) (*a2aE2EEState, [
 
 	if state.established != nil {
 		a.sessions.putIn(state.established)
+		// A2ASession.tla: Handshake, Warm, or a retry answered (Unknown).
+		ev, txn := "Handshake", msg.GetTransactionId()
+		switch {
+		case warm:
+			ev, txn = "Warm", ""
+		case state.retry != nil:
+			ev = "Retry"
+		}
+		traceAS(ev, state.caller, a.ref, txn, state.established.id[:], 0, state.retry)
 	}
 	return state, ack, ""
 }

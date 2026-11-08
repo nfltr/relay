@@ -102,8 +102,9 @@ stress-race:
 # each bug put back is caught (both in make ci); spec-traces checks the
 # traces the tests record under -tags relaytrace against them (nightly);
 # spec-cltraces is its per-push slice (the stuck-handler test's CallLifecycle
-# traces, about 10 s; in make ci).
-.PHONY: spec spec-mutants spec-traces spec-cltraces spec-proverif
+# traces, about 10 s; in make ci); spec-astraces another (the A2A E2EE
+# session tests' A2ASession traces, about 10 s; in make ci).
+.PHONY: spec spec-mutants spec-traces spec-cltraces spec-astraces spec-proverif
 spec:
 	./scripts/spec.sh check
 spec-mutants:
@@ -112,6 +113,8 @@ spec-traces:
 	./scripts/spec.sh traces
 spec-cltraces:
 	./scripts/spec.sh cltraces
+spec-astraces:
+	./scripts/spec.sh astraces
 # The ProVerif models (spec/proverif/README.md): every line of
 # spec/proverif/expect.txt, mutants included (in make ci).
 spec-proverif:
