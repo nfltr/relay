@@ -39,7 +39,7 @@ type serverStream struct {
 	sourceAgentID string
 	sourceSession uint64 // RoutingInfo.source_session of the call's first frame
 	ctx           context.Context
-	cancel        context.CancelFunc
+	cancel        context.CancelCauseFunc
 	requestCh     chan *pb.TunnelFrame
 
 	// 2026-05-24 deflake (TestNotifyWatchStreams panic: send on closed
@@ -105,6 +105,9 @@ func (ss *serverStream) Recv() ([]byte, error) {
 	select {
 	case msg, ok := <-ss.requestCh:
 		if !ok {
+			if ss.ctx.Err() != nil { // ended (a refusal, a revoke), not the caller's end
+				return nil, context.Cause(ss.ctx)
+			}
 			return nil, io.EOF
 		}
 		if !msg.GetEom() {
@@ -121,7 +124,7 @@ func (ss *serverStream) Recv() ([]byte, error) {
 		}
 		return data, nil
 	case <-ss.ctx.Done():
-		return nil, ss.ctx.Err()
+		return nil, context.Cause(ss.ctx)
 	}
 }
 
@@ -151,8 +154,8 @@ func (ss *serverStream) Send(data []byte) error {
 	// One of the call's credit (the caller's ResponseWindow): a caller
 	// that stops reading holds this handler, never the agent's other calls.
 	if !ss.agent.serveCredit.Acquire(ss.txnID, 1) {
-		if err := ss.ctx.Err(); err != nil {
-			return err
+		if ss.ctx.Err() != nil {
+			return context.Cause(ss.ctx)
 		}
 		return ss.agent.connectionClosed()
 	}

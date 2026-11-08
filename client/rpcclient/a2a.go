@@ -347,7 +347,7 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 
 	a := newAgent(do.agentID, ref, upStream, ctx, do.heartbeatInterval, true, liveness)
 	if keyring != nil {
-		a.a2aKeyring.Store(&keyring)
+		a.setKeyring(keyring)
 	}
 	a.conn = conn
 	return a, nil
@@ -446,7 +446,7 @@ func (a *Agent) EnableA2AE2EE(kr A2AE2EEKeyring) error {
 	if kr == nil {
 		return ErrA2AE2EENoKey
 	}
-	a.a2aKeyring.Store(&kr)
+	a.setKeyring(kr)
 	return nil
 }
 

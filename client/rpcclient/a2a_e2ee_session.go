@@ -263,6 +263,23 @@ func (ss *a2aSessions) takeCall(callee string, kr A2AE2EEKeyring) (*a2aSession, 
 	return s, c
 }
 
+// dropRevoked forgets every session whose key id no longer holds (spec
+// A2ASession.tla Revoke: both ends drop them at once).
+func (ss *a2aSessions) dropRevoked(kr A2AE2EEKeyring) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	for k, s := range ss.out {
+		if !kr.Valid(s.kid) {
+			delete(ss.out, k)
+		}
+	}
+	for k, s := range ss.in {
+		if !kr.Valid(s.kid) {
+			delete(ss.in, k)
+		}
+	}
+}
+
 // dropOut forgets the caller's session with callee if it is s.
 func (ss *a2aSessions) dropOut(callee string, s *a2aSession) {
 	ss.mu.Lock()

@@ -99,7 +99,7 @@ var errPastWindow = status.Error(codes.ResourceExhausted, "rpcclient: the peer s
 // newServerStream makes the stream of a call this agent serves, its credit
 // open until the call ends (end; the agent's end closes every credit).
 func (a *Agent) newServerStream(msg *pb.TunnelFrame, e2ee *a2aE2EEState) *serverStream {
-	ssCtx, ssCancel := context.WithCancel(a.ctx)
+	ssCtx, ssCancel := context.WithCancelCause(a.ctx)
 	txnID := msg.GetTransactionId()
 	a.serveCredit.Open(txnID)
 	traceCCOpen(a, txnID, false)
@@ -121,7 +121,10 @@ func (a *Agent) newServerStream(msg *pb.TunnelFrame, e2ee *a2aE2EEState) *server
 // where the call is removed, instead of a context callback per call
 // (lane CALLCREDIT2: the allocations of context.AfterFunc; guard
 // TestServedCallCreditEndsWithTheCall).
-func (ss *serverStream) end() {
-	ss.cancel()
+func (ss *serverStream) end() { ss.endWith(nil) }
+
+// endWith is end with the cause the handler's context gives (a revoke).
+func (ss *serverStream) endWith(cause error) {
+	ss.cancel(cause)
 	ss.agent.serveCredit.Forget(ss.txnID)
 }
