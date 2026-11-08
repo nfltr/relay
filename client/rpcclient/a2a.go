@@ -401,17 +401,20 @@ func newAgent(agentID, ref string, s AgentTunnel, ctx context.Context, heartbeat
 	return a
 }
 
-// Close shuts down the Agent, cancels in-flight calls, and closes the
-// underlying gRPC connection (if created by Dial). A Dial'd agent's Close
-// returns once every goroutine it started has ended, a Send or Recv still
-// running on the stream included (closing the connection ends them). The
-// AgentTunnel given to NewAgent is its caller's: a Send or Recv blocked on
-// it ends when the caller ends that tunnel, not by Close.
 // Ref is the ref the relay registered this agent under ("<machine
 // id>-<service>", its AgentRefKey header on Dial), else its agent id: the
 // callee its A2A E2EE calls name, and the caller its calls state.
 func (a *Agent) Ref() string { return a.ref }
 
+// Close shuts down the Agent, cancels in-flight calls, and closes the
+// underlying gRPC connection (if created by Dial). It does not drain: a call
+// still running ends with its handler's context cancelled and its end is not
+// sent (the relay ends it for its caller as its target disconnected); Drain
+// before Close answers every delivered call first. A Dial'd agent's Close
+// returns once every goroutine it started has ended, a Send or Recv still
+// running on the stream included (closing the connection ends them). The
+// AgentTunnel given to NewAgent is its caller's: a Send or Recv blocked on
+// it ends when the caller ends that tunnel, not by Close.
 func (a *Agent) Close() error {
 	a.cancel()
 	a.wg.Wait()
@@ -1006,8 +1009,14 @@ func (a *Agent) handleCall(ss *serverStream, h Handler) {
 			StatusDetail:  detail,
 		})
 	}
-	if sendErr := sendStatusTrailerWithRetry(a.ctx, send, statusTrailerSendAttempts, statusTrailerBackoff); sendErr != nil {
-		log.Printf("rpcclient: failed to send a2a-status trailer for txn %s after %d attempts: %v", ss.txnID, statusTrailerSendAttempts, sendErr)
+	switch sendErr := sendStatusTrailerWithRetry(a.ctx, send, statusTrailerSendAttempts, statusTrailerBackoff); {
+	case sendErr == nil:
+	case a.ctx.Err() != nil && a.Err() == nil:
+		// Closed: Close does not drain (Drain does); the relay ends the call
+		// for its caller as its target disconnected.
+		log.Printf("rpcclient: closed before the end of txn %s was sent; Drain before Close delivers it", ss.txnID)
+	default:
+		log.Printf("rpcclient: failed to send a2a-status trailer for txn %s: %v", ss.txnID, sendErr)
 	}
 }
 

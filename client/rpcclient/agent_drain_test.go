@@ -71,3 +71,40 @@ func TestIsAgentDrainingMatchesOnlyTheRelayDrainRefusal(t *testing.T) {
 		}
 	}
 }
+
+// Close does not drain: a call still running when Close is called ends with
+// its handler's context cancelled and its end is never sent (the relay ends
+// it for the caller as its target disconnected). Drain before Close is the
+// path that loses no call.
+func TestCloseCancelsRunningCallsWithoutTheirEnd(t *testing.T) {
+	stream := newMockStream(t.Context())
+	agent := NewAgent("leaving", stream)
+	handlerErr := make(chan error, 1)
+	agent.Handle(func(ss ServerStream) error {
+		<-ss.Context().Done()
+		handlerErr <- ss.Context().Err()
+		return status.Error(codes.Internal, "late")
+	})
+	stream.recvCh <- &pb.TunnelFrame{MessageType: "a2a-request", TransactionId: "running", Payload: []byte("x"), Eom: true,
+		Routing: &pb.RoutingInfo{AgentId: "hub"}}
+	for !agent.hasIncomingCalls() {
+		time.Sleep(time.Millisecond)
+	}
+	if err := agent.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-handlerErr; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the running handler's context ended with %v, want context.Canceled", err)
+	}
+	for {
+		select {
+		case f := <-stream.sendCh:
+			if f.GetMessageType() == "a2a-status" {
+				t.Fatalf("Close sent the end of a call it cancelled: %v", f)
+			}
+			continue
+		default:
+		}
+		break
+	}
+}
