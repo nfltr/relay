@@ -133,11 +133,11 @@ func TestFullRoundTrip_E2EE(t *testing.T) {
 	msTarget := newMockStream(ctx)
 
 	source := NewAgent("agent-a", msSource)
-	source.EnableA2AE2EE()
+	mustEnableE2EE(t, source)
 	defer source.Close() //nolint:errcheck
 
 	target := NewAgent(testTargetAgentId, msTarget)
-	target.EnableA2AE2EE()
+	mustEnableE2EE(t, target)
 	defer target.Close() //nolint:errcheck
 
 	target.Handle(func(stream ServerStream) error {
@@ -287,88 +287,6 @@ func TestFullRoundTrip_E2EE(t *testing.T) {
 	}
 }
 
-func TestAgentInboundOnlyE2EEAcceptsEncryptedCallsWithoutEncryptingOutbound(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	msSource := newMockStream(ctx)
-	msTarget := newMockStream(ctx)
-
-	source := NewAgent("encrypted-worker", msSource)
-	source.EnableA2AE2EE()
-	defer source.Close() //nolint:errcheck
-
-	target := NewAgent("relay-orchestrator", msTarget, WithAgentInboundA2AE2EE())
-	defer target.Close() //nolint:errcheck
-
-	target.Handle(func(stream ServerStream) error {
-		data, err := stream.Recv()
-		if err != nil {
-			return err
-		}
-		return stream.Send(append([]byte("ack:"), data...))
-	})
-
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case msg, ok := <-msSource.sendCh:
-				if !ok {
-					return
-				}
-				select {
-				case msTarget.recvCh <- msg:
-				case <-ctx.Done():
-					return
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-	go func() {
-		defer wg.Done()
-		for {
-			select {
-			case msg, ok := <-msTarget.sendCh:
-				if !ok {
-					return
-				}
-				select {
-				case msSource.recvCh <- msg:
-				case <-ctx.Done():
-					return
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	response, err := source.Invoke(ctx, "relay-orchestrator", []byte("resume-task"))
-	if err != nil {
-		t.Fatalf("encrypted inbound Invoke() error = %v", err)
-	}
-	if got, want := string(response), "ack:resume-task"; got != want {
-		t.Fatalf("encrypted inbound response = %q, want %q", got, want)
-	}
-
-	outbound, err := target.NewStream(ctx, "plaintext-worker")
-	if err != nil {
-		t.Fatalf("NewStream() error = %v", err)
-	}
-	client, ok := outbound.(*clientStream)
-	if !ok {
-		t.Fatalf("NewStream() type = %T, want *clientStream", outbound)
-	}
-	if client.e2ee != nil {
-		t.Fatal("inbound-only E2EE unexpectedly enabled encryption for an outbound stream")
-	}
-}
-
 func TestInvoke_E2EEUnsupportedTarget(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -377,7 +295,7 @@ func TestInvoke_E2EEUnsupportedTarget(t *testing.T) {
 	msTarget := newMockStream(ctx)
 
 	source := NewAgent("agent-a", msSource)
-	source.EnableA2AE2EE()
+	mustEnableE2EE(t, source)
 	defer source.Close() //nolint:errcheck
 
 	target := NewAgent(testTargetAgentId, msTarget)

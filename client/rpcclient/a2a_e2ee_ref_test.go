@@ -17,9 +17,8 @@ import (
 func refAgent(id, ref string, kr A2AE2EEKeyring) func(AgentTunnel) *Agent {
 	return func(s AgentTunnel) *Agent {
 		a := NewAgent(id, s, func(o *agentOptions) { o.ref = ref })
-		a.EnableA2AE2EE()
-		if kr != nil {
-			a.a2aKeyring.Store(&kr)
+		if err := a.EnableA2AE2EE(kr); err != nil {
+			panic(err)
 		}
 		return a
 	}

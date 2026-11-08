@@ -19,16 +19,14 @@ type DialOption func(*dialOptions)
 type AgentOption func(*agentOptions)
 
 type agentOptions struct {
-	ref            string // the agent ref (Agent.Ref); "" is the agent id
-	a2aE2EEInbound bool
-	noHeartbeat    bool
+	ref         string // the agent ref (Agent.Ref); "" is the agent id
+	noHeartbeat bool
 }
 
 type dialOptions struct {
 	agentID           string
 	apiKey            string                      // server-generated API key for agent authentication (preferred)
 	a2aE2EE           bool                        // transparently encrypt A2A payloads end to end
-	a2aRelayRequests  bool                        // with a2aE2EE: still serve relay-originated plaintext requests
 	a2aPairingKeyFile string                      // with a2aE2EE: authenticate handshakes with this pairing key
 	a2aKeyring        A2AE2EEKeyring              // with a2aE2EE: authenticate handshakes with these keys
 	labels            map[string]string           // optional fleet labels for this agent
@@ -57,28 +55,17 @@ func WithAPIKey(key string) DialOption {
 	return func(o *dialOptions) { o.apiKey = key }
 }
 
-// WithA2AE2EE transparently encrypts A2A request and response payloads using
-// an in-band X25519 handshake plus AES-256-GCM. Both endpoints must use an
-// updated rpcclient that supports the A2A E2EE control frames.
+// WithA2AE2EE transparently encrypts A2A request and response payloads end
+// to end (wire v2: Noise NNpsk0 under a key of WithA2AE2EEKeyring or
+// WithA2AE2EEPairingKeyFile, then AES-256-GCM with counter nonces). It is
+// keyed only: Dial refuses it without a key (ErrA2AE2EENoKey).
 //
-// An agent with E2EE on refuses plaintext requests from peers
-// (FailedPrecondition naming --e2ee / NFLTR_A2A_E2EE), so a relay cannot
-// downgrade a stream or inject one of its own. Streams to the relay's own
-// agent (RelayAgentID) are sent plaintext: they end at the relay.
+// An agent with E2EE on refuses every plaintext request, the relay's own
+// too (FailedPrecondition), so a relay cannot downgrade a stream or inject
+// one of its own. Streams to the relay's own agent (RelayAgentID) are sent
+// plaintext: they end at the relay.
 func WithA2AE2EE() DialOption {
 	return func(o *dialOptions) { o.a2aE2EE = true }
-}
-
-// WithA2AAcceptRelayRequests lets an agent with WithA2AE2EE still serve the
-// requests the relay itself originates in plaintext: relay-owned dispatch
-// from RelayAgentID and fleet-invoke. The relay sees those
-// payloads by construction. Only agents whose contract includes relay-owned
-// work (nfltr worker, fleet targets) opt in; hubs and nodes must not, or the
-// relay could start work on them by claiming to be its own agent. With a
-// pairing key (WithA2AE2EEPairingKeyFile) the relay is treated as hostile
-// and relay-originated requests are refused regardless.
-func WithA2AAcceptRelayRequests() DialOption {
-	return func(o *dialOptions) { o.a2aRelayRequests = true }
 }
 
 // WithA2AE2EEPairingKeyFile authenticates every E2EE handshake with a
@@ -108,13 +95,6 @@ func WithA2AE2EEKeyring(kr A2AE2EEKeyring) DialOption {
 func CheckA2AE2EEPairingKeyFile(path string) error {
 	_, err := LoadA2AE2EEPairingKey(path)
 	return err
-}
-
-// WithAgentInboundA2AE2EE allows an Agent created with NewAgent to accept
-// encrypted incoming A2A streams without enabling encryption for streams it
-// initiates. It is intended for routing and control agents serving mixed fleets.
-func WithAgentInboundA2AE2EE() AgentOption {
-	return func(o *agentOptions) { o.a2aE2EEInbound = true }
 }
 
 // WithoutHeartbeat makes an Agent created with NewAgent send no idle

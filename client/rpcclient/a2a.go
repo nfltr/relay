@@ -109,16 +109,9 @@ type Agent struct {
 	conn    *grpc.ClientConn // nil when created via NewAgent
 	stream  AgentTunnel
 
-	// A2A E2EE receive support and outbound preference are separate because
-	// long-lived routing/control agents must accept encrypted callers without
-	// forcing encryption on every peer they initiate a stream toward.
-	a2aE2EEInbound  atomic.Bool
-	a2aE2EEOutbound atomic.Bool
-	// a2aRelayRequests exempts relay-originated plaintext requests from the
-	// downgrade refusal (WithA2AAcceptRelayRequests).
-	a2aRelayRequests atomic.Bool
-	// a2aKeyring, when set, authenticates every E2EE handshake: a peer must
-	// prove a key it names (WithA2AE2EEPairingKeyFile, WithA2AE2EEKeyring).
+	// a2aKeyring, when set, turns A2A E2EE on, both ways (keyed only): every
+	// call it makes or serves is sealed under a key a peer must prove
+	// (WithA2AE2EEPairingKeyFile, WithA2AE2EEKeyring, EnableA2AE2EE).
 	a2aKeyring atomic.Pointer[A2AE2EEKeyring]
 	// sessions are the keyed handshakes later calls reuse (a2a_e2ee_session.go).
 	sessions a2aSessions
@@ -263,6 +256,9 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 	if keyring != nil && !do.a2aE2EE {
 		return nil, fmt.Errorf("rpcclient: an A2A E2EE pairing key needs E2EE on (--e2ee / NFLTR_A2A_E2EE)")
 	}
+	if do.a2aE2EE && keyring == nil {
+		return nil, ErrA2AE2EENoKey
+	}
 
 	host, port := parseTarget(target)
 
@@ -349,8 +345,7 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 		return nil, fmt.Errorf("rpcclient: upstream: %w", err)
 	}
 
-	a := newAgent(do.agentID, ref, upStream, ctx, do.heartbeatInterval, true, do.a2aE2EE, do.a2aE2EE, liveness)
-	a.a2aRelayRequests.Store(do.a2aRelayRequests)
+	a := newAgent(do.agentID, ref, upStream, ctx, do.heartbeatInterval, true, liveness)
 	if keyring != nil {
 		a.a2aKeyring.Store(&keyring)
 	}
@@ -369,10 +364,10 @@ func NewAgent(agentID string, s AgentTunnel, opts ...AgentOption) *Agent {
 	if ref == "" {
 		ref = agentID
 	}
-	return newAgent(agentID, ref, s, context.Background(), 0, !options.noHeartbeat, options.a2aE2EEInbound, false, agentwire.LivenessDefault)
+	return newAgent(agentID, ref, s, context.Background(), 0, !options.noHeartbeat, agentwire.LivenessDefault)
 }
 
-func newAgent(agentID, ref string, s AgentTunnel, ctx context.Context, heartbeatInterval time.Duration, heartbeat, a2aE2EEInbound, a2aE2EEOutbound bool, liveness agentwire.Liveness) *Agent {
+func newAgent(agentID, ref string, s AgentTunnel, ctx context.Context, heartbeatInterval time.Duration, heartbeat bool, liveness agentwire.Liveness) *Agent {
 	agentCtx, cancel := context.WithCancel(ctx)
 	a := &Agent{
 		agentID:           agentID,
@@ -386,8 +381,6 @@ func newAgent(agentID, ref string, s AgentTunnel, ctx context.Context, heartbeat
 		heartbeatInterval: heartbeatInterval,
 		liveness:          liveness,
 	}
-	a.a2aE2EEInbound.Store(a2aE2EEInbound)
-	a.a2aE2EEOutbound.Store(a2aE2EEOutbound)
 	a.newCallCredits()
 	context.AfterFunc(agentCtx, func() { // senders waiting for credit give up
 		a.callCredit.Close()
@@ -444,11 +437,14 @@ func (a *Agent) Err() error {
 }
 
 // EnableA2AE2EE turns on transparent end-to-end encryption for A2A streams on
-// this Agent. It is primarily useful for tests and in-process agents created
-// with NewAgent().
-func (a *Agent) EnableA2AE2EE() {
-	a.a2aE2EEInbound.Store(true)
-	a.a2aE2EEOutbound.Store(true)
+// this Agent, keyed by kr (A2A E2EE is keyed only: a nil kr is
+// ErrA2AE2EENoKey). It is for in-process agents created with NewAgent().
+func (a *Agent) EnableA2AE2EE(kr A2AE2EEKeyring) error {
+	if kr == nil {
+		return ErrA2AE2EENoKey
+	}
+	a.a2aKeyring.Store(&kr)
+	return nil
 }
 
 // connectionClosed is the error a call pending on this closed connection
@@ -522,7 +518,7 @@ func (a *Agent) NewStream(ctx context.Context, targetAgentID string, opts ...Cal
 	}
 	// A stream to the relay's own agent ends at the relay: E2EE to it would
 	// protect nothing TLS does not, and the relay cannot hold a pairing key.
-	if a.a2aE2EEOutbound.Load() && targetAgentID != RelayAgentID {
+	if a.keyring() != nil && targetAgentID != RelayAgentID {
 		kr := a.keyring()
 		if s, c := a.sessions.takeCall(targetAgentID, kr); s != nil {
 			cs.e2ee = newResumedA2AE2EEState(cs.txnID, s, c, kr)
@@ -897,9 +893,11 @@ func (a *Agent) handleRequest(msg *pb.TunnelFrame) string {
 		return "Drop"
 	}
 
-	if a.refusesPlaintext(msg) {
+	// An agent that encrypts its own streams is keyed: its keys declare the
+	// relay untrusted, so it refuses every plaintext request, the relay's too.
+	if a.keyring() != nil {
 		a.sendA2AControlError(txnID, codes.FailedPrecondition, fmt.Sprintf(
-			"rpcclient: agent %s requires end-to-end encrypted A2A streams (--e2ee / NFLTR_A2A_E2EE); %s sent plaintext: turn on --e2ee at the caller, or upgrade it",
+			"rpcclient: agent %s requires end-to-end encrypted A2A streams; %s sent plaintext: call it with its A2A E2EE key, or upgrade the caller",
 			a.agentID, msg.GetRouting().GetAgentId()))
 		return "Refuse"
 	}

@@ -233,9 +233,6 @@ func (ss *a2aSessions) putIn(s *a2aSession) {
 // used on it, or nil: no session, or one that expired or whose key no
 // longer holds (it is dropped: the call handshakes).
 func (ss *a2aSessions) takeCall(callee string, kr A2AE2EEKeyring) (*a2aSession, uint64) {
-	if kr == nil {
-		return nil, 0
-	}
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	s := ss.out[callee]
@@ -276,7 +273,7 @@ var errA2ASessionUnknown = errors.New("rpcclient: A2A E2EE session unknown")
 // resume takes a resume of call txnID: its session and call number, or
 // errA2ASessionUnknown. A session whose key no longer holds is dropped.
 func (ss *a2aSessions) resume(txnID string, msg []byte, kr A2AE2EEKeyring) (*a2aSession, uint64, error) {
-	if len(msg) != a2aResumeLen || kr == nil {
+	if len(msg) != a2aResumeLen {
 		return nil, 0, errA2ASessionUnknown
 	}
 	id := [a2aSessionIDLen]byte(msg[:a2aSessionIDLen])

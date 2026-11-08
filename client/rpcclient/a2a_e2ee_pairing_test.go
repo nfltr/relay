@@ -8,10 +8,10 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -39,13 +39,8 @@ func testPairingKey(t *testing.T, secret string) []byte {
 	return key
 }
 
-// keyringOf is the keyring of a root pairing key, or nil for none.
-func keyringOf(key []byte) A2AE2EEKeyring {
-	if key == nil {
-		return nil
-	}
-	return a2aE2EEPairingKey(key)
-}
+// keyringOf is the keyring of a root pairing key.
+func keyringOf(key []byte) A2AE2EEKeyring { return a2aE2EEPairingKey(key) }
 
 func pairedAgent(id string, key []byte) func(AgentTunnel) *Agent {
 	return keyedAgent(id, keyringOf(key))
@@ -53,9 +48,9 @@ func pairedAgent(id string, key []byte) func(AgentTunnel) *Agent {
 
 func keyedAgent(id string, kr A2AE2EEKeyring) func(AgentTunnel) *Agent {
 	return func(s AgentTunnel) *Agent {
-		a := e2eeAgent(id, false)(s)
-		if kr != nil {
-			a.a2aKeyring.Store(&kr)
+		a := NewAgent(id, s)
+		if err := a.EnableA2AE2EE(kr); err != nil {
+			panic(err)
 		}
 		return a
 	}
@@ -115,44 +110,6 @@ func cloneFrame(f *pb.TunnelFrame) *pb.TunnelFrame {
 	return proto.Clone(f).(*pb.TunnelFrame) // every field, as a relay forwards it
 }
 
-// Without a pairing key the ephemeral keys are unauthenticated: an active
-// relay that answers the caller's handshake itself reads the caller's
-// request. This is the gap the pairing key closes; the test pins it so the
-// claim stays honest.
-func TestA2AE2EEWithoutPairingKeyIsOpenToAnActiveRelay(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	var mu sync.Mutex
-	var mine *a2aE2EEState
-	var stolen []string
-	caller, _ := hostilePair(t, ctx, pairedAgent("hub", nil), pairedAgent("node-1", nil), func(fromA bool, f *pb.TunnelFrame) (back, on []*pb.TunnelFrame) {
-		mu.Lock()
-		defer mu.Unlock()
-		switch {
-		case fromA && f.GetMessageType() == a2aE2EEInitMessageType:
-			st, ack, err := newServerA2AE2EEState(f.GetTransactionId(), "node-1", f.GetPayload(), nil, rand.Reader)
-			if err != nil {
-				t.Errorf("the relay's own handshake: %v", err)
-				return nil, nil
-			}
-			mine = st
-			return one(&pb.TunnelFrame{MessageType: a2aE2EEAckMessageType, TransactionId: f.GetTransactionId(), Payload: ack}), nil
-		case fromA && mine != nil && isData(f, "a2a-request"):
-			if body, err := mine.openData(f.GetPayload()); err == nil {
-				stolen = append(stolen, string(body))
-			}
-			return nil, nil
-		}
-		return nil, one(f)
-	})
-	_, _ = caller.Invoke(ctx, "node-1", []byte("SECRET-BRIEF"))
-	mu.Lock()
-	defer mu.Unlock()
-	if !strings.Contains(strings.Join(stolen, ""), "SECRET-BRIEF") {
-		t.Fatal("expected the unauthenticated handshake to be readable by a relay that answers it")
-	}
-}
-
 func TestA2AE2EEPairingKeyRefusesRelayKeySwap(t *testing.T) {
 	key := testPairingKey(t, secretA)
 	for _, tc := range []struct {
@@ -198,8 +155,6 @@ func TestA2AE2EEPairingKeyBothEnds(t *testing.T) {
 	}{
 		{"same key", key, key, ""},
 		{"different keys", key, other, "failed pairing-key verification"},
-		{"responder has none", key, nil, "pairing key this end does not have"},
-		{"caller has none", nil, key, "did not authenticate its A2A E2EE key"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -222,20 +177,18 @@ func TestA2AE2EEPairingKeyBothEnds(t *testing.T) {
 	}
 }
 
-// A pairing key declares the relay hostile: a keyed worker refuses
-// relay-authored work (relay-owned dispatch, fleet-invoke) even though it
-// opted in to serve it, since the relay could inject any task.assign.
+// Keys declare the relay hostile: a keyed worker refuses relay-authored
+// work (relay-owned dispatch, fleet-invoke), since the relay could inject
+// any task.assign. There is no opt-in (keyed only).
 func TestPairedAgentRefusesRelayAuthoredRequests(t *testing.T) {
 	key := testPairingKey(t, secretA)
 	for _, tc := range []struct{ source, mtype string }{
 		{RelayAgentID, "a2a-request"},
-		{"worker-1", fleetInvokeMessageType},
+		{"worker-1", "fleet-invoke"},
 	} {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		ms := newMockStream(ctx)
-		worker := e2eeAgent("worker-1", true)(ms)
-		kr := keyringOf(key)
-		worker.a2aKeyring.Store(&kr)
+		worker := pairedAgent("worker-1", key)(ms)
 		var ran bool
 		worker.Handle(func(s ServerStream) error { ran = true; return nil })
 		ms.recvCh <- &pb.TunnelFrame{TransactionId: "txn-" + tc.mtype, MessageType: tc.mtype, Payload: []byte("task.assign"), Eom: true,
@@ -262,10 +215,18 @@ func TestLoadA2AE2EEPairingKey(t *testing.T) {
 	}
 }
 
+// Keyed only: E2EE without a key is refused before any dial.
 func TestDialRejectsPairingKeyWithoutE2EE(t *testing.T) {
 	_, err := Dial(context.Background(), "127.0.0.1:1", WithAgentID("a"), WithA2AE2EEPairingKeyFile(pairingKeyFile(t, secretA)))
 	if err == nil || !strings.Contains(err.Error(), "needs E2EE on") {
 		t.Fatalf("err = %v", err)
+	}
+	_, err = Dial(context.Background(), "127.0.0.1:1", WithAgentID("a"), WithA2AE2EE())
+	if !errors.Is(err, ErrA2AE2EENoKey) {
+		t.Fatalf("E2EE without a key: err = %v, want ErrA2AE2EENoKey", err)
+	}
+	if err := NewAgent("a", newMockStream(t.Context())).EnableA2AE2EE(nil); !errors.Is(err, ErrA2AE2EENoKey) {
+		t.Fatalf("EnableA2AE2EE(nil): err = %v, want ErrA2AE2EENoKey", err)
 	}
 	_, err = Dial(context.Background(), "127.0.0.1:1", WithAgentID("a"), WithA2AE2EE(), WithA2AE2EEPairingKeyFile(pairingKeyFile(t, "short")))
 	if err == nil || !strings.Contains(err.Error(), "at least 32 bytes") {

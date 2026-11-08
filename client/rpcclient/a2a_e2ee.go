@@ -53,8 +53,7 @@ const (
 	a2aE2EEProtocol = "nfltr-a2a-e2ee-v2"     // the prologue's first field
 	a2aE2EEPskLabel = "nfltr-a2a-e2ee-v2-psk" // psk = HMAC(K_kid, label)
 
-	a2aE2EEPubLen            = 32 // X25519 public key: an unkeyed message 1 (NN: e)
-	a2aE2EEKeyedMsg1Len      = a2aE2EEPubLen + 16
+	a2aE2EEKeyedMsg1Len      = 32 + 16 // message 1 (NNpsk0: psk, e): an X25519 key and the empty payload's tag
 	a2aE2EEPairingMinSecret  = 32
 	a2aE2EEPairingRemedy     = "set the same --e2ee-key-file / NFLTR_A2A_E2EE_KEY_FILE on both ends"
 	a2aE2EEPairingKeyContext = "nfltr-a2a-e2ee-pairing-v1"
@@ -119,9 +118,9 @@ const (
 // true), or the one a responder answers (false). A machine calls as a
 // machine and answers root holders only; a root holder calls as root and
 // answers a machine key id from a machine, the root key ("") from a root
-// holder. Without a keyring the call is unkeyed, root to root.
+// holder.
 func a2aE2EERole(kr A2AE2EEKeyring, kid string, initiator bool) string {
-	machine := kr != nil && kr.Machine()
+	machine := kr.Machine()
 	switch {
 	case initiator && machine, !initiator && !machine && kid != "":
 		return a2aE2EERoleMachine
@@ -133,6 +132,12 @@ func a2aE2EERole(kr A2AE2EEKeyring, kid string, initiator bool) string {
 // errA2AE2EEPairing marks a handshake refused because a peer did not prove
 // the key its call needs.
 var errA2AE2EEPairing = errors.New("A2A E2EE pairing key")
+
+// ErrA2AE2EENoKey refuses A2A E2EE without a key: it is keyed only (nfltr
+// docs/decisions/a2a-machine-identity-2026-11-07.md "Keyed only"). Dial
+// returns it for WithA2AE2EE without WithA2AE2EEKeyring or
+// WithA2AE2EEPairingKeyFile; an agent without keys refuses every E2EE call.
+var ErrA2AE2EENoKey = errors.New("rpcclient: A2A E2EE needs a key (WithA2AE2EEKeyring or WithA2AE2EEPairingKeyFile); there is no unkeyed A2A E2EE")
 
 // LoadA2AE2EEPairingKey reads a pairing key file and derives the 32-byte key
 // K = SHA-256(context ‖ secret). The secret must be random: a relay that
@@ -183,11 +188,8 @@ func a2aE2EEFieldsOK(txnID, caller, callee, kid string) error {
 }
 
 func newA2AE2EEHandshake(initiator bool, prologue, key []byte, rng io.Reader) (*noise.HandshakeState, error) {
-	cfg := noise.Config{CipherSuite: a2aE2EESuite, Random: rng, Pattern: noise.HandshakeNN, Initiator: initiator, Prologue: prologue}
-	if key != nil {
-		cfg.PresharedKey = a2aE2EEPsk(key) // NNpsk0
-	}
-	return noise.NewHandshakeState(cfg)
+	return noise.NewHandshakeState(noise.Config{CipherSuite: a2aE2EESuite, Random: rng, Pattern: noise.HandshakeNN, Initiator: initiator, Prologue: prologue,
+		PresharedKey: a2aE2EEPsk(key)}) // NNpsk0
 }
 
 // a2aE2EEState is one call's E2EE: the handshake, then a transport key per
@@ -203,7 +205,7 @@ type a2aE2EEState struct {
 
 	txnID          string
 	caller, callee string         // the agent refs the prologue binds
-	kr             A2AE2EEKeyring // this end's keys, or nil (unkeyed: Noise NN)
+	kr             A2AE2EEKeyring // this end's keys
 	kid            string         // the call's key id
 	keyFP          [sha256.Size]byte
 	hs             *noise.HandshakeState
@@ -235,7 +237,7 @@ func newA2AE2EEState(txnID, caller, callee string, kr A2AE2EEKeyring) *a2aE2EESt
 
 // checkA2AE2EEKey is the per-frame check: the call's key id still holds.
 func checkA2AE2EEKey(kr A2AE2EEKeyring, kid string) error {
-	if kr != nil && !kr.Valid(kid) {
+	if !kr.Valid(kid) {
 		return fmt.Errorf("rpcclient: A2A E2EE key %q was revoked or rotated; this call ends: %w", kid, errA2AE2EEPairing)
 	}
 	return nil
@@ -264,13 +266,9 @@ func (s *a2aE2EEState) fail(err error) {
 // callee (model RootInit/MachInit), message 1 is Noise's -> psk, e. The
 // init payload is caller 0 callee 0 key id 0 message 1.
 func (s *a2aE2EEState) initMessage() ([]byte, error) {
-	var kid string
-	var key []byte
-	if s.kr != nil {
-		var err error
-		if kid, key, err = s.kr.For(s.callee); err != nil {
-			return nil, fmt.Errorf("rpcclient: no A2A E2EE key to call %s: %v; %s: %w", s.callee, err, a2aE2EEPairingRemedy, errA2AE2EEPairing)
-		}
+	kid, key, err := s.kr.For(s.callee)
+	if err != nil {
+		return nil, fmt.Errorf("rpcclient: no A2A E2EE key to call %s: %v; %s: %w", s.callee, err, a2aE2EEPairingRemedy, errA2AE2EEPairing)
 	}
 	if err := a2aE2EEFieldsOK(s.txnID, s.caller, s.callee, kid); err != nil {
 		return nil, err
@@ -369,7 +367,7 @@ func (s *a2aE2EEState) complete(ack []byte) error {
 		s.err = fmt.Errorf("rpcclient: peer's A2A E2EE key failed pairing-key verification (a different key, or a relay in the middle; key id %q for %s): %v; %s: %w", s.kid, s.callee, err, a2aE2EEPairingRemedy, errA2AE2EEPairing)
 	} else {
 		s.send, s.recv, s.ready = toPeer, fromPeer, true
-		if s.kr != nil && bytes.Equal(offer, a2aSessionOffer) {
+		if bytes.Equal(offer, a2aSessionOffer) {
 			s.established = newA2ASession(toPeer, fromPeer, s.caller, s.callee, s.kid, s.keyFP, time.Now())
 		}
 	}
@@ -398,27 +396,14 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 	if callee != own {
 		return nil, nil, fmt.Errorf("rpcclient: an A2A E2EE call for %s reached %s (the relay routed it here): %w", callee, own, errA2AE2EEPairing)
 	}
-	var key, offer []byte
-	switch keyed := len(msg1) == a2aE2EEKeyedMsg1Len || len(msg1) == a2aE2EEKeyedMsg1Len+a2aRetryLen; {
-	case kr == nil && keyed:
-		return nil, nil, fmt.Errorf("rpcclient: peer authenticates A2A E2EE with a pairing key this end does not have; %s: %w", a2aE2EEPairingRemedy, errA2AE2EEPairing)
-	case kr == nil && len(msg1) == a2aE2EEPubLen && kid == "":
-	case kr == nil:
+	if len(msg1) != a2aE2EEKeyedMsg1Len && len(msg1) != a2aE2EEKeyedMsg1Len+a2aRetryLen {
 		return nil, nil, errors.New("rpcclient: malformed A2A E2EE init")
-	case len(msg1) == a2aE2EEPubLen:
-		return nil, nil, fmt.Errorf("rpcclient: peer did not authenticate its A2A E2EE key with the pairing key (no pairing key there, or an older nfltr); %s: %w", a2aE2EEPairingRemedy, errA2AE2EEPairing)
-	case !keyed:
-		return nil, nil, errors.New("rpcclient: malformed A2A E2EE init")
-	default:
-		want, k, err := kr.For(caller)
-		if err != nil {
-			return nil, nil, fmt.Errorf("rpcclient: peer's A2A E2EE key id %q refused for caller %s: %v; %s: %w", kid, caller, err, a2aE2EEPairingRemedy, errA2AE2EEPairing)
-		}
-		if want != kid {
-			return nil, nil, fmt.Errorf("rpcclient: caller %s named A2A E2EE key id %q, this end answers it only under %q; %s: %w", caller, kid, want, a2aE2EEPairingRemedy, errA2AE2EEPairing)
-		}
-		key, offer = k, a2aSessionOffer
 	}
+	key, err := a2aE2EEAnswerKey(kr, caller, kid)
+	if err != nil {
+		return nil, nil, err
+	}
+	offer := a2aSessionOffer
 	hs, err := newA2AE2EEHandshake(false, a2aE2EEPrologue(txnID, a2aE2EERole(kr, kid, false), caller, callee, kid), key, rng)
 	if err != nil {
 		return nil, nil, fmt.Errorf("rpcclient: A2A E2EE handshake: %w", err)
@@ -435,10 +420,21 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 	if len(retry) > 0 {
 		s.retry = retry
 	}
-	if offer != nil {
-		s.established = newA2ASession(fromPeer, toPeer, caller, callee, kid, sha256.Sum256(key), time.Now())
-	}
+	s.established = newA2ASession(fromPeer, toPeer, caller, callee, kid, sha256.Sum256(key), time.Now())
 	return s, ack, nil
+}
+
+// a2aE2EEAnswerKey is the key a callee answers caller's init under key id
+// kid with: the one its keyring gives for caller, under that id only.
+func a2aE2EEAnswerKey(kr A2AE2EEKeyring, caller, kid string) ([]byte, error) {
+	want, k, err := kr.For(caller)
+	if err != nil {
+		return nil, fmt.Errorf("rpcclient: peer's A2A E2EE key id %q refused for caller %s: %v; %s: %w", kid, caller, err, a2aE2EEPairingRemedy, errA2AE2EEPairing)
+	}
+	if want != kid {
+		return nil, fmt.Errorf("rpcclient: caller %s named A2A E2EE key id %q, this end answers it only under %q; %s: %w", caller, kid, want, a2aE2EEPairingRemedy, errA2AE2EEPairing)
+	}
+	return k, nil
 }
 
 // seal is one frame of type t (model: aenc(split, n, ad(t), (type, body))).

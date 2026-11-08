@@ -159,23 +159,21 @@ func plainAgent(id string) func(AgentTunnel) *Agent {
 	return func(s AgentTunnel) *Agent { return NewAgent(id, s) }
 }
 
-func e2eeAgent(id string, relayRequests bool) func(AgentTunnel) *Agent {
-	return func(s AgentTunnel) *Agent {
-		a := NewAgent(id, s)
-		a.EnableA2AE2EE()
-		a.a2aRelayRequests.Store(relayRequests)
-		return a
-	}
+// testKeyring is a root pairing key the E2EE tests share (keyed only).
+var testKeyring A2AE2EEKeyring = a2aE2EEPairingKey(bytes.Repeat([]byte{7}, 32))
+
+func e2eeAgent(id string) func(AgentTunnel) *Agent {
+	return keyedAgent(id, testKeyring)
 }
 
 func TestE2EEAgentRefusesPlaintextCaller(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	caller, _, ran := echoPair(t, ctx, plainAgent("old-cli"), e2eeAgent("node-1", false), &testRelay{})
+	caller, _, ran := echoPair(t, ctx, plainAgent("old-cli"), e2eeAgent("node-1"), &testRelay{})
 
 	_, err := caller.Invoke(ctx, "node-1", []byte("launch an agent"))
-	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "--e2ee") || !strings.Contains(err.Error(), "old-cli sent plaintext") {
-		t.Fatalf("plaintext call to an E2EE agent: err = %v, want FailedPrecondition naming --e2ee", err)
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "A2A E2EE key") || !strings.Contains(err.Error(), "old-cli sent plaintext") {
+		t.Fatalf("plaintext call to an E2EE agent: err = %v, want FailedPrecondition naming the key", err)
 	}
 	if ran.Load() != 0 {
 		t.Fatal("the E2EE agent ran a plaintext request")
@@ -188,10 +186,10 @@ func TestE2EECallerNeverFallsBackToPlaintext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	relay := &testRelay{}
-	caller, _, ran := echoPair(t, ctx, e2eeAgent("hub", false), plainAgent("old-node"), relay)
+	caller, _, ran := echoPair(t, ctx, e2eeAgent("hub"), plainAgent("old-node"), relay)
 
 	_, err := caller.Invoke(ctx, "old-node", []byte("SECRET-BRIEF"))
-	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "does not support A2A E2EE") {
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "does not serve A2A E2EE") {
 		t.Fatalf("E2EE call to a plaintext agent: err = %v", err)
 	}
 	if ran.Load() != 0 {
@@ -207,43 +205,10 @@ func TestE2EECallerNeverFallsBackToPlaintext(t *testing.T) {
 func TestE2EEAgentsStillTalk(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	caller, _, _ := echoPair(t, ctx, e2eeAgent("hub", false), e2eeAgent("node-1", false), &testRelay{})
+	caller, _, _ := echoPair(t, ctx, e2eeAgent("hub"), e2eeAgent("node-1"), &testRelay{})
 	got, err := caller.Invoke(ctx, "node-1", []byte("hi"))
 	if err != nil || string(got) != "echo:hi" {
 		t.Fatalf("E2EE ↔ E2EE = %q, %v", got, err)
-	}
-}
-
-// Relay-originated requests (relay-owned dispatch, fleet-invoke) are served
-// only by agents that opted in; everyone else refuses them like any other
-// plaintext request, so the relay cannot start work on a node or a hub by
-// claiming to be its own agent.
-func TestE2EERelayOriginatedRequestsNeedOptIn(t *testing.T) {
-	for _, tc := range []struct {
-		name          string
-		source, mtype string
-	}{
-		{"relay-owned dispatch", RelayAgentID, "a2a-request"},
-		{"fleet invoke", "worker-1", fleetInvokeMessageType},
-	} {
-		for _, optIn := range []bool{true, false} {
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			ms := newMockStream(ctx)
-			worker := e2eeAgent("worker-1", optIn)(ms)
-			var ran atomic.Int32
-			worker.Handle(func(s ServerStream) error { ran.Add(1); _, _ = s.Recv(); return s.Send([]byte("ok")) })
-			ms.recvCh <- &pb.TunnelFrame{TransactionId: "txn-" + tc.name, MessageType: tc.mtype, Payload: []byte("task"), Eom: true,
-				Routing: &pb.RoutingInfo{AgentId: tc.source, TargetAgentId: "worker-1"}}
-			reply := <-ms.sendCh
-			if optIn && (ran.Load() != 1 || reply.GetMessageType() == "error") {
-				t.Fatalf("%s with opt-in: ran=%d reply=%v", tc.name, ran.Load(), reply)
-			}
-			if !optIn && (ran.Load() != 0 || reply.GetMessageType() != "error" || codes.Code(reply.GetStatusCode()) != codes.FailedPrecondition) {
-				t.Fatalf("%s without opt-in: ran=%d reply=%v", tc.name, ran.Load(), reply)
-			}
-			_ = worker.Close()
-			cancel()
-		}
 	}
 }
 
@@ -251,7 +216,7 @@ func TestE2EERelayOriginatedRequestsNeedOptIn(t *testing.T) {
 func TestE2EEStreamToRelayAgentIsPlaintext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	a := e2eeAgent("worker-1", true)(newMockStream(ctx))
+	a := e2eeAgent("worker-1")(newMockStream(ctx))
 	defer a.Close() //nolint:errcheck
 	for target, wantE2EE := range map[string]bool{RelayAgentID: false, "hub": true} {
 		s, err := a.NewStream(ctx, target)
@@ -280,5 +245,12 @@ func TestStrayResponseFramesAreNotRequests(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if ran.Load() != 0 {
 		t.Fatalf("stray frames ran the handler %d times", ran.Load())
+	}
+}
+
+func mustEnableE2EE(t *testing.T, a *Agent) {
+	t.Helper()
+	if err := a.EnableA2AE2EE(testKeyring); err != nil {
+		t.Fatal(err)
 	}
 }

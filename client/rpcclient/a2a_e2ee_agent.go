@@ -21,24 +21,7 @@ import (
 // Streams to it end at the relay.
 const RelayAgentID = "nfltr-relay"
 
-// fleetInvokeMessageType is the request the relay itself sends fleet targets.
-const fleetInvokeMessageType = "fleet-invoke"
-
-// refusesPlaintext reports whether a new plaintext request must be refused:
-// this agent encrypts its own streams (E2EE on), and the request is not one
-// the relay originates itself on an agent that accepts those. A pairing key
-// declares the relay untrusted, so a keyed agent refuses relay-authored
-// work too; without one the relay could run its own handshake anyway, so
-// refusing its plaintext would add nothing.
-func (a *Agent) refusesPlaintext(msg *pb.TunnelFrame) bool {
-	if !a.a2aE2EEOutbound.Load() {
-		return false
-	}
-	relayOriginated := msg.GetRouting().GetAgentId() == RelayAgentID || msg.GetMessageType() == fleetInvokeMessageType
-	return !relayOriginated || !a.a2aRelayRequests.Load() || a.keyring() != nil
-}
-
-// keyring is this agent's A2A E2EE keys, or nil (unkeyed).
+// keyring is this agent's A2A E2EE keys, or nil (no E2EE).
 func (a *Agent) keyring() A2AE2EEKeyring {
 	if k := a.a2aKeyring.Load(); k != nil {
 		return *k
@@ -47,9 +30,9 @@ func (a *Agent) keyring() A2AE2EEKeyring {
 }
 
 func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
-	if !a.a2aE2EEInbound.Load() {
+	if a.keyring() == nil {
 		a.sendA2AControlError(msg.GetTransactionId(), codes.FailedPrecondition,
-			"target agent does not support A2A E2EE; retry with --e2ee=false or upgrade the target")
+			"target agent does not serve A2A E2EE: it has no A2A E2EE key (A2A E2EE is keyed only)")
 		return "Refuse"
 	}
 
@@ -94,9 +77,9 @@ func (a *Agent) handleE2EEInit(msg *pb.TunnelFrame) string {
 // holds; else it answers unknown (not the call's end: the relay keeps the
 // call's route for the caller's handshake).
 func (a *Agent) handleE2EEResume(msg *pb.TunnelFrame) string {
-	if !a.a2aE2EEInbound.Load() {
+	if a.keyring() == nil {
 		a.sendA2AControlError(msg.GetTransactionId(), codes.FailedPrecondition,
-			"target agent does not support A2A E2EE; retry with --e2ee=false or upgrade the target")
+			"target agent does not serve A2A E2EE: it has no A2A E2EE key (A2A E2EE is keyed only)")
 		return "Refuse"
 	}
 	a.handlerMu.RLock()

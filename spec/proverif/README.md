@@ -30,7 +30,7 @@ and pin.
 | X25519 is a Diffie-Hellman group (CDH hard, small-subgroup keys refused) | RFC 7748; Go `crypto/ecdh` rejects the all-zero shared secret |
 | HMAC-SHA256 and HKDF-SHA256 are PRFs; SHA-256 collision resistant | RFC 2104, RFC 5869 |
 | AES-256-GCM is an AEAD; a nonce never repeats under one key (v1: random 96-bit nonces; v2: Noise's 64-bit counter per direction) | NIST SP 800-38D (2^32 random-nonce messages per key); Noise rev. 34 §5.1 |
-| Noise NNpsk0 / NN as specified | Noise Protocol Framework rev. 34, `github.com/flynn/noise` |
+| Noise NNpsk0 as specified | Noise Protocol Framework rev. 34, `github.com/flynn/noise` |
 | the HMAC input encoding `label 0 txn 0 keys` is injective | the labels are prefix-free; the keys after the second 0 have fixed length (`a2a_e2ee.go` `a2aE2EEPairingTag`) |
 | a call's frames reach the other end in order, unless the relay misbehaves | gRPC stream per agent, relay-core sessions (relied on by v2's counters only) |
 | the root pairing key and machine keys never pass through a relay | nfltr `a2akeys`: files made on a root holder, copied out of band |
@@ -40,7 +40,6 @@ and pin.
 | file | what |
 |---|---|
 | `a2a_today.pv` | wire v1 (removed; relay 3977c04, the findings' evidence): interactive handshake, frames, machine keys, revoke; root holder R on relay X, machines B, E (honest), C (leaked), D (leaked, revoked at phase 1) on relay Y |
-| `a2a_today_unkeyed.pv` | wire v1 without a pairing key (v2's unkeyed Noise NN has the same attack) |
 | `a2a_machine.pv` | wire v2, what `client/rpcclient` ships: Noise NNpsk0 under the owner-derived machine key, key id from the called agent id, prologue binding txn, the initiator's role, caller, callee and key id (the callee's own ref the relay's), per-direction counter keys, authenticated end; each rule cites its code |
 
 Wire v2 is interactive only: v1's 0-RTT first flight (Noise NK to a
@@ -97,9 +96,6 @@ completes.
 | 10 | no frame of revoked D handled after the revoke | T (mutant `skip-valid`: F) |
 | 11 | no handshake of revoked D answered after the revoke | T (mutant `skip-peer-revoke`: F) |
 | 12-13 | witnesses: R gets B's response; R gets B's request | F (reachable) |
-
-`a2a_today_unkeyed.pv`: secrecy of the request **F**, agreement **F**: the
-relay runs one handshake with each end (F4, expected); witness F.
 
 `a2a_machine.pv` (wire v2), every variant and `leak` (phase 2 leaks the
 root key, so every machine key: forward secrecy of all earlier calls):
@@ -182,11 +178,11 @@ per finding (`client/rpcclient/a2a_e2ee_v2_test.go`: F1
   to any machine (a 0-RTT label could even claim another agent's name
   under the compromised key). Traces: `a2a_today` 1, 6 (and v1's 0-RTT
   model, removed with the flight).
-- **F4 (expected, unchanged in v2) no pairing key, no authentication.**
-  Without a pairing key or keyring the relay runs a handshake with each end
-  (`a2a_today_unkeyed`; v2's Noise NN the same,
-  `TestA2AE2EEWithoutPairingKeyIsOpenToAnActiveRelay`). The docs must say
-  that E2EE without a key protects only against a passive relay.
+- **F4 (expected) no pairing key, no authentication.** Without a pairing
+  key the relay runs a handshake with each end (Noise NN). Removed: A2A
+  E2EE is keyed only (lane A2AFINAL; `Dial` refuses `WithA2AE2EE` without
+  a key, `ErrA2AE2EENoKey`, and an agent without keys refuses every E2EE
+  call), so its model and the unkeyed Noise NN are gone.
 - **F5 (low)** a machine answers a root holder's init (key id "") without
   checking its tag (`newServerA2AE2EEState`): authentication is implicit
   (no frame of such a call decrypts for anyone without the machine's key,

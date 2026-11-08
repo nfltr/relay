@@ -193,7 +193,7 @@ func TestNewStream_SendWithE2EEUnblocksWhenAgentStopsBeforeAck(t *testing.T) {
 
 	ms := newMockStream(ctx)
 	agent := NewAgent("agent-a", ms)
-	agent.EnableA2AE2EE()
+	mustEnableE2EE(t, agent)
 
 	stream, err := agent.NewStream(context.Background(), testTargetAgentId)
 	if err != nil {

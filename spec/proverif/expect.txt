@@ -3,7 +3,6 @@
 #
 # Part 1: wire v1, removed (an F is a finding, README "Findings"; kept as
 # their evidence).
-a2a_today_unkeyed - FFF
 a2a_today - FTTTTFF?FTTFF
 a2a_today skip-valid FTTTTFF?FFTFF
 a2a_today skip-peer-revoke FTTTTFF?FTFFF
