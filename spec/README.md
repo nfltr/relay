@@ -518,13 +518,17 @@ branch, which kept its entry: finding CL2) is gone: a fresh call's credit
 
 Invariants: `AtMostOneCall` (a transaction runs at most one handler
 call), `NoEndedEntry` (`incoming` holds only calls whose handler runs: the
-memory bound); liveness `AllServed` (a call whose first frame was sent
+memory bound), `CancelKnown` (a cancel reaches its target only for a call
+it started or refused: a caller sends one only once a frame of its call
+went, `clientStream.reached`); liveness `AllServed` (a call whose first frame was sent
 gets its handler call or its refusal). Mutants, each caught:
 `CL:late-new-call` (the code before: `AtMostOneCall`), `CL:old-caller`
 (`AtMostOneCall`), `CL:tombstone` (an ended call keeps its entry:
 `NoEndedEntry`), `CL:refused-first-kept` (the code before for a refused
 first frame: `NoEndedEntry`), `CL:drop-unknown` (every frame of an
-unknown transaction dropped: `AllServed`). Witnesses, each violated:
+unknown transaction dropped: `AllServed`, with `CancelKnown` off: its dropped first frame leaves the cancel unknown too), `CL:cancel-unreached` (a
+caller that leaves before any frame went cancels all the same: the code
+before lane A2AFINAL, finding CL4: `CancelKnown`). Witnesses, each violated:
 `W_LateFrame`, `W_LateData` (a data frame of a call whose handler
 returned reaches the target), `W_BothRun`. `CallLifecycle.cfg` (2 calls,
 2 data frames each, request ends and cancels; a `Send` that took its
@@ -571,6 +575,8 @@ transactions accepted, 0 rejected; every action taken (`Start` 53,
 `reject-calllifecycle-late-new-call.ndjson` (a second `Start` from a
 continuation after `Return`: the code before),
 `reject-calllifecycle-tombstone.ndjson` (a frame served after `Return`),
+`reject-calllifecycle-cancel-unreached.ndjson` (a cancel dropped for a
+call no frame of which reached: finding CL4),
 `reject-calllifecycle-old-caller-second-call.ndjson` (an old caller's
 unmarked frame after `Return` starts a second call; it ends at that
 `Start`, so it was accepted while the checker listed `TraceNotDone` first:
@@ -586,6 +592,7 @@ traces, three runs (`CL_TRACE_TESTS`, `CL_TRACE_COUNT`).
 | CL1 | medium | a request frame that reached the target after its call's handler returned started a second handler call for the transaction (code diverged from `CallCredit.tla`'s `End`) | fixed: `continuation` mark and the rule above; `TestLateRequestFrameStartsNoCall`, `TestEndedAndRefusedCallsLeaveNoEntry` (red before: 2 handler calls for one call; 20 entries left by late frames) |
 | CL2 | low | a call refused at its first frame kept its entry (one per refusal) | unreachable (a fresh call always takes its first frame); the refusal deleted; `TestFirstFrameFitsAFreshCall` |
 | CL3 | low | `make spec-traces` rejected `TestStuckHandlerDoesNotHoldTheReceiveLoop`'s `stuck` trace in about 2 of 3 runs (`AtMostOneCall`): the test played an old caller (no `continuation` marks) and its refused handler returned before the caller's last frame, so a later frame started a real second handler call (2-3 per run in the raw trace). Callers of this module mark continuations, so no product path; the test was outside the spec's caller (lane CALLDUP, 2026-11-06) | fixed: the test marks continuations and asserts one handler call (red before: `ran 2 handler calls, want 1` in 2 of 10 runs); `make spec-cltraces` in `make ci`; reject fixture `reject-calllifecycle-old-caller-second-call.ndjson` |
+| CL4 | low | nightly `make spec-traces` on 11ff714 rejected 3 transactions, each a lone `Drop`: a cancel of a call its target never heard of (`TestA2AE2EEKeyringRevokeRefusesOnlyThatMachine`, `TestA2AE2EERevokeEndsSession`: the caller refused the call at a revoked key and still sent its cancel; the spec's `Cancel` needs `sent > 0`, so the code was wrong), and a continuation with no first frame (`TestA2AE2EEWithoutPairingKeyIsOpenToAnActiveRelay`, an active relay that took the first frame: outside the model's network, T1; that test went with unkeyed E2EE, eaf1900). Harmless at the target (dropped), but a first frame after such a cancel would start a handler whose caller left (lane CALLTRACES, 2026-11-08) | fixed in lane A2AFINAL (1b8edfa: `clientStream.reached`, a cancel only once a frame went); guarded by `TestClientStream_CancelOnlyForACallThatReachedItsTarget` (red without the guard: `sent 1 cancels, want 0`), invariant `CancelKnown`, mutant `CL:cancel-unreached`, reject fixture `reject-calllifecycle-cancel-unreached.ndjson` |
 
 ### Code map (CallLifecycle.tla)
 

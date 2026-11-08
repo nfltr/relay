@@ -27,7 +27,10 @@
    its entry: the code before, for a first frame past the call's window),
    "drop-unknown" (every frame of an unknown transaction is dropped:
    AllServed), "retry-runs-again" (an E2EE retry of a call that ran starts
-   it again: AtMostOneCall). *)
+   it again: AtMostOneCall), "cancel-unreached" (a caller that leaves
+   before any frame of its call went sends a cancel all the same: the code
+   before lane A2AFINAL, for a call refused at the caller, a revoked key
+   say: CancelKnown). *)
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS
@@ -83,7 +86,8 @@ CloseSend(t) ==
 
 \* clientStream.sendCancel: the caller left.
 Cancel(t) ==
-    /\ sent[t] > 0 /\ ~cancelled[t]
+    /\ sent[t] > 0 \/ Mutant = "cancel-unreached"
+    /\ ~cancelled[t]
     /\ cancelled' = [cancelled EXCEPT ![t] = TRUE]
     /\ net' = Append(net, [t |-> t, kind |-> "cancel", cont |-> FALSE, retry |-> FALSE])
     /\ UNCHANGED <<sent, closed, retried>> /\ UNCHANGED target
@@ -172,6 +176,13 @@ AtMostOneCall == \A t \in Txns : calls[t] <= 1
 \* NoEndedEntry: the target keeps an entry only for a call whose handler
 \* runs: nothing per call that ended or was refused (the memory bound).
 NoEndedEntry == incoming \subseteq running
+
+\* CancelKnown: a cancel reaches its target only for a call the target
+\* started or refused, never ahead of its call's first frame (dropped
+\* there, a first frame after it would start a handler whose caller left).
+CancelKnown ==
+    net # <<>> /\ Head(net).kind = "cancel" /\ Head(net).t \notin incoming
+        => calls[Head(net).t] > 0 \/ Head(net).t \in refused
 
 \* AllServed: a call whose first data frame was sent gets its handler call
 \* or its refusal.

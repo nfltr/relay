@@ -452,3 +452,43 @@ done:
 func windowFrame(txn string, n int) *pb.TunnelFrame {
 	return &pb.TunnelFrame{MessageType: WindowMessageType, TransactionId: txn, Payload: binary.AppendUvarint(nil, uint64(n))}
 }
+
+// A caller that leaves tells its target to stop only when a frame of the
+// call went there (spec/CallLifecycle.tla Cancel: sent > 0, CancelKnown,
+// mutant CL:cancel-unreached): a cancel for a call its target never heard
+// of is a frame no target step takes (the nightly CallLifecycle traces of
+// the revoke tests rejected it).
+func TestClientStream_CancelOnlyForACallThatReachedItsTarget(t *testing.T) {
+	ms := newMockStream(t.Context())
+	agent := NewAgent("agent-a", ms)
+	defer agent.Close() //nolint:errcheck
+
+	cancels := func(sent bool) int {
+		ctx, cancel := context.WithCancel(t.Context())
+		s, err := agent.NewStream(ctx, "target-agent")
+		if err != nil {
+			t.Fatalf("NewStream: %v", err)
+		}
+		cs := s.(*clientStream)
+		if sent {
+			if err := s.Send([]byte("req")); err != nil {
+				t.Fatalf("Send: %v", err)
+			}
+		}
+		cancel()
+		<-cs.ended // the cancel, if any, went before this
+		n := 0
+		for len(ms.sendCh) > 0 {
+			if f := <-ms.sendCh; f.GetTransactionId() == cs.txnID && f.GetMessageType() == "cancel" {
+				n++
+			}
+		}
+		return n
+	}
+	if n := cancels(false); n != 0 {
+		t.Fatalf("a call that sent nothing sent %d cancels, want 0", n)
+	}
+	if n := cancels(true); n != 1 {
+		t.Fatalf("a call that sent a frame sent %d cancels, want 1", n)
+	}
+}

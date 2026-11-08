@@ -368,7 +368,10 @@ mutants)
 	expect CL:old-caller -e 's/Mutant = "none"/Mutant = "old-caller"/'
 	expect CL:tombstone -e 's/Mutant = "none"/Mutant = "tombstone"/'
 	expect CL:refused-first-kept -e 's/Mutant = "none"/Mutant = "refused-first-kept"/'
-	expect CL:drop-unknown -e 's/Mutant = "none"/Mutant = "drop-unknown"/'
+	expect CL:drop-unknown -e 's/Mutant = "none"/Mutant = "drop-unknown"/' -e '/CancelKnown/d'
+	# The code before lane A2AFINAL: a call refused at its caller (a revoked
+	# key) sent its cancel though no frame of it went.
+	expect CL:cancel-unreached -e 's/Mutant = "none"/Mutant = "cancel-unreached"/'
 	expect witness:LateFrame -e 's/^    NoEndedEntry$/    W_LateFrame/'
 	expect witness:LateData -e 's/^    NoEndedEntry$/    W_LateData/'
 	expect witness:BothRun -e 's/^    NoEndedEntry$/    W_BothRun/'
