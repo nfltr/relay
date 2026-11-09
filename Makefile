@@ -10,6 +10,12 @@ build:
 vet:
 	@for m in $(MODULES); do (cd $$m && go vet ./...) || exit 1; done
 
+# check-fmt: gofmt (the toolchain's, not one on PATH) changes no tracked Go
+# file (vendor/ aside); go vet and the tests accept unformatted code.
+check-fmt:
+	@out="$$("$$(go env GOROOT)/bin/gofmt" -l $$(git ls-files '*.go' | grep -v '^vendor/'))"; \
+	if [ -n "$$out" ]; then echo "gofmt would change:"; echo "$$out"; exit 1; fi
+
 test:
 	@for m in $(MODULES); do (cd $$m && go test -count=1 ./...) || exit 1; done
 
