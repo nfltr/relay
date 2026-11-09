@@ -48,4 +48,6 @@ jobs:
           path: ~/.cache/relay-proverif
           key: proverif-${{ runner.os }}-${{ hashFiles('scripts/fetch-proverif.sh') }}
       - run: make spec-proverif
+      # the models' bindings against the code (spec/proverif/README.md "Bindings")
+      - run: make spec-bindings
       - run: make check-spec-drift

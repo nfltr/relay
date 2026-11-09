@@ -161,7 +161,8 @@ Conformance: these are symbolic models of a message exchange, not state
 machines, so there is no trace recorder; the code is tied to the model by
 its wire vectors (`TestA2AE2EEv2Vectors`: prologue, psk, both handshake
 messages and the first frames of each direction, the model's term beside
-each), by each rule's file:line citation in `a2a_machine.pv`, by one test
+each), by its bindings ("Bindings" below: a row per field the model
+binds, each a relay's change the code must refuse), by each rule's file:line citation in `a2a_machine.pv`, by one test
 per finding (`client/rpcclient/a2a_e2ee_v2_test.go`: F1
 `TestA2AE2EERefusesReflectedFrame`; F2 `TestA2AE2EERefusesReplayedFrame`,
 `TestA2AE2EERefusesDroppedFrame`, `TestA2AE2EERefusesForgedEnd`; F3
@@ -170,6 +171,30 @@ per finding (`client/rpcclient/a2a_e2ee_v2_test.go`: F1
 `Spec-Reviewed`). Runtime: about 4 CPU minutes for all lines (229 s user,
 82 s wall on a Mac at load average 7-10); lines run side by side
 (`PROVERIF_JOBS`).
+
+## Bindings
+
+The vectors pin the bytes the code sends; a change to the wire re-pins
+them, and a re-pinned vector cannot tell a dropped binding from a new
+field. So each model lists, as `BIND:<id>` lines in a comment, the fields
+and keys of its messages that its queries rely on and a relay could change
+on the wire, and a Go test has one row per id: it changes just that field
+in an honest message of the real code (fixed keys, as the vectors) and
+requires a refusal. The test fails when the model's ids and its rows
+differ, so a binding added to a model needs its row, and a row outlives any
+re-pinning (`make spec-bindings`, in `make ci`; nfltr
+`docs/decisions/e2ee-model-code-link-2026-11-09.md`).
+
+| model | test | rows |
+|---|---|---|
+| `a2a_machine.pv` | `client/rpcclient/a2a_e2ee_bindings_test.go` `TestA2AE2EEModelBindings` | 17: message 1 (txn, role, caller, callee, key id, psk, warm), the ack's transcript, frames (direction, order, end, header), resumed calls' keys (txn, call number), the resume (txn, call number, pair) |
+
+A planted Go mutant fails its row (lane E2EEVECTORS): the role, caller,
+callee or txn left out of `a2aE2EEPrologue`, the psk not keyed, a warm's
+message 1 untyped, a call's keys or a resume's tag without the call number,
+a resume's tag without the txn. Where the existing hostile-relay tests
+already make the attack (`frame.end`, `frame.header`, `init.warm`,
+`resume.pair`), the row runs them.
 
 ## Findings (lane A2AID, 2026-11-07; F1-F3 and F5 fixed by wire v2, lane A2AV2)
 

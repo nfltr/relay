@@ -130,6 +130,30 @@ free yUpB, yUpE: channel [private].      (* ONLY:honestY *)
 free yDownB, yDownE: channel.            (* NOT:honestY *)
 free yDownB, yDownE: channel [private].  (* ONLY:honestY *)
 
+(* Bindings (README "Bindings"): the fields and keys of the messages below
+   that the queries rely on and a relay could change on the wire. Each
+   BIND:<id> has one row in client/rpcclient/a2a_e2ee_bindings_test.go
+   (TestA2AE2EEModelBindings, make spec-bindings) that changes just that in
+   the real code's honest messages and requires a refusal; the test fails
+   when its rows and these ids differ.
+     BIND:init.txn      prologue t
+     BIND:init.role     prologue prole(r)
+     BIND:init.caller   prologue caller
+     BIND:init.callee   prologue callee
+     BIND:init.kid      prologue k
+     BIND:init.psk      psk(K)
+     BIND:init.warm     message 1's payload WARM
+     BIND:ack.transcript  the ack's AD (h1, ct1, r)
+     BIND:frame.dir     back(c) = split2
+     BIND:frame.order   the frame nonces N0, N1
+     BIND:frame.end     (END, Lempty) sealed
+     BIND:frame.header  (HDR, hdrFrom(m), ...) sealed
+     BIND:call.txn      callk(S, (t, c), dir), rad(t): t
+     BIND:call.ctr      callk(S, (t, c), dir): c
+     BIND:resume.txn    rtag(S, t, c): t
+     BIND:resume.ctr    rtag(S, t, c): c
+     BIND:resume.pair   msess(m, ...): the session's pair *)
+
 (* A machine's A2A key: the owner's derivation, or (mutant relay-cert) a
    credential the relays' CA issues. *)
 letfun mkey(n: bitstring, gen: bitstring) =

@@ -114,7 +114,7 @@ stress-race:
 # spec-cltraces is its per-push slice (the stuck-handler test's CallLifecycle
 # traces, about 10 s; in make ci); spec-astraces another (the A2A E2EE
 # session tests' A2ASession traces, about 10 s; in make ci).
-.PHONY: spec spec-mutants spec-traces spec-cltraces spec-astraces spec-proverif
+.PHONY: spec spec-mutants spec-traces spec-cltraces spec-astraces spec-proverif spec-bindings
 spec:
 	./scripts/spec.sh check
 spec-mutants:
@@ -129,6 +129,12 @@ spec-astraces:
 # spec/proverif/expect.txt, mutants included (in make ci).
 spec-proverif:
 	./spec/proverif/run.sh
+# The models' bindings against the code (spec/proverif/README.md
+# "Bindings"): each BIND id a model lists has a test row that changes that
+# field of an honest message, as a relay can, and requires a refusal; the
+# test fails when a model's ids and its rows differ (in make ci).
+spec-bindings:
+	cd client && go test -count=1 -run 'ModelBindings' ./rpcclient/
 
 # Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
 # identical; its test is nfltr's scripts/check_spec_drift_test.sh): every
