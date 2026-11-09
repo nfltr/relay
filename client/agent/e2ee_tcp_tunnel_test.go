@@ -21,6 +21,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
@@ -228,4 +229,66 @@ func TestE2EEOnlyTunnelRefusesRelayNamedTarget(t *testing.T) {
 func relaytrustFingerprint(der []byte) string {
 	sum := sha256.Sum256(der)
 	return hex.EncodeToString(sum[:])
+}
+
+// A pinned session the relay cuts between two TLS records (its transport
+// ends, no close_notify from the client) reaches the agent's target as a
+// reset, never as the client's clean half close; with the client's
+// close_notify it is a half close (claims review CLAIMS-A Q5,
+// spec/proverif/README.md e2ee_tcp query 12, mutant agent-clear-end).
+func TestPinnedSessionCutIsResetAtTarget(t *testing.T) {
+	cert, _, err := generateSelfSignedCert("agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cut := range []bool{false, true} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		ended := make(chan error, 1)
+		go func() {
+			c, err := ln.Accept()
+			if err != nil {
+				ended <- err
+				return
+			}
+			defer c.Close() //nolint:errcheck
+			b, err := io.ReadAll(c)
+			if err == nil && string(b) != "hello" {
+				err = errors.New("read " + string(b))
+			}
+			ended <- err
+		}()
+		target := ln.Addr().String()
+		l := &linkSessions{ctx: t.Context(), targets: sessionTargets{e2eeOnly: true, forwardAddr: target, defaultBackend: "http://" + target},
+			e2ee: newE2EETLSConfig(cert, "agent"), logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+		s, c := sessionPair(t)
+		h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: "localhost:1", E2Ee: true, Answer: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		go l.accept("", h, s)
+		if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
+			t.Fatalf("answer %v, %v", a, err)
+		}
+		tc := tls.Client(c, &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}) //nolint:gosec // only the end is under test
+		if _, err := io.WriteString(tc, "hello"); err != nil {
+			t.Fatal(err)
+		}
+		if cut {
+			_ = c.Close() // the relay's cut: no close_notify
+		} else {
+			_ = tc.CloseWrite()
+		}
+		select {
+		case err := <-ended:
+			if reset := err != nil; reset != cut {
+				t.Errorf("cut %v: the target's read ended with %v, want a reset %v", cut, err, cut)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("cut %v: the target's read did not end", cut)
+		}
+	}
 }

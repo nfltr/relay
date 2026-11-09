@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nfltr/link/peerlink"
+	"github.com/nfltr/relay/client/tlsend"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentservices"
@@ -332,10 +333,13 @@ func refuseAnswered(s net.Conn, reason relayv1.ErrorReason, err error) {
 // against the pin it got from the agent; with p.clients the agent verifies
 // the client's key against its list), the plaintext bridged to target,
 // each side's end passed on as a half close (TLS close_notify on s). A
-// refused client gets a TLS alert and the target only a connection that
-// closes: no byte of it is read or written.
+// session that ends without the client's close_notify (the relay cut it)
+// is a reset to the target, never its half close (tlsend; CLAIMS-A Q5,
+// TestPinnedSessionCutIsResetAtTarget). A refused client gets a TLS alert
+// and the target only a connection that closes: no byte of it is read or
+// written.
 func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
-	tc := tls.Server(s, p.clients.serverConfig(p.e2ee.tlsConfig, logger))
+	tc := tlsend.Server(s, p.clients.serverConfig(p.e2ee.tlsConfig, logger))
 	_ = tc.SetDeadline(time.Now().Add(e2eeHeaderTimeout))
 	if err := tc.Handshake(); err != nil {
 		logger.Debug("e2ee tcp: handshake failed", "error", err)
