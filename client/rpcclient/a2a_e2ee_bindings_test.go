@@ -41,7 +41,7 @@ func bindCall(t *testing.T) (c, s *a2aE2EEState, kr testMachine) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.complete(ack); err != nil {
+	if err := c.complete(ack, nil); err != nil {
 		t.Fatal(err)
 	}
 	return c, s, kr
@@ -114,7 +114,7 @@ var a2aBindings = map[string]func(t *testing.T){
 		if err != nil {
 			t.Fatal(err)
 		}
-		refused(t, "the ack of another handshake", c.complete(ack))
+		refused(t, "the ack of another handshake", c.complete(ack, nil))
 	},
 	// back(c) = split2: a frame returned to its sender (F1)
 	"frame.dir": func(t *testing.T) {

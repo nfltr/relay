@@ -855,10 +855,9 @@ func (a *Agent) handleMessage(msg *pb.TunnelFrame) {
 		if val, ok := a.pending.Load(txnID); ok {
 			cs := val.(*clientStream)
 			if cs.e2ee != nil {
-				if err := cs.e2ee.complete(msg.GetPayload()); err != nil {
+				keep := func(s *a2aSession) { a.sessions.putOut(cs.targetAgentID, s) }
+				if err := cs.e2ee.complete(msg.GetPayload(), keep); err != nil {
 					log.Printf("rpcclient: failed to complete A2A E2EE handshake for txn %s: %v", txnID, err)
-				} else if s := cs.e2ee.established; s != nil {
-					a.sessions.putOut(cs.targetAgentID, s)
 				}
 			}
 		}

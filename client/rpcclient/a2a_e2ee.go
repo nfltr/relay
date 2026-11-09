@@ -408,8 +408,10 @@ func (s *a2aE2EEState) ensureClientHandshake(ctx context.Context, transportDone 
 }
 
 // complete takes the peer's ack (Noise message 2, <- e, ee): the call's
-// transport keys, or the handshake's refusal.
-func (s *a2aE2EEState) complete(ack []byte) error {
+// transport keys, or the handshake's refusal. keep (when not nil) gets the
+// session the callee offered before a waiter wakes, so a call started once
+// the handshake returns (a warm's next call) finds it and resumes.
+func (s *a2aE2EEState) complete(ack []byte, keep func(*a2aSession)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.ready || s.err != nil {
@@ -428,6 +430,9 @@ func (s *a2aE2EEState) complete(ack []byte) error {
 		s.send, s.recv, s.ready = toPeer, fromPeer, true
 		if bytes.Equal(offer, a2aSessionOffer) {
 			s.established = newA2ASession(toPeer, fromPeer, s.caller, s.callee, s.kid, s.keyFP, time.Now())
+			if keep != nil {
+				keep(s.established) // lock order: the state's mu, then the sessions'
+			}
 		}
 	}
 	s.hs = nil

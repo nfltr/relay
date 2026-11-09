@@ -135,7 +135,7 @@ func TestA2AE2EEv2VectorsIndependentNoise(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := c.complete(ack); err != nil {
+	if err := c.complete(ack, nil); err != nil {
 		t.Fatal(err)
 	}
 	f1, _ := c.seal(a2aFrameData, []byte("hello"))

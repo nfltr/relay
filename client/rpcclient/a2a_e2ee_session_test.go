@@ -11,6 +11,7 @@ package rpcclient
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
 	"strings"
 	"sync"
@@ -793,6 +794,33 @@ func TestA2AE2EEWarmLeavesASessionAndNoCall(t *testing.T) {
 	}
 	if err := NewAgent("plain", newMockStream(ctx)).WarmA2AE2EE(ctx, "m1-node"); !errors.Is(err, ErrA2AE2EENoKey) {
 		t.Fatalf("warm without keys: %v", err)
+	}
+}
+
+// The caller keeps the session the ack offers before the handshake's
+// waiter wakes: a warm returned, the next call finds it and resumes (the
+// flake "warms 2, inits 0, resumes 1": the second warm ran before the
+// receive loop kept the session).
+func TestA2AE2EESessionKeptBeforeTheHandshakeReturns(t *testing.T) {
+	c, init, kr := bindHS(t)
+	_, ack, err := newServerA2AE2EEState("txn-1", "m1-node", init, kr, true, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitCh := c.waitCh
+	var kept *a2aSession
+	if err := c.complete(ack, func(s *a2aSession) {
+		select {
+		case <-waitCh:
+			t.Error("the handshake's waiter woke before the session was kept")
+		default:
+		}
+		kept = s
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if kept == nil || kept != c.established {
+		t.Fatalf("kept %v, want the offered session", kept)
 	}
 }
 

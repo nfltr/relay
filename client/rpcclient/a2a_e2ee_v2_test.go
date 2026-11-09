@@ -430,7 +430,7 @@ func TestA2AE2EEv2Vectors(t *testing.T) {
 	}
 	// (t, ACK, r, aenc(c2, N0, (h1, ct1, r), Lempty)): r = exp(g, y)
 	check("ack", hexOf(ack), vecAck)
-	if err := c.complete(ack); err != nil {
+	if err := c.complete(ack, nil); err != nil {
 		t.Fatal(err)
 	}
 	// aenc(split1(c2), N0, ad(t), (DATA, x)), then N1 (END, Lempty)
