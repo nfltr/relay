@@ -74,14 +74,14 @@ func orgServerConfig(o Org, groups []string, adm *orgAdmission, logger *slog.Log
 	}
 }
 
-// HoldAdmission ends a session at its admission's end: cut is called at
+// holdAdmission ends a session at its admission's end: cut is called at
 // until, or at a change (changed closed) after which check refuses it; a
 // change check still passes moves until (Enrol.tla NoExpiredSession and
 // RevocationBound: mutants no-expiry-timer, no-cut-on-update). next
 // returns the channel of the change after the one just taken; take
 // changed before the check that admitted the session, so a change between
 // the two is not missed. It returns when done is closed or after cut.
-func HoldAdmission(until time.Time, changed <-chan struct{}, next func() <-chan struct{}, check func(now time.Time) (time.Time, error), cut func(), done <-chan struct{}) {
+func holdAdmission(until time.Time, changed <-chan struct{}, next func() <-chan struct{}, check func(now time.Time) (time.Time, error), cut func(), done <-chan struct{}) {
 	t := time.NewTimer(time.Until(until))
 	defer t.Stop()
 	for {
@@ -125,7 +125,7 @@ func checkOrgService(s Service) error {
 // serveOrgTCP serves a session of a tcp service in organisation mode as
 // serveE2EETCP does a pinned one (tlsend, Join), with the organisation's
 // TLS (orgServerConfig), and ends it at its admission's end
-// (HoldAdmission): a cut is a reset to both ends.
+// (holdAdmission): a cut is a reset to both ends.
 func serveOrgTCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	var adm orgAdmission
 	changed := p.org.Changed() // before the check: a change after it is seen
@@ -140,7 +140,7 @@ func serveOrgTCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	_ = tc.SetDeadline(time.Time{})
 	done := make(chan struct{})
 	defer close(done)
-	go HoldAdmission(adm.until, changed, p.org.Changed,
+	go holdAdmission(adm.until, changed, p.org.Changed,
 		func(now time.Time) (time.Time, error) { return p.org.CheckClient(adm.certs, p.groups, now) },
 		func() {
 			logger.Info("e2ee tcp: organisation admission ended, session cut")
