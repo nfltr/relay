@@ -228,11 +228,13 @@ func TestOrgServiceOneMode(t *testing.T) {
 	}
 	base := Service{Name: "db", Kind: agentservices.TCP, Target: "localhost:1", E2EE: agentservices.E2EEOn, Org: org, AllowGroups: []string{"db"}}
 	for name, mutate := range map[string]func(*Service){
-		"client keys":   func(s *Service) { s.E2EEClients = []string{fp} },
-		"own cert":      func(s *Service) { s.Cert = setup },
-		"no group":      func(s *Service) { s.AllowGroups = nil },
-		"e2ee default":  func(s *Service) { s.E2EE = agentservices.E2EEDefault },
-		"http":          func(s *Service) { s.Kind, s.Target, s.E2EE = agentservices.HTTP, "http://localhost:1", agentservices.E2EEDefault },
+		"client keys":  func(s *Service) { s.E2EEClients = []string{fp} },
+		"own cert":     func(s *Service) { s.Cert = setup },
+		"no group":     func(s *Service) { s.AllowGroups = nil },
+		"e2ee default": func(s *Service) { s.E2EE = agentservices.E2EEDefault },
+		"http": func(s *Service) {
+			s.Kind, s.Target, s.E2EE = agentservices.HTTP, "http://localhost:1", agentservices.E2EEDefault
+		},
 		"groups no org": func(s *Service) { s.Org = nil },
 	} {
 		s := base
