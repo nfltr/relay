@@ -41,6 +41,8 @@ type sessionPlan struct {
 	client          netip.Addr     // an E2EE session's visitor, from the relay (pb.TCPData.ClientAddr); zero: unknown
 	e2ee            *e2eeTLSConfig // the certificate an E2EE session ends with: its service's, else the tunnel's
 	clients         clientKeys     // a sessionE2EETCP's allowed client keys; nil: any client
+	org             Org            // a sessionE2EETCP of a service in organisation mode; nil: pins
+	groups          []string       // ... its allow groups
 }
 
 // e2eeShareTarget is the target the relay's SNI router names for an E2EE
@@ -85,6 +87,14 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 			return sessionPlan{}, err
 		}
 		p.network, p.target, p.backend, svcWrap = svc.network, svc.addr, svc.backend, svc.wrap
+		if svc.org != nil {
+			// Organisation mode: resolve refused a plain session (E2EE
+			// On); the session is the organisation's TLS, never the
+			// tunnel's certificate or pins (e2ee_tcp_org.pv).
+			p.kind, p.org, p.groups, p.e2ee = sessionE2EETCP, svc.org, svc.groups, nil
+			p.client = clientAddr(open.GetClientAddr())
+			return p, nil
+		}
 		if svc.cert != nil {
 			p.e2ee = svc.cert
 		}
@@ -341,6 +351,10 @@ func refuseAnswered(s net.Conn, reason relayv1.ErrorReason, err error) {
 // and the target only a connection that closes: no byte of it is read or
 // written.
 func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
+	if p.org != nil {
+		serveOrgTCP(s, target, p, logger)
+		return
+	}
 	tc := tlsend.Server(s, p.clients.serverConfig(p.e2ee.tlsConfig, logger))
 	_ = tc.SetDeadline(time.Now().Add(e2eeHeaderTimeout))
 	if err := tc.Handshake(); err != nil {

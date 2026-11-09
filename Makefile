@@ -142,6 +142,13 @@ spec-proverif:
 spec-bindings:
 	cd client && go test -count=1 -run 'ModelBindings' ./rpcclient/
 
+# test-go-mutants (in make ci, about a minute): every planted bug of a Go
+# mutant list (client/agent/testdata/org_mutants.txt: the agent's
+# organisation mode) makes its test fail (scripts/go-mutants.sh).
+.PHONY: test-go-mutants
+test-go-mutants:
+	./scripts/go-mutants.sh client/agent/testdata/org_mutants.txt
+
 # Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
 # identical; its test is nfltr's scripts/check_spec_drift_test.sh): every
 # spec README's code-map entry exists, and the commits since origin/main

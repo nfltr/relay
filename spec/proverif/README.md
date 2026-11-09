@@ -314,6 +314,44 @@ client, and the default of nfltr's agent commands is nfltr's
 The design model `e2ee_tcp_clientauth.pv` (lane E2EEFIX) is folded into
 this one and deleted.
 
+### e2ee_tcp_org.pv: pinned TCP in organisation mode (lane ORG2)
+
+A tcp service in organisation mode (`agent.Service.Org`, `AllowGroups`;
+nfltr `allow_group:`) ends its sessions' TLS with its machine
+certificate, issued under the organisation's root (nfltr
+`docs/decisions/org-enrolment-2026-11-09.md`); a client names the machine
+(`nfltr dial web/pg`, `to: web/pg` with `org: true`) and checks the
+chain and the name, no pin; the service admits a client certificate of
+the organisation in an allowed group. The attacker owns the relays and
+holds the keys of eve (live, another group), lost (revoked), old
+(expired), and an expired and a revoked key of web itself. Who can get a
+certificate at all is nfltr's `enrol.pv`; the times (a session ends at
+`Identity.Until`, a newer CRL cuts what it lists) are nfltr's
+`spec/enrol/Enrol.tla` (`NoExpiredSession`, `RevocationBound`), whose
+session-level mutants `no-expiry-timer` and `no-cut-on-update` are Go
+mutants of `client/agent` (`make test-go-mutants`).
+
+| # | query | result |
+|---|---|---|
+| 1 | the client's bytes reach only machine web | holds |
+| 2 | injective agreement: the answer the client takes, web's agent sent in that session | holds |
+| 3, 4, 5 | the client refuses a server certificate of another name, a revoked one, an expired one | holds |
+| 6 | the service's answer reaches only an admitted client | holds |
+| 7 | what reaches the service was sent by an admitted client | holds |
+| 8, 9, 10 | the service refuses a client outside its groups, a revoked one, an expired one | holds |
+| 11, 12 | witnesses: an allowed client reaches the service and gets its answer | attack (reachable), as they must |
+
+Mutants, each check its own, the client's and the service's apart:
+`client-no-chain-check` (a certificate the relay made), `no-name-check`
+(another machine's), `client-no-expiry-check`, `client-no-crl-check`;
+`agent-no-chain-check`, `no-group-check`, `agent-no-expiry-check`,
+`agent-no-crl-check`. No downgrade: a client or service is in one mode,
+set by its own configuration, and never falls back. `downgrade-plain`
+(the client sends in plain when the relay answers that the service is
+pinned) fails 1; `downgrade-any-client` (the service serves a client
+without an organisation certificate, the pin mode's "no list") fails 6
+and 7.
+
 ### wg_exit.pv: WireGuard client and exit (Track B)
 
 The preshared key is HMAC(K, "nfltr-wg-psk-v2", the exit's service name,
@@ -433,6 +471,8 @@ fails (`TestSecureConnFailedWriteEndsIt`).
 | e2ee_tcp.pv | client/agent/e2ee_client_keys.go |
 | e2ee_tcp.pv | client/agent/services.go |
 | e2ee_tcp.pv | client/tlsend/tlsend.go |
+| e2ee_tcp_org.pv | client/agent/org.go |
+| e2ee_tcp_org.pv | client/agent/testdata/org_mutants.txt |
 | wg_exit.pv | client/wg/keys.go |
 | wg_exit.pv | client/wg/tunnel.go |
 | wg_exit.pv | client/agent/wgexit/wgexit.go |

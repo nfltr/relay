@@ -95,3 +95,20 @@ p2p_e2e name-unbound TTFTFTTTFFFF
 # lane ROOTNAMEPIN: a root initiator takes the relay's key id (the code
 # before): 7-9 fail
 p2p_e2e relay-kid TTTTFTFFFFFF
+#
+# Part 4: pinned TCP in organisation mode (lane ORG2, e2ee_tcp_org; queries
+# in README "e2ee_tcp_org.pv"). Each check is its own mutant, the client's
+# (1-5) and the service's (6-10) apart; the downgrade mutants are a mode
+# that falls back: the client to plain on the relay's word (1), the service
+# to a client without an organisation certificate (6, 7).
+e2ee_tcp_org - TTTTTTTTTTFF
+e2ee_tcp_org client-no-chain-check FFFTFTTTTTFF
+e2ee_tcp_org no-name-check FFFTTTTTTTFF
+e2ee_tcp_org client-no-expiry-check FFTTFTTTTTFF
+e2ee_tcp_org client-no-crl-check FFTFTTTTTTFF
+e2ee_tcp_org downgrade-plain FTTTTTTTTTFF
+e2ee_tcp_org agent-no-chain-check TTTTTFFFTFFF
+e2ee_tcp_org no-group-check TTTTTFFFTTFF
+e2ee_tcp_org agent-no-expiry-check TTTTTFFTTFFF
+e2ee_tcp_org agent-no-crl-check TTTTTFFTFTFF
+e2ee_tcp_org downgrade-any-client TFTTTFFTTTFF

@@ -41,6 +41,16 @@ type Service struct {
 	// to open its pinned sessions, as Config.TCPE2EEClients; empty: no
 	// client authentication.
 	E2EEClients []string
+	// Org puts a TCP service with E2EE On in organisation mode: its
+	// sessions end TLS with the organisation's machine certificate and
+	// admit a client certificate in one of AllowGroups (Org.CheckClient),
+	// nothing else. Org is the service's one mode marker: with it, no
+	// E2EEClients and no Cert (pins), and a session never falls back to
+	// them (spec/proverif/e2ee_tcp_org.pv mutant downgrade-any-client).
+	Org Org
+	// AllowGroups are the organisation groups whose machines Org admits;
+	// required with Org, refused without it.
+	AllowGroups []string
 }
 
 // ServiceTable is the services an agent serves under its identity: the
@@ -94,6 +104,8 @@ type tableService struct {
 	wrap    func(http.Handler) http.Handler
 	cert    *e2eeTLSConfig // Service.Cert; nil: the tunnel's
 	clients clientKeys     // Service.E2EEClients; nil: any client
+	org     Org            // Service.Org: organisation mode; nil: pins
+	groups  []string       // Service.AllowGroups
 }
 
 // NewServiceTable validates services and returns their table.
@@ -124,6 +136,10 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 			return nil, fmt.Errorf("service %q: %w", s.Name, err)
 		}
 		e.clients = clients
+		if err := checkOrgService(s); err != nil {
+			return nil, err
+		}
+		e.org, e.groups = s.Org, s.AllowGroups
 		switch s.Kind {
 		case agentservices.TCP:
 			e.network, e.addr = "tcp", s.Target
@@ -210,7 +226,7 @@ func (t *ServiceTable) resolve(target string, e2ee, terminatesE2EE, connect bool
 	switch {
 	case e == nil:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_UNKNOWN_SERVICE, "no such service")
-	case e2ee && !terminatesE2EE && e.cert == nil:
+	case e2ee && !terminatesE2EE && e.cert == nil && e.org == nil:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "the agent does not terminate end-to-end TLS")
 	case e2ee && e.kind == agentservices.TCP && !connect:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "an end-to-end encrypted share session needs an http service")

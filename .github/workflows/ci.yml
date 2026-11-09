@@ -51,4 +51,5 @@ jobs:
       - run: make spec-proverif
       # the models' bindings against the code (spec/proverif/README.md "Bindings")
       - run: make spec-bindings
+      - run: make test-go-mutants
       - run: make check-spec-drift
