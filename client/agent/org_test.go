@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
@@ -15,6 +16,7 @@ import (
 	"log/slog"
 	"math/big"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -125,6 +127,10 @@ func (f *fakeOrg) change(revoke ...*x509.Certificate) {
 // organisation mode: the server checked against the root and the name
 // web, cert as the client's certificate (none when nil); then one echo.
 func orgSession(t *testing.T, l *linkSessions, target string, cert *tls.Certificate) (*tls.Conn, error) {
+	return orgSessionTo(t, l, target, l.targets.services.byName[target].org.(*fakeOrg).o.pool, cert)
+}
+
+func orgSessionTo(t *testing.T, l *linkSessions, target string, pool *x509.CertPool, cert *tls.Certificate) (*tls.Conn, error) {
 	t.Helper()
 	s, c := sessionPair(t)
 	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: target, E2Ee: true, Answer: true})
@@ -135,7 +141,7 @@ func orgSession(t *testing.T, l *linkSessions, target string, cert *tls.Certific
 	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
 		return nil, fmt.Errorf("answer %v, %v", a, err)
 	}
-	cfg := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: l.targets.services.byName[target].org.(*fakeOrg).o.pool, ServerName: "web.org.internal"}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool, ServerName: "web.org.internal"}
 	if cert != nil {
 		cfg.Certificates = []tls.Certificate{*cert}
 	}
@@ -172,7 +178,11 @@ func orgSessions(t *testing.T, org Org, groups ...string) *linkSessions {
 // ignore-check, downgrade-any-client, org-falls-back-to-pins).
 func TestOrgServiceAdmitsGroup(t *testing.T) {
 	o := newTestOrg(t)
-	l := orgSessions(t, o.agentOrg(o.machine(t, "web", []string{"web"}, time.Hour, false)), "db", "ops")
+	org := o.agentOrg(o.machine(t, "web", []string{"web"}, time.Hour, false))
+	l := orgSessions(t, org, "db", "ops")
+	// Config.TCPE2EEOrg: the tunnel of nfltr tcp --e2ee --allow-group.
+	tunnel := &linkSessions{ctx: t.Context(), targets: sessionTargets{e2eeOnly: true, forwardAddr: echoTarget(t), org: org, groups: []string{"db", "ops"}},
+		logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 	for _, tc := range []struct {
 		name string
 		cert *tls.Certificate
@@ -188,6 +198,10 @@ func TestOrgServiceAdmitsGroup(t *testing.T) {
 		_, err := orgSession(t, l, "db", tc.cert)
 		if (err == nil) != tc.ok {
 			t.Errorf("%s: served %v, want %v (%v)", tc.name, err == nil, tc.ok, err)
+		}
+		_, err = orgSessionTo(t, tunnel, "localhost:1", o.pool, tc.cert)
+		if (err == nil) != tc.ok {
+			t.Errorf("tunnel, %s: served %v, want %v (%v)", tc.name, err == nil, tc.ok, err)
 		}
 	}
 }
@@ -248,6 +262,24 @@ func TestOrgServiceOneMode(t *testing.T) {
 	var refused *ServiceRefusedError
 	if !errors.As(err, &refused) || refused.Answer != relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED {
 		t.Errorf("plain session: %v, want E2EE_REQUIRED", err)
+	}
+	_, err = planSession(&pb.TCPData{TargetAddr: "localhost:1", Answer: true}, sessionTargets{e2eeOnly: true, forwardAddr: "localhost:1", org: org, groups: []string{"db"}}, nil)
+	if !errors.As(err, &refused) || refused.Answer != relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED {
+		t.Errorf("tunnel, plain session: %v, want E2EE_REQUIRED", err)
+	}
+	for name, cfg := range map[string]Config{
+		"tunnel client keys": {TCPTunnel: true, TCPE2EEOnly: true, TCPForwardAddr: "localhost:1", TCPE2EEOrg: org, TCPE2EEAllowGroups: []string{"db"}, TCPE2EEClients: []string{fp}},
+		"tunnel not e2ee":    {TCPTunnel: true, TCPForwardAddr: "localhost:1", TCPE2EEOrg: org, TCPE2EEAllowGroups: []string{"db"}},
+		"tunnel no group":    {TCPTunnel: true, TCPE2EEOnly: true, TCPForwardAddr: "localhost:1", TCPE2EEOrg: org},
+		"tunnel groups only": {TCPTunnel: true, TCPE2EEOnly: true, TCPForwardAddr: "localhost:1", TCPE2EEAllowGroups: []string{"db"}},
+	} {
+		// Bounded: a config wrongly taken goes on to dial a relay there is none of.
+		ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+		err := New(cfg, WithSelfSignedTLS()).Connect(ctx)
+		cancel()
+		if err == nil || !strings.Contains(err.Error(), "organisation") {
+			t.Errorf("%s: Connect: %v, want the organisation-mode refusal", name, err)
+		}
 	}
 }
 

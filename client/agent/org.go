@@ -103,6 +103,16 @@ func holdAdmission(until time.Time, changed <-chan struct{}, next func() <-chan 
 	}
 }
 
+// checkOrgTunnel is checkOrgService of Config's tunnel (TCPE2EEOrg needs
+// TCPE2EEOnly, which needs TCPForwardAddr).
+func checkOrgTunnel(cfg Config) error {
+	e2ee := agentservices.E2EEDefault
+	if cfg.TCPE2EEOnly {
+		e2ee = agentservices.E2EEOn
+	}
+	return checkOrgService(Service{Name: "tcp tunnel", Kind: agentservices.TCP, E2EE: e2ee, E2EEClients: cfg.TCPE2EEClients, Org: cfg.TCPE2EEOrg, AllowGroups: cfg.TCPE2EEAllowGroups})
+}
+
 // checkOrgService: a service in organisation mode (Org) is a tcp service
 // with E2EE On, at least one group, and no pin of either side (Cert,
 // E2EEClients), so it has one mode only; groups without Org are refused.

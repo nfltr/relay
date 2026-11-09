@@ -926,6 +926,8 @@ type sessionTargets struct {
 	noRaw          bool          // refuses sessions that would dial a target
 	e2eeOnly       bool          // Config.TCPE2EEOnly: a pinned session to a target is its bytes, not HTTP; others refused
 	clients        clientKeys    // Config.TCPE2EEClients: who may open an e2eeOnly pinned session; nil: anyone
+	org            Org           // Config.TCPE2EEOrg: an e2eeOnly tunnel in organisation mode; nil: pins
+	groups         []string      // Config.TCPE2EEAllowGroups
 }
 
 // RunServiceTunnel serves the ConnectTCP stream of an agent that serves

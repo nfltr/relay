@@ -100,6 +100,16 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 		}
 	} else if targets.forwardAddr != "" {
 		p.target = targets.forwardAddr
+		if targets.org != nil {
+			// Config.TCPE2EEOrg: organisation TLS only (an e2eeOnly
+			// tunnel with a fixed target, checked at New), never pins.
+			if !open.GetE2Ee() {
+				return sessionPlan{}, errE2EERequired(open)
+			}
+			p.kind, p.org, p.groups, p.e2ee = sessionE2EETCP, targets.org, targets.groups, nil
+			p.client = clientAddr(open.GetClientAddr())
+			return p, nil
+		}
 	}
 	if p.e2ee != nil {
 		p.wrap = p.e2ee.wrapHTTP

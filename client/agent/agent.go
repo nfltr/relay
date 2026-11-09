@@ -169,6 +169,16 @@ type Config struct {
 	// session on; a session in flight runs until it ends.
 	TCPE2EEClients []string
 
+	// TCPE2EEOrg, with TCPE2EEOnly, puts the tunnel in organisation mode,
+	// as Service.Org does a service: its pinned sessions end TLS with the
+	// organisation's machine certificate and admit a client certificate
+	// in one of TCPE2EEAllowGroups, nothing else (no TCPE2EEClients, no
+	// fallback; spec/proverif/e2ee_tcp_org.pv).
+	TCPE2EEOrg Org
+	// TCPE2EEAllowGroups are the groups TCPE2EEOrg admits; required with
+	// it, refused without it.
+	TCPE2EEAllowGroups []string
+
 	// Capabilities is a list of capability identifiers advertised to the
 	// server via the x-agent-capabilities metadata header (e.g. "terminal").
 	// The server uses these to enable UI features like the dashboard Term button.
@@ -362,6 +372,9 @@ func New(cfg Config, opts ...Option) Agent {
 	}
 	if cfg.TCPE2EEOnly && cfg.TCPForwardAddr == "" && a.initErr == nil {
 		a.initErr = ErrE2EENoFixedTarget
+	}
+	if err := checkOrgTunnel(cfg); err != nil && a.initErr == nil {
+		a.initErr = err
 	}
 	if keys, err := newClientKeys(cfg.TCPE2EEClients); err != nil && a.initErr == nil {
 		a.initErr = err
