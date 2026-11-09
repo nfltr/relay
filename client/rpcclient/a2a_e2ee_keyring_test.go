@@ -361,7 +361,7 @@ func TestA2AE2EEKeyIDOnTheWire(t *testing.T) {
 	}
 	parts := bytes.SplitN(root, []byte{0}, 4)
 	long := append([]byte("hub-b\x00hub-c\x00"+strings.Repeat("x", a2aE2EEKeyIDMax+1)+"\x00"), parts[3]...)
-	if _, _, err := newServerA2AE2EEState("txn", "hub-c", long, store, rand.Reader); err == nil || !errors.Is(err, errA2AE2EEPairing) {
+	if _, _, err := newServerA2AE2EEState("txn", "hub-c", long, store, true, rand.Reader); err == nil || !errors.Is(err, errA2AE2EEPairing) {
 		t.Fatalf("an over-long key id: %v", err)
 	}
 }

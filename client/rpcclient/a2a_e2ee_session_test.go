@@ -588,6 +588,71 @@ func TestA2AE2EEForgedUnknownEndsCall(t *testing.T) {
 	}
 }
 
+// Limit L1, closed (lane A2AL1; spec/A2ASession.tla mutant
+// AS:record-in-memory): the callee serves a resumed call and restarts
+// before its resumed reaches the caller; the relay forges unknown in place
+// of it. The caller's retry reaches the restarted callee, which keeps no
+// session but whose record has the call number: refused, the call ran
+// once; a later call runs.
+func TestA2AE2EERestartAfterServeRefusesForgedRetry(t *testing.T) {
+	store := newTestStore(t, "m1")
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	var callee atomic.Pointer[Agent]
+	var armed, forged, dropping atomic.Bool
+	retry := make(chan *pb.TunnelFrame, 1)
+	caller, b, _, msB, rec := relayPair(t, ctx, keyedAgent("hub", store), keyedAgent("m1-node", store.machine("m1")), func(fromA bool, f *pb.TunnelFrame) ([]*pb.TunnelFrame, []*pb.TunnelFrame) {
+		switch {
+		case !fromA && f.GetMessageType() == a2aE2EEResumedMessageType && armed.CompareAndSwap(true, false):
+			restartSessions(callee.Load())
+			forged.Store(true)
+			dropping.Store(true) // the first run's answer is lost with the process
+			g := cloneFrame(f)
+			g.MessageType = a2aE2EEUnknownMessageType
+			return nil, one(g)
+		case fromA && f.GetMessageType() == a2aE2EEInitMessageType && forged.CompareAndSwap(true, false):
+			retry <- cloneFrame(f) // held until the call's first run ended: a restarted callee serves no call
+			return nil, nil
+		case !fromA && dropping.Load():
+			return nil, nil
+		}
+		return nil, one(f)
+	})
+	callee.Store(b)
+	if _, err := invokeCtx(t, caller, "m1-node", "one"); err != nil {
+		t.Fatal(err)
+	}
+	armed.Store(true)
+	done := make(chan error, 1)
+	go func() {
+		cctx, ccancel := context.WithTimeout(ctx, 3*time.Second)
+		defer ccancel()
+		_, err := caller.Invoke(cctx, "m1-node", []byte("two"))
+		done <- err
+	}()
+	var init *pb.TunnelFrame
+	select {
+	case init = <-retry:
+	case <-ctx.Done():
+		t.Fatal("the caller did not retry after the forged unknown")
+	}
+	if !waitFor(ctx, func() bool { return strings.Count(strings.Join(rec.requests(), "|"), "two") == 1 }) {
+		t.Fatal("the resumed call never ran")
+	}
+	awaitEnded(t, ctx, b, init.GetTransactionId())
+	dropping.Store(false)
+	msB.recvCh <- init
+	if err := <-done; err == nil {
+		t.Fatal("a call whose resumed the relay forged after the callee's restart succeeded, want its retry refused")
+	}
+	if n := strings.Count(strings.Join(rec.requests(), "|"), "two"); n != 1 {
+		t.Fatalf("the call ran %d times across the callee's restart (requests %q)", n, rec.requests())
+	}
+	if got, err := invokeCtx(t, caller, "m1-node", "three"); err != nil || string(got) != "echo:three" {
+		t.Fatalf("a later call = %q, %v", got, err)
+	}
+}
+
 // The relay holds a resume and its request, answers the caller unknown
 // itself, and delivers them after the caller's retry ran the call: the
 // retry took the call number, so the late resume is refused
@@ -643,12 +708,28 @@ func TestA2AE2EELateResumeAfterRetryRefused(t *testing.T) {
 	}
 }
 
+// recordedSessions are a callee's sessions with a replay record in a
+// directory of t's.
+func recordedSessions(t *testing.T) *a2aSessions {
+	t.Helper()
+	r, err := openA2AReplayRecord(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(r.close)
+	ss := &a2aSessions{}
+	ss.rec.Store(r)
+	return ss
+}
+
 // A retry is refused past its bound, for another pair's session, and for
 // a call number its session took; a retry of a session the callee does
-// not keep (a restart) is answered (spec/A2ASession.tla RetryOK).
+// not keep (a restart) is answered by the record: once, and never for a
+// number the session took before it was lost (spec/A2ASession.tla RetryOK).
 func TestA2AE2EERetryChecks(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
-	ss := &a2aSessions{now: func() time.Time { return now }}
+	ss := recordedSessions(t)
+	ss.now = func() time.Time { return now }
 	s := &a2aSession{id: [a2aSessionIDLen]byte{1}, caller: "hub", kid: "m1.1"}
 	ss.in = map[[a2aSessionIDLen]byte]*a2aSession{s.id: s}
 	gone := &a2aSession{id: [a2aSessionIDLen]byte{2}}
@@ -665,11 +746,26 @@ func TestA2AE2EERetryChecks(t *testing.T) {
 		{"another caller's session", s.retryMessage(3, now), "hub-b", "m1.1", false},
 		{"another key's session", s.retryMessage(3, now), "hub", "m1.2", false},
 		{"a session lost to a restart", gone.retryMessage(1, now), "hub", "m1.1", true},
+		{"a session lost to a restart, its retry replayed", gone.retryMessage(1, now), "hub", "m1.1", false},
 		{"malformed", []byte{1, 2, 3}, "hub", "m1.1", false},
 	} {
 		if err := ss.retry(tc.msg, tc.caller, tc.kid); (err == nil) != tc.ok {
 			t.Errorf("%s: retry = %v, want ok %v", tc.name, err, tc.ok)
 		}
+	}
+	// s took 1 (its fresh retry): lost to a restart, the record refuses it.
+	ss.mu.Lock()
+	ss.in = nil
+	ss.mu.Unlock()
+	if err := ss.retry(s.retryMessage(1, now), "hub", "m1.1"); err == nil {
+		t.Error("a retry of a number taken before the restart was answered")
+	}
+	if err := ss.retry(s.retryMessage(4, now), "hub", "m1.1"); err != nil {
+		t.Errorf("a retry of a number never taken, after the restart = %v", err)
+	}
+	// A callee with no record keeps no sessions: every retry is refused.
+	if err := (&a2aSessions{now: ss.now}).retry(gone.retryMessage(5, now), "hub", "m1.1"); err == nil {
+		t.Error("a callee with no record answered a retry")
 	}
 }
 

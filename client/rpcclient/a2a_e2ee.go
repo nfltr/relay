@@ -440,7 +440,7 @@ func (s *a2aE2EEState) complete(ack []byte) error {
 // RootResp): the init's callee must be own, its key id the one For gives
 // for its caller, and message 1 must open under that key; the ack is Noise
 // message 2.
-func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rng io.Reader) (*a2aE2EEState, []byte, error) {
+func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, sessions bool, rng io.Reader) (*a2aE2EEState, []byte, error) {
 	parts := bytes.SplitN(init, []byte{0}, 4)
 	if len(parts) != 4 {
 		return nil, nil, errors.New("rpcclient: malformed A2A E2EE init")
@@ -462,7 +462,10 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 	if err != nil {
 		return nil, nil, err
 	}
-	offer := a2aSessionOffer
+	var offer []byte // no session offered: a callee with no replay record keeps none
+	if sessions {
+		offer = a2aSessionOffer
+	}
 	hs, err := newA2AE2EEHandshake(false, a2aE2EEPrologue(txnID, a2aE2EERole(kr, kid, false), caller, callee, kid), key, rng)
 	if err != nil {
 		return nil, nil, fmt.Errorf("rpcclient: A2A E2EE handshake: %w", err)
@@ -483,7 +486,9 @@ func newServerA2AE2EEState(txnID, own string, init []byte, kr A2AE2EEKeyring, rn
 	default:
 		s.retry = payload
 	}
-	s.established = newA2ASession(fromPeer, toPeer, caller, callee, kid, sha256.Sum256(key), time.Now())
+	if sessions {
+		s.established = newA2ASession(fromPeer, toPeer, caller, callee, kid, sha256.Sum256(key), time.Now())
+	}
 	return s, ack, nil
 }
 

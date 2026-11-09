@@ -30,6 +30,7 @@ type dialOptions struct {
 	a2aE2EE           bool                        // transparently encrypt A2A payloads end to end
 	a2aPairingKeyFile string                      // with a2aE2EE: authenticate handshakes with this pairing key
 	a2aKeyring        A2AE2EEKeyring              // with a2aE2EE: authenticate handshakes with these keys
+	a2aReplayDir      string                      // with a2aE2EE: the callee's replay record (sessions)
 	labels            map[string]string           // optional fleet labels for this agent
 	capabilities      []string                    // optional: advertised capabilities (e.g. "p2p", "ssh", "http")
 	tlsEnable         bool                        // enable TLS for the gRPC connection
@@ -89,6 +90,19 @@ func WithA2AE2EEPairingKeyFile(path string) DialOption {
 // Dial fails when E2EE is off.
 func WithA2AE2EEKeyring(kr A2AE2EEKeyring) DialOption {
 	return func(o *dialOptions) { o.a2aKeyring = kr }
+}
+
+// WithA2AE2EEReplayDir keeps this agent's A2A E2EE replay record in dir
+// (made 0700 if missing): as callee it writes each call number it takes on
+// a session there, synced, before the call starts, so a call a relay
+// replays or retries after a restart of this agent is refused, not run
+// again (nfltr docs/decisions/a2a-at-most-once-restart-2026-11-09.md). Without it
+// the agent offers no sessions as callee: every call to it handshakes. The
+// directory must survive the agent's restart (not a temporary one); the
+// agent's processes may share it. Dial fails when dir cannot be made or
+// E2EE is off. An empty dir sets nothing.
+func WithA2AE2EEReplayDir(dir string) DialOption {
+	return func(o *dialOptions) { o.a2aReplayDir = dir }
 }
 
 // CheckA2AE2EEPairingKeyFile reports why a pairing key file would fail Dial,

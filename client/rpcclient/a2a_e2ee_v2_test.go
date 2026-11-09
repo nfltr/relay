@@ -424,7 +424,7 @@ func TestA2AE2EEv2Vectors(t *testing.T) {
 	}
 	// (t, INIT, caller, callee, k, i, ct1): i = exp(g, x), ct1 = aenc(ck1(psk(K), i), N0, h1, Lempty)
 	check("init", hexOf(gotInit), vecInit)
-	s, ack, err := newServerA2AE2EEState(txn, callee, gotInit, kr, fixedReader(0x22)) // y
+	s, ack, err := newServerA2AE2EEState(txn, callee, gotInit, kr, true, fixedReader(0x22)) // y
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +463,9 @@ func TestA2AE2EEv2Vectors(t *testing.T) {
 	check("resume", hexOf(cs.resumeMessage("txn-2", 1)), vecResume)
 	check("retry", hexOf(cs.retryMessage(1, time.UnixMilli(1_800_000_000_000))), vecRetry)
 	rc := newResumedA2AE2EEState("txn-2", cs, 1, kr)
-	got, c1, err := (&a2aSessions{in: map[[a2aSessionIDLen]byte]*a2aSession{ss.id: ss}}).resume("txn-2", cs.resumeMessage("txn-2", 1), kr)
+	responder := recordedSessions(t)
+	responder.in = map[[a2aSessionIDLen]byte]*a2aSession{ss.id: ss}
+	got, c1, err := responder.resume("txn-2", cs.resumeMessage("txn-2", 1), kr)
 	if err != nil || got != ss || c1 != 1 {
 		t.Fatalf("the callee does not take the resume: %v", err)
 	}

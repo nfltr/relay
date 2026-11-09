@@ -178,11 +178,12 @@ cltraces() {
 clrun() {
 	mkdir -p "$work/cltraces"
 	# CL_TRACE_SKIP: tests whose hostile relay loses a call's first frame
-	# (T1): CallLifecycle.tla's network loses nothing (the relay delivers
-	# in order), so their traces are outside the model; what they check is
-	# spec/proverif/a2a_machine.pv's (queries 16-18) and their own asserts.
+	# (T1), or the answers of a callee that restarts (L1): CallLifecycle.tla's
+	# network loses nothing (the relay delivers in order), so their traces
+	# are outside the model; what they check is spec/proverif/a2a_machine.pv's
+	# (queries 16-18), A2ASession.tla's (astraces) and their own asserts.
 	(cd client && RELAYTRACE=$work/cltraces go test -tags relaytrace -count="$2" -run "$1" \
-		-skip "${CL_TRACE_SKIP:-^(TestA2AE2EERefusesDroppedFrame|TestA2AE2EELateResumeAfterRetryRefused)$}" ./rpcclient/) >"$work/cltest.out" 2>&1 || {
+		-skip "${CL_TRACE_SKIP:-^(TestA2AE2EERefusesDroppedFrame|TestA2AE2EELateResumeAfterRetryRefused|TestA2AE2EERestartAfterServeRefusesForgedRetry)$}" ./rpcclient/) >"$work/cltest.out" 2>&1 || {
 		cat "$work/cltest.out"
 		exit 1
 	}
@@ -399,6 +400,12 @@ mutants)
 	expect AS:retry-no-take -e 's/Mutant = "none"/Mutant = "retry-no-take"/'
 	expect witness:ForgedRefused -e 's/^    AtMostOnce$/    W_ForgedRefused/'
 	expect witness:Lost -e 's/^    AtMostOnce$/    W_Lost/'
+	# The code before lane A2AL1 (limit L1): the record in memory, lost on
+	# a restart; and the record's write order and retention put wrong.
+	expect AS:record-in-memory -e 's/Mutant = "none"/Mutant = "record-in-memory"/'
+	expect AS:record-after-serve -e 's/Mutant = "none"/Mutant = "record-after-serve"/'
+	expect AS:short-retention -e 's/Mutant = "none"/Mutant = "short-retention"/'
+	expect witness:RestartRefused -e 's/^    AtMostOnce$/    W_RestartRefused/'
 	model=UDPFlow
 	# UDP tunnels (design, lane UDPTUN): each failure the flow lifecycle
 	# prevents, put in.
@@ -437,8 +444,9 @@ cltraces)
 	;;
 astraces)
 	# The per-push slice: the session tests of the retry, the restart, the
-	# forged unknown, the warm, the revoke and the rotation.
-	asrun "${AS_TRACE_TESTS:-^TestA2AE2EE(SessionReused|ResponderRestartRehandshakes|ForgedUnknownEndsCall|LateResumeAfterRetryRefused|RevokeEndsSession|RotationRekeys|RotationDoesNotRetryAServedCall|WarmLeavesASessionAndNoCall)\$}" || fail=1
+	# forged unknown, the warm, the revoke, the rotation and the restart
+	# after a served call (L1).
+	asrun "${AS_TRACE_TESTS:-^TestA2AE2EE(SessionReused|ResponderRestartRehandshakes|ForgedUnknownEndsCall|LateResumeAfterRetryRefused|RevokeEndsSession|RotationRekeys|RotationDoesNotRetryAServedCall|WarmLeavesASessionAndNoCall|RestartAfterServeRefusesForgedRetry)\$}" || fail=1
 	exit $fail
 	;;
 cctraces)

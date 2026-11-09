@@ -49,6 +49,13 @@ func pairedAgent(id string, key []byte) func(AgentTunnel) *Agent {
 func keyedAgent(id string, kr A2AE2EEKeyring) func(AgentTunnel) *Agent {
 	return func(s AgentTunnel) *Agent {
 		a := NewAgent(id, s)
+		dir, err := os.MkdirTemp(replayBase, id+"-")
+		if err != nil {
+			panic(err)
+		}
+		if err := a.EnableA2AE2EEReplayRecord(dir); err != nil {
+			panic(err)
+		}
 		if err := a.EnableA2AE2EE(kr); err != nil {
 			panic(err)
 		}

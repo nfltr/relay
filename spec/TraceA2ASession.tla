@@ -14,7 +14,8 @@
    relay's and the clock's steps are not logged: TLC takes them only when
    the next logged step needs them (the retry bound passing, Late; the
    caller losing a session the model gave it, ExpireCaller: an ack the
-   caller never took). Accepted when TLC reaches the trace's end:
+   caller never took; a call the callee took starting, Finish: Deliver is
+   logged once its record is synced, before the handler starts). Accepted when TLC reaches the trace's end:
    TraceNotDone is then violated (scripts/spec.sh astraces). *)
 EXTENDS Json, A2ASession, Sequences, TLC
 
@@ -43,7 +44,7 @@ Step ==
       [] OTHER -> Print(<<"unknown event", E>>, FALSE)
 
 \* The steps no end logs, taken only when the next logged one waits for them.
-EnvStep == ExpireCaller \/ \E k \in Calls : Late(k)
+EnvStep == ExpireCaller \/ (\E k \in Calls : Late(k)) \/ \E m \in pend : Finish(m)
 
 TraceInit == Init /\ l = 1
 TraceNext ==

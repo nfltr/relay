@@ -131,7 +131,7 @@ func TestA2AE2EEv2VectorsIndependentNoise(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, ack, err := newServerA2AE2EEState(txn, callee, init, kr, fixedReader(0x22))
+	s, ack, err := newServerA2AE2EEState(txn, callee, init, kr, true, fixedReader(0x22))
 	if err != nil {
 		t.Fatal(err)
 	}

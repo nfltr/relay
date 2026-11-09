@@ -19,8 +19,10 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"log"
 	"math"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flynn/noise"
@@ -56,9 +58,9 @@ const (
 	// a2aRetryBound: the handshake after an unknown (a retry) names a
 	// resume taken at most this long ago, by either end's clock. A callee
 	// keeps a session a2aSessionCalleeIdle > 2 * a2aRetryBound past its
-	// last call, so with clocks less than a2aRetryBound apart a callee
-	// that no longer knows a retried session lost it to a restart
-	// (spec/A2ASession.tla RetryOK, ExpireCallee).
+	// last call; a retry of one it no longer knows (a restart, eviction) is
+	// answered by its replay record, which keeps 2 * a2aRetryBound
+	// (spec/A2ASession.tla RetryOK, ExpireCallee, Forget).
 	a2aRetryBound = 5 * time.Minute
 )
 
@@ -156,12 +158,16 @@ func (k *a2aCallCipher) Decrypt(out, ad, ciphertext []byte) ([]byte, error) {
 
 // a2aSessions is an agent's sessions: as caller by the callee ref, as
 // callee by session id. Memory only: a restart loses them (and with them
-// every key derived from them).
+// every key derived from them); the call numbers a callee took are in its
+// replay record (a2a_e2ee_replay.go), which a restart keeps. A callee
+// with no record keeps no sessions: it offers none, so every call to it
+// handshakes.
 type a2aSessions struct {
 	mu  sync.Mutex
 	out map[string]*a2aSession
 	in  map[[a2aSessionIDLen]byte]*a2aSession
 	now func() time.Time // tests
+	rec atomic.Pointer[a2aReplayRecord]
 }
 
 func (ss *a2aSessions) clock() time.Time {
@@ -304,12 +310,33 @@ func (s *a2aSession) resumeMessage(txnID string, c uint64) []byte {
 // below the window); the caller handshakes.
 var errA2ASessionUnknown = errors.New("rpcclient: A2A E2EE session unknown")
 
-// resume takes a resume of call txnID: its session and call number, or
-// errA2ASessionUnknown. A session whose key no longer holds is dropped.
+// resume takes a resume of call txnID: its session and call number,
+// written to the replay record before the call starts (a restart after
+// this returns keeps it), or errA2ASessionUnknown. A session whose key no
+// longer holds is dropped. A number whose record failed stays taken: its
+// retry is refused (at most once).
 func (ss *a2aSessions) resume(txnID string, msg []byte, kr A2AE2EEKeyring) (*a2aSession, uint64, error) {
-	if len(msg) != a2aResumeLen {
+	rec := ss.rec.Load()
+	if len(msg) != a2aResumeLen || rec == nil {
 		return nil, 0, errA2ASessionUnknown
 	}
+	rec.mu.Lock() // lock order: rec.mu, then ss.mu
+	defer rec.mu.Unlock()
+	s, c, err := ss.takeResume(txnID, msg, kr)
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := rec.write(s.id, c); err != nil {
+		log.Printf("rpcclient: refused an A2A E2EE resume for txn %s: %v", txnID, err)
+		return nil, 0, errA2ASessionUnknown
+	}
+	traceAS("Deliver", s.caller, s.callee, txnID, s.id[:], c, nil)
+	return s, c, nil
+}
+
+// takeResume is resume's check and take, in memory (under ss.mu alone, so
+// the record's sync holds no caller of this agent).
+func (ss *a2aSessions) takeResume(txnID string, msg []byte, kr A2AE2EEKeyring) (*a2aSession, uint64, error) {
 	id := [a2aSessionIDLen]byte(msg[:a2aSessionIDLen])
 	c := binary.BigEndian.Uint64(msg[a2aSessionIDLen:])
 	tag := msg[a2aSessionIDLen+8:]
@@ -332,7 +359,6 @@ func (ss *a2aSessions) resume(txnID string, msg []byte, kr A2AE2EEKeyring) (*a2a
 		return nil, 0, errA2ASessionUnknown
 	}
 	s.used = now
-	traceAS("Deliver", s.caller, s.callee, txnID, id[:], c, nil)
 	return s, c, nil
 }
 
@@ -369,34 +395,57 @@ func (s *a2aSession) retryMessage(c uint64, at time.Time) []byte {
 }
 
 // errA2ARetryRefused: a callee refuses a retry of a resume it took (the
-// unknown the caller got was not the callee's: the call may have run), of
-// another pair's session, or past a2aRetryBound.
+// unknown the caller got was not the callee's: the call may have run; its
+// record says so across a restart), of another pair's session, or past
+// a2aRetryBound.
 var errA2ARetryRefused = errors.New("rpcclient: A2A E2EE retry refused: the callee took the call it retries (an unknown not from the callee: the call may have run), or the retry is past its bound")
 
 // retry answers a retry by caller under kid: within a2aRetryBound, and a
-// call number its session (when this agent still keeps it) has not taken;
-// it takes the number, so the resume, delivered later, is refused
-// (spec/A2ASession.tla Unknown).
+// call number not taken: by its session's window when this agent still
+// keeps the session, else by the replay record. It takes the number, in
+// the record too, so the resume, delivered later, and a replay of the
+// retry are refused (spec/A2ASession.tla Unknown, RetryOK). A callee with
+// no record kept no session: it refuses every retry.
 func (ss *a2aSessions) retry(msg []byte, caller, kid string) error {
-	if len(msg) != a2aRetryLen {
+	rec := ss.rec.Load()
+	if len(msg) != a2aRetryLen || rec == nil {
 		return errA2ARetryRefused
 	}
 	id := [a2aSessionIDLen]byte(msg[:a2aSessionIDLen])
 	c := binary.BigEndian.Uint64(msg[a2aSessionIDLen:])
 	at := time.UnixMilli(int64(binary.BigEndian.Uint64(msg[a2aSessionIDLen+8:]))) // #nosec G115 -- a wrapped value is a time outside a2aRetryBound, refused below
-	ss.mu.Lock()
-	defer ss.mu.Unlock()
-	if d := ss.clock().Sub(at); d > a2aRetryBound || d < -a2aRetryBound {
-		return errA2ARetryRefused
+	rec.mu.Lock()                                                                 // lock order: rec.mu, then ss.mu
+	defer rec.mu.Unlock()
+	kept, err := ss.takeRetry(id, c, at, caller, kid)
+	if err != nil {
+		return err
 	}
-	s := ss.in[id]
-	if s == nil {
-		return nil // lost to a restart: nothing of it ran here
+	if !kept && rec.has(id, c) {
+		return errA2ARetryRefused // taken before this agent lost the session
 	}
-	if s.caller != caller || s.kid != kid || !s.takeCallNumber(c) {
+	if err := rec.write(id, c); err != nil {
+		log.Printf("rpcclient: refused an A2A E2EE retry: %v", err)
 		return errA2ARetryRefused
 	}
 	return nil
+}
+
+// takeRetry is retry's check in memory: whether this agent keeps the
+// session (and took c on it), or the refusal.
+func (ss *a2aSessions) takeRetry(id [a2aSessionIDLen]byte, c uint64, at time.Time, caller, kid string) (bool, error) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if d := ss.clock().Sub(at); d > a2aRetryBound || d < -a2aRetryBound {
+		return false, errA2ARetryRefused
+	}
+	s := ss.in[id]
+	if s == nil {
+		return false, nil // the record answers
+	}
+	if s.caller != caller || s.kid != kid || !s.takeCallNumber(c) {
+		return false, errA2ARetryRefused
+	}
+	return true, nil
 }
 
 // a2aSentFrame is a frame a resumed call sent before its callee took the

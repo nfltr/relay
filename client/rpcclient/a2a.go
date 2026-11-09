@@ -259,6 +259,17 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 	if do.a2aE2EE && keyring == nil {
 		return nil, ErrA2AE2EENoKey
 	}
+	var replay *a2aReplayRecord
+	if do.a2aReplayDir != "" {
+		if !do.a2aE2EE {
+			return nil, fmt.Errorf("rpcclient: an A2A E2EE replay record needs E2EE on")
+		}
+		r, err := openA2AReplayRecord(do.a2aReplayDir)
+		if err != nil {
+			return nil, err
+		}
+		replay = r
+	}
 
 	host, port := parseTarget(target)
 
@@ -349,6 +360,9 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 	}
 
 	a := newAgent(do.agentID, ref, upStream, ctx, do.heartbeatInterval, true, liveness)
+	if replay != nil {
+		a.sessions.rec.Store(replay)
+	}
 	if keyring != nil {
 		a.setKeyring(keyring)
 	}
@@ -421,6 +435,9 @@ func (a *Agent) Ref() string { return a.ref }
 func (a *Agent) Close() error {
 	a.cancel()
 	a.wg.Wait()
+	if r := a.sessions.rec.Load(); r != nil {
+		r.close()
+	}
 	if a.conn == nil {
 		return nil
 	}
@@ -450,6 +467,18 @@ func (a *Agent) EnableA2AE2EE(kr A2AE2EEKeyring) error {
 		return ErrA2AE2EENoKey
 	}
 	a.setKeyring(kr)
+	return nil
+}
+
+// EnableA2AE2EEReplayRecord keeps this agent's A2A E2EE replay record in
+// dir, as WithA2AE2EEReplayDir does for Dial; for in-process agents
+// created with NewAgent(), before their first call.
+func (a *Agent) EnableA2AE2EEReplayRecord(dir string) error {
+	r, err := openA2AReplayRecord(dir)
+	if err != nil {
+		return err
+	}
+	a.sessions.rec.Store(r)
 	return nil
 }
 
