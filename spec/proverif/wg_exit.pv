@@ -40,6 +40,20 @@
      nfltr cmd/nfltr/internal/wgcli   K from the key file (a2akeys)
      nfltr a2akeys PairKeys.Exit      the key id must be the machine the client named *)
 
+(* Bindings (README "Bindings"): what the queries rely on that a relay
+   could change. Each BIND:<id> has one row in
+   client/agent/wgexit/wg_exit_bindings_test.go (TestWGExitModelBindings,
+   make spec-bindings) that changes just that in an honest pairing and
+   requires the real WireGuard handshake to fail; nfltr.* rows are the
+   client's choices, in nfltr cmd/nfltr/internal/wgcli/wg_exit_bindings_test.go.
+   The test fails when its rows and these ids differ.
+     BIND:psk.name             pskOf(k, name, kid): each end's own name (name-unbound)
+     BIND:client.psk           RootClient's p on the exit key the relay told (client-no-psk)
+     BIND:exit.psk             Exit's p on the client key the relay told (exit-no-psk)
+     BIND:nfltr.client.kid     kid = named: the relay's key id only for the machine named (relay-kid)
+     BIND:nfltr.client.paired  p whatever x-wg-paired says (psk-dropped-on-relay-word)
+     BIND:nfltr.key.machine    machineKey(R, id): one key per machine (group-key) *)
+
 free c: channel.
 
 type exponent.

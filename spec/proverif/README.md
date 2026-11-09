@@ -188,6 +188,7 @@ re-pinning (`make spec-bindings`, in `make ci`; nfltr
 | model | test | rows |
 |---|---|---|
 | `a2a_machine.pv` | `client/rpcclient/a2a_e2ee_bindings_test.go` `TestA2AE2EEModelBindings` | 17: message 1 (txn, role, caller, callee, key id, psk, warm), the ack's transcript, frames (direction, order, end, header), resumed calls' keys (txn, call number), the resume (txn, call number, pair) |
+| `wg_exit.pv` | `client/agent/wgexit/wg_exit_bindings_test.go` `TestWGExitModelBindings` | 3 here (psk binds the exit's name; each end's psk on the key the relay told it) + 3 in nfltr `cmd/nfltr/internal/wgcli/wg_exit_bindings_test.go` (the key id of the machine named, psk whatever `x-wg-paired` says, one key per machine) |
 
 A planted Go mutant fails its row (lane E2EEVECTORS): the role, caller,
 callee or txn left out of `a2aE2EEPrologue`, the psk not keyed, a warm's
@@ -195,6 +196,24 @@ message 1 untyped, a call's keys or a resume's tag without the call number,
 a resume's tag without the txn. Where the existing hostile-relay tests
 already make the attack (`frame.end`, `frame.header`, `init.warm`,
 `resume.pair`), the row runs them.
+
+`wg_exit.pv`'s rows run real WireGuard handshakes (wireguard-go on both
+ends, the test as the relay) and require the client's to fail: a client
+rerouted to another exit of the same machine key (`psk.name`), a paired
+client told the relay's exit key (`client.psk`), a paired exit told the
+relay's client key (`exit.psk`); an honest pairing completes first. The
+client's choices are rows in nfltr (`nfltr.*` ids, listed in the relay test
+as `wgNfltrRows`): it takes the relay's key id only for the machine it
+named, its psk does not depend on `x-wg-paired`, machine keys differ per
+machine. Planted Go mutants caught (lane E2EEVECTORS-2): the service name
+out of `PresharedKey`, the client's psk off its peer, the exit's psk off its
+tunnel. The key id inside the HMAC has no row: keys already differ per key
+id, and no query relies on it.
+
+`client/agent/e2ee_share_bindings_test.go` `TestE2EEShareModelBindingsAgent`
+holds the agent's row of relay-core's `e2ee_share.pv` (`relay.agent.cred`:
+the share credential checked on every E2EE request; mutant: the check
+skipped).
 
 ## Findings (lane A2AID, 2026-11-07; F1-F3 and F5 fixed by wire v2, lane A2AV2)
 
