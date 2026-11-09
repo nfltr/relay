@@ -6,6 +6,9 @@
 // cuts an end-to-end encrypted session between two records would read as
 // the peer's clean end; a Conn reports that cut as ErrTruncated (claims
 // review CLAIMS-A Q5; spec/proverif/README.md e2ee_tcp queries 11-12).
+// Its Reset is the other half: an end that aborts closes the transport
+// without close_notify, so the peer reads a reset, never a clean end
+// (lane TCPRESET, queries 15-16).
 package tlsend
 
 import (
@@ -39,6 +42,30 @@ func Server(raw net.Conn, cfg *tls.Config) *Conn {
 	return &Conn{tls.Server(r, cfg), r}
 }
 
+// Reset ends the connection as failed: no close_notify; the transport is
+// reset (its Reset, an RST on a *net.TCPConn) or else closed, which the
+// peer's Conn reads as ErrTruncated. peerlink.Join calls it to pass on
+// the other side's reset; Close after it sends nothing.
+func (c *Conn) Reset() error {
+	c.raw.reset.Store(true)
+	switch r := c.raw.Conn.(type) {
+	case interface{ Reset() error }:
+		return r.Reset()
+	case *net.TCPConn:
+		_ = r.SetLinger(0)
+	}
+	return c.raw.Conn.Close()
+}
+
+// Close is the TLS connection's (close_notify, then the transport's
+// close), or after Reset only the transport's.
+func (c *Conn) Close() error {
+	if c.raw.reset.Load() {
+		return c.raw.Conn.Close()
+	}
+	return c.Conn.Close()
+}
+
 // Read is the TLS connection's, with a transport end as ErrTruncated.
 func (c *Conn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
@@ -56,6 +83,7 @@ type rawEnd struct {
 	net.Conn
 	eof   bool // the transport's EOF, held for the next read
 	ended atomic.Bool
+	reset atomic.Bool // Conn.Reset: Close sends no close_notify
 }
 
 func (r *rawEnd) Read(p []byte) (int, error) {

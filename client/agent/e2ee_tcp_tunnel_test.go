@@ -19,10 +19,12 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/tlsend"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/dataplane"
@@ -290,5 +292,69 @@ func TestPinnedSessionCutIsResetAtTarget(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("cut %v: the target's read did not end", cut)
 		}
+	}
+}
+
+// A pinned session whose target resets its connection (an RST, or any
+// read error but EOF) reaches the client as a reset, never as the agent's
+// close_notify; the target's clean end is the client's clean end (lane
+// TCPRESET, spec/proverif/README.md e2ee_tcp query 15, mutant
+// abort-as-close).
+func TestPinnedSessionTargetResetIsResetAtClient(t *testing.T) {
+	cert, _, err := generateSelfSignedCert("agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reset := range []bool{false, true} {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = ln.Close() })
+		go func() {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			tc := c.(*net.TCPConn)
+			_, _ = io.ReadFull(tc, make([]byte, len("hello")))
+			_, _ = io.WriteString(tc, "hi")
+			if reset {
+				_ = tc.SetLinger(0) // the target's reset
+				_ = tc.Close()
+				return
+			}
+			_ = tc.CloseWrite()
+			_, _ = io.Copy(io.Discard, tc)
+			_ = tc.Close()
+		}()
+		target := ln.Addr().String()
+		l := &linkSessions{ctx: t.Context(), targets: sessionTargets{e2eeOnly: true, forwardAddr: target, defaultBackend: "http://" + target},
+			e2ee: newE2EETLSConfig(cert, "agent"), logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+		s, c := sessionPair(t)
+		h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: "localhost:1", E2Ee: true, Answer: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		go l.accept("", h, s)
+		if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
+			t.Fatalf("answer %v, %v", a, err)
+		}
+		tc := tlsend.Client(c, &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}) //nolint:gosec // only the end is under test
+		if _, err := io.WriteString(tc, "hello"); err != nil {
+			t.Fatal(err)
+		}
+		_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
+		got, err := io.ReadAll(tc)
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("reset %v: the client's read did not end", reset)
+		}
+		if reset && err == nil {
+			t.Errorf("reset: the client read %q and a clean end, want a reset", got)
+		}
+		if !reset && (err != nil || string(got) != "hi") {
+			t.Errorf("clean end: the client read %q, %v; want hi and a clean end", got, err)
+		}
+		_ = tc.CloseWrite()
 	}
 }

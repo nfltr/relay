@@ -335,7 +335,9 @@ func refuseAnswered(s net.Conn, reason relayv1.ErrorReason, err error) {
 // each side's end passed on as a half close (TLS close_notify on s). A
 // session that ends without the client's close_notify (the relay cut it)
 // is a reset to the target, never its half close (tlsend; CLAIMS-A Q5,
-// TestPinnedSessionCutIsResetAtTarget). A refused client gets a TLS alert
+// TestPinnedSessionCutIsResetAtTarget); a target's reset is one to the
+// client, no close_notify (Join calls tlsend's Reset; lane TCPRESET,
+// TestPinnedSessionTargetResetIsResetAtClient). A refused client gets a TLS alert
 // and the target only a connection that closes: no byte of it is read or
 // written.
 func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {

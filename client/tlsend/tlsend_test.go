@@ -103,3 +103,20 @@ func cert(t *testing.T) tls.Certificate {
 	}
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: k}
 }
+
+// Reset is an abort, never a clean end: the peer reads an error, not
+// io.EOF, even when Close follows it (peerlink.Join closes both sides at
+// the end); lane TCPRESET, spec/proverif/README.md e2ee_tcp queries 15-16.
+func TestResetIsNotCloseNotify(t *testing.T) {
+	for _, resetterIsServer := range []bool{false, true} {
+		resetter, peer, _ := pair(t, resetterIsServer)
+		if err := resetter.Reset(); err != nil {
+			t.Fatal(err)
+		}
+		_ = resetter.Close()
+		_ = peer.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if _, err := io.ReadAll(peer); err == nil || errors.Is(err, io.EOF) {
+			t.Errorf("resetter server %v: the peer's read ended with %v, want a reset", resetterIsServer, err)
+		}
+	}
+}
