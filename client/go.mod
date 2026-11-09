@@ -4,10 +4,10 @@ go 1.27.2
 
 require (
 	github.com/flynn/noise v1.1.0
-	github.com/nfltr/link v0.12.5
-	github.com/nfltr/link/peerlink/quiclink v0.5.11
+	github.com/nfltr/link v0.12.6
+	github.com/nfltr/link/peerlink/quiclink v0.5.12
 	github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261104164830-88368f5b9ba4
-	github.com/nfltr/relay/proto v0.19.22
+	github.com/nfltr/relay/proto v0.19.23
 	github.com/pion/logging v0.2.4
 	github.com/pion/stun/v4 v4.0.1
 	github.com/pion/webrtc/v4 v4.2.22
