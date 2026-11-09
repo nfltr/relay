@@ -262,6 +262,9 @@ service table's `e2ee: true` service).
 | 11 | a clean end the client passes on (after the bytes it read) was the pinned agent's close_notify after those bytes | holds: a stream that ends without the peer's close_notify (the relay cutting it between two records) is a reset to the local application (`client/tlsend`; claims review CLAIMS-A Q5, mutant `clear-end`: crypto/tls's `io.EOF` for both, the code before) |
 | 12 | the service's half close was the allowed client's close_notify after the bytes it got | holds (the agent side, `serveE2EETCP`; mutant `agent-clear-end`) |
 | 13, 14 | witnesses: both clean ends happen | attack (reachable), as they must |
+| 15 | a clean end at the client was the target's clean end | holds: a target's reset (or a read error other than EOF at the agent) ends the TLS stream without close_notify (`tlsend.Conn.Reset`, which link's `peerlink.Join` calls on an abort), a reset at the client; lane TCPRESET, mutant `abort-as-close`: Join closed the TLS conn, sending close_notify, the code before |
+| 16 | the service's half close was the client's local application's clean end | holds: the application's reset (a local read or write error) resets the session (nfltr `transportcli.Pump`, `tlsSession.Reset`); mutant `client-abort-as-close` |
+| 17, 18 | witnesses: both aborts happen | attack (reachable), as they must |
 
 A TLS record is bound to its place in its direction's stream (TLS 1.3's
 sequence number in the AEAD nonce): the model's close record names the
@@ -276,7 +279,8 @@ its fix), the relay's target despite `--forward`, accept a response
 without the session key, the agent takes any client certificate
 (`any-client-cert`), skips CertificateVerify (`skip-certificate-verify`),
 a raw end taken as a clean end on the client (`clear-end`) or the agent
-(`agent-clear-end`).
+(`agent-clear-end`), an end's reset sent as close_notify at the agent
+(`abort-as-close`) or the client (`client-abort-as-close`).
 A client-side mutant leaves 7-9 holding: the agent's check of the client
 does not depend on the client's check of the agent. An agent with an
 empty list is `any-client-cert`: the SDK's zero value authenticates no

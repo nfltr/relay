@@ -41,6 +41,10 @@
                                               a stream that ends without the peer's close_notify
                                               (the relay's cut) is a reset, never a clean end
                                               (client/tlsend; CLAIMS-A Q5, README queries 11-14)
+     client/tlsend Conn.Reset, link peerlink.Join: the target's reset (or a read error) ends the
+                                              TLS stream without close_notify; nfltr .../tcp_connect_session.go
+                                              Pump, tlsSession.Reset: the local application's likewise
+                                              (README queries 15-18)
 
    A TLS record carries its content type: application data (appData) or
    the close_notify alert (closeAlert); a stream's raw end (rawEnd: the
@@ -82,6 +86,10 @@ event ClientEnded(pkey, bitstring).                  (* the client's close_notif
 event ClientCleanEnd(bitstring, bitstring, bitstring). (* pin, session key, response: a clean end delivered *)
 event AgentEnded(bitstring, bitstring, bitstring).   (* fp of its key, session key, response: its close_notify *)
 event ServiceCleanEnd(pkey, bitstring).              (* the service's half close: the client key, its bytes *)
+event TargetEnded(bitstring, bitstring, bitstring).  (* fp of its key, session key, response: the target's clean end *)
+event TargetAborted(bitstring, bitstring, bitstring). (* ... the target's reset *)
+event AppEnded(pkey, bitstring).                     (* the client's local application's clean end after its bytes *)
+event AppAborted(pkey, bitstring).                   (* ... its reset *)
 free sk1: skey [private].
 
 (* The pinned client: opens with E2Ee set, needs the relay's answer, runs
@@ -101,6 +109,14 @@ let Client(pin: bitstring, m: bitstring) =
   out(c, (pk(csk), sign(h((k, spk)), csk)));         (* Certificate + CertificateVerify *)
   event ClientSent(pk(csk), m);
   out(c, senc((c2s, appData, m), k));
+  in(c, appAbort: bool);                             (* the local application ends cleanly or resets: either *)
+  if appAbort = true then (
+    event AppAborted(pk(csk), m);
+    0                                                (* Pump: tlsSession.Reset, no close_notify *) (* NOT:client-abort-as-close *)
+    event ClientEnded(pk(csk), m); (* ONLY:client-abort-as-close *)
+    out(c, senc((c2s, closeAlert, m), k)) (* ONLY:client-abort-as-close *)
+  ) else
+  event AppEnded(pk(csk), m);
   event ClientEnded(pk(csk), m);
   out(c, senc((c2s, closeAlert, m), k));
   in(c, e: bitstring);
@@ -141,6 +157,14 @@ let Agent(sk: skey, fixed: bool) =
     new r: bitstring;
     event AgentSent(fp(pk(sk)), k, (r, svcData));
     out(c, senc((s2c, appData, (r, svcData)), k));
+    in(c, targetAbort: bool);                        (* the target ends cleanly or resets: either *)
+    if targetAbort = true then (
+      event TargetAborted(fp(pk(sk)), k, (r, svcData));
+      0                                              (* Join: tlsend Conn.Reset, no close_notify *) (* NOT:abort-as-close *)
+      event AgentEnded(fp(pk(sk)), k, (r, svcData)); (* ONLY:abort-as-close *)
+      out(c, senc((s2c, closeAlert, (r, svcData)), k)) (* ONLY:abort-as-close *)
+    ) else
+    event TargetEnded(fp(pk(sk)), k, (r, svcData));
     event AgentEnded(fp(pk(sk)), k, (r, svcData));
     out(c, senc((s2c, closeAlert, (r, svcData)), k));
     in(c, e2: bitstring);
@@ -211,6 +235,24 @@ query ck: pkey, m: bitstring; event(ServiceCleanEnd(ck, m)) ==> event(ClientEnde
 query k: bitstring, r: bitstring; event(ClientCleanEnd(fp(pk(sk1)), k, r)).
 (* expect false *)
 query ck: pkey, m: bitstring; event(ServiceCleanEnd(ck, m)).
+
+(* README 15. a clean end at the client was the target's: the target's
+   reset (or a read error at the agent) reaches the client as a reset,
+   never as the agent's close_notify (mutant abort-as-close: Join closed
+   the TLS conn, sending close_notify, the code before) *)
+(* expect true *)
+query k: bitstring, r: bitstring;
+  event(ClientCleanEnd(fp(pk(sk1)), k, r)) ==> event(TargetEnded(fp(pk(sk1)), k, r)).
+(* README 16. likewise the other way: the service's half close was the
+   client's local application's clean end (mutant client-abort-as-close:
+   Pump closed the session, sending close_notify, the code before) *)
+(* expect true *)
+query ck: pkey, m: bitstring; event(ServiceCleanEnd(ck, m)) ==> event(AppEnded(ck, m)).
+(* README 17, 18. witnesses: both aborts happen *)
+(* expect false *)
+query k: bitstring, r: bitstring; event(TargetAborted(fp(pk(sk1)), k, r)).
+(* expect false *)
+query ck: pkey, m: bitstring; event(AppAborted(ck, m)).
 
 process
   new sk2: skey; new skOld: skey; new skNew: skey; new sk4: skey;
