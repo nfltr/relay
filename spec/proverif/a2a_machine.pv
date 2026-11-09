@@ -27,7 +27,9 @@
 
    Abstractions: the key id is mid(n, gen) and an agent id is its machine
    name; the code's key id is opaque and A2AE2EEKeyring.For(ref) maps an
-   agent ref to it (A2AE2EEKeyring; nfltr a2akeys, by machine id with TENANTS2).
+   agent ref to it (A2AE2EEKeyring; nfltr a2akeys rootKeyring.For keys a call
+   by the machine id the ref names, <machine id>-<service>, refusing a learned
+   machine the ref does not name).
    A callee's own ref is the one the relay told it at connect (a2a.go
    Dial, agentwire.AgentRefKey; the callee check in newServerA2AE2EEState), so the model takes
    it from the attacker at every answer: the key id and the role are the
