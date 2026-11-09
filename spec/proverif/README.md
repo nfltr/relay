@@ -259,12 +259,24 @@ service table's `e2ee: true` service).
 | 8 | a removed client key (leaked) reaches nothing: removal from the list is revocation | holds |
 | 9 | what reaches the service was sent by the allowed client | holds |
 | 10 | witness: an allowed client reaches the service | attack (reachable), as it must |
+| 11 | a clean end the client passes on (after the bytes it read) was the pinned agent's close_notify after those bytes | holds: a stream that ends without the peer's close_notify (the relay cutting it between two records) is a reset to the local application (`client/tlsend`; claims review CLAIMS-A Q5, mutant `clear-end`: crypto/tls's `io.EOF` for both, the code before) |
+| 12 | the service's half close was the allowed client's close_notify after the bytes it got | holds (the agent side, `serveE2EETCP`; mutant `agent-clear-end`) |
+| 13, 14 | witnesses: both clean ends happen | attack (reachable), as they must |
+
+A TLS record is bound to its place in its direction's stream (TLS 1.3's
+sequence number in the AEAD nonce): the model's close record names the
+bytes it follows. Without that binding the model finds the attacker
+splicing one agent session's close record onto a replay of the client's
+handshake to another; TLS's sequence numbers and the server's random
+rule it out, and the model does not re-prove TLS.
 
 Mutants: skip the pin check, a relay-supplied pin, plaintext when the relay
 gives no answer, the relay's target without `--forward` (finding 1 before
 its fix), the relay's target despite `--forward`, accept a response
 without the session key, the agent takes any client certificate
-(`any-client-cert`), skips CertificateVerify (`skip-certificate-verify`).
+(`any-client-cert`), skips CertificateVerify (`skip-certificate-verify`),
+a raw end taken as a clean end on the client (`clear-end`) or the agent
+(`agent-clear-end`).
 A client-side mutant leaves 7-9 holding: the agent's check of the client
 does not depend on the client's check of the agent. An agent with an
 empty list is `any-client-cert`: the SDK's zero value authenticates no
@@ -391,6 +403,7 @@ fails (`TestSecureConnFailedWriteEndsIt`).
 | e2ee_tcp.pv | client/agent/agent.go |
 | e2ee_tcp.pv | client/agent/e2ee_client_keys.go |
 | e2ee_tcp.pv | client/agent/services.go |
+| e2ee_tcp.pv | client/tlsend/tlsend.go |
 | wg_exit.pv | client/wg/keys.go |
 | wg_exit.pv | client/wg/tunnel.go |
 | wg_exit.pv | client/agent/wgexit/wgexit.go |

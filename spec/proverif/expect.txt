@@ -53,18 +53,21 @@ a2a_machine sess,clear-header TTTTTTTTTTTTTTTTTTFFFFFFF
 # Part 3: the agent-side E2EE paths (e2ee_tcp: pinned TCP; wg_exit:
 # WireGuard client and exit; p2p_e2e: p2p). Queries in README "E2EE paths";
 # an F on the base line is a finding or a documented limit there.
-e2ee_tcp - TTTTFFTTTF
+e2ee_tcp - TTTTFFTTTFTTFF
 wg_exit - TTTFTTTFF
 p2p_e2e - TTTTFTTTTFFF
-e2ee_tcp skip-pin-check FFFFFFTTTF
-e2ee_tcp relay-supplied-pin FFFFFFTTTF
-e2ee_tcp plaintext-without-answer FTFFFFTTTF
-e2ee_tcp relay-names-target TTFTFFTTTF
-e2ee_tcp relay-names-target-with-forward FTTFFFTTTF
-e2ee_tcp agreement-without-key-check TFTTFFTTTF
+e2ee_tcp skip-pin-check FFFFFFTTTFFTFF
+e2ee_tcp relay-supplied-pin FFFFFFTTTFFTFF
+e2ee_tcp plaintext-without-answer FTFFFFTTTFTTFF
+e2ee_tcp relay-names-target TTFTFFTTTFTTFF
+e2ee_tcp relay-names-target-with-forward FTTFFFTTTFTTFF
+e2ee_tcp agreement-without-key-check TFTTFFTTTFTTTF
 # finding 2 (client pins, lane E2EEFIX2) put back: 7-9 fail
-e2ee_tcp any-client-cert TTTTFFFFFF
-e2ee_tcp skip-certificate-verify TTTTFFFTFF
+e2ee_tcp any-client-cert TTTTFFFFFFTFFF
+e2ee_tcp skip-certificate-verify TTTTFFFTFFTFFF
+# CLAIMS-A Q5: a raw end taken as a clean end (crypto/tls io.EOF), either side: queries 11-12 fail
+e2ee_tcp clear-end TTTTFFTTTFFTFF
+e2ee_tcp agent-clear-end TTTTFFTTTFTFFF
 wg_exit psk-dropped-on-relay-word FTTFTFTFF
 wg_exit client-no-psk FTTFTFTTT
 wg_exit exit-no-psk TFFFFTTFF

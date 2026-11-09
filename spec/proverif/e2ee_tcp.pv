@@ -36,7 +36,19 @@
      client/agent/e2ee_client_keys.go:50      RequireAnyClientCert: CertificateVerify against the certificate's key
      client/agent/e2ee_client_keys.go:53-63   VerifyConnection (resumption too): the key's fingerprint on the list, no CA
      client/relaytrust/relaytrust.go:39-41    a client key's fingerprint: SHA-256 of its SubjectPublicKeyInfo
-     client/agent/tls.go:202-216              rotateCert: one certificate at a time *)
+     client/agent/tls.go:202-216              rotateCert: one certificate at a time
+     client/agent/session_plan.go serveE2EETCP, nfltr .../tcp_connect_session.go tlsSession:
+                                              a stream that ends without the peer's close_notify
+                                              (the relay's cut) is a reset, never a clean end
+                                              (client/tlsend; CLAIMS-A Q5, README queries 11-14)
+
+   A TLS record carries its content type: application data (appData) or
+   the close_notify alert (closeAlert); a stream's raw end (rawEnd: the
+   transport's EOF, which the relay can produce between any two records)
+   carries none. A record is bound to its place in its direction's stream
+   (TLS 1.3's per-record sequence number in the AEAD nonce): the model's
+   close record names the bytes it follows. crypto/tls reports both a close_notify and a raw end as
+   io.EOF; tlsend.Conn tells them apart. *)
 
 free c: channel.
 
@@ -55,6 +67,7 @@ fun h(bitstring): bitstring.          (* the transcript hash: it shows nothing o
 const svcAddr: bitstring.           (* the target the agent means: its table's, --forward's *)
 const answerOK, answerNone: bitstring.
 const c2s, s2c: bitstring.            (* TLS keys each direction apart *)
+const appData, closeAlert, rawEnd: bitstring.
 
 free payloadFixed, payloadRelayTarget, payloadNew, payloadOld, payloadTofu: bitstring [private].
 free svcData: bitstring [private].  (* what the agent's service answers an allowed client *)
@@ -65,6 +78,10 @@ event ClientRecv(bitstring, bitstring, bitstring).   (* pin, session key, respon
 event AgentSent(bitstring, bitstring, bitstring).    (* fp of its key, session key, response *)
 event ServiceGot(pkey, bitstring).                   (* the client key it allowed, its bytes *)
 event ClientSent(pkey, bitstring).
+event ClientEnded(pkey, bitstring).                  (* the client's close_notify after its bytes *)
+event ClientCleanEnd(bitstring, bitstring, bitstring). (* pin, session key, response: a clean end delivered *)
+event AgentEnded(bitstring, bitstring, bitstring).   (* fp of its key, session key, response: its close_notify *)
+event ServiceCleanEnd(pkey, bitstring).              (* the service's half close: the client key, its bytes *)
 free sk1: skey [private].
 
 (* The pinned client: opens with E2Ee set, needs the relay's answer, runs
@@ -83,11 +100,20 @@ let Client(pin: bitstring, m: bitstring) =
   out(c, aenc(k, spk));
   out(c, (pk(csk), sign(h((k, spk)), csk)));         (* Certificate + CertificateVerify *)
   event ClientSent(pk(csk), m);
-  out(c, senc((c2s, m), k));
+  out(c, senc((c2s, appData, m), k));
+  event ClientEnded(pk(csk), m);
+  out(c, senc((c2s, closeAlert, m), k));
   in(c, e: bitstring);
-  let (=s2c, r: bitstring) = sdec(e, k) in (* NOT:agreement-without-key-check *)
+  let (=s2c, =appData, r: bitstring) = sdec(e, k) in (* NOT:agreement-without-key-check *)
   in(c, r: bitstring); (* ONLY:agreement-without-key-check *)
-  event ClientRecv(pin, k, r).
+  event ClientRecv(pin, k, r);
+  in(c, e2: bitstring);
+  if e2 = rawEnd then (
+    0                                                (* a reset to the local application *) (* NOT:clear-end *)
+    event ClientCleanEnd(pin, k, r) (* ONLY:clear-end *)
+  ) else
+  let (=s2c, =closeAlert, =r) = sdec(e2, k) in
+  event ClientCleanEnd(pin, k, r).
 
 (* The agent: E2EE only; refuses an unpinned session; after TLS bridges the
    plaintext to the target. fixed = the agent has a target of its own (a
@@ -109,12 +135,21 @@ let Agent(sk: skey, fixed: bool) =
   if cpk = pk(csk) then                              (* e2ee_client_keys.go:58: the list *) (* NOT:any-client-cert *)
   if checksign(cv, cpk) = h((k, pk(sk))) then        (* CertificateVerify (crypto/tls) *) (* NOT:skip-certificate-verify *)
   in(c, e: bitstring);
-  let (=c2s, m: bitstring) = sdec(e, k) in
+  let (=c2s, =appData, m: bitstring) = sdec(e, k) in
   if t = svcAddr then (
     event ServiceGot(cpk, m);                       (* to its own service, on its machine *)
     new r: bitstring;
     event AgentSent(fp(pk(sk)), k, (r, svcData));
-    out(c, senc((s2c, (r, svcData)), k))
+    out(c, senc((s2c, appData, (r, svcData)), k));
+    event AgentEnded(fp(pk(sk)), k, (r, svcData));
+    out(c, senc((s2c, closeAlert, (r, svcData)), k));
+    in(c, e2: bitstring);
+    if e2 = rawEnd then (
+      0                                              (* the target reset *) (* NOT:agent-clear-end *)
+      event ServiceCleanEnd(cpk, m) (* ONLY:agent-clear-end *)
+    ) else
+    let (=c2s, =closeAlert, =m) = sdec(e2, k) in
+    event ServiceCleanEnd(cpk, m)                    (* the target's half close *)
   ) else
     out(c, (t, m)).                                  (* dialTarget: another host, the attacker's *)
 
@@ -159,6 +194,23 @@ query ck: pkey, m: bitstring; event(ServiceGot(ck, m)) ==> event(ClientSent(ck, 
 (* 8. witness: an allowed client does reach the service *)
 (* expect false *)
 query ck: pkey, m: bitstring; event(ServiceGot(ck, m)).
+
+(* 9 (README 11). a clean end the client passes on was the agent's: the relay cutting
+   the stream between two records (its raw end, no close_notify) is a
+   reset (CLAIMS-A Q5; mutant clear-end: crypto/tls's io.EOF taken as a
+   clean end, the code before) *)
+(* expect true *)
+query k: bitstring, r: bitstring;
+  event(ClientCleanEnd(fp(pk(sk1)), k, r)) ==> event(AgentEnded(fp(pk(sk1)), k, r)).
+(* 10 (README 12). likewise toward the service: its half close was the client's
+   (mutant agent-clear-end) *)
+(* expect true *)
+query ck: pkey, m: bitstring; event(ServiceCleanEnd(ck, m)) ==> event(ClientEnded(ck, m)).
+(* README 13, 14. witnesses: both clean ends happen at all *)
+(* expect false *)
+query k: bitstring, r: bitstring; event(ClientCleanEnd(fp(pk(sk1)), k, r)).
+(* expect false *)
+query ck: pkey, m: bitstring; event(ServiceCleanEnd(ck, m)).
 
 process
   new sk2: skey; new skOld: skey; new skNew: skey; new sk4: skey;
