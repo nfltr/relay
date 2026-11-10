@@ -924,9 +924,7 @@ type sessionTargets struct {
 	services       *ServiceTable // when set, the only targets (the fields above unused)
 	http           http.Handler  // serves sessions to dataplane.HTTPSessionTarget
 	noRaw          bool          // refuses sessions that would dial a target
-	e2eeOnly       bool          // Config.TCPE2EEOnly: a pinned session to a target is its bytes, not HTTP; others refused
-	clients        clientKeys    // Config.TCPE2EEClients: who may open an e2eeOnly pinned session; nil: anyone
-	org            Org           // Config.TCPE2EEOrg: an e2eeOnly tunnel in organisation mode; nil: pins
+	org            Org           // Config.TCPE2EEOrg (TCPE2EEOnly): organisation TLS only, its bytes to forwardAddr; plain refused
 	groups         []string      // Config.TCPE2EEAllowGroups
 }
 

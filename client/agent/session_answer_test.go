@@ -6,10 +6,6 @@ package agent
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
-	"errors"
 	"io"
 	"log/slog"
 	"net"
@@ -84,17 +80,20 @@ func closedAddr(t *testing.T) string {
 // An open that asks for an answer gets one before any byte: OK once the
 // agent reached its target, else the typed reason (refused, unreachable,
 // unknown service, E2EE required or unavailable), then the session's end.
-// An E2EE tcp service is TLS with the agent's E2EE certificate, whose
-// SHA-256 the client pins, and passes half closes through.
+// An E2EE tcp service is the organisation's TLS and passes half closes
+// through; a tcp service without its organisation takes no E2EE session.
 func TestLinkSessionAnswers(t *testing.T) {
 
 	echo := echoTarget(t)
+	o := newTestOrg(t)
+	cli := o.machine(t, "cli", []string{"db"}, time.Hour, false)
 	tab, err := NewServiceTable([]Service{
 		{Name: "db", Kind: agentservices.TCP, Target: echo},
 		{Name: "down", Kind: agentservices.TCP, Target: closedAddr(t)},
 		{Name: "void", Kind: agentservices.TCP, Target: "void.invalid:9"}, // RFC 2606: never resolves (a TEST-NET address is refused by some networks)
-		{Name: "vault", Kind: agentservices.TCP, Target: echo, E2EE: agentservices.E2EEOn},
+		{Name: "vault", Kind: agentservices.TCP, Target: echo, E2EE: agentservices.E2EEOn, Org: o.agentOrg(o.machine(t, "web", nil, time.Hour, false)), AllowGroups: []string{"db"}},
 		{Name: "plain", Kind: agentservices.TCP, Target: echo, E2EE: agentservices.E2EEOff},
+		{Name: "either", Kind: agentservices.TCP, Target: echo},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,11 +117,12 @@ func TestLinkSessionAnswers(t *testing.T) {
 		e2ee bool
 		want relayv1.ErrorReason
 	}{
-		"down":  {false, relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED},
-		"void":  {false, relayv1.ErrorReason_ERROR_REASON_TARGET_UNREACHABLE},
-		"nope":  {false, relayv1.ErrorReason_ERROR_REASON_UNKNOWN_SERVICE},
-		"vault": {false, relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED},
-		"plain": {true, relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE},
+		"down":   {false, relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED},
+		"void":   {false, relayv1.ErrorReason_ERROR_REASON_TARGET_UNREACHABLE},
+		"nope":   {false, relayv1.ErrorReason_ERROR_REASON_UNKNOWN_SERVICE},
+		"vault":  {false, relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED},
+		"plain":  {true, relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE},
+		"either": {true, relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE},
 	}
 	for target, tc := range refused {
 		c := open(target, tc.e2ee)
@@ -147,28 +147,19 @@ func TestLinkSessionAnswers(t *testing.T) {
 		t.Fatalf("db: echo %q, %v", got, err)
 	}
 
-	// E2EE: the answer, then TLS whose certificate matches the pin.
-	pin := sha256.Sum256(cert.Certificate[0])
-	for _, target := range []string{"vault", "db"} { // On, and Default (either)
-		c := open(target, true)
-		if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
-			t.Fatalf("%s e2ee: answer %v, %v", target, a, err)
-		}
-		tc := tls.Client(c, &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true, //nolint:gosec // pinned below
-			VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
-				if got := sha256.Sum256(raw[0]); !bytes.Equal(got[:], pin[:]) {
-					return errors.New("pin mismatch")
-				}
-				return nil
-			}})
-		if err := tc.HandshakeContext(context.Background()); err != nil {
-			t.Fatalf("%s e2ee: handshake: %v", target, err)
-		}
-		_, _ = tc.Write([]byte("secret"))
-		_ = tc.CloseWrite()
-		if got, err := io.ReadAll(tc); err != nil || string(got) != "secret" {
-			t.Fatalf("%s e2ee: echo %q, %v", target, got, err)
-		}
+	// E2EE: the answer, then the organisation's TLS.
+	c = open("vault", true)
+	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
+		t.Fatalf("vault e2ee: answer %v, %v", a, err)
+	}
+	tc := orgClient(c, o, cli)
+	if err := tc.HandshakeContext(context.Background()); err != nil {
+		t.Fatalf("vault e2ee: handshake: %v", err)
+	}
+	_, _ = tc.Write([]byte("secret"))
+	_ = tc.CloseWrite()
+	if got, err := io.ReadAll(tc); err != nil || string(got) != "secret" {
+		t.Fatalf("vault e2ee: echo %q, %v", got, err)
 	}
 }
 

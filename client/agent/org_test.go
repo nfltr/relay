@@ -174,14 +174,14 @@ func orgSessions(t *testing.T, org Org, groups ...string) *linkSessions {
 // client checks it against the root and the name it dialled) and admits a
 // client certificate of the organisation in an allowed group only: not
 // another group, not a self-signed look-alike, not a client without a
-// certificate (spec/proverif/e2ee_tcp_org.pv queries 6-8; mutants
-// ignore-check, downgrade-any-client, org-falls-back-to-pins).
+// certificate (spec/proverif/e2ee_tcp.pv queries 6-8; mutants
+// ignore-check, downgrade-any-client, org-falls-through, tunnel-falls-through).
 func TestOrgServiceAdmitsGroup(t *testing.T) {
 	o := newTestOrg(t)
 	org := o.agentOrg(o.machine(t, "web", []string{"web"}, time.Hour, false))
 	l := orgSessions(t, org, "db", "ops")
 	// Config.TCPE2EEOrg: the tunnel of nfltr tcp --e2ee --allow-group.
-	tunnel := &linkSessions{ctx: t.Context(), targets: sessionTargets{e2eeOnly: true, forwardAddr: echoTarget(t), org: org, groups: []string{"db", "ops"}},
+	tunnel := &linkSessions{ctx: t.Context(), targets: sessionTargets{forwardAddr: echoTarget(t), org: org, groups: []string{"db", "ops"}},
 		logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 	for _, tc := range []struct {
 		name string
@@ -228,24 +228,28 @@ func TestOrgServiceServesItsMachineCertificate(t *testing.T) {
 	}
 }
 
-// One mode per service: organisation mode takes no pins (its own
-// certificate, client keys), needs a tcp service with e2ee on and a
-// group; groups without the organisation are refused; a plain session to
-// it is refused, never dialled (mutant pins-beside-org).
+// Organisation mode is the only end-to-end encrypted tcp mode: a tcp
+// service or tunnel with e2ee on needs it (mutant e2ee-without-org), with
+// a group; it takes no certificate of its own; groups without the
+// organisation are refused; a plain session to it is refused, never
+// dialled; an end-to-end encrypted session to a tcp service without it is
+// refused (mutant e2ee-to-plain-service).
 func TestOrgServiceOneMode(t *testing.T) {
 	o := newTestOrg(t)
 	org := o.agentOrg(o.machine(t, "web", nil, time.Hour, false))
-	_, fp := clientCert(t)
 	setup, err := NewE2EESetup("web", "", "", slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
 	base := Service{Name: "db", Kind: agentservices.TCP, Target: "localhost:1", E2EE: agentservices.E2EEOn, Org: org, AllowGroups: []string{"db"}}
 	for name, mutate := range map[string]func(*Service){
-		"client keys":  func(s *Service) { s.E2EEClients = []string{fp} },
 		"own cert":     func(s *Service) { s.Cert = setup },
 		"no group":     func(s *Service) { s.AllowGroups = nil },
+		"no org":       func(s *Service) { s.Org, s.AllowGroups = nil, nil },
 		"e2ee default": func(s *Service) { s.E2EE = agentservices.E2EEDefault },
+		"plain, own cert": func(s *Service) {
+			s.E2EE, s.Org, s.AllowGroups, s.Cert = agentservices.E2EEDefault, nil, nil, setup
+		},
 		"http": func(s *Service) {
 			s.Kind, s.Target, s.E2EE = agentservices.HTTP, "http://localhost:1", agentservices.E2EEDefault
 		},
@@ -263,12 +267,29 @@ func TestOrgServiceOneMode(t *testing.T) {
 	if !errors.As(err, &refused) || refused.Answer != relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED {
 		t.Errorf("plain session: %v, want E2EE_REQUIRED", err)
 	}
-	_, err = planSession(&pb.TCPData{TargetAddr: "localhost:1", Answer: true}, sessionTargets{e2eeOnly: true, forwardAddr: "localhost:1", org: org, groups: []string{"db"}}, nil)
+	_, err = planSession(&pb.TCPData{TargetAddr: "localhost:1", Answer: true}, sessionTargets{forwardAddr: "localhost:1", org: org, groups: []string{"db"}}, nil)
 	if !errors.As(err, &refused) || refused.Answer != relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED {
 		t.Errorf("tunnel, plain session: %v, want E2EE_REQUIRED", err)
 	}
+	// A tcp service of e2ee default (the relay's policy) is never end to
+	// end encrypted without its organisation, with the tunnel's
+	// certificate or without.
+	plain, err := NewServiceTable([]Service{{Name: "db", Kind: agentservices.TCP, Target: "localhost:1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _, err := generateSelfSignedCert("agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tunnelCert := range []*e2eeTLSConfig{nil, newE2EETLSConfig(cert, "agent")} {
+		_, err = planSession(&pb.TCPData{TargetAddr: "db", E2Ee: true, Answer: true}, sessionTargets{services: plain}, tunnelCert)
+		if !errors.As(err, &refused) || refused.Answer != relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE {
+			t.Errorf("e2ee session to a plain service (tunnel certificate %v): %v, want E2EE_UNAVAILABLE", tunnelCert != nil, err)
+		}
+	}
 	for name, cfg := range map[string]Config{
-		"tunnel client keys": {TCPTunnel: true, TCPE2EEOnly: true, TCPForwardAddr: "localhost:1", TCPE2EEOrg: org, TCPE2EEAllowGroups: []string{"db"}, TCPE2EEClients: []string{fp}},
+		"tunnel no org":      {TCPTunnel: true, TCPE2EEOnly: true, TCPForwardAddr: "localhost:1"},
 		"tunnel not e2ee":    {TCPTunnel: true, TCPForwardAddr: "localhost:1", TCPE2EEOrg: org, TCPE2EEAllowGroups: []string{"db"}},
 		"tunnel no group":    {TCPTunnel: true, TCPE2EEOnly: true, TCPForwardAddr: "localhost:1", TCPE2EEOrg: org},
 		"tunnel groups only": {TCPTunnel: true, TCPE2EEOnly: true, TCPForwardAddr: "localhost:1", TCPE2EEAllowGroups: []string{"db"}},

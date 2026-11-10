@@ -267,7 +267,7 @@ skipped).
   by its mutant). A revoked machine itself learns nothing: frames a root
   holder sealed before the revoke still open there, which is harmless.
 
-## E2EE paths: pinned TCP, WireGuard, P2P (lane E2EEPROOF, 2026-11-07)
+## E2EE paths: TCP, WireGuard, P2P (lane E2EEPROOF, 2026-11-07)
 
 `e2ee_tcp.pv`, `wg_exit.pv` and `p2p_e2e.pv` model the other E2EE paths
 whose ends live in this repository (Part 3 of `expect.txt`); nfltr's
@@ -285,30 +285,43 @@ fingerprint, the check, the pairing key, rotation, the plaintext
 fallbacks a relay could steer to. An F on a model's base line is a
 documented limit or a finding (nfltr's LEFTOVERS, lane E2EEPROOF).
 
-### e2ee_tcp.pv: pinned TCP sessions (Track A)
+### e2ee_tcp.pv: TCP sessions in organisation mode (lanes ORG2, ORGCUT)
 
-`nfltr dial|tcp-connect|ssh-proxy --pin`, `pin:` on a `connect:` mapping,
-to an agent ending TLS with its E2EE certificate (`Config.TCPE2EEOnly`, a
-service table's `e2ee: true` service).
+Organisation mode is the only end-to-end encrypted TCP mode: lane ORGCUT
+deleted pins (`--pin`, `pin:`, `Config.TCPE2EEClients`,
+`Service.E2EEClients`) and folded `e2ee_tcp_org.pv` into this model. A tcp
+service with E2EE On is in organisation mode (`agent.Service.Org`,
+`AllowGroups`; a tunnel's `Config.TCPE2EEOrg`, `TCPE2EEAllowGroups`; nfltr
+`allow_group:`), else the SDK refuses it. It ends its sessions' TLS with
+its machine certificate, issued under the organisation's root (nfltr
+`docs/decisions/org-enrolment-2026-11-09.md`); a client names the machine
+(`nfltr dial web/pg`, `to: web/pg`) and checks the chain and the name; the
+service admits a client certificate of the organisation in an allowed
+group, and sends its plaintext only to the target it fixed (its table's,
+`--forward`'s). The attacker owns the relays and holds the keys of eve
+(live, another group), lost (revoked), old (expired), and an expired and a
+revoked key of web itself. Who can get a certificate at all is nfltr's
+`enrol.pv`; the times (a session ends at `Identity.Until`, a newer CRL cuts
+what it lists) are nfltr's `spec/enrol/Enrol.tla` (`NoExpiredSession`,
+`RevocationBound`), whose session-level mutants `no-expiry-timer` and
+`no-cut-on-update` are Go mutants of `client/agent` (`make
+test-go-mutants`).
 
 | # | query | result |
 |---|---|---|
-| 1 | payload secret (pin from the agent's own output, target fixed by the agent) | holds |
-| 2 | injective agreement: a response the client accepts came from the pinned key in that session | holds |
-| 3 | `nfltr tcp --e2ee` without `--forward`: payload secret | holds: the agent refuses a pinned session without a target of its own (`ErrE2EENoFixedTarget`, `ERROR_REASON_TARGET_REFUSED`); before lane E2EEFIX it dialled the relay's target (finding 1, mutant `relay-names-target`) |
-| 4 | rotation: the old key leaks; a client pinned to the new certificate | holds |
-| 5 | ... a client still pinned to the old certificate | attack: a rotation revokes no pin; re-pin |
-| 6 | first use: a pin taken from what the relay shows (dashboard), or an SSH host key on first use (`nfltr shell`: OpenSSH known_hosts; a new key every start without `--host-key`) | attack |
-| 7 | the agent's service, against the relay | holds: the agent requires a client certificate whose key is on its list (`TCPE2EEClients`, a service's `E2EEClients`; finding 2, lane E2EEFIX2); before, no client authentication (mutant `any-client-cert`: an agent without a list, and a relay-CA client certificate, which the relay can mint) |
-| 8 | a removed client key (leaked) reaches nothing: removal from the list is revocation | holds |
-| 9 | what reaches the service was sent by the allowed client | holds |
-| 10 | witness: an allowed client reaches the service | attack (reachable), as it must |
-| 11 | a clean end the client passes on (after the bytes it read) was the pinned agent's close_notify after those bytes | holds: a stream that ends without the peer's close_notify (the relay cutting it between two records) is a reset to the local application (`client/tlsend`; claims review CLAIMS-A Q5, mutant `clear-end`: crypto/tls's `io.EOF` for both, the code before) |
-| 12 | the service's half close was the allowed client's close_notify after the bytes it got | holds (the agent side, `serveE2EETCP`; mutant `agent-clear-end`) |
-| 13, 14 | witnesses: both clean ends happen | attack (reachable), as they must |
-| 15 | a clean end at the client was the target's clean end | holds: a target's reset (or a read error other than EOF at the agent) ends the TLS stream without close_notify (`tlsend.Conn.Reset`, which link's `peerlink.Join` calls on an abort), a reset at the client; lane TCPRESET, mutant `abort-as-close`: Join closed the TLS conn, sending close_notify, the code before |
-| 16 | the service's half close was the client's local application's clean end | holds: the application's reset (a local read or write error) resets the session (nfltr `transportcli.Pump`, `tlsSession.Reset`); mutant `client-abort-as-close` |
-| 17, 18 | witnesses: both aborts happen | attack (reachable), as they must |
+| 1 | the client's bytes reach only machine web's own service | holds |
+| 2 | injective agreement: the answer the client takes, web's agent sent in that session | holds |
+| 3, 4, 5 | the client refuses a server certificate of another name, a revoked one, an expired one | holds |
+| 6 | the service's answer reaches only an admitted client | holds |
+| 7 | what reaches the service was sent by an admitted client | holds |
+| 8, 9, 10 | the service refuses a client outside its groups, a revoked one, an expired one | holds |
+| 11 | a clean end the client passes on was web's agent's close_notify | holds: a stream that ends without the peer's close_notify (the relay cutting it between two records) is a reset to the local application (`client/tlsend`; claims review CLAIMS-A Q5, mutant `clear-end`: crypto/tls's `io.EOF` for both) |
+| 12 | the service's half close was the client's close_notify after the bytes it got | holds (the agent side, `serveE2EETCP`; mutant `agent-clear-end`) |
+| 13 | a clean end at the client was the target's clean end | holds: a target's reset ends the TLS stream without close_notify (`tlsend.Conn.Reset`, which link's `peerlink.Join` calls on an abort); lane TCPRESET, mutant `abort-as-close` |
+| 14 | the service's half close was the client's local application's clean end | holds: the application's reset resets the session (nfltr `transportcli.Pump`, `tlsSession.Reset`); mutant `client-abort-as-close` |
+| 15, 16 | witnesses: an allowed client reaches the service and gets its answer | attack (reachable), as they must |
+| 17, 18 | witnesses: both clean ends happen | attack (reachable) |
+| 19, 20 | witnesses: both aborts happen | attack (reachable) |
 
 A TLS record is bound to its place in its direction's stream (TLS 1.3's
 sequence number in the AEAD nonce): the model's close record names the
@@ -317,59 +330,22 @@ splicing one agent session's close record onto a replay of the client's
 handshake to another; TLS's sequence numbers and the server's random
 rule it out, and the model does not re-prove TLS.
 
-Mutants: skip the pin check, a relay-supplied pin, plaintext when the relay
-gives no answer, the relay's target without `--forward` (finding 1 before
-its fix), the relay's target despite `--forward`, accept a response
-without the session key, the agent takes any client certificate
-(`any-client-cert`), skips CertificateVerify (`skip-certificate-verify`),
-a raw end taken as a clean end on the client (`clear-end`) or the agent
-(`agent-clear-end`), an end's reset sent as close_notify at the agent
-(`abort-as-close`) or the client (`client-abort-as-close`).
-A client-side mutant leaves 7-9 holding: the agent's check of the client
-does not depend on the client's check of the agent. An agent with an
-empty list is `any-client-cert`: the SDK's zero value authenticates no
-client, and the default of nfltr's agent commands is nfltr's
-(`docs/decisions/e2ee-fix-2026-11-07.md` "Lane E2EEFIX2").
-The design model `e2ee_tcp_clientauth.pv` (lane E2EEFIX) is folded into
-this one and deleted.
-
-### e2ee_tcp_org.pv: pinned TCP in organisation mode (lane ORG2)
-
-A tcp service in organisation mode (`agent.Service.Org`, `AllowGroups`;
-nfltr `allow_group:`) ends its sessions' TLS with its machine
-certificate, issued under the organisation's root (nfltr
-`docs/decisions/org-enrolment-2026-11-09.md`); a client names the machine
-(`nfltr dial web/pg`, `to: web/pg` with `org: true`) and checks the
-chain and the name, no pin; the service admits a client certificate of
-the organisation in an allowed group. The attacker owns the relays and
-holds the keys of eve (live, another group), lost (revoked), old
-(expired), and an expired and a revoked key of web itself. Who can get a
-certificate at all is nfltr's `enrol.pv`; the times (a session ends at
-`Identity.Until`, a newer CRL cuts what it lists) are nfltr's
-`spec/enrol/Enrol.tla` (`NoExpiredSession`, `RevocationBound`), whose
-session-level mutants `no-expiry-timer` and `no-cut-on-update` are Go
-mutants of `client/agent` (`make test-go-mutants`).
-
-| # | query | result |
-|---|---|---|
-| 1 | the client's bytes reach only machine web | holds |
-| 2 | injective agreement: the answer the client takes, web's agent sent in that session | holds |
-| 3, 4, 5 | the client refuses a server certificate of another name, a revoked one, an expired one | holds |
-| 6 | the service's answer reaches only an admitted client | holds |
-| 7 | what reaches the service was sent by an admitted client | holds |
-| 8, 9, 10 | the service refuses a client outside its groups, a revoked one, an expired one | holds |
-| 11, 12 | witnesses: an allowed client reaches the service and gets its answer | attack (reachable), as they must |
-
 Mutants, each check its own, the client's and the service's apart:
 `client-no-chain-check` (a certificate the relay made), `no-name-check`
 (another machine's), `client-no-expiry-check`, `client-no-crl-check`;
 `agent-no-chain-check`, `no-group-check`, `agent-no-expiry-check`,
-`agent-no-crl-check`. No downgrade: a client or service is in one mode,
-set by its own configuration, and never falls back. `downgrade-plain`
-(the client sends in plain when the relay answers that the service is
-pinned) fails 1; `downgrade-any-client` (the service serves a client
-without an organisation certificate, the pin mode's "no list") fails 6
-and 7.
+`agent-no-crl-check`, `skip-certificate-verify`. No downgrade: a client or
+service is in one mode, set by its own configuration (nfltr: an enrolled
+machine's client is in organisation mode; `--plain` per call), never by
+the relay's word, and never falls back. `downgrade-plain` (the client sends
+in plain when the relay answers that the service is plain) fails 1;
+`downgrade-any-client` (the service serves a client without an
+organisation certificate) fails 6 and 7. The target: `relay-names-target`
+(an agent without a target of its own dials the open's, E2EEPROOF finding
+1 before its fix; today `ErrE2EENoFixedTarget` at `New`) and
+`relay-names-target-with-forward` fail 1. `agreement-without-key-check`
+(a response taken without the session key) fails 2. The ends: `clear-end`,
+`agent-clear-end`, `abort-as-close`, `client-abort-as-close` (above).
 
 ### wg_exit.pv: WireGuard client and exit (Track B)
 
@@ -458,8 +434,8 @@ fails (`TestSecureConnFailedWriteEndsIt`).
 
 | path | what the first contact trusts |
 |---|---|
-| pinned TCP | the fingerprint the agent printed, carried by the user; never the relay's |
-| `nfltr shell` | OpenSSH's first-use prompt; every start without `--host-key` is a first use |
+| TCP (organisation mode) | nothing on first contact: both ends hold the organisation's root from their enrolment; never the relay's word |
+| `nfltr shell` | organisation mode since nfltr lane ORGCUT: the host certificate under the organisation's root (nfltr's model) |
 | WireGuard unpaired | the relay, on every connect; paired: the pairing file, copied out of band |
 | P2P unpaired | the relay, unless the users compare the fingerprints; paired: the pairing file |
 
@@ -467,7 +443,7 @@ fails (`TestSecureConnFailedWriteEndsIt`).
 
 | assumption | source |
 |---|---|
-| TLS 1.3 with a checked server key is an authenticated channel; no resumption skips the pin check | Cremers et al., IEEE S&P 2017; Bhargavan et al., IEEE S&P 2017; `e2eeTLSConfig` sets no session cache |
+| TLS 1.3 with a checked server key is an authenticated channel; no resumption skips the certificate check | Cremers et al., IEEE S&P 2017; Bhargavan et al., IEEE S&P 2017; organisation TLS (`orgServerConfig`) disables session tickets |
 | Noise IKpsk2 gives a key only to the holder of the peer key it used and the same psk | Donenfeld and Milner 2017 (Tamarin); Dowling and Paterson, ACNS 2018; Lipp, Blanchet and Bhargavan, EuroS&P 2019 |
 | DTLS-SRTP keys only the holder of the fingerprinted certificate | RFC 5763, RFC 8827 |
 | X25519 refuses low-order points | Go `crypto/ecdh` (`ECDH` errors on the all-zero output) |
@@ -483,15 +459,12 @@ fails (`TestSecureConnFailedWriteEndsIt`).
 | frames on the streams, the end of a served call, v1 refused | client/rpcclient/client_stream.go, client/rpcclient/server_stream.go, client/rpcclient/a2a.go |
 | one test per finding, wire vectors | client/rpcclient/a2a_e2ee_v2_test.go |
 | runner, prover pin | spec/proverif/run.sh, scripts/fetch-proverif.sh |
-| e2ee_tcp.pv | client/relaytrust/relaytrust.go |
 | e2ee_tcp.pv | client/agent/session_plan.go |
-| e2ee_tcp.pv | client/agent/tls.go |
 | e2ee_tcp.pv | client/agent/agent.go |
-| e2ee_tcp.pv | client/agent/e2ee_client_keys.go |
 | e2ee_tcp.pv | client/agent/services.go |
+| e2ee_tcp.pv | client/agent/org.go |
+| e2ee_tcp.pv | client/agent/testdata/org_mutants.txt |
 | e2ee_tcp.pv | client/tlsend/tlsend.go |
-| e2ee_tcp_org.pv | client/agent/org.go |
-| e2ee_tcp_org.pv | client/agent/testdata/org_mutants.txt |
 | wg_exit.pv | client/wg/keys.go |
 | wg_exit.pv | client/wg/tunnel.go |
 | wg_exit.pv | client/agent/wgexit/wgexit.go |

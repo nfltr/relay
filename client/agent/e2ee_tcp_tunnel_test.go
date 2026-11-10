@@ -11,8 +11,6 @@ import (
 	"crypto/cipher"
 	"crypto/sha256"
 	"crypto/tls"
-	"crypto/x509"
-	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
@@ -30,22 +28,41 @@ import (
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
-// With Config.TCPE2EEOnly (nfltr tcp --e2ee: TCPTunnel and an E2EE
-// certificate, no service table) a pinned session is TLS ended by the
-// agent and the plaintext bridged to the session's target, byte for byte
-// as a raw session's; the relay's SNI marker stays an E2EE share's HTTP.
-// Before: every pinned session was taken for an E2EE share's HTTP, so a
-// byte stream got nothing back once the agent's request header wait ended
-// (lane E2EETCP, VMSCALE1 follow-up 6). Without the option a pinned
-// session to a target stays HTTP to the default route (relay-core
+// orgTunnel is the link sessions of a tunnel of nfltr tcp --e2ee
+// --allow-group db (Config.TCPE2EEOnly, TCPE2EEOrg, TCPForwardAddr), its
+// organisation's machine web, and a client certificate in db.
+func orgTunnel(t *testing.T, forward string) (*linkSessions, *testOrg, tls.Certificate) {
+	t.Helper()
+	o := newTestOrg(t)
+	org := o.agentOrg(o.machine(t, "web", nil, time.Hour, false))
+	l := &linkSessions{ctx: t.Context(), targets: sessionTargets{forwardAddr: forward, defaultBackend: "http://" + forward, org: org, groups: []string{"db"}},
+		logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+	return l, o, o.machine(t, "cli", []string{"db"}, time.Hour, false)
+}
+
+// orgClient is the client's TLS of organisation mode on c: web's machine
+// certificate checked against the root, cli presented.
+func orgClient(c net.Conn, o *testOrg, cli tls.Certificate) *tlsend.Conn {
+	return tlsend.Client(c, &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: o.pool, ServerName: "web.org.internal", Certificates: []tls.Certificate{cli}})
+}
+
+// With Config.TCPE2EEOnly in organisation mode (nfltr tcp --e2ee
+// --allow-group: TCPTunnel, no service table) an end-to-end encrypted
+// session is the organisation's TLS ended by the agent and the plaintext
+// bridged to the agent's fixed target, byte for byte as a raw session's,
+// whatever target the open names (the relay writes it: E2EEPROOF finding
+// 1, spec/proverif/e2ee_tcp.pv mutant relay-names-target-with-forward).
+// Without the option an end-to-end encrypted session to a target stays an
+// E2EE share's HTTP to the default route (relay-core
 // TestCoreProcessTLSAndE2EE: an agent with a route and a forward).
-func TestPinnedSessionToTunnelTargetCarriesBytes(t *testing.T) {
+func TestOrgTunnelCarriesBytes(t *testing.T) {
 	cert, _, err := generateSelfSignedCert("agent")
 	if err != nil {
 		t.Fatal(err)
 	}
 	e2ee := newE2EETLSConfig(cert, "agent")
 	target := echoTarget(t)
+	l, o, cli := orgTunnel(t, target)
 
 	for _, tc := range []struct {
 		name    string
@@ -53,15 +70,17 @@ func TestPinnedSessionToTunnelTargetCarriesBytes(t *testing.T) {
 		target  string
 		kind    sessionKind
 	}{
-		{"bytes, forward", sessionTargets{e2eeOnly: true, forwardAddr: target, defaultBackend: "http://" + target}, "localhost:1", sessionE2EETCP},
-		{"bytes, SNI share marker", sessionTargets{e2eeOnly: true, defaultBackend: "http://" + target}, "__e2ee__", sessionE2EE},
-		{"bytes, no raw targets", sessionTargets{e2eeOnly: true, noRaw: true, defaultBackend: "http://" + target}, target, sessionE2EE},
+		{"organisation, forward", l.targets, "localhost:1", sessionE2EETCP},
+		{"organisation, SNI share marker", l.targets, "__e2ee__", sessionE2EETCP},
 		{"no option, a port's target", sessionTargets{forwardAddr: target, defaultBackend: "http://" + target}, "localhost:22", sessionE2EE},
 		{"no option, SNI share marker", sessionTargets{defaultBackend: "http://" + target}, "__e2ee__", sessionE2EE},
 	} {
 		p, err := planSession(&pb.TCPData{Open: true, TargetAddr: tc.target, E2Ee: true, Answer: true}, tc.targets, e2ee)
 		if err != nil || p.kind != tc.kind {
 			t.Errorf("%s: kind %d, %v; want kind %d", tc.name, p.kind, err, tc.kind)
+		}
+		if tc.kind == sessionE2EETCP && p.target != target {
+			t.Errorf("%s: target %q, want the agent's own %q", tc.name, p.target, target)
 		}
 	}
 
@@ -73,9 +92,7 @@ func TestPinnedSessionToTunnelTargetCarriesBytes(t *testing.T) {
 	}
 	cipher.NewCTR(block, make([]byte, 16)).XORKeyStream(payload, payload)
 	want := sha256.Sum256(payload)
-	pin := sha256.Sum256(cert.Certificate[0])
 
-	l := &linkSessions{ctx: t.Context(), targets: sessionTargets{e2eeOnly: true, forwardAddr: target, defaultBackend: "http://" + target}, e2ee: e2ee, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 	s, c := sessionPair(t)
 	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: "localhost:1", E2Ee: true, Answer: true})
 	if err != nil {
@@ -85,13 +102,7 @@ func TestPinnedSessionToTunnelTargetCarriesBytes(t *testing.T) {
 	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
 		t.Fatalf("answer %v, %v", a, err)
 	}
-	tc := tls.Client(c, &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true, //nolint:gosec // pinned below
-		VerifyPeerCertificate: func(raw [][]byte, _ [][]*x509.Certificate) error {
-			if got := sha256.Sum256(raw[0]); !bytes.Equal(got[:], pin[:]) {
-				return errors.New("pin mismatch")
-			}
-			return nil
-		}})
+	tc := orgClient(c, o, cli)
 	if err := tc.HandshakeContext(context.Background()); err != nil {
 		t.Fatalf("handshake: %v", err)
 	}
@@ -107,11 +118,11 @@ func TestPinnedSessionToTunnelTargetCarriesBytes(t *testing.T) {
 	_ = net.Conn(tc).Close()
 }
 
-// Without Config.TCPE2EEOnly a pinned session to a target of an agent
-// with a route and a forward is HTTP to the route, never the forward's
-// bytes (relay-core TestCoreProcessTLSAndE2EE's agent; the case the
-// first cut of the byte path broke).
-func TestPinnedSessionWithoutBytesOptionIsHTTP(t *testing.T) {
+// Without Config.TCPE2EEOnly an end-to-end encrypted session to a target
+// of an agent with a route and a forward is an E2EE share's HTTP to the
+// route, never the forward's bytes (relay-core TestCoreProcessTLSAndE2EE's
+// agent; the case the first cut of the byte path broke).
+func TestE2EESessionWithoutOrgTunnelIsHTTP(t *testing.T) {
 	cert, _, err := generateSelfSignedCert("agent")
 	if err != nil {
 		t.Fatal(err)
@@ -148,39 +159,26 @@ func TestPinnedSessionWithoutBytesOptionIsHTTP(t *testing.T) {
 }
 
 // With Config.TCPE2EEOnly (nfltr tcp --e2ee) a session that is not end to
-// end encrypted (an open without --pin, or one the agent cannot end TLS
-// for) is refused with ERROR_REASON_E2EE_REQUIRED, never dialled: without
-// a pin the relay could read its bytes (lane E2EEPIN). Its refusal names
-// no fingerprint: the answer is not authenticated, the pin comes from the
-// agent's own output.
-func TestE2EEOnlyTunnelRefusesUnpinnedSessions(t *testing.T) {
-	cert, _, err := generateSelfSignedCert("agent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	e2ee := newE2EETLSConfig(cert, "agent")
+// end encrypted is refused with ERROR_REASON_E2EE_REQUIRED, never
+// dialled: the relay could read its bytes (lane E2EEPIN). Its refusal
+// names no certificate: the answer is not authenticated.
+func TestOrgTunnelRefusesPlainSessions(t *testing.T) {
 	target := echoTarget(t)
-	only := sessionTargets{e2eeOnly: true, defaultBackend: "http://" + target}
+	l, _, _ := orgTunnel(t, target)
 	for _, tc := range []struct {
 		name string
 		open *pb.TCPData
-		cert *e2eeTLSConfig
 	}{
-		{"plain open", &pb.TCPData{Open: true, TargetAddr: target, Answer: true}, e2ee},
-		{"plain open, no answer asked", &pb.TCPData{Open: true, TargetAddr: target}, e2ee},
-		{"pinned open, no certificate", &pb.TCPData{Open: true, TargetAddr: target, E2Ee: true, Answer: true}, nil},
+		{"plain open", &pb.TCPData{Open: true, TargetAddr: target, Answer: true}},
+		{"plain open, no answer asked", &pb.TCPData{Open: true, TargetAddr: target}},
 	} {
-		_, err := planSession(tc.open, only, tc.cert)
+		_, err := planSession(tc.open, l.targets, nil)
 		if got := refusalReason(err); err == nil || got != relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED {
 			t.Errorf("%s: %v (reason %v), want ERROR_REASON_E2EE_REQUIRED", tc.name, err, got)
-		}
-		if err != nil && strings.Contains(err.Error(), relaytrustFingerprint(cert.Certificate[0])) {
-			t.Errorf("%s: the refusal names the fingerprint: %v", tc.name, err)
 		}
 	}
 
 	// On the agent link: the opener reads the typed refusal.
-	l := &linkSessions{ctx: t.Context(), targets: only, e2ee: e2ee, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 	s, c := sessionPair(t)
 	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: target, Answer: true})
 	if err != nil {
@@ -192,57 +190,32 @@ func TestE2EEOnlyTunnelRefusesUnpinnedSessions(t *testing.T) {
 	}
 }
 
-// With Config.TCPE2EEOnly a pinned session goes only to the target the
-// agent fixed (Config.TCPForwardAddr): one the relay names is refused with
-// ERROR_REASON_TARGET_REFUSED, never dialled, and an agent configured
-// without a fixed target does not start. Before: the agent dialled the
-// open's TargetAddr, which the relay writes, and sent it the pinned
-// client's plaintext (E2EEPROOF finding 1, spec/proverif/e2ee_tcp.pv query 3).
-func TestE2EEOnlyTunnelRefusesRelayNamedTarget(t *testing.T) {
-	cert, _, err := generateSelfSignedCert("agent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	e2ee := newE2EETLSConfig(cert, "agent")
-	relayTarget := echoTarget(t) // reachable: only the plan keeps it from being dialled
-	only := sessionTargets{e2eeOnly: true, defaultBackend: "http://" + relayTarget}
-	_, err = planSession(&pb.TCPData{Open: true, TargetAddr: relayTarget, E2Ee: true, Answer: true}, only, e2ee)
-	if got := refusalReason(err); err == nil || got != relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED {
-		t.Fatalf("pinned open to the relay's target: %v (reason %v), want ERROR_REASON_TARGET_REFUSED", err, got)
-	}
-
-	l := &linkSessions{ctx: t.Context(), targets: only, e2ee: e2ee, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
-	s, c := sessionPair(t)
-	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: relayTarget, E2Ee: true, Answer: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	go l.accept("", h, s)
-	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED {
-		t.Fatalf("answer %v, %v; want ERROR_REASON_TARGET_REFUSED", a, err)
-	}
-
+// An end-to-end encrypted tunnel goes only to the target the agent fixed
+// (Config.TCPForwardAddr): an agent configured without one does not start
+// (before: it dialled the open's TargetAddr, which the relay writes, and
+// sent it the client's plaintext: E2EEPROOF finding 1,
+// spec/proverif/e2ee_tcp.pv mutant relay-names-target), and one without
+// its organisation does not either (organisation mode is the only E2EE
+// tcp mode).
+func TestE2EEOnlyTunnelNeedsForwardAndOrg(t *testing.T) {
 	a := New(Config{AgentID: "a", TCPTunnel: true, TCPE2EEOnly: true}, WithSelfSignedTLS())
 	if err := a.Connect(t.Context()); !errors.Is(err, ErrE2EENoFixedTarget) {
 		t.Fatalf("Connect without TCPForwardAddr: %v, want ErrE2EENoFixedTarget", err)
 	}
-}
-
-func relaytrustFingerprint(der []byte) string {
-	sum := sha256.Sum256(der)
-	return hex.EncodeToString(sum[:])
-}
-
-// A pinned session the relay cuts between two TLS records (its transport
-// ends, no close_notify from the client) reaches the agent's target as a
-// reset, never as the client's clean half close; with the client's
-// close_notify it is a half close (claims review CLAIMS-A Q5,
-// spec/proverif/README.md e2ee_tcp query 12, mutant agent-clear-end).
-func TestPinnedSessionCutIsResetAtTarget(t *testing.T) {
-	cert, _, err := generateSelfSignedCert("agent")
-	if err != nil {
-		t.Fatal(err)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	a = New(Config{AgentID: "a", TCPTunnel: true, TCPE2EEOnly: true, TCPForwardAddr: "localhost:1"}, WithSelfSignedTLS())
+	if err := a.Connect(ctx); err == nil || !strings.Contains(err.Error(), "organisation") {
+		t.Fatalf("Connect without TCPE2EEOrg: %v, want the organisation-mode refusal", err)
 	}
+}
+
+// An end-to-end encrypted session the relay cuts between two TLS records
+// (its transport ends, no close_notify from the client) reaches the
+// agent's target as a reset, never as the client's clean half close; with
+// the client's close_notify it is a half close (claims review CLAIMS-A
+// Q5, spec/proverif/e2ee_tcp.pv query 12, mutant agent-clear-end).
+func TestOrgSessionCutIsResetAtTarget(t *testing.T) {
 	for _, cut := range []bool{false, true} {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -263,9 +236,7 @@ func TestPinnedSessionCutIsResetAtTarget(t *testing.T) {
 			}
 			ended <- err
 		}()
-		target := ln.Addr().String()
-		l := &linkSessions{ctx: t.Context(), targets: sessionTargets{e2eeOnly: true, forwardAddr: target, defaultBackend: "http://" + target},
-			e2ee: newE2EETLSConfig(cert, "agent"), logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+		l, o, cli := orgTunnel(t, ln.Addr().String())
 		s, c := sessionPair(t)
 		h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: "localhost:1", E2Ee: true, Answer: true})
 		if err != nil {
@@ -275,7 +246,7 @@ func TestPinnedSessionCutIsResetAtTarget(t *testing.T) {
 		if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
 			t.Fatalf("answer %v, %v", a, err)
 		}
-		tc := tls.Client(c, &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}) //nolint:gosec // only the end is under test
+		tc := orgClient(c, o, cli)
 		if _, err := io.WriteString(tc, "hello"); err != nil {
 			t.Fatal(err)
 		}
@@ -295,16 +266,12 @@ func TestPinnedSessionCutIsResetAtTarget(t *testing.T) {
 	}
 }
 
-// A pinned session whose target resets its connection (an RST, or any
-// read error but EOF) reaches the client as a reset, never as the agent's
-// close_notify; the target's clean end is the client's clean end (lane
-// TCPRESET, spec/proverif/README.md e2ee_tcp query 15, mutant
+// An end-to-end encrypted session whose target resets its connection (an
+// RST, or any read error but EOF) reaches the client as a reset, never as
+// the agent's close_notify; the target's clean end is the client's clean
+// end (lane TCPRESET, spec/proverif/e2ee_tcp.pv query 13, mutant
 // abort-as-close).
-func TestPinnedSessionTargetResetIsResetAtClient(t *testing.T) {
-	cert, _, err := generateSelfSignedCert("agent")
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestOrgSessionTargetResetIsResetAtClient(t *testing.T) {
 	for _, reset := range []bool{false, true} {
 		ln, err := net.Listen("tcp", "127.0.0.1:0")
 		if err != nil {
@@ -328,9 +295,7 @@ func TestPinnedSessionTargetResetIsResetAtClient(t *testing.T) {
 			_, _ = io.Copy(io.Discard, tc)
 			_ = tc.Close()
 		}()
-		target := ln.Addr().String()
-		l := &linkSessions{ctx: t.Context(), targets: sessionTargets{e2eeOnly: true, forwardAddr: target, defaultBackend: "http://" + target},
-			e2ee: newE2EETLSConfig(cert, "agent"), logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+		l, o, cli := orgTunnel(t, ln.Addr().String())
 		s, c := sessionPair(t)
 		h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: "localhost:1", E2Ee: true, Answer: true})
 		if err != nil {
@@ -340,7 +305,7 @@ func TestPinnedSessionTargetResetIsResetAtClient(t *testing.T) {
 		if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
 			t.Fatalf("answer %v, %v", a, err)
 		}
-		tc := tlsend.Client(c, &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true}) //nolint:gosec // only the end is under test
+		tc := orgClient(c, o, cli)
 		if _, err := io.WriteString(tc, "hello"); err != nil {
 			t.Fatal(err)
 		}

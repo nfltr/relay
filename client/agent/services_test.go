@@ -256,10 +256,10 @@ func newChanStream(t *testing.T, in, out int) *chanStream {
 
 func (s *chanStream) closeIn() { s.once.Do(func() { close(s.in) }) }
 
-// A service's own certificate (Service.Cert) ends its E2EE sessions; a
-// service without one takes the tunnel's, and with no tunnel certificate
-// only a service with its own terminates E2EE: a pinned tcp service and
-// an http share with the tunnel's (ACME) certificate under one identity.
+// An http service's own certificate (Service.Cert) ends its E2EE share
+// sessions; a service without one takes the tunnel's, and with no tunnel
+// certificate only a service with its own terminates E2EE: two shares,
+// one with the tunnel's (ACME) certificate, under one identity.
 func TestServiceOwnCertificate(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
 	tunnel, err := NewE2EESetup("home", "", "", logger)
@@ -271,14 +271,14 @@ func TestServiceOwnCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 	tab, err := NewServiceTable([]Service{
-		{Name: "db", Kind: agentservices.TCP, Target: "127.0.0.1:5432", E2EE: agentservices.E2EEOn, Cert: own},
+		{Name: "db", Kind: agentservices.HTTP, Target: "http://127.0.0.1:5432", Cert: own},
 		{Name: "web", Kind: agentservices.HTTP, Target: "http://127.0.0.1:3000"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	targets := sessionTargets{services: tab}
-	db := &pb.TCPData{Open: true, TargetAddr: "db", E2Ee: true, Answer: true}
+	db := &pb.TCPData{Open: true, TargetAddr: "db", E2Ee: true}
 	web := &pb.TCPData{Open: true, TargetAddr: "web", E2Ee: true}
 	for _, tc := range []struct {
 		name   string
@@ -287,9 +287,9 @@ func TestServiceOwnCertificate(t *testing.T) {
 		want   *E2EESetup // nil: refused
 		kind   sessionKind
 	}{
-		{"tcp service, own certificate", db, tunnel, own, sessionE2EETCP},
+		{"own certificate", db, tunnel, own, sessionE2EE},
 		{"http service, the tunnel's", web, tunnel, tunnel, sessionE2EE},
-		{"own certificate, no tunnel's", db, nil, own, sessionE2EETCP},
+		{"own certificate, no tunnel's", db, nil, own, sessionE2EE},
 		{"no certificate at all", web, nil, nil, 0},
 	} {
 		var cfg *e2eeTLSConfig

@@ -1,266 +1,277 @@
 (* Copyright 2026 nfltr
    SPDX-License-Identifier: Apache-2.0
 
-   e2ee_tcp.pv: Track A, pinned TCP sessions (nfltr dial/tcp-connect/ssh-proxy
-   --pin, pin: on a connect: mapping) to an agent that ends TLS with its own
-   E2EE certificate (nfltr tcp --e2ee, a service table's e2ee: true service).
-   spec/proverif/README.md "e2ee_tcp.pv".
+   e2ee_tcp.pv: end-to-end encrypted TCP sessions, organisation mode, the
+   only mode (lane ORG2; pins deleted by lane ORGCUT: nfltr
+   docs/decisions/org-enrolment-2026-11-09.md "Migration: a hard cut").
+   A tcp service in organisation mode (agent.Service.Org, AllowGroups;
+   Config.TCPE2EEOrg for a tunnel) ends TLS with its machine certificate,
+   issued under the organisation's root; a client names the machine (nfltr
+   dial web/pg, to: web/pg on a connect: mapping) and checks the chain and
+   the name; the service admits a client certificate under the same root,
+   in one of its allow_group groups, neither expired nor on the issuer's
+   CRL. Its plaintext goes only to the target the agent fixed (its table's,
+   --forward's), and each end of the session is the peer's own, never the
+   relay's cut. spec/proverif/README.md "e2ee_tcp.pv".
 
-   The attacker owns the relay(s) (the session open, its E2Ee flag, its
-   TargetAddr, the answer), the network and anything the relay shows (the
-   dashboard's advertised fingerprint); two relays are one attacker. TLS 1.3
-   is not re-proven: a client that checked the server's certificate key
-   against its pin shares a fresh key only with that key's holder
-   (Cremers et al., IEEE S&P 2017, Tamarin; Bhargavan et al., IEEE S&P
-   2017, ProVerif/CryptoVerif). What is modelled is ours: where the pin
-   comes from, the pin check, the open's answer, the agent's choice of the
-   target, rotation, and the agent's check of the client's key (finding 2,
-   lane E2EEFIX2: client pins; the design model was e2ee_tcp_clientauth.pv,
-   folded in here). TLS 1.3 CertificateVerify is the client's signature
-   over a hash of the session key and the server's key (the transcript);
-   crypto/tls checks it against the certificate's key.
+   A service and a client are each in their mode by their own
+   configuration, never by the relay (the downgrade mutants below).
 
-   Code (nfltr = github.com/nfltr/nfltr; the rest github.com/nfltr/relay):
-     client/relaytrust/relaytrust.go:29-46   pin = SHA-256 of the leaf certificate DER
-     nfltr cmd/nfltr/internal/transportcli/tcp_connect_session.go:195      E2Ee = pin != ""
-     nfltr .../tcp_connect_session.go:210-213  no answer: a pinned session is refused
-                                               (before TLS; Open and the pipelined OpenPipelined alike)
-     nfltr .../tcp_connect_session.go:277-295  TLS 1.3, VerifyPeerCertificate: fingerprint == pin
-     nfltr cmd/nfltr/internal/upcli/agent.go:135 the pin comes from the agent's own output
-     client/agent/session_plan.go:77,90-91    target: the table's, --forward's, else the relay's TargetAddr
-     client/agent/session_plan.go:105-126     E2EE only: pinned -> TLS here, unpinned refused
-     client/agent/session_plan.go:114-115     E2EE only without --forward: a pinned session refused (finding 1)
-     client/agent/agent.go:362-364            TCPE2EEOnly without TCPForwardAddr: Connect fails
-     client/agent/session_plan.go:337-348     serveE2EETCP: TLS, then the plaintext to the dialled target
-     client/agent/agent.go:170,365-369        TCPE2EEClients: the allow-list (services.go:122-126: a service's)
-     client/agent/e2ee_client_keys.go:50      RequireAnyClientCert: CertificateVerify against the certificate's key
-     client/agent/e2ee_client_keys.go:53-63   VerifyConnection (resumption too): the key's fingerprint on the list, no CA
-     client/relaytrust/relaytrust.go:39-41    a client key's fingerprint: SHA-256 of its SubjectPublicKeyInfo
-     client/agent/tls.go:202-216              rotateCert: one certificate at a time
-     client/agent/session_plan.go serveE2EETCP, nfltr .../tcp_connect_session.go tlsSession:
-                                              a stream that ends without the peer's close_notify
-                                              (the relay's cut) is a reset, never a clean end
-                                              (client/tlsend; CLAIMS-A Q5, README queries 11-14)
-     client/tlsend Conn.Reset, link peerlink.Join: the target's reset (or a read error) ends the
-                                              TLS stream without close_notify; nfltr .../tcp_connect_session.go
-                                              Pump, tlsSession.Reset: the local application's likewise
-                                              (README queries 15-18)
+   The attacker owns the relay(s): the open, its E2Ee flag and target, the
+   answer, the certificate a session presents, every byte, a stream's raw
+   end; two relays are one attacker. It holds the keys of: eve (enrolled,
+   live, group web: not the service's group), lost (group db, revoked: its
+   serial on the CRL), old (group db, expired), and two of web's own (an
+   expired one and a revoked one). nfltr's enrol.pv proves who can get a
+   certificate of the organisation (only the issuer under the root, for a
+   token's own name); here the organisation's signing key is one private
+   key, orgk, and a certificate is its signature over (name, group, key,
+   serial, validity). The CRL the verifier holds lists serWebRev and
+   serLost; validity live or expired is the verifier's clock against
+   NotAfter. Time and re-checks (a session ends at Identity.Until, a newer
+   CRL cuts what it lists) are nfltr spec/enrol/Enrol.tla's
+   NoExpiredSession and RevocationBound, not here.
 
-   A TLS record carries its content type: application data (appData) or
-   the close_notify alert (closeAlert); a stream's raw end (rawEnd: the
+   TLS 1.3 is not re-proven: a client that checked the server's
+   certificate shares a fresh key only with that key's holder (Cremers et
+   al., IEEE S&P 2017, Tamarin; Bhargavan et al., IEEE S&P 2017,
+   ProVerif/CryptoVerif). TLS 1.3 CertificateVerify is the client's
+   signature over a hash of the session key and the server's key (the
+   transcript); crypto/tls checks it against the certificate's key. A TLS
+   record carries its content type: application data (appData) or the
+   close_notify alert (closeAlert); a stream's raw end (rawEnd: the
    transport's EOF, which the relay can produce between any two records)
    carries none. A record is bound to its place in its direction's stream
-   (TLS 1.3's per-record sequence number in the AEAD nonce): the model's
-   close record names the bytes it follows. crypto/tls reports both a close_notify and a raw end as
-   io.EOF; tlsend.Conn tells them apart. *)
+   (the sequence number in the AEAD nonce): the model's close record names
+   the bytes it follows. crypto/tls reports both a close_notify and a raw
+   end as io.EOF; tlsend.Conn tells them apart.
+
+   Code (nfltr = github.com/nfltr/nfltr; the rest github.com/nfltr/relay):
+     nfltr internal/application/orgpki/verify.go Check   chain to the root, name, groups, CRL, NotAfter
+     client/agent/org.go Org.CheckClient                 the service's check (nfltr: orgpki behind it)
+     client/agent/org.go orgServerConfig                 RequireAnyClientCert + VerifyConnection, no other mode
+     client/agent/org.go checkOrgService                 e2ee On needs Org and a group (services, the tunnel)
+     client/agent/services.go resolve                    an org service takes no plain session; no other tcp service an E2EE one
+     client/agent/session_plan.go planOpen               target: the table's, --forward's; never the relay's
+     client/agent/agent.go New                           TCPE2EEOnly without TCPForwardAddr: Connect fails
+     client/agent/org.go serveE2EETCP, client/tlsend, link peerlink.Join:
+                                                         a stream that ends without the peer's close_notify
+                                                         is a reset; the target's reset is one to the client
+     nfltr cmd/nfltr/internal/transportcli/org_session.go the client: ServerName <name>.<org>.internal, the check;
+                                                         its mode is its own (enrolled: organisation), never the answer's
+     nfltr .../tcp_connect_session.go Pump, tlsSession.Reset: the local application's reset likewise *)
 
 free c: channel.
 
 type skey.
 type pkey.
 fun pk(skey): pkey.
-fun fp(pkey): bitstring.            (* SHA-256 of the certificate (its key here) *)
 fun aenc(bitstring, pkey): bitstring.
 reduc forall m: bitstring, k: skey; adec(aenc(m, pk(k)), k) = m.
 fun senc(bitstring, bitstring): bitstring.
 reduc forall m: bitstring, k: bitstring; sdec(senc(m, k), k) = m.
 fun sign(bitstring, skey): bitstring.
 reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
-fun h(bitstring): bitstring.          (* the transcript hash: it shows nothing of the key *)
+reduc forall m: bitstring, k: skey; getmsg(sign(m, k)) = m.    (* a certificate's contents are public *)
+fun h(bitstring): bitstring.
 
-const svcAddr: bitstring.           (* the target the agent means: its table's, --forward's *)
-const answerOK, answerNone: bitstring.
-const c2s, s2c: bitstring.            (* TLS keys each direction apart *)
+const svcAddr: bitstring.                     (* the target the agent means: its table's, --forward's *)
+const c2s, s2c: bitstring.                    (* TLS keys each direction apart *)
 const appData, closeAlert, rawEnd: bitstring.
+const answerOK, answerPlain: bitstring.       (* the relay's word: accepted; "the service is plain" *)
+const live, expired: bitstring.
+const nameWeb, nameCli, nameEve, nameLost, nameOld: bitstring.
+const grpDb, grpWeb: bitstring.
+const serWeb, serWebOld, serWebRev, serCli, serEve, serLost, serOld: bitstring.
+const noCert: bitstring.                      (* a client that presents no organisation certificate *)
 
-free payloadFixed, payloadRelayTarget, payloadNew, payloadOld, payloadTofu: bitstring [private].
-free svcData: bitstring [private].  (* what the agent's service answers an allowed client *)
-free csk: skey [private].           (* the owner's client key, on every agent's list *)
-free cskOld: skey [private].        (* a client key removed from the list, leaked *)
+free orgk: skey [private].                    (* the organisation: root, then issuer (enrol.pv) *)
+free skWeb, skCli: skey [private].
+free payload: bitstring [private].            (* what the client sends machine web *)
+free svcData: bitstring [private].            (* what web's service answers an admitted client *)
 
-event ClientRecv(bitstring, bitstring, bitstring).   (* pin, session key, response *)
-event AgentSent(bitstring, bitstring, bitstring).    (* fp of its key, session key, response *)
-event ServiceGot(pkey, bitstring).                   (* the client key it allowed, its bytes *)
-event ClientSent(pkey, bitstring).
-event ClientEnded(pkey, bitstring).                  (* the client's close_notify after its bytes *)
-event ClientCleanEnd(bitstring, bitstring, bitstring). (* pin, session key, response: a clean end delivered *)
-event AgentEnded(bitstring, bitstring, bitstring).   (* fp of its key, session key, response: its close_notify *)
-event ServiceCleanEnd(pkey, bitstring).              (* the service's half close: the client key, its bytes *)
-event TargetEnded(bitstring, bitstring, bitstring).  (* fp of its key, session key, response: the target's clean end *)
-event TargetAborted(bitstring, bitstring, bitstring). (* ... the target's reset *)
-event AppEnded(pkey, bitstring).                     (* the client's local application's clean end after its bytes *)
-event AppAborted(pkey, bitstring).                   (* ... its reset *)
-free sk1: skey [private].
+event ClientAccepted(bitstring).                       (* the serial of the server certificate the client took *)
+event ClientSent(bitstring, bitstring).                (* its own serial, its bytes *)
+event ClientRecv(bitstring, bitstring).                (* session key, response *)
+event AgentSent(bitstring, bitstring).                 (* session key, response *)
+event ServiceGot(bitstring, bitstring).                (* the admitted client's serial, its bytes *)
+event ClientEnded(bitstring, bitstring).               (* the client's close_notify after its bytes *)
+event ClientCleanEnd(bitstring, bitstring).            (* session key, response: a clean end delivered *)
+event AgentEnded(bitstring, bitstring).                (* session key, response: its close_notify *)
+event ServiceCleanEnd(bitstring, bitstring).           (* the service's half close: the client's serial, its bytes *)
+event TargetEnded(bitstring, bitstring).               (* session key, response: the target's clean end *)
+event TargetAborted(bitstring, bitstring).             (* ... the target's reset *)
+event AppEnded(bitstring, bitstring).                  (* the client's local application's clean end after its bytes *)
+event AppAborted(bitstring, bitstring).                (* ... its reset *)
 
-(* The pinned client: opens with E2Ee set, needs the relay's answer, runs
-   TLS with the agent inside the session, accepts only its pin. *)
-let Client(pin: bitstring, m: bitstring) =
-  out(c, (svcAddr, true));                           (* the open: target and E2Ee *)
+(* The client, enrolled: names machine web, organisation mode whatever the
+   relay answers. *)
+let Client(certCli: bitstring) =
+  out(c, (nameWeb, true));                             (* the open: web's service, E2Ee *)
   in(c, answer: bitstring);
-  if answer = answerOK then                          (* tcp_connect_session.go:210-213 *) (* NOT:plaintext-without-answer *)
-  if answer = answerNone then out(c, m) else (* ONLY:plaintext-without-answer *)
-  in(c, spk: pkey);                                  (* the certificate the session presents *)
-  let pin2 = pin in                                  (* the pin is the client's own, never the relay's *) (* NOT:relay-supplied-pin *)
-  in(c, pin2: bitstring); (* ONLY:relay-supplied-pin *)
-  if fp(spk) = pin2 then                             (* tcp_connect_session.go:289 *) (* NOT:skip-pin-check *)
-  if true then (* ONLY:skip-pin-check *)
+  if answer = answerPlain then out(c, payload) else (* ONLY:downgrade-plain *)
+  if answer = answerOK then
+  in(c, (scert: bitstring, spk: pkey));                (* the session's certificate and key *)
+  let (sn: bitstring, sg: bitstring, =spk, ss: bitstring, se: bitstring) = checksign(scert, pk(orgk)) in (* NOT:client-no-chain-check *)
+  let (sn: bitstring, sg: bitstring, =spk, ss: bitstring, se: bitstring) = getmsg(scert) in (* ONLY:client-no-chain-check *)
+  if sn = nameWeb then                                 (* the name it asked for *) (* NOT:no-name-check *)
+  if se = live then                                    (* NotAfter *) (* NOT:client-no-expiry-check *)
+  if ss <> serWebRev && ss <> serLost then             (* the CRL *) (* NOT:client-no-crl-check *)
+  event ClientAccepted(ss);
   new k: bitstring;
   out(c, aenc(k, spk));
-  out(c, (pk(csk), sign(h((k, spk)), csk)));         (* Certificate + CertificateVerify *)
-  event ClientSent(pk(csk), m);
-  out(c, senc((c2s, appData, m), k));
-  in(c, appAbort: bool);                             (* the local application ends cleanly or resets: either *)
+  out(c, (certCli, sign(h((k, spk)), skCli)));          (* Certificate + CertificateVerify *)
+  event ClientSent(serCli, payload);
+  out(c, senc((c2s, appData, payload), k));
+  in(c, appAbort: bool);                               (* the local application ends cleanly or resets: either *)
   if appAbort = true then (
-    event AppAborted(pk(csk), m);
-    0                                                (* Pump: tlsSession.Reset, no close_notify *) (* NOT:client-abort-as-close *)
-    event ClientEnded(pk(csk), m); (* ONLY:client-abort-as-close *)
-    out(c, senc((c2s, closeAlert, m), k)) (* ONLY:client-abort-as-close *)
+    event AppAborted(serCli, payload);
+    0                                                  (* Pump: tlsSession.Reset, no close_notify *) (* NOT:client-abort-as-close *)
+    event ClientEnded(serCli, payload); (* ONLY:client-abort-as-close *)
+    out(c, senc((c2s, closeAlert, payload), k)) (* ONLY:client-abort-as-close *)
   ) else
-  event AppEnded(pk(csk), m);
-  event ClientEnded(pk(csk), m);
-  out(c, senc((c2s, closeAlert, m), k));
+  event AppEnded(serCli, payload);
+  event ClientEnded(serCli, payload);
+  out(c, senc((c2s, closeAlert, payload), k));
   in(c, e: bitstring);
   let (=s2c, =appData, r: bitstring) = sdec(e, k) in (* NOT:agreement-without-key-check *)
   in(c, r: bitstring); (* ONLY:agreement-without-key-check *)
-  event ClientRecv(pin, k, r);
+  event ClientRecv(k, r);
   in(c, e2: bitstring);
   if e2 = rawEnd then (
-    0                                                (* a reset to the local application *) (* NOT:clear-end *)
-    event ClientCleanEnd(pin, k, r) (* ONLY:clear-end *)
+    0                                                  (* a reset to the local application *) (* NOT:clear-end *)
+    event ClientCleanEnd(k, r) (* ONLY:clear-end *)
   ) else
   let (=s2c, =closeAlert, =r) = sdec(e2, k) in
-  event ClientCleanEnd(pin, k, r).
+  event ClientCleanEnd(k, r).
 
-(* The agent: E2EE only; refuses an unpinned session; after TLS bridges the
-   plaintext to the target. fixed = the agent has a target of its own (a
-   service table, --forward); without one a pinned session is refused, the
-   open's target being the relay's. relay-names-target: before finding 1's
-   fix, the agent without one dialled the open's target. *)
-let Agent(sk: skey, fixed: bool) =
+(* Web's agent: a tcp service in organisation mode, allow_group db. fixed:
+   the agent has a target of its own (a service table, --forward); a
+   tunnel without one is refused at New (ErrE2EENoFixedTarget), modelled
+   as an agent that serves nothing. relay-names-target: before E2EEPROOF
+   finding 1's fix, that agent dialled the open's target. *)
+let Agent(certWeb: bitstring, fixed: bool) =
   in(c, (target: bitstring, e2ee: bool));
-  if e2ee = true then                                (* session_plan.go:120-125: unpinned refused *)
+  if e2ee = true then                                  (* a plain session is refused *)
   let t0 = if fixed then svcAddr else target in (* ONLY:relay-names-target *)
-  if fixed = true then                               (* session_plan.go:113-114: no fixed target, refused *) (* NOT:relay-names-target *)
-  let t0 = svcAddr in                                (* session_plan.go:76,89-90 *) (* NOT:relay-names-target *)
+  if fixed = true then (* NOT:relay-names-target *)
+  let t0 = svcAddr in (* NOT:relay-names-target *)
   let t = t0 in (* NOT:relay-names-target-with-forward *)
   let t = target in (* ONLY:relay-names-target-with-forward *)
-  out(c, pk(sk));
+  out(c, (certWeb, pk(skWeb)));
   in(c, ek: bitstring);
-  let k = adec(ek, sk) in
-  in(c, (cpk: pkey, cv: bitstring));
-  if cpk = pk(csk) then                              (* e2ee_client_keys.go:58: the list *) (* NOT:any-client-cert *)
-  if checksign(cv, cpk) = h((k, pk(sk))) then        (* CertificateVerify (crypto/tls) *) (* NOT:skip-certificate-verify *)
+  let k = adec(ek, skWeb) in
+  in(c, (ccert: bitstring, cv: bitstring));
+  if ccert = noCert then (in(c, e0: bitstring); let (=c2s, =appData, m0: bitstring) = sdec(e0, k) in event ServiceGot(noCert, m0); out(c, senc((s2c, appData, svcData), k))) else (* ONLY:downgrade-any-client *)
+  let (cn: bitstring, cg: bitstring, cpk: pkey, cs: bitstring, ce: bitstring) = checksign(ccert, pk(orgk)) in (* NOT:agent-no-chain-check *)
+  let (cn: bitstring, cg: bitstring, cpk: pkey, cs: bitstring, ce: bitstring) = getmsg(ccert) in (* ONLY:agent-no-chain-check *)
+  if cg = grpDb then                                   (* allow_group *) (* NOT:no-group-check *)
+  if ce = live then                                    (* NotAfter *) (* NOT:agent-no-expiry-check *)
+  if cs <> serWebRev && cs <> serLost then             (* the CRL *) (* NOT:agent-no-crl-check *)
+  if checksign(cv, cpk) = h((k, pk(skWeb))) then       (* CertificateVerify (crypto/tls) *) (* NOT:skip-certificate-verify *)
   in(c, e: bitstring);
   let (=c2s, =appData, m: bitstring) = sdec(e, k) in
   if t = svcAddr then (
-    event ServiceGot(cpk, m);                       (* to its own service, on its machine *)
+    event ServiceGot(cs, m);                           (* to its own service, on its machine *)
     new r: bitstring;
-    event AgentSent(fp(pk(sk)), k, (r, svcData));
+    event AgentSent(k, (r, svcData));
     out(c, senc((s2c, appData, (r, svcData)), k));
-    in(c, targetAbort: bool);                        (* the target ends cleanly or resets: either *)
+    in(c, targetAbort: bool);                          (* the target ends cleanly or resets: either *)
     if targetAbort = true then (
-      event TargetAborted(fp(pk(sk)), k, (r, svcData));
-      0                                              (* Join: tlsend Conn.Reset, no close_notify *) (* NOT:abort-as-close *)
-      event AgentEnded(fp(pk(sk)), k, (r, svcData)); (* ONLY:abort-as-close *)
+      event TargetAborted(k, (r, svcData));
+      0                                                (* Join: tlsend Conn.Reset, no close_notify *) (* NOT:abort-as-close *)
+      event AgentEnded(k, (r, svcData)); (* ONLY:abort-as-close *)
       out(c, senc((s2c, closeAlert, (r, svcData)), k)) (* ONLY:abort-as-close *)
     ) else
-    event TargetEnded(fp(pk(sk)), k, (r, svcData));
-    event AgentEnded(fp(pk(sk)), k, (r, svcData));
+    event TargetEnded(k, (r, svcData));
+    event AgentEnded(k, (r, svcData));
     out(c, senc((s2c, closeAlert, (r, svcData)), k));
     in(c, e2: bitstring);
     if e2 = rawEnd then (
-      0                                              (* the target reset *) (* NOT:agent-clear-end *)
-      event ServiceCleanEnd(cpk, m) (* ONLY:agent-clear-end *)
+      0                                                (* the target reset *) (* NOT:agent-clear-end *)
+      event ServiceCleanEnd(cs, m) (* ONLY:agent-clear-end *)
     ) else
     let (=c2s, =closeAlert, =m) = sdec(e2, k) in
-    event ServiceCleanEnd(cpk, m)                    (* the target's half close *)
+    event ServiceCleanEnd(cs, m)                       (* the target's half close *)
   ) else
-    out(c, (t, m)).                                  (* dialTarget: another host, the attacker's *)
+    out(c, (t, m)).                                    (* dialTarget: another host, the attacker's *)
 
-(* 1. a pin from the agent's own output, a target the agent fixed *)
+(* 1. the client's bytes reach only machine web's own service: not eve
+   (another name), not a certificate the relay made, not web's expired or
+   revoked key, not in plain on the relay's word, not a target the relay
+   names (mutants client-no-chain-check, no-name-check,
+   client-no-expiry-check, client-no-crl-check, downgrade-plain,
+   relay-names-target, relay-names-target-with-forward) *)
 (* expect true *)
-query attacker(payloadFixed).
+query attacker(payload).
+(* 2. what the client takes as web's answer, web's agent sent in that
+   session (mutant agreement-without-key-check) *)
 (* expect true *)
-query k: bitstring, r: bitstring;
-  inj-event(ClientRecv(fp(pk(sk1)), k, r)) ==> inj-event(AgentSent(fp(pk(sk1)), k, r)).
-(* 2. nfltr tcp --e2ee without --forward: the relay names the target; the
-   agent refuses the session (finding 1 fixed: before, it dialled the
-   relay's target and sent it the client's plaintext; mutant
-   relay-names-target) *)
+query k: bitstring, r: bitstring; inj-event(ClientRecv(k, r)) ==> inj-event(AgentSent(k, r)).
+(* 3, 4, 5. the server certificates the client refuses: another name, revoked, expired *)
 (* expect true *)
-query attacker(payloadRelayTarget).
-(* 3. rotation: the old key leaks after RotateE2EECert; a client pinned to
-   the new certificate keeps its secrecy, one still pinned to the old one
-   does not (a pin is not revoked by a rotation: re-pin) *)
+query event(ClientAccepted(serEve)).
 (* expect true *)
-query attacker(payloadNew).
-(* expect false *)
-query attacker(payloadOld).
-(* 4. first use: a pin taken from what the relay shows (the dashboard, a
-   page the relay serves) protects nothing; likewise nfltr shell's SSH host
-   key on first use (OpenSSH known_hosts TOFU; a new key at every start
-   without --host-key) *)
-(* expect false *)
-query attacker(payloadTofu).
-(* 5. the service, against the relay: only an allowed client reaches it
-   (finding 2 fixed: the agent's list of client keys; before, the relay
-   opened a pinned session of its own and got the service: mutant
-   any-client-cert, an agent without a list, is that case and also a
-   relay-CA client certificate, which the relay can mint) *)
+query event(ClientAccepted(serWebRev)).
+(* expect true *)
+query event(ClientAccepted(serWebOld)).
+(* 6. the service's answer reaches only an admitted client (mutants
+   agent-no-chain-check, no-group-check, agent-no-expiry-check,
+   agent-no-crl-check, skip-certificate-verify, downgrade-any-client: a
+   service that serves a client without an organisation certificate) *)
 (* expect true *)
 query attacker(svcData).
-(* 6. a removed client key (leaked) reaches nothing: removal is revocation *)
+(* 7. what reaches the service was sent by an admitted client *)
 (* expect true *)
-query m: bitstring; event(ServiceGot(pk(cskOld), m)).
-(* 7. what reaches the service was sent by the allowed client *)
+query s: bitstring, m: bitstring; event(ServiceGot(s, m)) ==> event(ClientSent(s, m)).
+(* 8, 9, 10. the clients the service refuses: outside its group, revoked, expired *)
 (* expect true *)
-query ck: pkey, m: bitstring; event(ServiceGot(ck, m)) ==> event(ClientSent(ck, m)).
-(* 8. witness: an allowed client does reach the service *)
-(* expect false *)
-query ck: pkey, m: bitstring; event(ServiceGot(ck, m)).
-
-(* 9 (README 11). a clean end the client passes on was the agent's: the relay cutting
-   the stream between two records (its raw end, no close_notify) is a
-   reset (CLAIMS-A Q5; mutant clear-end: crypto/tls's io.EOF taken as a
-   clean end, the code before) *)
+query m: bitstring; event(ServiceGot(serEve, m)).
 (* expect true *)
-query k: bitstring, r: bitstring;
-  event(ClientCleanEnd(fp(pk(sk1)), k, r)) ==> event(AgentEnded(fp(pk(sk1)), k, r)).
-(* 10 (README 12). likewise toward the service: its half close was the client's
+query m: bitstring; event(ServiceGot(serLost, m)).
+(* expect true *)
+query m: bitstring; event(ServiceGot(serOld, m)).
+(* 11. a clean end the client passes on was the agent's close_notify: the
+   relay cutting the stream between two records is a reset (CLAIMS-A Q5;
+   mutant clear-end: crypto/tls's io.EOF taken as a clean end) *)
+(* expect true *)
+query k: bitstring, r: bitstring; event(ClientCleanEnd(k, r)) ==> event(AgentEnded(k, r)).
+(* 12. likewise toward the service: its half close was the client's
    (mutant agent-clear-end) *)
 (* expect true *)
-query ck: pkey, m: bitstring; event(ServiceCleanEnd(ck, m)) ==> event(ClientEnded(ck, m)).
-(* README 13, 14. witnesses: both clean ends happen at all *)
-(* expect false *)
-query k: bitstring, r: bitstring; event(ClientCleanEnd(fp(pk(sk1)), k, r)).
-(* expect false *)
-query ck: pkey, m: bitstring; event(ServiceCleanEnd(ck, m)).
-
-(* README 15. a clean end at the client was the target's: the target's
-   reset (or a read error at the agent) reaches the client as a reset,
-   never as the agent's close_notify (mutant abort-as-close: Join closed
-   the TLS conn, sending close_notify, the code before) *)
+query s: bitstring, m: bitstring; event(ServiceCleanEnd(s, m)) ==> event(ClientEnded(s, m)).
+(* 13. a clean end at the client was the target's: its reset reaches the
+   client as a reset (lane TCPRESET, mutant abort-as-close) *)
 (* expect true *)
-query k: bitstring, r: bitstring;
-  event(ClientCleanEnd(fp(pk(sk1)), k, r)) ==> event(TargetEnded(fp(pk(sk1)), k, r)).
-(* README 16. likewise the other way: the service's half close was the
-   client's local application's clean end (mutant client-abort-as-close:
-   Pump closed the session, sending close_notify, the code before) *)
+query k: bitstring, r: bitstring; event(ClientCleanEnd(k, r)) ==> event(TargetEnded(k, r)).
+(* 14. the service's half close was the client's local application's clean
+   end (mutant client-abort-as-close) *)
 (* expect true *)
-query ck: pkey, m: bitstring; event(ServiceCleanEnd(ck, m)) ==> event(AppEnded(ck, m)).
-(* README 17, 18. witnesses: both aborts happen *)
+query s: bitstring, m: bitstring; event(ServiceCleanEnd(s, m)) ==> event(AppEnded(s, m)).
+(* 15, 16. witnesses: an allowed client reaches the service, and gets its answer *)
 (* expect false *)
-query k: bitstring, r: bitstring; event(TargetAborted(fp(pk(sk1)), k, r)).
+query m: bitstring; event(ServiceGot(serCli, m)).
 (* expect false *)
-query ck: pkey, m: bitstring; event(AppAborted(ck, m)).
+query k: bitstring, r: bitstring; event(ClientRecv(k, r)).
+(* 17, 18. witnesses: both clean ends happen *)
+(* expect false *)
+query k: bitstring, r: bitstring; event(ClientCleanEnd(k, r)).
+(* expect false *)
+query s: bitstring, m: bitstring; event(ServiceCleanEnd(s, m)).
+(* 19, 20. witnesses: both aborts happen *)
+(* expect false *)
+query k: bitstring, r: bitstring; event(TargetAborted(k, r)).
+(* expect false *)
+query s: bitstring, m: bitstring; event(AppAborted(s, m)).
 
 process
-  new sk2: skey; new skOld: skey; new skNew: skey; new sk4: skey;
-  out(c, pk(csk)); out(c, cskOld);
-  (
-    (* 1 *) (!Agent(sk1, true)) | (!Client(fp(pk(sk1)), payloadFixed))
-    (* 2 *) | (!Agent(sk2, false)) | (!Client(fp(pk(sk2)), payloadRelayTarget))
-    (* 3 *) | (!Agent(skNew, true)) | (!Client(fp(pk(skNew)), payloadNew))
-            | (!Client(fp(pk(skOld)), payloadOld)) | out(c, skOld)
-    (* 4 *) | (!Agent(sk4, true)) | (in(c, relayPin: bitstring); !Client(relayPin, payloadTofu))
-  )
+  new skEve: skey; new skLost: skey; new skOld: skey; new skWebOld: skey; new skWebRev: skey;
+  let certWeb = sign((nameWeb, grpWeb, pk(skWeb), serWeb, live), orgk) in
+  let certCli = sign((nameCli, grpDb, pk(skCli), serCli, live), orgk) in
+  out(c, certWeb); out(c, certCli);
+  out(c, (skEve, sign((nameEve, grpWeb, pk(skEve), serEve, live), orgk)));
+  out(c, (skLost, sign((nameLost, grpDb, pk(skLost), serLost, live), orgk)));
+  out(c, (skOld, sign((nameOld, grpDb, pk(skOld), serOld, expired), orgk)));
+  out(c, (skWebOld, sign((nameWeb, grpWeb, pk(skWebOld), serWebOld, expired), orgk)));
+  out(c, (skWebRev, sign((nameWeb, grpWeb, pk(skWebRev), serWebRev, live), orgk)));
+  ((!Agent(certWeb, true)) | (!Agent(certWeb, false)) | (!Client(certCli)))

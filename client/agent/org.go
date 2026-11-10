@@ -18,11 +18,12 @@ import (
 )
 
 // Org is an organisation's identity for a tcp service in organisation mode
-// (Service.Org; nfltr docs/decisions/org-enrolment-2026-11-09.md): the
-// agent ends its pinned sessions' TLS with this machine's certificate and
-// admits a client only by its certificate, checked by CheckClient. The SDK
-// holds no policy of its own; nfltr's orgpki is behind it
-// (spec/proverif/e2ee_tcp_org.pv, the service's half).
+// (Service.Org; nfltr docs/decisions/org-enrolment-2026-11-09.md), the
+// only end-to-end encrypted tcp mode: the agent ends its sessions' TLS
+// with this machine's certificate and admits a client only by its
+// certificate, checked by CheckClient. The SDK holds no policy of its
+// own; nfltr's orgpki is behind it (spec/proverif/e2ee_tcp.pv, the
+// service's half).
 type Org interface {
 	// Certificate is this machine's certificate chain (its leaf, then its
 	// issuer's certificate) and key, read at every handshake: a renewed
@@ -52,9 +53,9 @@ type orgAdmission struct {
 
 // orgServerConfig is TLS 1.3 with o's machine certificate and a client
 // certificate required (crypto/tls checks its CertificateVerify against
-// the certificate's key) and checked by o for groups, into adm. No pin and
-// no other mode: a client without an organisation certificate is refused
-// (e2ee_tcp_org.pv mutant downgrade-any-client). VerifyConnection, not
+// the certificate's key) and checked by o for groups, into adm. No other
+// mode: a client without an organisation certificate is refused
+// (e2ee_tcp.pv mutant downgrade-any-client). VerifyConnection, not
 // VerifyPeerCertificate, runs on a resumed session too; tickets are off.
 func orgServerConfig(o Org, groups []string, adm *orgAdmission, logger *slog.Logger) *tls.Config {
 	return &tls.Config{
@@ -110,33 +111,40 @@ func checkOrgTunnel(cfg Config) error {
 	if cfg.TCPE2EEOnly {
 		e2ee = agentservices.E2EEOn
 	}
-	return checkOrgService(Service{Name: "tcp tunnel", Kind: agentservices.TCP, E2EE: e2ee, E2EEClients: cfg.TCPE2EEClients, Org: cfg.TCPE2EEOrg, AllowGroups: cfg.TCPE2EEAllowGroups})
+	return checkOrgService(Service{Name: "tcp tunnel", Kind: agentservices.TCP, E2EE: e2ee, Org: cfg.TCPE2EEOrg, AllowGroups: cfg.TCPE2EEAllowGroups})
 }
 
-// checkOrgService: a service in organisation mode (Org) is a tcp service
-// with E2EE On, at least one group, and no pin of either side (Cert,
-// E2EEClients), so it has one mode only; groups without Org are refused.
+// checkOrgService: a tcp service with E2EE On is in organisation mode (Org
+// and at least one group), the only end-to-end encrypted tcp mode; Org is
+// only that, and groups without Org are refused.
 func checkOrgService(s Service) error {
 	switch {
 	case s.Org == nil && len(s.AllowGroups) > 0:
 		return fmt.Errorf("service %q: allow groups need the organisation (Org)", s.Name)
+	case s.Org == nil && s.Kind == agentservices.TCP && s.E2EE == agentservices.E2EEOn:
+		return fmt.Errorf("service %q: e2ee %q needs organisation mode (Org and at least one allow group)", s.Name, agentservices.E2EEOn)
 	case s.Org == nil:
 		return nil
 	case s.Kind != agentservices.TCP || s.E2EE != agentservices.E2EEOn:
 		return fmt.Errorf("service %q: organisation mode needs a tcp service with e2ee %q", s.Name, agentservices.E2EEOn)
 	case len(s.AllowGroups) == 0:
 		return fmt.Errorf("service %q: organisation mode needs at least one allow group", s.Name)
-	case len(s.E2EEClients) > 0 || s.Cert != nil:
-		return fmt.Errorf("service %q: organisation mode takes no pins (e2ee clients, its own certificate): one mode per service", s.Name)
 	}
 	return nil
 }
 
-// serveOrgTCP serves a session of a tcp service in organisation mode as
-// serveE2EETCP does a pinned one (tlsend, Join), with the organisation's
-// TLS (orgServerConfig), and ends it at its admission's end
-// (holdAdmission): a cut is a reset to both ends.
-func serveOrgTCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
+// serveE2EETCP serves an end-to-end encrypted session of a tcp service in
+// organisation mode: TLS (orgServerConfig) on s, the plaintext bridged to
+// target, each side's end passed on as a half close (TLS close_notify on
+// s), and the session ended at its admission's end (holdAdmission): a cut
+// is a reset to both ends. A session that ends without the client's
+// close_notify (the relay cut it) is a reset to the target, never its half
+// close (tlsend; CLAIMS-A Q5, TestOrgSessionCutIsResetAtTarget); a
+// target's reset is one to the client, no close_notify (Join calls
+// tlsend's Reset; lane TCPRESET, TestOrgSessionTargetResetIsResetAtClient).
+// A refused client gets a TLS alert and the target only a connection that
+// closes: no byte of it is read or written.
+func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	var adm orgAdmission
 	changed := p.org.Changed() // before the check: a change after it is seen
 	tc := tlsend.Server(s, orgServerConfig(p.org, p.groups, &adm, logger))

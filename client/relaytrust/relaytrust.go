@@ -31,15 +31,6 @@ func Fingerprint(der []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// ClientKeyFingerprint is the fingerprint of a client's key, the entry of
-// an agent's allow-list of E2EE clients (agent Config.TCPE2EEClients): the
-// SHA-256 of the certificate's SubjectPublicKeyInfo, in Fingerprint's form.
-// The key's, not the certificate's: a client that makes a new self-signed
-// certificate for each session keeps its fingerprint.
-func ClientKeyFingerprint(cert *x509.Certificate) string {
-	return Fingerprint(cert.RawSubjectPublicKeyInfo)
-}
-
 // ParsePin normalizes a fingerprint to Fingerprint's form and rejects
 // anything that is not a SHA-256. It is the one parser of certificate pins:
 // it accepts any case, optional colons and an optional "SHA256:" prefix, so

@@ -28,25 +28,21 @@ type Service struct {
 	Name   string             // agentservices.ValidName
 	Kind   agentservices.Kind // HTTP: E2EE sessions; TCP: raw sessions
 	Target string             // HTTP: backend URL (http or https); TCP: host:port, or unix:/abs/path (a unix socket only this table dials)
-	// E2EE of a TCP service: On, its sessions are TLS the agent terminates
-	// with its E2EE certificate (a plain session is refused); Off, plain
-	// bytes only; Default, either, as the relay's policy resolves it.
+	// E2EE of a TCP service: On, its sessions are TLS in organisation mode
+	// (Org, required; a plain session is refused); Off, plain bytes only;
+	// Default, either as the relay's policy resolves it, and a session
+	// that is end to end encrypted is refused (no Org).
 	E2EE agentservices.E2EE
-	// Cert, when set, is the certificate this service's E2EE sessions end
-	// with instead of the tunnel's (Tunnel.E2EE): a pinned tcp service and
-	// an http service whose share takes the tunnel's ACME certificate
-	// under one agent identity.
+	// Cert, when set, is the certificate an http service's E2EE share
+	// sessions end with instead of the tunnel's (Tunnel.E2EE): an http
+	// service whose share takes the tunnel's ACME certificate beside
+	// another under one agent identity. A tcp service takes none.
 	Cert *E2EESetup
-	// E2EEClients of a TCP service with E2EE On: the client keys allowed
-	// to open its pinned sessions, as Config.TCPE2EEClients; empty: no
-	// client authentication.
-	E2EEClients []string
-	// Org puts a TCP service with E2EE On in organisation mode: its
-	// sessions end TLS with the organisation's machine certificate and
-	// admit a client certificate in one of AllowGroups (Org.CheckClient),
-	// nothing else. Org is the service's one mode marker: with it, no
-	// E2EEClients and no Cert (pins), and a session never falls back to
-	// them (spec/proverif/e2ee_tcp_org.pv mutant downgrade-any-client).
+	// Org puts a TCP service with E2EE On in organisation mode, its only
+	// end-to-end encrypted mode: its sessions end TLS with the
+	// organisation's machine certificate and admit a client certificate in
+	// one of AllowGroups (Org.CheckClient), nothing else
+	// (spec/proverif/e2ee_tcp.pv mutant downgrade-any-client).
 	Org Org
 	// AllowGroups are the organisation groups whose machines Org admits;
 	// required with Org, refused without it.
@@ -103,8 +99,7 @@ type tableService struct {
 	shares  []string // share codes whose policy wrap enforces
 	wrap    func(http.Handler) http.Handler
 	cert    *e2eeTLSConfig // Service.Cert; nil: the tunnel's
-	clients clientKeys     // Service.E2EEClients; nil: any client
-	org     Org            // Service.Org: organisation mode; nil: pins
+	org     Org            // Service.Org: organisation mode; nil: no E2EE tcp session
 	groups  []string       // Service.AllowGroups
 }
 
@@ -128,14 +123,9 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if s.E2EE != agentservices.E2EEDefault && (s.Kind != agentservices.TCP || (s.E2EE != agentservices.E2EEOn && s.E2EE != agentservices.E2EEOff)) {
 			return nil, fmt.Errorf("service %q: e2ee %q (want %q or %q on a tcp service)", s.Name, s.E2EE, agentservices.E2EEOn, agentservices.E2EEOff)
 		}
-		if len(s.E2EEClients) > 0 && (s.Kind != agentservices.TCP || s.E2EE != agentservices.E2EEOn) {
-			return nil, fmt.Errorf("service %q: e2ee clients need a tcp service with e2ee %q", s.Name, agentservices.E2EEOn)
+		if s.Cert != nil && s.Kind != agentservices.HTTP {
+			return nil, fmt.Errorf("service %q: a certificate of its own needs an http service (a tcp service's E2EE is the organisation's)", s.Name)
 		}
-		clients, err := newClientKeys(s.E2EEClients)
-		if err != nil {
-			return nil, fmt.Errorf("service %q: %w", s.Name, err)
-		}
-		e.clients = clients
 		if err := checkOrgService(s); err != nil {
 			return nil, err
 		}
@@ -230,8 +220,10 @@ func (t *ServiceTable) resolve(target string, e2ee, terminatesE2EE, connect bool
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "the agent does not terminate end-to-end TLS")
 	case e2ee && e.kind == agentservices.TCP && !connect:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "an end-to-end encrypted share session needs an http service")
-	case e2ee && e.e2ee == agentservices.E2EEOff:
-		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "the service is not end-to-end encrypted")
+	case e2ee && e.kind == agentservices.TCP && e.org == nil:
+		// Only organisation mode is end to end encrypted (E2EE Off, or a
+		// Default service the relay's policy made plain).
+		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "the service is not end-to-end encrypted (not in organisation mode)")
 	case !e2ee && e.kind != agentservices.TCP:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED, "a raw TCP session needs a tcp service")
 	case !e2ee && e.e2ee == agentservices.E2EEOn:

@@ -145,35 +145,22 @@ type Config struct {
 	// Format: "host:port" (e.g. "kubernetes.default.svc:443").
 	TCPForwardAddr string
 
-	// TCPE2EEOnly makes the TCP tunnel end-to-end encrypted only. An end
-	// to end encrypted session that names a target (a pinned connect
-	// session: tcp-connect/dial --pin) is TLS ended here with the
-	// plaintext bridged to TCPForwardAddr, byte for byte as a raw session's;
-	// any other session to a target (no pin: the relay could read it) is
-	// refused with ERROR_REASON_E2EE_REQUIRED. Without it a pinned session
-	// is HTTP to the default route, as an E2EE share's (the relay's SNI
-	// sessions are that either way), and a plain one is a raw session.
-	// With TCPTunnel, an E2EE certificate and TCPForwardAddr: the pinned
-	// session's target is that, never the open's (Connect fails with
-	// ErrE2EENoFixedTarget without it).
+	// TCPE2EEOnly makes the TCP tunnel end-to-end encrypted only, in
+	// organisation mode (TCPE2EEOrg and TCPE2EEAllowGroups, required): an
+	// end to end encrypted session that names a target ends the
+	// organisation's TLS here with the plaintext bridged to TCPForwardAddr,
+	// byte for byte as a raw session's, never to the open's target
+	// (Connect fails with ErrE2EENoFixedTarget without TCPForwardAddr); any
+	// other session to a target (the relay could read it) is refused with
+	// ERROR_REASON_E2EE_REQUIRED. Without it an end to end encrypted
+	// session is HTTP to the default route, an E2EE share's (the relay's
+	// SNI sessions are that either way), and a plain one is a raw session.
 	TCPE2EEOnly bool
 
-	// TCPE2EEClients, with TCPE2EEOnly, are the client keys allowed to
-	// open a pinned session (relaytrust.ClientKeyFingerprint, any form
-	// relaytrust.ParsePin takes): its TLS then requires a client
-	// certificate whose key is listed, so a relay, which holds none,
-	// cannot reach TCPForwardAddr through a pinned session of its own
-	// (spec/proverif/e2ee_tcp.pv query 7). Empty: no client
-	// authentication (anyone who reaches the agent, the relay included).
-	// The list is read once: a removed key is refused from the next
-	// session on; a session in flight runs until it ends.
-	TCPE2EEClients []string
-
-	// TCPE2EEOrg, with TCPE2EEOnly, puts the tunnel in organisation mode,
-	// as Service.Org does a service: its pinned sessions end TLS with the
+	// TCPE2EEOrg, with TCPE2EEOnly, is the tunnel's organisation, as
+	// Service.Org is a service's: its sessions end TLS with the
 	// organisation's machine certificate and admit a client certificate
-	// in one of TCPE2EEAllowGroups, nothing else (no TCPE2EEClients, no
-	// fallback; spec/proverif/e2ee_tcp_org.pv).
+	// in one of TCPE2EEAllowGroups, nothing else (spec/proverif/e2ee_tcp.pv).
 	TCPE2EEOrg Org
 	// TCPE2EEAllowGroups are the groups TCPE2EEOrg admits; required with
 	// it, refused without it.
@@ -376,11 +363,6 @@ func New(cfg Config, opts ...Option) Agent {
 	if err := checkOrgTunnel(cfg); err != nil && a.initErr == nil {
 		a.initErr = err
 	}
-	if keys, err := newClientKeys(cfg.TCPE2EEClients); err != nil && a.initErr == nil {
-		a.initErr = err
-	} else {
-		a.e2eeClients = keys
-	}
 	a.client = newBackendClient(cfg)
 	if a.wrapTransport != nil {
 		a.client.Transport = a.wrapTransport(a.client.Transport)
@@ -454,8 +436,6 @@ type agent struct {
 
 	// initErr captures errors from functional options so Connect() can surface them.
 	initErr error
-	// e2eeClients is Config.TCPE2EEClients, parsed; nil: none.
-	e2eeClients clientKeys
 
 	// lifecycle
 	cancel context.CancelFunc

@@ -2,16 +2,17 @@
 # client/agent/testdata/org_mutants.txt, make test-go-mutants, in make ci):
 # each line "<mutant> | <file> | <exact line text> | <replacement> | <test>";
 # the lines of one mutant are applied together and its test must then fail.
-# Models: spec/proverif/e2ee_tcp_org.pv (downgrade-any-client, the checks'
+# Models: spec/proverif/e2ee_tcp.pv (downgrade-any-client, the checks'
 # use) and nfltr spec/enrol/Enrol.tla (no-expiry-timer: NoExpiredSession;
 # no-cut-on-update: RevocationBound). The checks themselves (chain, name,
 # groups, CRL, NotAfter) are nfltr orgpki's, with its own mutants.
 ignore-check | org.go | 			until, err := o.CheckClient(cs.PeerCertificates, groups, time.Now()) | 			until, err := time.Now().Add(time.Hour), error(nil) | TestOrgServiceAdmitsGroup
 downgrade-any-client | org.go | 		ClientAuth:             tls.RequireAnyClientCert, | 		ClientAuth:             tls.RequestClientCert, | TestOrgServiceAdmitsGroup
 downgrade-any-client | org.go | 			until, err := o.CheckClient(cs.PeerCertificates, groups, time.Now()) | 			if len(cs.PeerCertificates) == 0 { adm.until = time.Now().Add(time.Hour); return nil }; until, err := o.CheckClient(cs.PeerCertificates, groups, time.Now()) | TestOrgServiceAdmitsGroup
-org-falls-back-to-pins | session_plan.go | 		if svc.org != nil { | 		if false { | TestOrgServiceAdmitsGroup
-pins-beside-org | org.go | 	case len(s.E2EEClients) > 0 || s.Cert != nil: | 	case false: | TestOrgServiceOneMode
+org-falls-through | session_plan.go | 		if svc.org != nil { | 		if false { | TestOrgServiceAdmitsGroup
+e2ee-without-org | org.go | 	case s.Org == nil && s.Kind == agentservices.TCP && s.E2EE == agentservices.E2EEOn: | 	case false: | TestOrgServiceOneMode
+e2ee-to-plain-service | services.go | 	case e2ee && e.kind == agentservices.TCP && e.org == nil: | 	case false: | TestOrgServiceOneMode
 no-expiry-timer | org.go | 	t := time.NewTimer(time.Until(until)) | 	t := time.NewTimer(time.Hour) | TestOrgSessionEndsAtUntil
 no-expiry-timer | org.go | 			t.Reset(time.Until(u)) | 			t.Reset(time.Hour + 0*time.Until(u)) | TestOrgSessionEndsAtUntil
 no-cut-on-update | org.go | 			u, cerr := check(time.Now()) | 			u, cerr := until, error(nil) | TestOrgSessionCutOnUpdate
-tunnel-falls-back-to-pins | session_plan.go | 		if targets.org != nil { | 		if false { | TestOrgServiceAdmitsGroup
+tunnel-falls-through | session_plan.go | 		if targets.org != nil { | 		if false { | TestOrgServiceAdmitsGroup

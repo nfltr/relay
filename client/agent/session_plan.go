@@ -15,10 +15,8 @@ import (
 	"time"
 
 	"github.com/nfltr/link/peerlink"
-	"github.com/nfltr/relay/client/tlsend"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
-	"github.com/nfltr/relay/proto/wire/agentservices"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
@@ -29,7 +27,7 @@ const (
 	sessionRaw     sessionKind = iota // a TCP connection to the target
 	sessionE2EE                       // TLS ended here, proxied to the backend
 	sessionHTTP                       // the HTTP tunnel (dataplane.HTTPSessionTarget)
-	sessionE2EETCP                    // TLS ended here, bytes to a tcp service's target
+	sessionE2EETCP                    // organisation TLS ended here, bytes to a tcp service's target
 )
 
 // sessionPlan is how one session is served.
@@ -40,19 +38,14 @@ type sessionPlan struct {
 	wrap            func(http.Handler) http.Handler
 	client          netip.Addr     // an E2EE session's visitor, from the relay (pb.TCPData.ClientAddr); zero: unknown
 	e2ee            *e2eeTLSConfig // the certificate an E2EE session ends with: its service's, else the tunnel's
-	clients         clientKeys     // a sessionE2EETCP's allowed client keys; nil: any client
-	org             Org            // a sessionE2EETCP of a service in organisation mode; nil: pins
+	org             Org            // a sessionE2EETCP's organisation
 	groups          []string       // ... its allow groups
 }
-
-// e2eeShareTarget is the target the relay's SNI router names for an E2EE
-// share session to a whole agent (relay-core TCPDispatcher.RouteConnection).
-const e2eeShareTarget = "__e2ee__"
 
 // ErrE2EENoFixedTarget: Config.TCPE2EEOnly without Config.TCPForwardAddr.
 // An end-to-end encrypted session's plaintext goes only to a target the
 // agent fixed; the relay names a session's target, so one it names is
-// refused (spec/proverif/e2ee_tcp.pv query 3).
+// refused (spec/proverif/e2ee_tcp.pv mutant relay-names-target).
 var ErrE2EENoFixedTarget = errors.New("an end-to-end encrypted tunnel needs a fixed target (TCPForwardAddr): the agent never dials a target the relay names")
 
 var (
@@ -90,7 +83,7 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 		if svc.org != nil {
 			// Organisation mode: resolve refused a plain session (E2EE
 			// On); the session is the organisation's TLS, never the
-			// tunnel's certificate or pins (e2ee_tcp_org.pv).
+			// tunnel's certificate (e2ee_tcp.pv).
 			p.kind, p.org, p.groups, p.e2ee = sessionE2EETCP, svc.org, svc.groups, nil
 			p.client = clientAddr(open.GetClientAddr())
 			return p, nil
@@ -101,8 +94,12 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 	} else if targets.forwardAddr != "" {
 		p.target = targets.forwardAddr
 		if targets.org != nil {
-			// Config.TCPE2EEOrg: organisation TLS only (an e2eeOnly
-			// tunnel with a fixed target, checked at New), never pins.
+			// Config.TCPE2EEOrg (nfltr tcp --e2ee): organisation TLS only,
+			// its bytes to the agent's fixed target (TCPForwardAddr,
+			// required at New), never to the open's, which the relay
+			// writes (E2EEPROOF finding 1); a plain session is refused,
+			// never dialled. Guards: TestOrgTunnelCarriesBytes,
+			// TestOrgTunnelRefusesPlainSessions.
 			if !open.GetE2Ee() {
 				return sessionPlan{}, errE2EERequired(open)
 			}
@@ -116,35 +113,11 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 	}
 	p.wrap = composeWraps(p.wrap, svcWrap)
 	if open.GetE2Ee() && p.e2ee != nil {
+		// An E2EE share session: HTTP to the default route or the table's
+		// http service (relay-core TestCoreProcessTLSAndE2EE).
 		p.kind = sessionE2EE
 		p.client = clientAddr(open.GetClientAddr())
-		switch {
-		case targets.services != nil:
-			if svc := targets.services.byName[open.GetTargetAddr()]; svc.kind == agentservices.TCP {
-				p.kind, p.clients = sessionE2EETCP, svc.clients
-			}
-		case targets.e2eeOnly && open.GetTargetAddr() != e2eeShareTarget && !targets.noRaw:
-			// Config.TCPE2EEOnly (nfltr tcp --e2ee): a pinned session to
-			// a target of a tunnel without a table ends TLS here and its
-			// bytes go to the agent's fixed target (TCPForwardAddr), never
-			// to the open's, which the relay writes (E2EEPROOF finding 1;
-			// guard TestE2EEOnlyTunnelRefusesRelayNamedTarget); the SNI
-			// marker stays an E2EE share's HTTP. Without the option a
-			// pinned session is HTTP to the default route (relay-core
-			// TestCoreProcessTLSAndE2EE). Guard: TestPinnedSessionToTunnelTargetCarriesBytes.
-			if targets.forwardAddr == "" {
-				return sessionPlan{}, &ServiceRefusedError{Target: open.GetTargetAddr(), E2EE: true, Answer: relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED, Reason: ErrE2EENoFixedTarget.Error()}
-			}
-			p.kind, p.clients = sessionE2EETCP, targets.clients
-		}
 		return p, nil
-	}
-	if targets.e2eeOnly {
-		// Config.TCPE2EEOnly: without a pin the relay could read the
-		// session's bytes, so it is refused, never dialled. The refusal
-		// names no fingerprint: the answer is not authenticated.
-		// Guard: TestE2EEOnlyTunnelRefusesUnpinnedSessions.
-		return sessionPlan{}, errE2EERequired(open)
 	}
 	if targets.noRaw {
 		return sessionPlan{}, errNoRawTargets
@@ -156,7 +129,7 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 // that is not end to end encrypted.
 func errE2EERequired(open *pb.TCPData) error {
 	return &ServiceRefusedError{Target: open.GetTargetAddr(), E2EE: open.GetE2Ee(), Answer: relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED,
-		Reason: "the agent takes end-to-end encrypted sessions only: open it pinned (nfltr dial/tcp-connect --pin, pin: on a connect: mapping) with the fingerprint from the agent's own output"}
+		Reason: "the agent takes end-to-end encrypted sessions only: open it from a machine enrolled in its organisation, in one of its allowed groups"}
 }
 
 // clientAddr is the visitor address an open names, the zero Addr when it
@@ -346,33 +319,4 @@ func refusalReason(err error) relayv1.ErrorReason {
 func refuseAnswered(s net.Conn, reason relayv1.ErrorReason, err error) {
 	_ = dataplane.WriteAnswer(s, reason, err.Error())
 	_ = s.Close()
-}
-
-// serveE2EETCP serves an end-to-end encrypted session of a tcp service:
-// TLS with the agent's E2EE certificate on s (the client verifies it
-// against the pin it got from the agent; with p.clients the agent verifies
-// the client's key against its list), the plaintext bridged to target,
-// each side's end passed on as a half close (TLS close_notify on s). A
-// session that ends without the client's close_notify (the relay cut it)
-// is a reset to the target, never its half close (tlsend; CLAIMS-A Q5,
-// TestPinnedSessionCutIsResetAtTarget); a target's reset is one to the
-// client, no close_notify (Join calls tlsend's Reset; lane TCPRESET,
-// TestPinnedSessionTargetResetIsResetAtClient). A refused client gets a TLS alert
-// and the target only a connection that closes: no byte of it is read or
-// written.
-func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
-	if p.org != nil {
-		serveOrgTCP(s, target, p, logger)
-		return
-	}
-	tc := tlsend.Server(s, p.clients.serverConfig(p.e2ee.tlsConfig, logger))
-	_ = tc.SetDeadline(time.Now().Add(e2eeHeaderTimeout))
-	if err := tc.Handshake(); err != nil {
-		logger.Debug("e2ee tcp: handshake failed", "error", err)
-		_ = target.Close()
-		_ = s.Close()
-		return
-	}
-	_ = tc.SetDeadline(time.Time{})
-	_ = peerlink.Join(tc, target)
 }

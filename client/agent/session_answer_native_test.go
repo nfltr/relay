@@ -29,10 +29,11 @@ func TestAgentLinkNativeAnswers(t *testing.T) {
 		t.Fatalf("AgentLinkALPNs()[0] = %q, want quiclink.ALPNChain %q", got, quiclink.ALPNChain)
 	}
 	echo := echoTarget(t)
+	o := newTestOrg(t)
 	tab, err := NewServiceTable([]Service{
 		{Name: "db", Kind: agentservices.TCP, Target: echo},
 		{Name: "down", Kind: agentservices.TCP, Target: closedAddr(t)},
-		{Name: "vault", Kind: agentservices.TCP, Target: echo, E2EE: agentservices.E2EEOn},
+		{Name: "vault", Kind: agentservices.TCP, Target: echo, E2EE: agentservices.E2EEOn, Org: o.agentOrg(o.machine(t, "web", nil, time.Hour, false)), AllowGroups: []string{"db"}},
 	})
 	if err != nil {
 		t.Fatal(err)
