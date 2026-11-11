@@ -4,7 +4,9 @@
 package agent
 
 import (
+	"context"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -12,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/nfltr/quic-go"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
@@ -208,6 +211,26 @@ func (t *ServiceTable) addDirect(services []Service) error {
 	t.byName[DirectServiceName] = &tableService{kind: agentservices.TCP, e2ee: agentservices.E2EEOn, network: networkDirect, org: org, groups: groups}
 	t.decls = append(t.decls, agentservices.Decl{Name: DirectServiceName, Kind: agentservices.TCP, E2EE: agentservices.E2EEOn})
 	return nil
+}
+
+// Continue gives t prev's direct paths when both serve the same direct
+// services, before t serves: a table built for a new relay connection
+// (nfltr builds one per connection) keeps the sessions that re-attach
+// after the old connection died, the UDP socket and its NAT mapping; t's
+// own stop. prev keeps serving its connection's sessions.
+func (t *ServiceTable) Continue(prev *ServiceTable) {
+	if t == nil || prev == nil || t.direct == nil || prev.direct == nil || t.direct == prev.direct {
+		return
+	}
+	n, o := t.direct, prev.direct
+	if !slices.Equal(n.groups, o.groups) || !maps.Equal(n.modes, o.modes) {
+		return // ponytail: prev's lives on with its sessions; a relay that changes a service's mode mid-process leaves one socket
+	}
+	t.direct = o
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = n.node.Drain(ctx)
+	_ = n.ep.Close()
 }
 
 // DirectTransport is the UDP socket of the table's direct paths, for the

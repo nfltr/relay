@@ -72,7 +72,7 @@ func newDirectServer(org Org, groups []string, modes map[string]DirectMode) (*di
 		_ = ep.Close()
 		return nil, err
 	}
-	go func() { _ = d.node.Serve(d.acceptDirect) }() // ponytail: the process's lifetime, as the table's
+	go func() { _ = d.node.Serve(d.acceptDirect) }() // ponytail: the process's lifetime: a later table takes it over (Continue)
 	return d, nil
 }
 

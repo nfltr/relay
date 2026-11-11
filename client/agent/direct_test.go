@@ -85,29 +85,37 @@ type directRig struct {
 	client testMachine
 	mu     sync.Mutex
 	conns  []net.Conn // the client ends of open's sessions
+	table  func() *ServiceTable
 }
 
 func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 	t.Helper()
 	o := newTestOrg(t)
 	web := o.agentOrg(o.machine(t, "web", nil, time.Hour, false))
-	table, err := NewServiceTable([]Service{{Name: "blob", Kind: agentservices.TCP, Target: echoTarget(t), E2EE: agentservices.E2EEOn,
-		Org: web, AllowGroups: []string{"db"}, Direct: mode}})
-	if err != nil {
-		t.Fatal(err)
+	target, qad := echoTarget(t), qadServer(t)
+	mk := func() *ServiceTable {
+		table, err := NewServiceTable([]Service{{Name: "blob", Kind: agentservices.TCP, Target: target, E2EE: agentservices.E2EEOn,
+			Org: web, AllowGroups: []string{"db"}, Direct: mode}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if table.direct != nil {
+			table.direct.ep.loopback = true
+			table.direct.setRelay(qad, &tls.Config{InsecureSkipVerify: true}) // #nosec G402 -- a test's relay
+			d := table.direct
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_ = d.node.Drain(ctx)
+				_ = d.ep.Close()
+			})
+		}
+		return table
 	}
-	if table.direct != nil {
-		table.direct.ep.loopback = true
-		table.direct.setRelay(qadServer(t), &tls.Config{InsecureSkipVerify: true}) // #nosec G402 -- a test's relay
-		t.Cleanup(func() {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			_ = table.direct.node.Drain(ctx)
-			_ = table.direct.ep.Close()
-		})
-	}
+	table := mk()
 	r := &directRig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}},
-		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}}
+		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}, table: mk}
+	var err error
 	r.d, err = NewDirectClient(DirectClientConfig{Machine: r.client,
 		Relayed: func(context.Context, string) (net.Conn, error) { return r.open(t, DirectServiceName) },
 		QADTLS:  func(string) *tls.Config { return &tls.Config{InsecureSkipVerify: true} }}) // #nosec G402 -- a test's relay
@@ -131,7 +139,10 @@ func (r *directRig) open(t *testing.T, target string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	go r.l.accept("", h, s)
+	r.mu.Lock()
+	l := r.l
+	r.mu.Unlock()
+	go l.accept("", h, s)
 	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
 		return nil, fmt.Errorf("answer %v, %v", a, err)
 	}
@@ -254,6 +265,41 @@ func TestDirectSessionRelayLostReattaches(t *testing.T) {
 		p.mu.Unlock()
 		waitPath(t, events, PathRelayed)
 		r.mu.Lock()
+		_ = r.conns[len(r.conns)-1].Close()
+		r.mu.Unlock()
+		if e := waitPath(t, events, PathRelayed); e.Reason != ReasonRelayLost {
+			t.Fatalf("reason %q", e.Reason)
+		}
+		select {
+		case e := <-events:
+			t.Fatalf("a second re-attach: %+v", e)
+		case <-time.After(1500 * time.Millisecond):
+		}
+	})
+}
+
+// TestDirectSessionReattachesOnANewConnection: the agent's relay
+// connection is replaced (nfltr builds a table per connection, Continue
+// hands it the direct paths) and the session's relayed stream is cut
+// with the old one: it re-attaches through the new connection, every byte
+// back once, in order.
+func TestDirectSessionReattachesOnANewConnection(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	_, tc, events := r.session(t)
+	echo(t, tc, 4<<20, func() {
+		waitPath(t, events, PathDirect)
+		p := r.d.pair("web", "web")
+		p.mu.Lock()
+		_ = p.q.CloseWithError(0, "the direct path dies")
+		p.mu.Unlock()
+		waitPath(t, events, PathRelayed)
+		next := r.table()
+		next.Continue(r.l.targets.services)
+		if next.direct != r.l.targets.services.direct {
+			t.Fatal("Continue kept the new table's own direct paths")
+		}
+		r.mu.Lock()
+		r.l = &linkSessions{ctx: t.Context(), targets: sessionTargets{services: next}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 		_ = r.conns[len(r.conns)-1].Close()
 		r.mu.Unlock()
 		if e := waitPath(t, events, PathRelayed); e.Reason != ReasonRelayLost {
