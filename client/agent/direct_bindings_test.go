@@ -66,6 +66,7 @@ func rogueAnswer(t *testing.T, cert func(o *testOrg) tls.Certificate) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rogue.ep.loopback = true
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

@@ -91,6 +91,10 @@ const tlsRecordHandshake = 0x16
 type DirectEndpoint struct {
 	pc *net.UDPConn
 	tr *quic.Transport
+	// loopback admits loopback candidates (tests on one machine); else a
+	// peer could aim this machine's probes and punches at its own
+	// loopback services.
+	loopback bool
 }
 
 // NewDirectEndpoint opens the socket on an ephemeral port.
@@ -134,7 +138,7 @@ func (e *DirectEndpoint) QAD(ctx context.Context, addr string, tc *tls.Config) (
 	if err != nil {
 		return netip.AddrPort{}, fmt.Errorf("qad: %w", err)
 	}
-	return parseCandidate(string(b))
+	return e.candidate(string(b))
 }
 
 // hostCandidates are this machine's interface addresses on the socket's
@@ -160,18 +164,15 @@ func (e *DirectEndpoint) hostCandidates() []netip.AddrPort {
 	return out
 }
 
-// candidateAddr is an address a candidate may name: unicast, never
-// loopback (a test's seam).
-var candidateAddr = func(a netip.Addr) bool { return a.IsGlobalUnicast() || a.IsPrivate() }
-
-// parseCandidate reads one candidate: a unicast address and a port.
-func parseCandidate(s string) (netip.AddrPort, error) {
+// candidate reads one candidate: a unicast address (global or private;
+// loopback only with e.loopback) and a port.
+func (e *DirectEndpoint) candidate(s string) (netip.AddrPort, error) {
 	a, err := netip.ParseAddrPort(strings.TrimSpace(s))
 	if err != nil {
 		return netip.AddrPort{}, fmt.Errorf("candidate %q: %w", s, err)
 	}
 	a = netip.AddrPortFrom(a.Addr().Unmap(), a.Port())
-	if a.Port() == 0 || !candidateAddr(a.Addr()) {
+	if a.Port() == 0 || !(a.Addr().IsGlobalUnicast() || e.loopback && a.Addr().IsLoopback()) {
 		return netip.AddrPort{}, fmt.Errorf("candidate %q: not a unicast address and port", s)
 	}
 	return a, nil

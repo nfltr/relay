@@ -284,7 +284,7 @@ func (d *directServer) control(c net.Conn) error {
 	if err := readJSONLine(r, &theirs); err != nil {
 		return err
 	}
-	peer, err := parseCandidates(theirs.Candidates)
+	peer, err := d.ep.candidates(theirs.Candidates)
 	if err != nil {
 		return err
 	}
@@ -313,14 +313,14 @@ func readJSONLine(r *bufio.Reader, v any) error {
 	return json.Unmarshal(line, v)
 }
 
-// parseCandidates reads at most quiclink.MaxCandidates candidates.
-func parseCandidates(ss []string) ([]netip.AddrPort, error) {
+// candidates reads at most quiclink.MaxCandidates candidates.
+func (e *DirectEndpoint) candidates(ss []string) ([]netip.AddrPort, error) {
 	if len(ss) == 0 || len(ss) > quiclink.MaxCandidates {
 		return nil, fmt.Errorf("direct path: %d candidates (1 to %d)", len(ss), quiclink.MaxCandidates)
 	}
 	out := make([]netip.AddrPort, 0, len(ss))
 	for _, s := range ss {
-		a, err := parseCandidate(s)
+		a, err := e.candidate(s)
 		if err != nil {
 			return nil, err
 		}

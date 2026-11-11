@@ -328,7 +328,7 @@ func (s *DirectSession) punch(p *directPair) string {
 	if offer.Error != "" {
 		return offer.Error
 	}
-	theirs, err := parseCandidates(offer.Candidates)
+	theirs, err := s.d.ep.candidates(offer.Candidates)
 	if err != nil {
 		return ReasonNoQAD
 	}

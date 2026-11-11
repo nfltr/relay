@@ -14,7 +14,6 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net"
-	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -88,9 +87,6 @@ type directRig struct {
 
 func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 	t.Helper()
-	old := candidateAddr
-	candidateAddr = func(netip.Addr) bool { return true }
-	t.Cleanup(func() { candidateAddr = old })
 	o := newTestOrg(t)
 	web := o.agentOrg(o.machine(t, "web", nil, time.Hour, false))
 	table, err := NewServiceTable([]Service{{Name: "blob", Kind: agentservices.TCP, Target: echoTarget(t), E2EE: agentservices.E2EEOn,
@@ -99,6 +95,7 @@ func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 		t.Fatal(err)
 	}
 	if table.direct != nil {
+		table.direct.ep.loopback = true
 		table.direct.setRelay(qadServer(t), &tls.Config{InsecureSkipVerify: true}) // #nosec G402 -- a test's relay
 		t.Cleanup(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -115,6 +112,7 @@ func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 	if err != nil {
 		t.Fatal(err)
 	}
+	r.d.ep.loopback = true
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
