@@ -14,7 +14,6 @@ package agent
 // relayed stream starts with a TLS record (no) or a pathswitch frame (yes).
 
 import (
-	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
@@ -251,25 +250,38 @@ func (s pathStream) Reset() error {
 	return s.Conn.Close()
 }
 
-// peekConn replays the byte peekFirst read.
+// peekConn replays the byte peekFirst read, then reads the conn itself
+// (no buffer on the session's data path).
 type peekConn struct {
 	net.Conn
-	r *bufio.Reader
+	first []byte
 }
 
-func (c peekConn) Read(p []byte) (int, error) { return c.r.Read(p) }
+func (c *peekConn) Read(p []byte) (int, error) {
+	if len(c.first) > 0 && len(p) > 0 {
+		n := copy(p, c.first)
+		c.first = c.first[n:]
+		return n, nil
+	}
+	return c.Conn.Read(p)
+}
+
+// CloseWrite and Reset are the conn's (tlsend resets a link session with
+// its Reset, link's Abort), as pathStream's.
+func (c *peekConn) CloseWrite() error { return pathStream{Conn: c.Conn}.CloseWrite() }
+func (c *peekConn) Reset() error      { return pathStream{Conn: c.Conn}.Reset() }
 
 // peekFirst reads s's first byte (bounded by d) and returns s with it put
 // back.
 func peekFirst(s net.Conn, d time.Duration) (byte, net.Conn, error) {
 	_ = s.SetReadDeadline(time.Now().Add(d))
-	r := bufio.NewReaderSize(s, 512)
-	b, err := r.Peek(1)
+	var b [1]byte
+	_, err := io.ReadFull(s, b[:])
 	_ = s.SetReadDeadline(time.Time{})
 	if err != nil {
 		return 0, nil, err
 	}
-	return b[0], peekConn{s, r}, nil
+	return b[0], &peekConn{Conn: s, first: b[:]}, nil
 }
 
 // psConn is a pathswitch Conn as the net.Conn crypto/tls runs on. A read
