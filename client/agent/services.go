@@ -130,8 +130,8 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if s.Name == DirectServiceName {
 			return nil, fmt.Errorf("service %q: the name is reserved for direct paths", s.Name)
 		}
-		if s.Direct != DirectOff && (s.Org == nil || s.Direct != DirectOn && s.Direct != DirectLAN) {
-			return nil, fmt.Errorf("service %q: direct %q needs organisation mode (want %q or %q)", s.Name, s.Direct, DirectOn, DirectLAN)
+		if s.Direct != DirectOff && (s.Org == nil || s.Direct != DirectOn && s.Direct != DirectPublic) {
+			return nil, fmt.Errorf("service %q: direct %q needs organisation mode (want %q or %q)", s.Name, s.Direct, DirectOn, DirectPublic)
 		}
 		e := &tableService{kind: s.Kind, e2ee: s.E2EE}
 		if s.Cert != nil {

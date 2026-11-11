@@ -270,7 +270,7 @@ func (d *directServer) control(c net.Conn) error {
 			d.logger.Info("direct path: qad", "error", err)
 		}
 	}
-	if mode == DirectLAN {
+	if mode == DirectOn {
 		cands = append(cands, d.ep.hostCandidates()...)
 	}
 	cands = compactCandidates(cands)

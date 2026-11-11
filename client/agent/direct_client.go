@@ -203,8 +203,8 @@ func (s *DirectSession) Path() string { return s.c.Path() }
 // session to a direct path toward agent (its machine name machine, its
 // service service) when one can be punched, back to the relay when it
 // dies, and to a direct one again after the pair's backoff; on gets each
-// change; mode DirectOn sends this machine's public address only,
-// DirectLAN its interface addresses too. It returns at once.
+// change; mode DirectOn sends this machine's public and interface
+// addresses, DirectPublic its public address only. It returns at once.
 func (s *DirectSession) Run(cs tls.ConnectionState, agent, machine, service string, mode DirectMode, on func(PathEvent)) error {
 	key, err := sessionKey(cs)
 	if err != nil {
@@ -343,7 +343,7 @@ func (s *DirectSession) punch(p *directPair) string {
 			mine = append(mine, a)
 		}
 	}
-	if s.mode == DirectLAN {
+	if s.mode == DirectOn {
 		mine = append(mine, s.d.ep.hostCandidates()...)
 	}
 	mine = compactCandidates(mine)

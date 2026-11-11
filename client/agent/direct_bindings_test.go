@@ -60,7 +60,7 @@ func lyingQAD(t *testing.T, addr string) string {
 // (cert its certificate), which answers the punch; the client must refuse
 // it and stay relayed.
 func rogueAnswer(t *testing.T, cert func(o *testOrg) tls.Certificate) {
-	r := newDirectRig(t, DirectOn)
+	r := newDirectRig(t, DirectPublic) // the reflexive candidate only: the rogue holds it
 	o := r.client.o
 	rogue, err := newDirectServer(o.agentOrg(cert(o)), []string{"db"}, map[string]DirectMode{"blob": DirectOn})
 	if err != nil {

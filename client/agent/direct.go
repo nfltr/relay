@@ -39,24 +39,27 @@ type DirectMode string
 const (
 	// DirectOff: relayed only, never a candidate sent (the default).
 	DirectOff DirectMode = ""
-	// DirectOn: the public (reflexive, QAD) address only.
+	// DirectOn: the public (reflexive, QAD) address and this machine's
+	// interface addresses (host candidates), so two machines on one LAN
+	// connect directly (owner, 2026-11-11). Only the organisation peer of
+	// the control session sees them.
 	DirectOn DirectMode = "on"
-	// DirectLAN: also this machine's interface addresses (host candidates).
-	DirectLAN DirectMode = "lan"
+	// DirectPublic: the public address only, LAN addresses withheld.
+	DirectPublic DirectMode = "public"
 )
 
 // ParseDirectMode reads a mode: "", "off", "false" (off), "on", "true",
-// "lan".
+// "public".
 func ParseDirectMode(s string) (DirectMode, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", "off", "false":
 		return DirectOff, nil
 	case "on", "true":
 		return DirectOn, nil
-	case "lan":
-		return DirectLAN, nil
+	case "public":
+		return DirectPublic, nil
 	}
-	return DirectOff, fmt.Errorf("direct %q: want on, off or lan", s)
+	return DirectOff, fmt.Errorf("direct %q: want on, off or public", s)
 }
 
 // DirectServiceName is the reserved service every agent with a direct
@@ -142,7 +145,7 @@ func (e *DirectEndpoint) QAD(ctx context.Context, addr string, tc *tls.Config) (
 }
 
 // hostCandidates are this machine's interface addresses on the socket's
-// port (DirectLAN only): global and private unicast, no loopback.
+// port (DirectOn only): global and private unicast, no loopback.
 func (e *DirectEndpoint) hostCandidates() []netip.AddrPort {
 	port := uint16(e.pc.LocalAddr().(*net.UDPAddr).Port) // #nosec G115 -- a UDP port
 	addrs, err := net.InterfaceAddrs()

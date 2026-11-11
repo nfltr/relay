@@ -86,6 +86,7 @@ type directRig struct {
 	mu     sync.Mutex
 	conns  []net.Conn // the client ends of open's sessions
 	table  func() *ServiceTable
+	mode   DirectMode
 }
 
 func newDirectRig(t *testing.T, mode DirectMode) *directRig {
@@ -114,7 +115,7 @@ func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 	}
 	table := mk()
 	r := &directRig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}},
-		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}, table: mk}
+		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}, table: mk, mode: mode}
 	var err error
 	r.d, err = NewDirectClient(DirectClientConfig{Machine: r.client,
 		Relayed: func(context.Context, string) (net.Conn, error) { return r.open(t, DirectServiceName) },
@@ -174,7 +175,7 @@ func (r *directRig) session(t *testing.T) (*DirectSession, *tls.Conn, chan PathE
 		}
 	})
 	events := make(chan PathEvent, 16)
-	if err := ds.Run(tc.ConnectionState(), "web", "web", "blob", DirectOn, func(e PathEvent) { events <- e }); err != nil {
+	if err := ds.Run(tc.ConnectionState(), "web", "web", "blob", r.mode, func(e PathEvent) { events <- e }); err != nil {
 		t.Fatal(err)
 	}
 	return ds, tc, events
@@ -344,10 +345,24 @@ func TestDirectSessionReattachRefusedEnds(t *testing.T) {
 // paths gets a relayed session, framed, and the reason off.
 func TestDirectServiceOff(t *testing.T) {
 	r := newDirectRig(t, DirectOff)
+	r.mode = DirectOn // the client asks
 	r.l.targets.services.direct = nil
 	_, tc, events := r.session(t)
 	if e := waitPath(t, events, PathRelayed); e.Reason != ReasonWithheld {
 		t.Fatalf("reason %q, want %s (no reserved service)", e.Reason, ReasonWithheld)
 	}
 	echo(t, tc, 1<<20, func() {})
+}
+
+// TestParseDirectMode: true is on (LAN addresses included, owner
+// 2026-11-11), public withholds them, lan is gone.
+func TestParseDirectMode(t *testing.T) {
+	for in, want := range map[string]DirectMode{"": DirectOff, "false": DirectOff, "true": DirectOn, "on": DirectOn, "public": DirectPublic} {
+		if got, err := ParseDirectMode(in); err != nil || got != want {
+			t.Errorf("%q: %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if _, err := ParseDirectMode("lan"); err == nil {
+		t.Error("lan parsed")
+	}
 }
