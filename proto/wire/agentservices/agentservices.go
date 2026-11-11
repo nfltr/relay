@@ -50,8 +50,10 @@ const (
 )
 
 // E2EE is a tcp service's end-to-end encryption: whether its sessions are
-// TLS the agent terminates with its E2EE certificate (the client verifies
-// the certificate against a pin it got from the agent, never the relay).
+// TLS the agent terminates with its organisation machine certificate (mutual
+// TLS in organisation mode: each side verifies the other's certificate
+// against the organisation's root it enrolled with, never anything from the
+// relay).
 type E2EE string
 
 const (
