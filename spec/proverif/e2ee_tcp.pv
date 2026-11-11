@@ -46,6 +46,26 @@
    the bytes it follows. crypto/tls reports both a close_notify and a raw
    end as io.EOF; tlsend.Conn tells them apart.
 
+   Direct paths (lane DIRECTPATH, a design: nfltr
+   docs/decisions/direct-paths-2026-11-11.md; no code yet). Once the
+   session's TLS is up, its client may move the session's bytes (the same
+   TLS records, under the same session key) to a direct QUIC connection
+   to an address the relay hands it (a candidate, a QAD reply): whoever
+   holds that address answers, so the address is the attacker's. The
+   client takes the direct connection only if the answer's certificate
+   passes the same check as the session's (chain, name, NotAfter, CRL)
+   and both ends prove the session: each sends, inside the QUIC session,
+   an exporter of the TLS session bound to the QUIC session's key
+   (tokC, tokS below). The agent binds a direct connection to a session
+   only on that session's token. Queries 21-26; mutants direct-*.
+   Bindings (direct-paths doc "E2EE"; each gets a refusal row in the
+   code's bindings test when the code lands):
+     BIND:direct.cert     the direct answer's certificate checked as the session's
+     BIND:direct.name     ... names the machine the client named
+     BIND:direct.token    tokC/tokS: an exporter of the session's TLS key
+     BIND:direct.quic     ... bound to the direct QUIC session's key
+     BIND:direct.role     ... the sender's role (labC, labS)
+
    Code (nfltr = github.com/nfltr/nfltr; the rest github.com/nfltr/relay):
      nfltr internal/application/orgpki/verify.go Check   chain to the root, name, groups, CRL, NotAfter
      client/agent/org.go Org.CheckClient                 the service's check (nfltr: orgpki behind it)
@@ -84,11 +104,13 @@ const nameWeb, nameCli, nameEve, nameLost, nameOld: bitstring.
 const grpDb, grpWeb: bitstring.
 const serWeb, serWebOld, serWebRev, serCli, serEve, serLost, serOld: bitstring.
 const noCert: bitstring.                      (* a client that presents no organisation certificate *)
+const labC, labS: bitstring.                  (* the direct token's roles: the client's, the agent's *)
 
 free orgk: skey [private].                    (* the organisation: root, then issuer (enrol.pv) *)
 free skWeb, skCli: skey [private].
 free payload: bitstring [private].            (* what the client sends machine web *)
 free svcData: bitstring [private].            (* what web's service answers an admitted client *)
+free dirData: bitstring [private].            (* what the client sends on a direct connection it took *)
 
 event ClientAccepted(bitstring).                       (* the serial of the server certificate the client took *)
 event ClientSent(bitstring, bitstring).                (* its own serial, its bytes *)
@@ -103,6 +125,56 @@ event TargetEnded(bitstring, bitstring).               (* session key, response:
 event TargetAborted(bitstring, bitstring).             (* ... the target's reset *)
 event AppEnded(bitstring, bitstring).                  (* the client's local application's clean end after its bytes *)
 event AppAborted(bitstring, bitstring).                (* ... its reset *)
+event ClientDirectOffer(bitstring, bitstring).         (* session key, direct QUIC key: the client's token sent *)
+event ClientDirect(bitstring, bitstring, bitstring).   (* session key, direct key, the answer's serial: taken *)
+event AgentDirect(bitstring, bitstring).               (* session key, direct key: bound to that session *)
+
+(* The client's direct path for its session k: the relay hands it an
+   address (cand); whoever the attacker routes there answers with a
+   certificate and a key (the QUIC handshake, TLS 1.3 as for the session).
+   direct-no-cert-check: the answer's certificate is not checked;
+   direct-no-token: the agent's token is not checked; token-unbound: the
+   tokens bind the session but not the direct QUIC key; token-no-role:
+   both ends send the same token (no role in it or its message). *)
+let DirectClient(k: bitstring) =
+  in(c, cand: bitstring);
+  let ls = labS in (* NOT:token-no-role *)
+  let ls = labC in (* ONLY:token-no-role *)
+  in(c, (dcert: bitstring, dpk: pkey));
+  let (dn: bitstring, dg: bitstring, =dpk, ds: bitstring, de: bitstring) = checksign(dcert, pk(orgk)) in (* NOT:direct-no-cert-check *)
+  let (dn: bitstring, dg: bitstring, =dpk, ds: bitstring, de: bitstring) = getmsg(dcert) in (* ONLY:direct-no-cert-check *)
+  if dn = nameWeb then (* NOT:direct-no-cert-check *)
+  if de = live then (* NOT:direct-no-cert-check *)
+  if ds <> serWebRev && ds <> serLost then (* NOT:direct-no-cert-check *)
+  new kd: bitstring;
+  out(c, aenc(kd, dpk));
+  let tokC = h((k, kd, labC)) in (* NOT:token-unbound *)
+  let tokS = h((k, kd, ls)) in (* NOT:token-unbound *)
+  let tokC = h((k, labC)) in (* ONLY:token-unbound *)
+  let tokS = h((k, ls)) in (* ONLY:token-unbound *)
+  event ClientDirectOffer(k, kd);
+  out(c, senc((labC, tokC), kd));
+  in(c, x: bitstring);
+  let (=ls, =tokS) = sdec(x, kd) in (* NOT:direct-no-token *)
+  event ClientDirect(k, kd, ds);
+  out(c, senc(dirData, kd)).
+
+(* Web's agent: a direct connection (its certificate, the session's key
+   pair) bound to its session k only on that session's client token.
+   agent-direct-no-token: bound on the relay's word (a session id). *)
+let DirectAgent(k: bitstring) =
+  in(c, ekd: bitstring);
+  let ls = labS in (* NOT:token-no-role *)
+  let ls = labC in (* ONLY:token-no-role *)
+  let kd = adec(ekd, skWeb) in
+  let tokC = h((k, kd, labC)) in (* NOT:token-unbound *)
+  let tokS = h((k, kd, ls)) in (* NOT:token-unbound *)
+  let tokC = h((k, labC)) in (* ONLY:token-unbound *)
+  let tokS = h((k, ls)) in (* ONLY:token-unbound *)
+  in(c, x: bitstring);
+  let (=labC, =tokC) = sdec(x, kd) in (* NOT:agent-direct-no-token *)
+  event AgentDirect(k, kd);
+  out(c, senc((ls, tokS), kd)).
 
 (* The client, enrolled: names machine web, organisation mode whatever the
    relay answers. *)
@@ -121,6 +193,7 @@ let Client(certCli: bitstring) =
   new k: bitstring;
   out(c, aenc(k, spk));
   out(c, (certCli, sign(h((k, spk)), skCli)));          (* Certificate + CertificateVerify *)
+  (DirectClient(k)) | (
   event ClientSent(serCli, payload);
   out(c, senc((c2s, appData, payload), k));
   in(c, appAbort: bool);                               (* the local application ends cleanly or resets: either *)
@@ -143,7 +216,7 @@ let Client(certCli: bitstring) =
     event ClientCleanEnd(k, r) (* ONLY:clear-end *)
   ) else
   let (=s2c, =closeAlert, =r) = sdec(e2, k) in
-  event ClientCleanEnd(k, r).
+  event ClientCleanEnd(k, r)).
 
 (* Web's agent: a tcp service in organisation mode, allow_group db. fixed:
    the agent has a target of its own (a service table, --forward); a
@@ -169,6 +242,7 @@ let Agent(certWeb: bitstring, fixed: bool) =
   if ce = live then                                    (* NotAfter *) (* NOT:agent-no-expiry-check *)
   if cs <> serWebRev && cs <> serLost then             (* the CRL *) (* NOT:agent-no-crl-check *)
   if checksign(cv, cpk) = h((k, pk(skWeb))) then       (* CertificateVerify (crypto/tls) *) (* NOT:skip-certificate-verify *)
+  (DirectAgent(k)) | (
   in(c, e: bitstring);
   let (=c2s, =appData, m: bitstring) = sdec(e, k) in
   if t = svcAddr then (
@@ -194,7 +268,7 @@ let Agent(certWeb: bitstring, fixed: bool) =
     let (=c2s, =closeAlert, =m) = sdec(e2, k) in
     event ServiceCleanEnd(cs, m)                       (* the target's half close *)
   ) else
-    out(c, (t, m)).                                    (* dialTarget: another host, the attacker's *)
+    out(c, (t, m))).                                   (* dialTarget: another host, the attacker's *)
 
 (* 1. the client's bytes reach only machine web's own service: not eve
    (another name), not a certificate the relay made, not web's expired or
@@ -263,6 +337,28 @@ query s: bitstring, m: bitstring; event(ServiceCleanEnd(s, m)).
 query k: bitstring, r: bitstring; event(TargetAborted(k, r)).
 (* expect false *)
 query s: bitstring, m: bitstring; event(AppAborted(s, m)).
+
+(* 21. what the client sends on a direct connection it took reaches only
+   web's agent: the relay's address cannot put another holder there
+   (mutants direct-no-cert-check, and with direct-no-token too) *)
+(* expect true *)
+query attacker(dirData).
+(* 22. a direct connection the client takes ends at web's agent, bound to
+   the client's own session (mutants direct-no-token, token-unbound) *)
+(* expect true *)
+query k: bitstring, kd: bitstring, s: bitstring; inj-event(ClientDirect(k, kd, s)) ==> inj-event(AgentDirect(k, kd)).
+(* 23. the agent binds a direct connection to a session only for that
+   session's client (mutant agent-direct-no-token) *)
+(* expect true *)
+query k: bitstring, kd: bitstring; event(AgentDirect(k, kd)) ==> event(ClientDirectOffer(k, kd)).
+(* 24. the client takes no other machine's certificate on the direct path *)
+(* expect true *)
+query k: bitstring, kd: bitstring; event(ClientDirect(k, kd, serEve)).
+(* 25, 26. witnesses: the client takes a direct connection; the agent binds one *)
+(* expect false *)
+query k: bitstring, kd: bitstring, s: bitstring; event(ClientDirect(k, kd, s)).
+(* expect false *)
+query k: bitstring, kd: bitstring; event(AgentDirect(k, kd)).
 
 process
   new skEve: skey; new skLost: skey; new skOld: skey; new skWebOld: skey; new skWebRev: skey;

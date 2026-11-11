@@ -88,23 +88,39 @@ p2p_e2e relay-kid TTTTFTFFFFFF
 # forward): the plaintext to a target the relay names (E2EEPROOF finding 1;
 # 1). The ends (CLAIMS-A Q5, lane TCPRESET): a raw end taken as a clean
 # end, either side (11, 12); a reset sent as close_notify, at the agent
-# (13) or the client (14).
-e2ee_tcp - TTTTTTTTTTTTTTFFFFFF
-e2ee_tcp downgrade-plain FTTTTTTTTTTTTTFFFFFF
-e2ee_tcp client-no-chain-check FFFTFTTTTTFTFTFFFFFF
-e2ee_tcp no-name-check FFFTTTTTTTFTFTFFFFFF
-e2ee_tcp client-no-expiry-check FFTTFTTTTTFTFTFFFFFF
-e2ee_tcp client-no-crl-check FFTFTTTTTTFTFTFFFFFF
-e2ee_tcp agent-no-chain-check TTTTTFFFTFTFTFFFFFFF
-e2ee_tcp no-group-check TTTTTFFFTTTFTFFFFFFF
-e2ee_tcp agent-no-expiry-check TTTTTFFTTFTFTFFFFFFF
-e2ee_tcp agent-no-crl-check TTTTTFFTFTTFTFFFFFFF
-e2ee_tcp downgrade-any-client TFTTTFFTTTTTTTFFFFFF
-e2ee_tcp skip-certificate-verify TTTTTFFTTTTFTFFFFFFF
-e2ee_tcp relay-names-target FTTTTTTTTTTTTTFFFFFF
-e2ee_tcp relay-names-target-with-forward FTTTTTTTTTTTTTFFFFFF
-e2ee_tcp agreement-without-key-check TFTTTTTTTTTTTTFFTFFF
-e2ee_tcp clear-end TTTTTTTTTTFTFTFFFFFF
-e2ee_tcp agent-clear-end TTTTTTTTTTTFTFFFFFFF
-e2ee_tcp abort-as-close TTTTTTTTTTTTFTFFFFFF
-e2ee_tcp client-abort-as-close TTTTTTTTTTTTTFFFFFFF
+# (13) or the client (14). Direct paths (lane DIRECTPATH, 21-26, a design
+# before code): the agent's checks of the session's client also guard 23
+# (a client the agent admits wrongly holds the session's key, so binds a
+# direct connection to it).
+e2ee_tcp - TTTTTTTTTTTTTTFFFFFFTTTTFF
+e2ee_tcp downgrade-plain FTTTTTTTTTTTTTFFFFFFTTTTFF
+e2ee_tcp client-no-chain-check FFFTFTTTTTFTFTFFFFFFTTTTFF
+e2ee_tcp no-name-check FFFTTTTTTTFTFTFFFFFFTTTTFF
+e2ee_tcp client-no-expiry-check FFTTFTTTTTFTFTFFFFFFTTTTFF
+e2ee_tcp client-no-crl-check FFTFTTTTTTFTFTFFFFFFTTTTFF
+e2ee_tcp agent-no-chain-check TTTTTFFFTFTFTFFFFFFFTTFTFF
+e2ee_tcp no-group-check TTTTTFFFTTTFTFFFFFFFTTFTFF
+e2ee_tcp agent-no-expiry-check TTTTTFFTTFTFTFFFFFFFTTFTFF
+e2ee_tcp agent-no-crl-check TTTTTFFTFTTFTFFFFFFFTTFTFF
+e2ee_tcp downgrade-any-client TFTTTFFTTTTTTTFFFFFFTTTTFF
+e2ee_tcp skip-certificate-verify TTTTTFFTTTTFTFFFFFFFTTFTFF
+e2ee_tcp relay-names-target FTTTTTTTTTTTTTFFFFFFTTTTFF
+e2ee_tcp relay-names-target-with-forward FTTTTTTTTTTTTTFFFFFFTTTTFF
+e2ee_tcp agreement-without-key-check TFTTTTTTTTTTTTFFTFFFTTTTFF
+e2ee_tcp clear-end TTTTTTTTTTFTFTFFFFFFTTTTFF
+e2ee_tcp agent-clear-end TTTTTTTTTTTFTFFFFFFFTTTTFF
+e2ee_tcp abort-as-close TTTTTTTTTTTTFTFFFFFFTTTTFF
+e2ee_tcp client-abort-as-close TTTTTTTTTTTTTFFFFFFFTTTTFF
+# Direct paths (lane DIRECTPATH): the answer at the relay's address taken
+# without the certificate check (21, 24; with direct-no-token too, 22), the
+# agent's token unchecked at the client (22), tokens without the QUIC key
+# (alone: the certificate check holds; without it a relay in the middle,
+# 21-24), one token for both roles (22: reflected), the agent binding a
+# connection on the relay's word (23).
+e2ee_tcp direct-no-cert-check TTTTTTTTTTTTTTFFFFFFFTTFFF
+e2ee_tcp direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFF
+e2ee_tcp direct-no-cert-check,direct-no-token TTTTTTTTTTTTTTFFFFFFFFTFFF
+e2ee_tcp token-unbound TTTTTTTTTTTTTTFFFFFFTTTTFF
+e2ee_tcp direct-no-cert-check,token-unbound TTTTTTTTTTTTTTFFFFFFFFFFFF
+e2ee_tcp token-no-role TTTTTTTTTTTTTTFFFFFFTFTTFF
+e2ee_tcp agent-direct-no-token TTTTTTTTTTTTTTFFFFFFTTFTFF

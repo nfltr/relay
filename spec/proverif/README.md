@@ -322,6 +322,11 @@ test-go-mutants`).
 | 15, 16 | witnesses: an allowed client reaches the service and gets its answer | attack (reachable), as they must |
 | 17, 18 | witnesses: both clean ends happen | attack (reachable) |
 | 19, 20 | witnesses: both aborts happen | attack (reachable) |
+| 21 | what the client sends on a direct connection it took reaches only web's agent | holds (design, lane DIRECTPATH) |
+| 22 | injective agreement: a direct connection the client takes ends at web's agent, bound to the client's own session and the same QUIC key | holds |
+| 23 | the agent binds a direct connection to a session only for that session's client | holds |
+| 24 | the client takes no other machine's certificate on the direct path | holds |
+| 25, 26 | witnesses: the client takes a direct connection; the agent binds one | attack (reachable) |
 
 A TLS record is bound to its place in its direction's stream (TLS 1.3's
 sequence number in the AEAD nonce): the model's close record names the
@@ -346,6 +351,29 @@ organisation certificate) fails 6 and 7. The target: `relay-names-target`
 `relay-names-target-with-forward` fail 1. `agreement-without-key-check`
 (a response taken without the session key) fails 2. The ends: `clear-end`,
 `agent-clear-end`, `abort-as-close`, `client-abort-as-close` (above).
+
+Direct paths (queries 21-26; lane DIRECTPATH, nfltr
+`docs/decisions/direct-paths-2026-11-11.md`; a design checked before any
+code). Once the session's TLS is up, its client may move the session's
+bytes, the same TLS records under the same key, to a direct QUIC
+connection to an address the relay hands it (a candidate, a QAD reply):
+the attacker decides who answers there. The client takes the direct
+connection only if the answer's certificate passes the session's own
+check (chain, name, NotAfter, CRL) and both ends prove the session: each
+sends, inside the QUIC session, an exporter of the TLS session bound to
+the QUIC key and to its role (`tokC`, `tokS`); the agent binds a direct
+connection to a session only on that session's client token. Mutants:
+`direct-no-cert-check` (whoever answers: 21, 24; with `direct-no-token`
+too, 22), `direct-no-token` (the agent's token unchecked at the client:
+22), `token-unbound` (tokens without the QUIC key: alone the certificate
+check holds; with `direct-no-cert-check`, a relay in the middle with two
+QUIC keys fails 21-24), `token-no-role` (one token both ways: reflected,
+22), `agent-direct-no-token` (bound on the relay's word: 23). The agent's
+checks of the session's client guard 23 as well: a client it admits
+wrongly holds the session key. The model's `BIND:direct.*` ids get their
+refusal rows in the code's bindings test when the code lands. The
+cut-over's byte order (none lost, duplicated or reordered) is link's
+`spec/DirectPath.tla`, not here.
 
 ### wg_exit.pv: WireGuard client and exit (Track B)
 
