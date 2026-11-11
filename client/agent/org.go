@@ -144,7 +144,17 @@ func checkOrgService(s Service) error {
 // tlsend's Reset; lane TCPRESET, TestOrgSessionTargetResetIsResetAtClient).
 // A refused client gets a TLS alert and the target only a connection that
 // closes: no byte of it is read or written.
+//
+// A session whose first byte is no TLS record asked for direct paths: its
+// stream is framed (pathswitch) under the TLS, and with Service.Direct on
+// it may move (direct_server.go); without it the framed session stays on
+// the relay.
 func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
+	ps, s, err := startDirect(s)
+	if err != nil {
+		_ = target.Close()
+		return
+	}
 	var adm orgAdmission
 	changed := p.org.Changed() // before the check: a change after it is seen
 	tc := tlsend.Server(s, orgServerConfig(p.org, p.groups, &adm, logger))
@@ -156,6 +166,11 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 		return
 	}
 	_ = tc.SetDeadline(time.Time{})
+	if ps != nil && p.direct != nil {
+		if key, err := sessionKey(tc.ConnectionState()); err == nil {
+			p.direct.register(ps, key)
+		}
+	}
 	done := make(chan struct{})
 	defer close(done)
 	go holdAdmission(adm.until, changed, p.org.Changed,

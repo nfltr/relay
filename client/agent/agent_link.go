@@ -58,6 +58,9 @@ func ParseTransport(s string) (string, error) {
 type QUICDialer struct {
 	Host string
 	TLS  *tls.Config
+	// Transport, when set, is the socket the agent link dials from (the
+	// direct paths' DirectEndpoint); nil: a socket per connection.
+	Transport *quic.Transport
 }
 
 // The agent's choices for TransportAuto: how long QUIC dials alone before
@@ -639,7 +642,16 @@ func (l *agentLink) dialQUIC(ctx context.Context, qc *quic.Config) (*quic.Conn, 
 	tc := l.dial.QUIC.TLS.Clone()
 	tc.NextProtos = dataplane.AgentLinkALPNs()
 	addr := net.JoinHostPort(l.dial.QUIC.Host, strconv.Itoa(l.offer.QUICPort))
-	q, err := quic.DialAddr(dctx, addr, tc, qc)
+	var q *quic.Conn
+	var err error
+	if tr := l.dial.QUIC.Transport; tr != nil {
+		var ua *net.UDPAddr
+		if ua, err = net.ResolveUDPAddr("udp", addr); err == nil {
+			q, err = tr.Dial(dctx, ua, tc, qc)
+		}
+	} else {
+		q, err = quic.DialAddr(dctx, addr, tc, qc)
+	}
 	if err != nil {
 		return nil, relaytrust.Explain(err)
 	}

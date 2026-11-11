@@ -16,3 +16,12 @@ no-expiry-timer | org.go | 	t := time.NewTimer(time.Until(until)) | 	t := time.N
 no-expiry-timer | org.go | 			t.Reset(time.Until(u)) | 			t.Reset(time.Hour + 0*time.Until(u)) | TestOrgSessionEndsAtUntil
 no-cut-on-update | org.go | 			u, cerr := check(time.Now()) | 			u, cerr := until, error(nil) | TestOrgSessionCutOnUpdate
 tunnel-falls-through | session_plan.go | 		if targets.org != nil { | 		if false { | TestOrgServiceAdmitsGroup
+# Direct paths (direct.go; e2ee_tcp.pv queries 21-29): the client's check
+# of the punch's answer, the agent's of the OPEN's token, the client's of
+# the agent's token.
+direct-no-name | direct_client.go | 			if _, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, p.machine, time.Now()); err != nil { | 			if _, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, cs.PeerCertificates[0].Subject.CommonName, time.Now()); err != nil { | TestDirectModelBindings
+direct-no-cert-check | direct_client.go | 			if _, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, p.machine, time.Now()); err != nil { | 			if _, err := time.Now(), error(nil); err != nil { | TestDirectModelBindings
+token-no-epoch | direct_server.go | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, 2, qk)) { | TestDirectModelBindings
+token-unbound | direct_server.go | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, nil)) || hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | TestDirectModelBindings
+token-no-role | direct_server.go | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | 		if hmac.Equal(o.Token, pathToken(s.key, roleServer, o.Epoch, qk)) || hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | TestDirectModelBindings
+direct-no-token | direct_client.go | 		if !hmac.Equal(got, t.want) { | 		if !hmac.Equal(got, got) { | TestDirectModelBindings

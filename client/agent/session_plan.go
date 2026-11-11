@@ -28,6 +28,7 @@ const (
 	sessionE2EE                       // TLS ended here, proxied to the backend
 	sessionHTTP                       // the HTTP tunnel (dataplane.HTTPSessionTarget)
 	sessionE2EETCP                    // organisation TLS ended here, bytes to a tcp service's target
+	sessionDirect                     // the reserved DirectServiceName, served in process
 )
 
 // sessionPlan is how one session is served.
@@ -40,6 +41,7 @@ type sessionPlan struct {
 	e2ee            *e2eeTLSConfig // the certificate an E2EE session ends with: its service's, else the tunnel's
 	org             Org            // a sessionE2EETCP's organisation
 	groups          []string       // ... its allow groups
+	direct          *directServer  // ... the table's direct paths (nil: none); a sessionDirect's server
 }
 
 // ErrE2EENoFixedTarget: Config.TCPE2EEOnly without Config.TCPForwardAddr.
@@ -80,12 +82,19 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 			return sessionPlan{}, err
 		}
 		p.network, p.target, p.backend, svcWrap = svc.network, svc.addr, svc.backend, svc.wrap
+		if svc.network == networkDirect {
+			p.kind, p.org, p.groups, p.direct = sessionDirect, svc.org, svc.groups, targets.services.direct
+			return p, nil
+		}
 		if svc.org != nil {
 			// Organisation mode: resolve refused a plain session (E2EE
 			// On); the session is the organisation's TLS, never the
 			// tunnel's certificate (e2ee_tcp.pv).
 			p.kind, p.org, p.groups, p.e2ee = sessionE2EETCP, svc.org, svc.groups, nil
 			p.client = clientAddr(open.GetClientAddr())
+			if targets.services.direct != nil && targets.services.direct.modes[open.GetTargetAddr()] != DirectOff {
+				p.direct = targets.services.direct
+			}
 			return p, nil
 		}
 		if svc.cert != nil {
@@ -208,6 +217,12 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 			return
 		}
 		serveE2EEConn(tls.Server(s, p.e2ee.tlsConfig), backend, p.e2ee.rewriteHost, p.client, p.wrap, l.logger)
+	case sessionDirect:
+		if a.accept() != nil {
+			_ = s.Close()
+			return
+		}
+		p.direct.serveService(s, l.logger)
 	default:
 		target, reason, err := dialTarget(l.ctx, p.network, p.target)
 		if err != nil {

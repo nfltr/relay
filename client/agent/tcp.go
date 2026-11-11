@@ -538,6 +538,11 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 		for _, code := range targets.services.shareCodes() {
 			streamCtx = metadata.AppendToOutgoingContext(streamCtx, sharePolicyHeader, code)
 		}
+		if tr := targets.services.DirectTransport(); tr != nil && dial.QUIC != nil {
+			q := *dial.QUIC // the agent link on the direct paths' socket: its NAT mapping is QAD's
+			q.Transport = tr
+			dial.QUIC = &q
+		}
 	}
 	if e2eeTLS != nil {
 		// Name the shares whose policy this agent enforces on E2EE
@@ -653,6 +658,9 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 		close(parkDone)
 		data = dataplane.PickVersion(md.Get(dataplane.Header)) > 0
 		offer := dataplane.ParseAgentLinkOffer(md.Get(dataplane.AgentLinkHeader), md.Get(dataplane.AgentLinkQUICHeader))
+		if d := targets.services.directServer(); d != nil && offer.QUICPort > 0 && dial.QUIC != nil {
+			d.setRelay(net.JoinHostPort(dial.QUIC.Host, strconv.Itoa(offer.QUICPort)), dial.QUIC.TLS)
+		}
 		if quicOK, tcpOK := dial.linkPlan(offer); token != "" && (quicOK || tcpOK) {
 			select {
 			case <-lazy.failed:
@@ -816,6 +824,11 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 					continue
 				}
 				go t.serveE2EE(id, q, p.e2ee, p.backend, p.client, p.wrap)
+			case sessionDirect:
+				if answer && t.answerOpen(id, q) != nil {
+					continue
+				}
+				go p.direct.serveService(newSessionConn(t, id, q), logger)
 			default:
 				go func() {
 					conn, reason, dialErr := dialTarget(ctx, p.network, p.target)

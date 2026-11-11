@@ -1,0 +1,249 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+package agent
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"math/rand/v2"
+	"net"
+	"net/netip"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/nfltr/quic-go"
+	"github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/agentservices"
+	"github.com/nfltr/relay/proto/wire/dataplane"
+)
+
+// testMachine is a client's DirectMachine of a testOrg: the chain to its
+// root and the machine's name (nfltr's orgpki is the real one).
+type testMachine struct {
+	o    *testOrg
+	cert tls.Certificate
+}
+
+func (m testMachine) Certificate() (*tls.Certificate, error) { return &m.cert, nil }
+
+func (m testMachine) CheckServer(certs []*x509.Certificate, name string, now time.Time) (time.Time, error) {
+	if len(certs) == 0 {
+		return time.Time{}, errors.New("no certificate")
+	}
+	if _, err := certs[0].Verify(x509.VerifyOptions{Roots: m.o.pool, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+		return time.Time{}, err
+	}
+	if certs[0].Subject.CommonName != name {
+		return time.Time{}, fmt.Errorf("certificate of %q, want %q", certs[0].Subject.CommonName, name)
+	}
+	return certs[0].NotAfter, nil
+}
+
+// qadServer answers QAD on loopback as relay-core does: the observed
+// address on one unidirectional stream.
+func qadServer(t *testing.T) string {
+	t.Helper()
+	o := newTestOrg(t)
+	cert := o.machine(t, "relay", nil, time.Hour, false)
+	ln, err := quic.ListenAddr("127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{QADALPN}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		for {
+			q, err := ln.Accept(context.Background())
+			if err != nil {
+				return
+			}
+			go func() {
+				s, err := q.OpenUniStream()
+				if err == nil {
+					_, _ = io.WriteString(s, q.RemoteAddr().String())
+					_ = s.Close()
+				}
+				<-q.Context().Done()
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// directRig is an agent serving blob (an echo, direct mode) to db and a
+// client of db with its DirectClient, sessions on loopback TCP pairs (the
+// relay) and direct connections on loopback UDP.
+type directRig struct {
+	l      *linkSessions
+	d      *DirectClient
+	client testMachine
+}
+
+func newDirectRig(t *testing.T, mode DirectMode) *directRig {
+	t.Helper()
+	old := candidateAddr
+	candidateAddr = func(netip.Addr) bool { return true }
+	t.Cleanup(func() { candidateAddr = old })
+	o := newTestOrg(t)
+	web := o.agentOrg(o.machine(t, "web", nil, time.Hour, false))
+	table, err := NewServiceTable([]Service{{Name: "blob", Kind: agentservices.TCP, Target: echoTarget(t), E2EE: agentservices.E2EEOn,
+		Org: web, AllowGroups: []string{"db"}, Direct: mode}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if table.direct != nil {
+		table.direct.setRelay(qadServer(t), &tls.Config{InsecureSkipVerify: true}) // #nosec G402 -- a test's relay
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_ = table.direct.node.Drain(ctx)
+			_ = table.direct.ep.Close()
+		})
+	}
+	r := &directRig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}},
+		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}}
+	r.d, err = NewDirectClient(DirectClientConfig{Machine: r.client,
+		Relayed: func(context.Context, string) (net.Conn, error) { return r.open(t, DirectServiceName) },
+		QADTLS:  func(string) *tls.Config { return &tls.Config{InsecureSkipVerify: true} }}) // #nosec G402 -- a test's relay
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = r.d.node.Drain(ctx)
+		_ = r.d.ep.Close()
+	})
+	return r
+}
+
+// open is a relayed session to target, answered.
+func (r *directRig) open(t *testing.T, target string) (net.Conn, error) {
+	s, c := sessionPair(t)
+	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: target, E2Ee: true, Answer: true})
+	if err != nil {
+		return nil, err
+	}
+	go r.l.accept("", h, s)
+	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
+		return nil, fmt.Errorf("answer %v, %v", a, err)
+	}
+	return c, nil
+}
+
+// session opens a framed session to blob, its TLS up and Run started;
+// events gets its path changes.
+func (r *directRig) session(t *testing.T) (*DirectSession, *tls.Conn, chan PathEvent) {
+	t.Helper()
+	first, err := r.open(t, "blob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ds := r.d.Start(first)
+	tc := tls.Client(ds.Conn(), r.d.controlTLS("web"))
+	if err := tc.HandshakeContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = tc.Close()
+		select {
+		case <-ds.Done():
+		case <-time.After(10 * time.Second):
+			t.Error("the session did not end after its Close")
+		}
+	})
+	events := make(chan PathEvent, 16)
+	if err := ds.Run(tc.ConnectionState(), "web", "web", "blob", DirectOn, func(e PathEvent) { events <- e }); err != nil {
+		t.Fatal(err)
+	}
+	return ds, tc, events
+}
+
+func waitPath(t *testing.T, events chan PathEvent, path string) PathEvent {
+	t.Helper()
+	select {
+	case e := <-events:
+		if e.Path != path {
+			t.Fatalf("path event %+v, want %s", e, path)
+		}
+		return e
+	case <-time.After(15 * time.Second):
+		t.Fatalf("no path event %s", path)
+	}
+	return PathEvent{}
+}
+
+// echo writes n random bytes through tc, its end after them, and checks
+// the echo; mid runs once half went.
+func echo(t *testing.T, tc *tls.Conn, n int, mid func()) {
+	t.Helper()
+	want := make([]byte, n)
+	r := rand.New(rand.NewPCG(uint64(n), 7))
+	for i := range want {
+		want[i] = byte(r.Uint32())
+	}
+	var got []byte
+	var rerr error
+	var wg sync.WaitGroup
+	wg.Go(func() { got, rerr = io.ReadAll(tc) })
+	if _, err := tc.Write(want[:n/2]); err != nil {
+		t.Fatal(err)
+	}
+	mid()
+	if _, err := tc.Write(want[n/2:]); err != nil {
+		t.Fatal(err)
+	}
+	_ = tc.CloseWrite()
+	wg.Wait()
+	if rerr != nil || !bytes.Equal(got, want) {
+		t.Fatalf("echo: %d of %d bytes back: %v", len(got), n, rerr)
+	}
+}
+
+// TestDirectSessionMovesAndFallsBack: an organisation-mode session that
+// asked moves to a punched direct connection mid-transfer (the agent's
+// address from QAD), then that connection dies and the session falls back
+// to a relayed stream: every byte back once, in order.
+func TestDirectSessionMovesAndFallsBack(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	ds, tc, events := r.session(t)
+	echo(t, tc, 4<<20, func() {
+		e := waitPath(t, events, PathDirect)
+		if !e.Peer.IsValid() {
+			t.Fatalf("direct event without the peer's address: %+v", e)
+		}
+		if ds.Path() != PathDirect {
+			t.Fatalf("path %s", ds.Path())
+		}
+		p := r.d.pair("web", "web")
+		p.mu.Lock()
+		_ = p.q.CloseWithError(0, "the direct path dies")
+		p.mu.Unlock()
+		if e := waitPath(t, events, PathRelayed); e.Reason != ReasonDirectLost {
+			t.Fatalf("fallback reason %q", e.Reason)
+		}
+	})
+	st := r.d.Stats()
+	if st.DirectSent == 0 || st.RelayedSent == 0 || st.Punches["ok"] != 1 {
+		t.Fatalf("stats %+v", st)
+	}
+}
+
+// TestDirectServiceOff: a client that asks of a service without direct
+// paths gets a relayed session, framed, and the reason off.
+func TestDirectServiceOff(t *testing.T) {
+	r := newDirectRig(t, DirectOff)
+	r.l.targets.services.direct = nil
+	_, tc, events := r.session(t)
+	if e := waitPath(t, events, PathRelayed); e.Reason != ReasonWithheld {
+		t.Fatalf("reason %q, want %s (no reserved service)", e.Reason, ReasonWithheld)
+	}
+	echo(t, tc, 1<<20, func() {})
+}

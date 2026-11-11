@@ -188,6 +188,7 @@ re-pinning (`make spec-bindings`, in `make ci`; nfltr
 | model | test | rows |
 |---|---|---|
 | `a2a_machine.pv` | `client/rpcclient/a2a_e2ee_bindings_test.go` `TestA2AE2EEModelBindings` | 17: message 1 (txn, role, caller, callee, key id, psk, warm), the ack's transcript, frames (direction, order, end, header), resumed calls' keys (txn, call number), the resume (txn, call number, pair) |
+| `e2ee_tcp.pv` (direct paths) | `client/agent/direct_bindings_test.go` `TestDirectModelBindings` | 6, one per `BIND:direct.*`: a look-alike certificate and another machine's name answering the punch (`refused_cert`), the token keyed by another session, bound to another or no QUIC connection, the other role's token (both ways), another epoch's token (lane DIRECTPATH3; Go mutants `direct-no-name`, `direct-no-cert-check`, `token-no-epoch`, `token-unbound`, `token-no-role`, `direct-no-token`) |
 | `wg_exit.pv` | `client/agent/wgexit/wg_exit_bindings_test.go` `TestWGExitModelBindings` | 3 here (psk binds the exit's name; each end's psk on the key the relay told it) + 3 in nfltr `cmd/nfltr/internal/wgcli/wg_exit_bindings_test.go` (the key id of the machine named, psk whatever `x-wg-paired` says, one key per machine) |
 
 A planted Go mutant fails its row (lane E2EEVECTORS): the role, caller,
@@ -514,6 +515,10 @@ fails (`TestSecureConnFailedWriteEndsIt`).
 | e2ee_tcp.pv | client/agent/org.go |
 | e2ee_tcp.pv | client/agent/testdata/org_mutants.txt |
 | e2ee_tcp.pv | client/tlsend/tlsend.go |
+| e2ee_tcp.pv | client/agent/direct.go |
+| e2ee_tcp.pv | client/agent/direct_server.go |
+| e2ee_tcp.pv | client/agent/direct_client.go |
+| e2ee_tcp.pv | client/agent/direct_bindings_test.go |
 | wg_exit.pv | client/wg/keys.go |
 | wg_exit.pv | client/wg/tunnel.go |
 | wg_exit.pv | client/agent/wgexit/wgexit.go |

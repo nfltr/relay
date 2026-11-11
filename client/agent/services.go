@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 
+	"github.com/nfltr/quic-go"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentservices"
@@ -47,6 +49,11 @@ type Service struct {
 	// AllowGroups are the organisation groups whose machines Org admits;
 	// required with Org, refused without it.
 	AllowGroups []string
+	// Direct lets an organisation-mode service's sessions move to a direct
+	// path when their client asks (direct.go; DirectOff, the default:
+	// relayed only, no address of this machine sent). The table then
+	// serves DirectServiceName too.
+	Direct DirectMode
 }
 
 // ServiceTable is the services an agent serves under its identity: the
@@ -57,6 +64,7 @@ type Service struct {
 type ServiceTable struct {
 	byName    map[string]*tableService
 	decls     []agentservices.Decl
+	direct    *directServer // the direct services' (DirectServiceName); nil: none
 	refused   atomic.Uint64
 	onSession func(Session)
 }
@@ -116,6 +124,12 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if t.byName[s.Name] != nil {
 			return nil, fmt.Errorf("service %q: declared twice", s.Name)
 		}
+		if s.Name == DirectServiceName {
+			return nil, fmt.Errorf("service %q: the name is reserved for direct paths", s.Name)
+		}
+		if s.Direct != DirectOff && (s.Org == nil || s.Direct != DirectOn && s.Direct != DirectLAN) {
+			return nil, fmt.Errorf("service %q: direct %q needs organisation mode (want %q or %q)", s.Name, s.Direct, DirectOn, DirectLAN)
+		}
 		e := &tableService{kind: s.Kind, e2ee: s.E2EE}
 		if s.Cert != nil {
 			e.cert = s.Cert.cfg
@@ -153,8 +167,67 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		t.byName[s.Name] = e
 		t.decls = append(t.decls, agentservices.Decl{Name: s.Name, Kind: s.Kind, E2EE: s.E2EE})
 	}
+	if err := t.addDirect(services); err != nil {
+		return nil, err
+	}
 	return t, nil
 }
+
+// addDirect serves DirectServiceName when a service has Direct: in
+// organisation mode (the first direct service's Org), its allow groups
+// every direct service's.
+func (t *ServiceTable) addDirect(services []Service) error {
+	var org Org
+	var groups []string
+	modes := map[string]DirectMode{}
+	for _, s := range services {
+		if s.Direct == DirectOff {
+			continue
+		}
+		if org == nil {
+			org = s.Org
+		}
+		modes[s.Name] = s.Direct
+		for _, g := range s.AllowGroups {
+			if !slices.Contains(groups, g) {
+				groups = append(groups, g)
+			}
+		}
+	}
+	if org == nil {
+		return nil
+	}
+	if len(t.decls) >= agentservices.MaxServices {
+		return fmt.Errorf("services: direct paths take one of the %d services", agentservices.MaxServices)
+	}
+	d, err := newDirectServer(org, groups, modes)
+	if err != nil {
+		return err
+	}
+	t.direct = d
+	t.byName[DirectServiceName] = &tableService{kind: agentservices.TCP, e2ee: agentservices.E2EEOn, network: networkDirect, org: org, groups: groups}
+	t.decls = append(t.decls, agentservices.Decl{Name: DirectServiceName, Kind: agentservices.TCP, E2EE: agentservices.E2EEOn})
+	return nil
+}
+
+// DirectTransport is the UDP socket of the table's direct paths, for the
+// agent link's QUIC (QUICDialer.Transport); nil: no direct service.
+func (t *ServiceTable) DirectTransport() *quic.Transport {
+	if t == nil || t.direct == nil {
+		return nil
+	}
+	return t.direct.ep.tr
+}
+
+func (t *ServiceTable) directServer() *directServer {
+	if t == nil {
+		return nil
+	}
+	return t.direct
+}
+
+// networkDirect: the reserved service's sessions are served in process.
+const networkDirect = "direct"
 
 // RequireSharePolicy makes every E2EE request to service satisfy the
 // credential policy of its share code, as E2EESetup.RequireSharePolicy does
