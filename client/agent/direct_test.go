@@ -341,6 +341,116 @@ func TestDirectSessionReattachRefusedEnds(t *testing.T) {
 	}
 }
 
+// TestDirectSessionSlowRefusalsEnd: a path whose resets reach the client
+// later than a second (a loaded machine, a slow relay) still ends a
+// session whose agent refuses every re-attach after the detach bound: a
+// stream counts as answered by its first byte, never by how long it took
+// to die.
+func TestDirectSessionSlowRefusalsEnd(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	r.d.detach = 2 * time.Second
+	r.l.targets.services.direct.detach = 2 * time.Second
+	r.d.cfg.Relayed = func(context.Context, string) (net.Conn, error) {
+		c, err := r.open(t, DirectServiceName)
+		return &slowReads{Conn: c, delay: 1500 * time.Millisecond}, err
+	}
+	ds, _, events := r.session(t)
+	waitPath(t, events, PathDirect)
+	d := r.l.targets.services.direct
+	d.mu.Lock()
+	clear(d.sessions)
+	d.mu.Unlock()
+	p := r.d.pair("web", "web")
+	p.mu.Lock()
+	_ = p.q.CloseWithError(0, "the direct path dies")
+	p.mu.Unlock()
+	select {
+	case <-ds.Done():
+	case <-time.After(15 * time.Second):
+		t.Fatal("slow refusals kept the session re-attaching past its detach bound")
+	}
+}
+
+// slowReads delays a relayed stream's first read: its reset (or its
+// first byte) reaches the client delay late.
+type slowReads struct {
+	net.Conn
+	delay time.Duration
+	once  sync.Once
+}
+
+func (c *slowReads) Read(p []byte) (int, error) {
+	c.once.Do(func() { time.Sleep(c.delay) })
+	return c.Conn.Read(p)
+}
+
+// TestDirectPairDeathBacksOffWhateverItsNoticeOrder: a pair whose
+// connection died waits the first backoff before its next punch even
+// when a try finds the dead connection before the death's own notice ran
+// (the order a loaded runner showed: relay eb15a7a70594, a re-punch past
+// a death and five refused re-attaches in 2 s).
+func TestDirectPairDeathBacksOffWhateverItsNoticeOrder(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	ds, tc, events := r.session(t)
+	echo(t, tc, 1<<20, func() {
+		waitPath(t, events, PathDirect)
+		p := r.d.pair("web", "web")
+		p.mu.Lock()
+		q := p.q
+		p.mu.Unlock()
+		_ = q.CloseWithError(0, "the direct path dies")
+		waitPath(t, events, PathRelayed) // the fallback, then the loop's try finds the death
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			p.mu.Lock()
+			noticed := p.q == nil
+			if noticed { // the try that wins the race: the death's notice not yet run
+				p.q, p.fails, p.next = q, 0, time.Time{}
+			}
+			p.mu.Unlock()
+			if noticed {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the pair never noticed its connection's death")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		before := r.d.Stats().Punches["ok"]
+		if reason := ds.tryDirect(); reason != "backoff" {
+			t.Errorf("a try past a death: %q, want backoff", reason)
+		}
+		if after := r.d.Stats().Punches["ok"]; after != before {
+			t.Errorf("punched again past a death: %d punches, want %d", after, before)
+		}
+	})
+}
+
+// TestDirectSessionStaleStreamEndMovesNothing: a stream end whose session
+// moved on since (another fallback, or a direct move, while it waited out
+// the second) re-attaches nothing: one re-attach a second, whatever the
+// ends' interleaving.
+func TestDirectSessionStaleStreamEndMovesNothing(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	ds, _, events := r.session(t)
+	waitPath(t, events, PathDirect)
+	ds.mu.Lock()
+	e := ds.epoch
+	ds.mu.Unlock()
+	if e == 0 {
+		t.Fatal("the direct move recorded no epoch")
+	}
+	ds.fallback(e-1, nil)
+	select {
+	case ev := <-events:
+		t.Fatalf("a stale stream end moved the session: %+v", ev)
+	default:
+	}
+	if ds.Path() != PathDirect {
+		t.Fatalf("path %s, want direct", ds.Path())
+	}
+}
+
 // TestDirectServiceOff: a client that asks of a service without direct
 // paths gets a relayed session, framed, and the reason off.
 func TestDirectServiceOff(t *testing.T) {

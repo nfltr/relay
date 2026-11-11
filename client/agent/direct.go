@@ -222,12 +222,16 @@ func pathToken(key []byte, role byte, epoch uint64, qk []byte) []byte {
 type pathStream struct {
 	net.Conn
 	sent, recv *atomic.Uint64
+	heard      *atomic.Bool // set by its first byte read (nil: none kept)
 }
 
 func (s pathStream) Read(p []byte) (int, error) {
 	n, err := s.Conn.Read(p)
 	if s.recv != nil {
 		s.recv.Add(uint64(n)) // #nosec G115 -- n >= 0
+	}
+	if n > 0 && s.heard != nil {
+		s.heard.Store(true)
 	}
 	return n, err
 }

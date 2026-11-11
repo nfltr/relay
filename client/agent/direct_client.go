@@ -168,6 +168,9 @@ type DirectSession struct {
 	c     *pathswitch.Conn
 	nc    *psConn
 	moved chan struct{} // a fallback happened: the loop tries again
+	// falling: one fallback at a time, so that a stream end while another
+	// waits out its second does not re-attach beside it
+	falling sync.Mutex
 
 	mu      sync.Mutex
 	key     []byte
@@ -176,16 +179,20 @@ type DirectSession struct {
 	mode    DirectMode
 	on      func(PathEvent)
 	pair    *directPair
-	moveAt  time.Time // the last fallback's move
-	lostAt  time.Time // since then no re-attached stream held a second
+	moveAt  time.Time    // the last fallback's move
+	epoch   uint64       // the last move's stream (either path)
+	heard   *atomic.Bool // that stream's peer answered (a RESUME, the agent's token)
+	lostAt  time.Time    // since then no re-attached stream was answered
 }
 
 // Start frames a session whose first stream (relayed) is first: the
 // session's TLS runs on Conn. Run starts its moves once TLS is up.
 func (d *DirectClient) Start(first net.Conn) *DirectSession {
-	s := &DirectSession{d: d, moved: make(chan struct{}, 1)}
+	s := &DirectSession{d: d, moved: make(chan struct{}, 1), heard: new(atomic.Bool)}
+	s.heard.Store(true) // the session's TLS runs on it
 	s.c = pathswitch.Client(pathStream{Conn: first, sent: &d.relayedSent, recv: &d.relayedRecv}, PathRelayed,
 		pathswitch.Config{OnStreamEnd: s.fallback, Detach: d.detach})
+	s.epoch = s.c.Epoch()
 	s.nc = newPSConn(s.c, first)
 	return s
 }
@@ -263,8 +270,13 @@ func (s *DirectSession) tryDirect() string {
 	p := s.pair
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.q == nil || p.q.Context().Err() != nil {
-		p.q = nil
+	if p.q != nil && p.q.Context().Err() != nil {
+		// the next punch after a death waits the first backoff, here
+		// rather than on the death's notice, which a try may outrun
+		// (TestDirectPairDeathBacksOffWhateverItsNoticeOrder)
+		p.q, p.fails, p.next = nil, 1, time.Now().Add(directBackoff[0])
+	}
+	if p.q == nil {
 		if time.Now().Before(p.next) {
 			return "backoff"
 		}
@@ -280,14 +292,6 @@ func (s *DirectSession) tryDirect() string {
 			return reason
 		}
 		p.fails = 0
-		q := p.q
-		context.AfterFunc(q.Context(), func() { // the next punch after a death waits the first backoff
-			p.mu.Lock()
-			if p.q == q {
-				p.q, p.fails, p.next = nil, 1, time.Now().Add(directBackoff[0])
-			}
-			p.mu.Unlock()
-		})
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -297,16 +301,23 @@ func (s *DirectSession) tryDirect() string {
 	}
 	tc := &tokenCheck{pathStream: pathStream{Conn: st, sent: &s.d.directSent, recv: &s.d.directRecv}, ready: make(chan struct{})}
 	peer, _ := netip.ParseAddrPort(p.q.RemoteAddr().String())
-	tc.ok = func() { s.emit(PathEvent{Path: PathDirect, Peer: peer}) }
+	heard := new(atomic.Bool)
+	tc.ok = func() { heard.Store(true); s.emit(PathEvent{Path: PathDirect, Peer: peer}) }
 	tc.bad = func() { s.emit(PathEvent{Path: PathRelayed, Reason: ReasonRefusedToken}) }
 	qk := p.qk
-	if _, err := s.c.Move(tc, PathDirect, func(e uint64) []byte {
+	e, err := s.c.Move(tc, PathDirect, func(e uint64) []byte {
 		tc.want = pathToken(s.key, roleServer, e, qk)
 		close(tc.ready)
 		return pathToken(s.key, roleClient, e, qk)
-	}); err != nil {
+	})
+	if err != nil {
 		return ReasonNoAnswer
 	}
+	s.mu.Lock()
+	if e > s.epoch {
+		s.epoch, s.heard = e, heard
+	}
+	s.mu.Unlock()
 	return ""
 }
 
@@ -429,10 +440,17 @@ func (d *DirectClient) controlTLS(machine string) *tls.Config {
 
 // fallback is the path layer's OnStreamEnd: the current stream died; a
 // relayed one takes the session (tokR) until the detach bound.
-func (s *DirectSession) fallback(_ uint64, _ error) {
+func (s *DirectSession) fallback(epoch uint64, _ error) {
+	s.falling.Lock()
+	defer s.falling.Unlock()
+	if s.movedSince(epoch) {
+		return
+	}
 	s.mu.Lock()
 	key, agent, last := s.key, s.agent, s.moveAt
-	if s.lostAt.IsZero() || time.Since(last) >= time.Second {
+	// a loss starts here unless the ended stream was refused unanswered
+	// (however late its reset came: TestDirectSessionSlowRefusalsEnd)
+	if s.lostAt.IsZero() || epoch == s.epoch && s.heard.Load() {
 		s.lostAt = time.Now()
 	}
 	lost := s.lostAt
@@ -442,7 +460,7 @@ func (s *DirectSession) fallback(_ uint64, _ error) {
 	}
 	// A stream reset again at once (an agent that no longer holds the
 	// session resets its re-attach) gets at most one re-attach a second,
-	// and none once no stream held a second for the detach bound: the
+	// and none once no stream was answered for the detach bound: the
 	// session ends, as an agent's would with no stream.
 	if time.Since(lost) >= s.d.detach {
 		s.c.Abort()
@@ -454,6 +472,9 @@ func (s *DirectSession) fallback(_ uint64, _ error) {
 			return
 		case <-time.After(wait):
 		}
+	}
+	if s.movedSince(epoch) {
+		return
 	}
 	reason := ReasonRelayLost
 	if s.c.Path() == PathDirect {
@@ -469,11 +490,16 @@ func (s *DirectSession) fallback(_ uint64, _ error) {
 		rs, err := s.d.cfg.Relayed(ctx, agent)
 		cancel()
 		if err == nil {
-			_, err = s.c.Move(pathStream{Conn: rs, sent: &s.d.relayedSent, recv: &s.d.relayedRecv}, PathRelayed,
+			var e uint64
+			heard := new(atomic.Bool)
+			e, err = s.c.Move(pathStream{Conn: rs, sent: &s.d.relayedSent, recv: &s.d.relayedRecv, heard: heard}, PathRelayed,
 				func(e uint64) []byte { return pathToken(key, roleClient, e, nil) })
 			if err == nil {
 				s.mu.Lock()
 				s.moveAt = time.Now()
+				if e > s.epoch {
+					s.epoch, s.heard = e, heard
+				}
 				s.mu.Unlock()
 				s.emit(PathEvent{Path: PathRelayed, Reason: reason})
 				select {
@@ -489,6 +515,15 @@ func (s *DirectSession) fallback(_ uint64, _ error) {
 		case <-time.After(time.Second):
 		}
 	}
+}
+
+// movedSince: the session moved past the stream of epoch, which ended (a
+// fallback before, or a direct move while it waited): that stream's own
+// end falls back, if it ends (TestDirectSessionStaleStreamEndMovesNothing).
+func (s *DirectSession) movedSince(epoch uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return epoch < s.epoch
 }
 
 // tokenCheck is a direct stream at the client: its first bytes must be
