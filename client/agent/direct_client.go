@@ -81,6 +81,9 @@ type DirectClient struct {
 	cfg  DirectClientConfig
 	ep   *DirectEndpoint
 	node *quiclink.Node
+	// detach: a session with no stream (or only re-attaches reset within a
+	// second) this long ends; the agent's pathswitch default
+	detach time.Duration
 
 	directSent, directRecv, relayedSent, relayedRecv atomic.Uint64
 
@@ -115,7 +118,7 @@ func NewDirectClient(cfg DirectClientConfig) (*DirectClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &DirectClient{cfg: cfg, ep: ep, pairs: map[string]*directPair{}, punches: map[string]uint64{},
+	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, pairs: map[string]*directPair{}, punches: map[string]uint64{},
 		sessions: map[*DirectSession]struct{}{}}
 	d.node, err = quiclink.New(quiclink.Config{Dial: d.dial, Liveness: link.LivenessFast})
 	if err != nil {
@@ -174,6 +177,7 @@ type DirectSession struct {
 	on      func(PathEvent)
 	pair    *directPair
 	moveAt  time.Time // the last fallback's move
+	lostAt  time.Time // since then no re-attached stream held a second
 }
 
 // Start frames a session whose first stream (relayed) is first: the
@@ -181,7 +185,7 @@ type DirectSession struct {
 func (d *DirectClient) Start(first net.Conn) *DirectSession {
 	s := &DirectSession{d: d, moved: make(chan struct{}, 1)}
 	s.c = pathswitch.Client(pathStream{Conn: first, sent: &d.relayedSent, recv: &d.relayedRecv}, PathRelayed,
-		pathswitch.Config{OnStreamEnd: s.fallback})
+		pathswitch.Config{OnStreamEnd: s.fallback, Detach: d.detach})
 	s.nc = newPSConn(s.c, first)
 	return s
 }
@@ -428,13 +432,22 @@ func (d *DirectClient) controlTLS(machine string) *tls.Config {
 func (s *DirectSession) fallback(_ uint64, _ error) {
 	s.mu.Lock()
 	key, agent, last := s.key, s.agent, s.moveAt
+	if s.lostAt.IsZero() || time.Since(last) >= time.Second {
+		s.lostAt = time.Now()
+	}
+	lost := s.lostAt
 	s.mu.Unlock()
 	if key == nil {
 		return // before Run: no token yet; the session ends with its stream
 	}
 	// A stream reset again at once (an agent that no longer holds the
-	// session resets its re-attach) gets at most one re-attach a second
-	// until the session's detach bound ends it.
+	// session resets its re-attach) gets at most one re-attach a second,
+	// and none once no stream held a second for the detach bound: the
+	// session ends, as an agent's would with no stream.
+	if time.Since(lost) >= s.d.detach {
+		s.c.Abort()
+		return
+	}
 	if wait := time.Second - time.Since(last); wait > 0 {
 		select {
 		case <-s.c.Done():

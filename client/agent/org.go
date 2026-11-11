@@ -150,7 +150,7 @@ func checkOrgService(s Service) error {
 // it may move (direct_server.go); without it the framed session stays on
 // the relay.
 func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
-	ps, s, err := startDirect(s)
+	ps, s, err := startDirect(s, p.direct)
 	if err != nil {
 		_ = target.Close()
 		return

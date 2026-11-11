@@ -83,6 +83,8 @@ type directRig struct {
 	l      *linkSessions
 	d      *DirectClient
 	client testMachine
+	mu     sync.Mutex
+	conns  []net.Conn // the client ends of open's sessions
 }
 
 func newDirectRig(t *testing.T, mode DirectMode) *directRig {
@@ -133,6 +135,9 @@ func (r *directRig) open(t *testing.T, target string) (net.Conn, error) {
 	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
 		return nil, fmt.Errorf("answer %v, %v", a, err)
 	}
+	r.mu.Lock()
+	r.conns = append(r.conns, c)
+	r.mu.Unlock()
 	return c, nil
 }
 
@@ -231,6 +236,61 @@ func TestDirectSessionMovesAndFallsBack(t *testing.T) {
 	st := r.d.Stats()
 	if st.DirectSent == 0 || st.RelayedSent == 0 || st.Punches["ok"] != 1 {
 		t.Fatalf("stats %+v", st)
+	}
+}
+
+// TestDirectSessionRelayLostReattaches: a session's relayed stream (its
+// fallback after the direct path died) is cut mid-transfer, as a relay
+// reconnect cuts it: the session re-attaches on a new relayed stream once,
+// every byte back once, in order.
+func TestDirectSessionRelayLostReattaches(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	_, tc, events := r.session(t)
+	echo(t, tc, 4<<20, func() {
+		waitPath(t, events, PathDirect)
+		p := r.d.pair("web", "web")
+		p.mu.Lock()
+		_ = p.q.CloseWithError(0, "the direct path dies")
+		p.mu.Unlock()
+		waitPath(t, events, PathRelayed)
+		r.mu.Lock()
+		_ = r.conns[len(r.conns)-1].Close()
+		r.mu.Unlock()
+		if e := waitPath(t, events, PathRelayed); e.Reason != ReasonRelayLost {
+			t.Fatalf("reason %q", e.Reason)
+		}
+		select {
+		case e := <-events:
+			t.Fatalf("a second re-attach: %+v", e)
+		case <-time.After(1500 * time.Millisecond):
+		}
+	})
+}
+
+// TestDirectSessionReattachRefusedEnds: an agent that no longer holds a
+// session resets every re-attach; the client's session ends after the
+// detach bound instead of re-attaching forever.
+func TestDirectSessionReattachRefusedEnds(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	r.d.detach = 2 * time.Second
+	r.l.targets.services.direct.detach = 2 * time.Second // the agent's session ends too
+	ds, _, events := r.session(t)
+	waitPath(t, events, PathDirect)
+	d := r.l.targets.services.direct
+	d.mu.Lock()
+	clear(d.sessions)
+	d.mu.Unlock()
+	p := r.d.pair("web", "web")
+	p.mu.Lock()
+	_ = p.q.CloseWithError(0, "the direct path dies")
+	p.mu.Unlock()
+	select {
+	case <-ds.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session re-attaches past its detach bound")
+	}
+	if n := len(events); n > 3 {
+		t.Fatalf("%d re-attaches in 2 s, want at most one a second", n)
 	}
 }
 

@@ -40,6 +40,7 @@ type directServer struct {
 	node   *quiclink.Node
 	relay  atomic.Pointer[qadTarget] // the relay's QAD address: the agent link's offer
 	logger *slog.Logger
+	detach time.Duration // a session's pathswitch Detach; 0: its default
 
 	mu       sync.Mutex
 	sessions map[*directSession]struct{}
@@ -208,10 +209,12 @@ func (d *directServer) reattach(s pathStream) {
 	}
 	sess := d.find(o, nil)
 	if sess == nil {
+		d.logger.Info("direct path: a relayed re-attach no session's token names, refused")
 		_ = s.Reset()
 		return
 	}
 	if err := sess.c.Attach(o, PathRelayed); err != nil {
+		d.logger.Info("direct path: a relayed re-attach refused", "error", err)
 		_ = s.Reset()
 	}
 }
@@ -342,8 +345,8 @@ func compactCandidates(cs []netip.AddrPort) []netip.AddrPort {
 
 // startDirect is a framed session's path layer at the agent (its first
 // stream is s), once its first byte said it is one; nil, s: an unframed
-// session (TLS from its first byte).
-func startDirect(s net.Conn) (*pathswitch.Conn, net.Conn, error) {
+// session (TLS from its first byte). d may be nil (no direct service).
+func startDirect(s net.Conn, d *directServer) (*pathswitch.Conn, net.Conn, error) {
 	first, ps, err := peekFirst(s, e2eeHeaderTimeout)
 	if err != nil {
 		_ = s.Close()
@@ -353,6 +356,10 @@ func startDirect(s net.Conn) (*pathswitch.Conn, net.Conn, error) {
 	if first == tlsRecordHandshake {
 		return nil, s, nil
 	}
-	c := pathswitch.Server(pathStream{Conn: s}, PathRelayed, pathswitch.Config{})
+	var cfg pathswitch.Config
+	if d != nil {
+		cfg.Detach = d.detach
+	}
+	c := pathswitch.Server(pathStream{Conn: s}, PathRelayed, cfg)
 	return c, newPSConn(c, s), nil
 }
