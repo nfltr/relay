@@ -173,6 +173,7 @@ type DirectSession struct {
 	mode    DirectMode
 	on      func(PathEvent)
 	pair    *directPair
+	moveAt  time.Time // the last fallback's move
 }
 
 // Start frames a session whose first stream (relayed) is first: the
@@ -426,10 +427,20 @@ func (d *DirectClient) controlTLS(machine string) *tls.Config {
 // relayed one takes the session (tokR) until the detach bound.
 func (s *DirectSession) fallback(_ uint64, _ error) {
 	s.mu.Lock()
-	key, agent := s.key, s.agent
+	key, agent, last := s.key, s.agent, s.moveAt
 	s.mu.Unlock()
 	if key == nil {
 		return // before Run: no token yet; the session ends with its stream
+	}
+	// A stream reset again at once (an agent that no longer holds the
+	// session resets its re-attach) gets at most one re-attach a second
+	// until the session's detach bound ends it.
+	if wait := time.Second - time.Since(last); wait > 0 {
+		select {
+		case <-s.c.Done():
+			return
+		case <-time.After(wait):
+		}
 	}
 	reason := ReasonRelayLost
 	if s.c.Path() == PathDirect {
@@ -448,6 +459,9 @@ func (s *DirectSession) fallback(_ uint64, _ error) {
 			_, err = s.c.Move(pathStream{Conn: rs, sent: &s.d.relayedSent, recv: &s.d.relayedRecv}, PathRelayed,
 				func(e uint64) []byte { return pathToken(key, roleClient, e, nil) })
 			if err == nil {
+				s.mu.Lock()
+				s.moveAt = time.Now()
+				s.mu.Unlock()
 				s.emit(PathEvent{Path: PathRelayed, Reason: reason})
 				select {
 				case s.moved <- struct{}{}:
