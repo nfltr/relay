@@ -58,6 +58,22 @@
    an exporter of the TLS session bound to the QUIC session's key
    (tokC, tokS below). The agent binds a direct connection to a session
    only on that session's token. Queries 21-26; mutants direct-*.
+
+   Re-attach (gap G2): each attach (a switch) is a fresh stream, an epoch,
+   opened by the client with OPEN(epoch, token). ep1 is the direct
+   connection; when it dies the client opens a new relayed stream (ep2),
+   and later another (ep3), each with the token of that epoch: an
+   exporter of the session's TLS bound to the client's role and the epoch
+   (tokR; the exporter, h((k, ns)), takes the server's random ns, as TLS
+   1.3's does: the model's k is the client's alone, so without ns the
+   relay replaying the client's handshake to a second agent session would
+   give two agent sessions one exporter). On a relayed stream the relay sees OPEN and can replay an
+   earlier epoch's on a new stream, rewriting its epoch field. The agent
+   has one acceptor per epoch of a session and attaches a stream at epoch
+   e only on the client's token for e (27; mutant token-no-epoch, the
+   token without the epoch: the replay attaches). Either way the bytes on
+   a re-attached stream are the session's TLS records, secret (28): a
+   replay is a denial only.
    Bindings (direct-paths doc "E2EE"; each gets a refusal row in the
    code's bindings test when the code lands):
      BIND:direct.cert     the direct answer's certificate checked as the session's
@@ -65,6 +81,7 @@
      BIND:direct.token    tokC/tokS: an exporter of the session's TLS key
      BIND:direct.quic     ... bound to the direct QUIC session's key
      BIND:direct.role     ... the sender's role (labC, labS)
+     BIND:direct.epoch    ... and the attach's epoch (tokC/tokS at ep1, tokR at ep2, ep3)
 
    Code (nfltr = github.com/nfltr/nfltr; the rest github.com/nfltr/relay):
      nfltr internal/application/orgpki/verify.go Check   chain to the root, name, groups, CRL, NotAfter
@@ -105,12 +122,18 @@ const grpDb, grpWeb: bitstring.
 const serWeb, serWebOld, serWebRev, serCli, serEve, serLost, serOld: bitstring.
 const noCert: bitstring.                      (* a client that presents no organisation certificate *)
 const labC, labS: bitstring.                  (* the direct token's roles: the client's, the agent's *)
+const ep1, ep2, ep3, noEpoch: bitstring.      (* attach epochs: ep1 direct, ep2 and ep3 relayed re-attaches *)
 
 free orgk: skey [private].                    (* the organisation: root, then issuer (enrol.pv) *)
 free skWeb, skCli: skey [private].
 free payload: bitstring [private].            (* what the client sends machine web *)
 free svcData: bitstring [private].            (* what web's service answers an admitted client *)
 free dirData: bitstring [private].            (* what the client sends on a direct connection it took *)
+free attData: bitstring [private].            (* what the client sends on a relayed stream it re-attached *)
+
+(* The epoch a token binds; token-no-epoch: none. *)
+letfun tokEpoch(e: bitstring) = e. (* NOT:token-no-epoch *)
+letfun tokEpoch(e: bitstring) = noEpoch. (* ONLY:token-no-epoch *)
 
 event ClientAccepted(bitstring).                       (* the serial of the server certificate the client took *)
 event ClientSent(bitstring, bitstring).                (* its own serial, its bytes *)
@@ -128,6 +151,8 @@ event AppAborted(bitstring, bitstring).                (* ... its reset *)
 event ClientDirectOffer(bitstring, bitstring).         (* session key, direct QUIC key: the client's token sent *)
 event ClientDirect(bitstring, bitstring, bitstring).   (* session key, direct key, the answer's serial: taken *)
 event AgentDirect(bitstring, bitstring).               (* session key, direct key: bound to that session *)
+event ClientAttach(bitstring, bitstring).              (* session key, epoch: the client's OPEN sent *)
+event AgentAttach(bitstring, bitstring).               (* session key, epoch: the agent attached that stream *)
 
 (* The client's direct path for its session k: the relay hands it an
    address (cand); whoever the attacker routes there answers with a
@@ -148,16 +173,35 @@ let DirectClient(k: bitstring) =
   if ds <> serWebRev && ds <> serLost then (* NOT:direct-no-cert-check *)
   new kd: bitstring;
   out(c, aenc(kd, dpk));
-  let tokC = h((k, kd, labC)) in (* NOT:token-unbound *)
-  let tokS = h((k, kd, ls)) in (* NOT:token-unbound *)
-  let tokC = h((k, labC)) in (* ONLY:token-unbound *)
-  let tokS = h((k, ls)) in (* ONLY:token-unbound *)
+  let tokC = h((k, kd, labC, tokEpoch(ep1))) in (* NOT:token-unbound *)
+  let tokS = h((k, kd, ls, tokEpoch(ep1))) in (* NOT:token-unbound *)
+  let tokC = h((k, labC, tokEpoch(ep1))) in (* ONLY:token-unbound *)
+  let tokS = h((k, ls, tokEpoch(ep1))) in (* ONLY:token-unbound *)
   event ClientDirectOffer(k, kd);
   out(c, senc((labC, tokC), kd));
   in(c, x: bitstring);
   let (=ls, =tokS) = sdec(x, kd) in (* NOT:direct-no-token *)
   event ClientDirect(k, kd, ds);
   out(c, senc(dirData, kd)).
+
+(* The client's relayed re-attaches of its session k: the direct path (or
+   the previous relayed stream) died, so a new relayed stream, OPEN(epoch,
+   tokR), then the session's records on it. *)
+let ReAttach(k: bitstring, ns: bitstring) =
+  event ClientAttach(k, ep2);
+  out(c, (ep2, h((h((k, ns)), labC, tokEpoch(ep2)))));
+  out(c, senc(attData, k));
+  in(c, died: bitstring);                              (* the ep2 stream died too *)
+  event ClientAttach(k, ep3);
+  out(c, (ep3, h((h((k, ns)), labC, tokEpoch(ep3)))));
+  out(c, senc(attData, k)).
+
+(* Web's agent: its acceptor for epoch e of session k, on a new relayed
+   stream. *)
+let AttachAgent(k: bitstring, ns: bitstring, e: bitstring) =
+  in(c, (=e, tok: bitstring));
+  if tok = h((h((k, ns)), labC, tokEpoch(e))) then
+  event AgentAttach(k, e).
 
 (* Web's agent: a direct connection (its certificate, the session's key
    pair) bound to its session k only on that session's client token.
@@ -167,10 +211,10 @@ let DirectAgent(k: bitstring) =
   let ls = labS in (* NOT:token-no-role *)
   let ls = labC in (* ONLY:token-no-role *)
   let kd = adec(ekd, skWeb) in
-  let tokC = h((k, kd, labC)) in (* NOT:token-unbound *)
-  let tokS = h((k, kd, ls)) in (* NOT:token-unbound *)
-  let tokC = h((k, labC)) in (* ONLY:token-unbound *)
-  let tokS = h((k, ls)) in (* ONLY:token-unbound *)
+  let tokC = h((k, kd, labC, tokEpoch(ep1))) in (* NOT:token-unbound *)
+  let tokS = h((k, kd, ls, tokEpoch(ep1))) in (* NOT:token-unbound *)
+  let tokC = h((k, labC, tokEpoch(ep1))) in (* ONLY:token-unbound *)
+  let tokS = h((k, ls, tokEpoch(ep1))) in (* ONLY:token-unbound *)
   in(c, x: bitstring);
   let (=labC, =tokC) = sdec(x, kd) in (* NOT:agent-direct-no-token *)
   event AgentDirect(k, kd);
@@ -183,7 +227,7 @@ let Client(certCli: bitstring) =
   in(c, answer: bitstring);
   if answer = answerPlain then out(c, payload) else (* ONLY:downgrade-plain *)
   if answer = answerOK then
-  in(c, (scert: bitstring, spk: pkey));                (* the session's certificate and key *)
+  in(c, (scert: bitstring, spk: pkey, ns: bitstring)); (* the session's certificate, key and server random *)
   let (sn: bitstring, sg: bitstring, =spk, ss: bitstring, se: bitstring) = checksign(scert, pk(orgk)) in (* NOT:client-no-chain-check *)
   let (sn: bitstring, sg: bitstring, =spk, ss: bitstring, se: bitstring) = getmsg(scert) in (* ONLY:client-no-chain-check *)
   if sn = nameWeb then                                 (* the name it asked for *) (* NOT:no-name-check *)
@@ -193,7 +237,7 @@ let Client(certCli: bitstring) =
   new k: bitstring;
   out(c, aenc(k, spk));
   out(c, (certCli, sign(h((k, spk)), skCli)));          (* Certificate + CertificateVerify *)
-  (DirectClient(k)) | (
+  (DirectClient(k)) | (ReAttach(k, ns)) | (
   event ClientSent(serCli, payload);
   out(c, senc((c2s, appData, payload), k));
   in(c, appAbort: bool);                               (* the local application ends cleanly or resets: either *)
@@ -231,7 +275,8 @@ let Agent(certWeb: bitstring, fixed: bool) =
   let t0 = svcAddr in (* NOT:relay-names-target *)
   let t = t0 in (* NOT:relay-names-target-with-forward *)
   let t = target in (* ONLY:relay-names-target-with-forward *)
-  out(c, (certWeb, pk(skWeb)));
+  new ns: bitstring;                                   (* ServerHello.random *)
+  out(c, (certWeb, pk(skWeb), ns));
   in(c, ek: bitstring);
   let k = adec(ek, skWeb) in
   in(c, (ccert: bitstring, cv: bitstring));
@@ -242,7 +287,7 @@ let Agent(certWeb: bitstring, fixed: bool) =
   if ce = live then                                    (* NotAfter *) (* NOT:agent-no-expiry-check *)
   if cs <> serWebRev && cs <> serLost then             (* the CRL *) (* NOT:agent-no-crl-check *)
   if checksign(cv, cpk) = h((k, pk(skWeb))) then       (* CertificateVerify (crypto/tls) *) (* NOT:skip-certificate-verify *)
-  (DirectAgent(k)) | (
+  (DirectAgent(k)) | (AttachAgent(k, ns, ep2)) | (AttachAgent(k, ns, ep3)) | (
   in(c, e: bitstring);
   let (=c2s, =appData, m: bitstring) = sdec(e, k) in
   if t = svcAddr then (
@@ -359,6 +404,19 @@ query k: bitstring, kd: bitstring; event(ClientDirect(k, kd, serEve)).
 query k: bitstring, kd: bitstring, s: bitstring; event(ClientDirect(k, kd, s)).
 (* expect false *)
 query k: bitstring, kd: bitstring; event(AgentDirect(k, kd)).
+
+(* 27. the agent attaches a stream at epoch e of a session only on that
+   session's client's OPEN for e, once each (mutant token-no-epoch: the
+   relay replays ep2's OPEN as ep3's) *)
+(* expect true *)
+query k: bitstring, e: bitstring; inj-event(AgentAttach(k, e)) ==> inj-event(ClientAttach(k, e)).
+(* 28. what the client sends on a re-attached relayed stream stays secret,
+   replayed or not: a replay is a denial only (holds under token-no-epoch) *)
+(* expect true *)
+query attacker(attData).
+(* 29. witness: the agent attaches a relayed re-attach *)
+(* expect false *)
+query k: bitstring; event(AgentAttach(k, ep3)).
 
 process
   new skEve: skey; new skLost: skey; new skOld: skey; new skWebOld: skey; new skWebRev: skey;

@@ -327,6 +327,9 @@ test-go-mutants`).
 | 23 | the agent binds a direct connection to a session only for that session's client | holds |
 | 24 | the client takes no other machine's certificate on the direct path | holds |
 | 25, 26 | witnesses: the client takes a direct connection; the agent binds one | attack (reachable) |
+| 27 | injective agreement per (session, epoch): the agent attaches a stream at epoch e only on the client's OPEN for e | holds (lane DIRECTPATH2, gap G2; mutant `token-no-epoch`) |
+| 28 | what the client sends on a re-attached relayed stream stays secret | holds, also under `token-no-epoch`: a replay is a denial only |
+| 29 | witness: the agent attaches a relayed re-attach | attack (reachable) |
 
 A TLS record is bound to its place in its direction's stream (TLS 1.3's
 sequence number in the AEAD nonce): the model's close record names the
@@ -374,6 +377,24 @@ wrongly holds the session key. The model's `BIND:direct.*` ids get their
 refusal rows in the code's bindings test when the code lands. The
 cut-over's byte order (none lost, duplicated or reordered) is link's
 `spec/DirectPath.tla`, not here.
+
+Re-attach (queries 27-29; lane DIRECTPATH2, gap G2 of the direct-paths
+doc). Each attach is a fresh stream, an epoch, opened by the client with
+`OPEN(epoch, token)`: ep1 the direct connection, ep2 and ep3 relayed
+streams after a fallback. Every token binds its epoch
+(`BIND:direct.epoch`); a relayed one is an exporter of the session's TLS
+(here `h((k, ns))`, with the server's random `ns`, as TLS 1.3's exporter
+takes the whole transcript; without it the relay replaying the client's
+handshake to a second agent session would give two sessions one
+exporter), the client's role and the epoch. The relay sees a relayed
+OPEN and can replay it on a new stream with another epoch; the agent, one
+acceptor per epoch of a session, attaches only on the token for that
+epoch. `token-no-epoch` (no epoch in the token) lets ep2's OPEN attach
+ep3 (27 fails) while the bytes on it stay the session's records under its
+key (28 holds): the replay is a denial only. A client mutant that takes
+the relay's certificate gives it the key, and so the re-attached bytes
+(28); an agent mutant that admits the relay's own client lets it attach
+its own session (27).
 
 ### wg_exit.pv: WireGuard client and exit (Track B)
 

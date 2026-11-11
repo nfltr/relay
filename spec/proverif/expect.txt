@@ -91,36 +91,43 @@ p2p_e2e relay-kid TTTTFTFFFFFF
 # (13) or the client (14). Direct paths (lane DIRECTPATH, 21-26, a design
 # before code): the agent's checks of the session's client also guard 23
 # (a client the agent admits wrongly holds the session's key, so binds a
-# direct connection to it).
-e2ee_tcp - TTTTTTTTTTTTTTFFFFFFTTTTFF
-e2ee_tcp downgrade-plain FTTTTTTTTTTTTTFFFFFFTTTTFF
-e2ee_tcp client-no-chain-check FFFTFTTTTTFTFTFFFFFFTTTTFF
-e2ee_tcp no-name-check FFFTTTTTTTFTFTFFFFFFTTTTFF
-e2ee_tcp client-no-expiry-check FFTTFTTTTTFTFTFFFFFFTTTTFF
-e2ee_tcp client-no-crl-check FFTFTTTTTTFTFTFFFFFFTTTTFF
-e2ee_tcp agent-no-chain-check TTTTTFFFTFTFTFFFFFFFTTFTFF
-e2ee_tcp no-group-check TTTTTFFFTTTFTFFFFFFFTTFTFF
-e2ee_tcp agent-no-expiry-check TTTTTFFTTFTFTFFFFFFFTTFTFF
-e2ee_tcp agent-no-crl-check TTTTTFFTFTTFTFFFFFFFTTFTFF
-e2ee_tcp downgrade-any-client TFTTTFFTTTTTTTFFFFFFTTTTFF
-e2ee_tcp skip-certificate-verify TTTTTFFTTTTFTFFFFFFFTTFTFF
-e2ee_tcp relay-names-target FTTTTTTTTTTTTTFFFFFFTTTTFF
-e2ee_tcp relay-names-target-with-forward FTTTTTTTTTTTTTFFFFFFTTTTFF
-e2ee_tcp agreement-without-key-check TFTTTTTTTTTTTTFFTFFFTTTTFF
-e2ee_tcp clear-end TTTTTTTTTTFTFTFFFFFFTTTTFF
-e2ee_tcp agent-clear-end TTTTTTTTTTTFTFFFFFFFTTTTFF
-e2ee_tcp abort-as-close TTTTTTTTTTTTFTFFFFFFTTTTFF
-e2ee_tcp client-abort-as-close TTTTTTTTTTTTTFFFFFFFTTTTFF
+# direct connection to it). Re-attach (lane DIRECTPATH2, gap G2, 27-29): a
+# client mutant that takes the relay's certificate gives it the session's
+# key, so the re-attached bytes too (28); an agent mutant that admits the
+# relay's client lets it attach its own session (27).
+e2ee_tcp - TTTTTTTTTTTTTTFFFFFFTTTTFFTTF
+e2ee_tcp downgrade-plain FTTTTTTTTTTTTTFFFFFFTTTTFFTTF
+e2ee_tcp client-no-chain-check FFFTFTTTTTFTFTFFFFFFTTTTFFTFF
+e2ee_tcp no-name-check FFFTTTTTTTFTFTFFFFFFTTTTFFTFF
+e2ee_tcp client-no-expiry-check FFTTFTTTTTFTFTFFFFFFTTTTFFTFF
+e2ee_tcp client-no-crl-check FFTFTTTTTTFTFTFFFFFFTTTTFFTFF
+e2ee_tcp agent-no-chain-check TTTTTFFFTFTFTFFFFFFFTTFTFFFTF
+e2ee_tcp no-group-check TTTTTFFFTTTFTFFFFFFFTTFTFFFTF
+e2ee_tcp agent-no-expiry-check TTTTTFFTTFTFTFFFFFFFTTFTFFFTF
+e2ee_tcp agent-no-crl-check TTTTTFFTFTTFTFFFFFFFTTFTFFFTF
+e2ee_tcp downgrade-any-client TFTTTFFTTTTTTTFFFFFFTTTTFFTTF
+e2ee_tcp skip-certificate-verify TTTTTFFTTTTFTFFFFFFFTTFTFFFTF
+e2ee_tcp relay-names-target FTTTTTTTTTTTTTFFFFFFTTTTFFTTF
+e2ee_tcp relay-names-target-with-forward FTTTTTTTTTTTTTFFFFFFTTTTFFTTF
+e2ee_tcp agreement-without-key-check TFTTTTTTTTTTTTFFTFFFTTTTFFTTF
+e2ee_tcp clear-end TTTTTTTTTTFTFTFFFFFFTTTTFFTTF
+e2ee_tcp agent-clear-end TTTTTTTTTTTFTFFFFFFFTTTTFFTTF
+e2ee_tcp abort-as-close TTTTTTTTTTTTFTFFFFFFTTTTFFTTF
+e2ee_tcp client-abort-as-close TTTTTTTTTTTTTFFFFFFFTTTTFFTTF
 # Direct paths (lane DIRECTPATH): the answer at the relay's address taken
 # without the certificate check (21, 24; with direct-no-token too, 22), the
 # agent's token unchecked at the client (22), tokens without the QUIC key
 # (alone: the certificate check holds; without it a relay in the middle,
 # 21-24), one token for both roles (22: reflected), the agent binding a
 # connection on the relay's word (23).
-e2ee_tcp direct-no-cert-check TTTTTTTTTTTTTTFFFFFFFTTFFF
-e2ee_tcp direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFF
-e2ee_tcp direct-no-cert-check,direct-no-token TTTTTTTTTTTTTTFFFFFFFFTFFF
-e2ee_tcp token-unbound TTTTTTTTTTTTTTFFFFFFTTTTFF
-e2ee_tcp direct-no-cert-check,token-unbound TTTTTTTTTTTTTTFFFFFFFFFFFF
-e2ee_tcp token-no-role TTTTTTTTTTTTTTFFFFFFTFTTFF
-e2ee_tcp agent-direct-no-token TTTTTTTTTTTTTTFFFFFFTTFTFF
+e2ee_tcp direct-no-cert-check TTTTTTTTTTTTTTFFFFFFFTTFFFTTF
+e2ee_tcp direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTTF
+e2ee_tcp direct-no-cert-check,direct-no-token TTTTTTTTTTTTTTFFFFFFFFTFFFTTF
+e2ee_tcp token-unbound TTTTTTTTTTTTTTFFFFFFTTTTFFTTF
+e2ee_tcp direct-no-cert-check,token-unbound TTTTTTTTTTTTTTFFFFFFFFFFFFTTF
+e2ee_tcp token-no-role TTTTTTTTTTTTTTFFFFFFTFTTFFTTF
+e2ee_tcp agent-direct-no-token TTTTTTTTTTTTTTFFFFFFTTFTFFTTF
+# The epoch in the token (gap G2): without it the relay replays ep2's
+# relayed OPEN as ep3's and the agent attaches (27), yet the bytes stay
+# secret (28 holds): a replay is denial only.
+e2ee_tcp token-no-epoch TTTTTTTTTTTTTTFFFFFFTTTTFFFTF
