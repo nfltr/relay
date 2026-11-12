@@ -59,6 +59,18 @@
    (tokC, tokS below). The agent binds a direct connection to a session
    only on that session's token. Queries 21-26; mutants direct-*.
 
+   Direct paths under a group dial (lane DIRECTGROUP: nfltr
+   docs/decisions/service-discovery-2026-11-12.md section 4 "Direct paths
+   under a group dial"): the group-dial client names no machine, so its
+   direct check takes the name the session's certificate carries: the
+   direct answer must name the machine whose agent holds the session, not
+   any machine of the group (36; mutant group-direct-no-name-check, the
+   group's check on the direct answer: alone it holds, the tokens bind the
+   session; with direct-no-token the relay moves the session to another
+   instance, mal, 36). Which agent the control exchange and a re-attach
+   reach is the relay's routing (candidates and addresses are already the
+   attacker's): a wrong one is a denial.
+
    Re-attach (gap G2): each attach (a switch) is a fresh stream, an epoch,
    opened by the client with OPEN(epoch, token). ep1 is the direct
    connection; when it dies the client opens a new relayed stream (ep2),
@@ -98,7 +110,7 @@
    Bindings (direct-paths doc "E2EE"; each gets a refusal row in the
    code's bindings test when the code lands):
      BIND:direct.cert     the direct answer's certificate checked as the session's
-     BIND:direct.name     ... names the machine the client named
+     BIND:direct.name     ... names the machine the client named (a group dial: the session's certificate's)
      BIND:direct.token    tokC/tokS: an exporter of the session's TLS key
      BIND:direct.quic     ... bound to the direct QUIC session's key
      BIND:direct.role     ... the sender's role (labC, labS)
@@ -160,6 +172,12 @@ free svcData: bitstring [private].            (* what web's service answers an a
 free dirData: bitstring [private].            (* what the client sends on a direct connection it took *)
 free attData: bitstring [private].            (* what the client sends on a relayed stream it re-attached *)
 
+(* The direct answer's name check: the machine the client named (a machine
+   dial) or its session's certificate names (a group dial, grouped).
+   group-direct-no-name-check: a group dial takes any machine of the group. *)
+letfun directNameOK(dn: bitstring, dg: bitstring, want: bitstring, grouped: bool) = (dn = want). (* NOT:group-direct-no-name-check *)
+letfun directNameOK(dn: bitstring, dg: bitstring, want: bitstring, grouped: bool) = if grouped = true then (dg = grpDb) else (dn = want). (* ONLY:group-direct-no-name-check *)
+
 (* The epoch a token binds; token-no-epoch: none. *)
 letfun tokEpoch(e: bitstring) = e. (* NOT:token-no-epoch *)
 letfun tokEpoch(e: bitstring) = noEpoch. (* ONLY:token-no-epoch *)
@@ -191,6 +209,7 @@ event AppAborted(bitstring, bitstring).                (* ... its reset *)
 event ClientDirectOffer(bitstring, bitstring).         (* session key, direct QUIC key: the client's token sent *)
 event ClientDirect(bitstring, bitstring, bitstring).   (* session key, direct key, the answer's serial: taken *)
 event AgentDirect(bitstring, bitstring).               (* session key, direct key: bound to that session *)
+event DirectTaken(bitstring, bitstring, bitstring, bitstring, bool). (* session key, direct key, the answer's name, the session's machine, a group dial *)
 event ClientAttach(bitstring, bitstring).              (* session key, epoch: the client's OPEN sent *)
 event AgentAttach(bitstring, bitstring).               (* session key, epoch: the agent attached that stream *)
 event Dialled(bitstring, bitstring, bitstring).        (* a machine dial: agent, service, the bytes it sends *)
@@ -205,14 +224,14 @@ event GClientRecv(bitstring, bitstring).               (* the group-dial client:
    direct-no-token: the agent's token is not checked; token-unbound: the
    tokens bind the session but not the direct QUIC key; token-no-role:
    both ends send the same token (no role in it or its message). *)
-let DirectClient(k: bitstring) =
+let DirectClient(k: bitstring, want: bitstring, grouped: bool) =
   in(c, cand: bitstring);
   let ls = labS in (* NOT:token-no-role *)
   let ls = labC in (* ONLY:token-no-role *)
   in(c, (dcert: bitstring, dpk: pkey));
   let (dn: bitstring, dg: bitstring, =dpk, ds: bitstring, de: bitstring) = checksign(dcert, pk(orgk)) in (* NOT:direct-no-cert-check *)
   let (dn: bitstring, dg: bitstring, =dpk, ds: bitstring, de: bitstring) = getmsg(dcert) in (* ONLY:direct-no-cert-check *)
-  if dn = nameWeb then (* NOT:direct-no-cert-check *)
+  if directNameOK(dn, dg, want, grouped) then (* NOT:direct-no-cert-check *)
   if de = live then (* NOT:direct-no-cert-check *)
   if ds <> serWebRev && ds <> serLost then (* NOT:direct-no-cert-check *)
   new kd: bitstring;
@@ -226,6 +245,7 @@ let DirectClient(k: bitstring) =
   in(c, x: bitstring);
   let (=ls, =tokS) = sdec(x, kd) in (* NOT:direct-no-token *)
   event ClientDirect(k, kd, ds);
+  event DirectTaken(k, kd, dn, want, grouped);
   out(c, senc(dirData, kd)).
 
 (* The client's relayed re-attaches of its session k: the direct path (or
@@ -287,7 +307,7 @@ let Client(certCli: bitstring, svc: bitstring, payload: bitstring) =
   let (=eeTag, np: bitstring) = sdec(ee, k) in
   if np = offer then                                   (* the negotiated protocol is the offer *) (* NOT:client-no-alpn-check *)
   out(c, (certCli, sign(h((k, spk)), skCli)));          (* Certificate + CertificateVerify *)
-  (DirectClient(k)) | (ReAttach(k, ns)) | (
+  (DirectClient(k, nameWeb, false)) | (ReAttach(k, ns)) | (
   event ClientSent(serCli, payload);
   out(c, senc((c2s, appData, payload), k));
   in(c, appAbort: bool);                               (* the local application ends cleanly or resets: either *)
@@ -331,11 +351,12 @@ let GClient(certCli: bitstring) =
   let (=eeTag, np: bitstring) = sdec(ee, k) in
   if np = offer then (* NOT:client-no-alpn-check *)
   out(c, (certCli, sign(h((k, spk)), skCli)));
+  (DirectClient(k, sn, true)) | (
   event ClientSent(serCli, gData);
   out(c, senc((c2s, appData, gData), k));
   in(c, e: bitstring);
   let (=s2c, =appData, r: bitstring) = sdec(e, k) in
-  event GClientRecv(k, r).
+  event GClientRecv(k, r)).
 
 (* Web's agent: a tcp service in organisation mode, allow_group db. fixed:
    the agent has a target of its own (a service table, --forward); a
@@ -523,6 +544,16 @@ query n: bitstring, s: bitstring; event(Served(n, s, payload)) ==> event(Dialled
 query k: bitstring, r: bitstring; event(GClientRecv(k, r)).
 (* expect false *)
 query m: bitstring; event(Served(nameWeb, svcVault, m)).
+
+(* Direct paths under a group dial (lane DIRECTGROUP). 36. a direct
+   connection a client takes names the machine of its session: the relay
+   cannot move a group dial's session to another instance (mutant
+   group-direct-no-name-check with direct-no-token) *)
+(* expect true *)
+query k: bitstring, kd: bitstring, dn: bitstring, w: bitstring, g: bool; event(DirectTaken(k, kd, dn, w, g)) ==> dn = w.
+(* 37. witness: a group dial's session goes direct *)
+(* expect false *)
+query k: bitstring, kd: bitstring, dn: bitstring, w: bitstring; event(DirectTaken(k, kd, dn, w, true)).
 
 process
   new skEve: skey; new skLost: skey; new skOld: skey; new skWebOld: skey; new skWebRev: skey;

@@ -95,51 +95,60 @@ p2p_e2e relay-kid TTTTFTFFFFFF
 # client mutant that takes the relay's certificate gives it the session's
 # key, so the re-attached bytes too (28); an agent mutant that admits the
 # relay's client lets it attach its own session (27).
-e2ee_tcp - TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFF
-e2ee_tcp downgrade-plain FTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFF
-e2ee_tcp client-no-chain-check FFFTFTTTTTFTFTFFFFFFTTTTFFTFFTTTTFF
-e2ee_tcp no-name-check FFFTTTTTTTFTFTFFFFFFTTTTFFTFFTTTTFF
-e2ee_tcp client-no-expiry-check FFTTFTTTTTFTFTFFFFFFTTTTFFTFFTTTTFF
-e2ee_tcp client-no-crl-check FFTFTTTTTTFTFTFFFFFFTTTTFFTFFTTTTFF
-e2ee_tcp agent-no-chain-check TTTTTFFFTFTFTFFFFFFFTTFTFFFTFTTTTFF
-e2ee_tcp no-group-check TTTTTFFFTTTFTFFFFFFFTTFTFFFTFTTTTFF
-e2ee_tcp agent-no-expiry-check TTTTTFFTTFTFTFFFFFFFTTFTFFFTFTTTTFF
-e2ee_tcp agent-no-crl-check TTTTTFFTFTTFTFFFFFFFTTFTFFFTFTTTTFF
-e2ee_tcp downgrade-any-client TFTTTFFTTTTTTTFFFFFFTTTTFFTTFTTFTFF
-e2ee_tcp skip-certificate-verify TTTTTFFTTTTFTFFFFFFFTTFTFFFTFTTTTFF
-e2ee_tcp relay-names-target FTTTTTTTTTTTTTFFFFFFTTTTFFTTFFTTTFF
-e2ee_tcp relay-names-target-with-forward FTTTTTTTTTTTTTFFFFFFTTTTFFTTFFTTTFF
-e2ee_tcp agreement-without-key-check TFTTTTTTTTTTTTFFTFFFTTTTFFTTFTTTTFF
-e2ee_tcp clear-end TTTTTTTTTTFTFTFFFFFFTTTTFFTTFTTTTFF
-e2ee_tcp agent-clear-end TTTTTTTTTTTFTFFFFFFFTTTTFFTTFTTTTFF
-e2ee_tcp abort-as-close TTTTTTTTTTTTFTFFFFFFTTTTFFTTFTTTTFF
-e2ee_tcp client-abort-as-close TTTTTTTTTTTTTFFFFFFFTTTTFFTTFTTTTFF
+e2ee_tcp - TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTF
+e2ee_tcp downgrade-plain FTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTF
+e2ee_tcp client-no-chain-check FFFTFTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTF
+e2ee_tcp no-name-check FFFTTTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTF
+e2ee_tcp client-no-expiry-check FFTTFTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTF
+e2ee_tcp client-no-crl-check FFTFTTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTF
+e2ee_tcp agent-no-chain-check TTTTTFFFTFTFTFFFFFFFTTFTFFFTFTTTTFFTF
+e2ee_tcp no-group-check TTTTTFFFTTTFTFFFFFFFTTFTFFFTFTTTTFFTF
+e2ee_tcp agent-no-expiry-check TTTTTFFTTFTFTFFFFFFFTTFTFFFTFTTTTFFTF
+e2ee_tcp agent-no-crl-check TTTTTFFTFTTFTFFFFFFFTTFTFFFTFTTTTFFTF
+e2ee_tcp downgrade-any-client TFTTTFFTTTTTTTFFFFFFTTTTFFTTFTTFTFFTF
+e2ee_tcp skip-certificate-verify TTTTTFFTTTTFTFFFFFFFTTFTFFFTFTTTTFFTF
+e2ee_tcp relay-names-target FTTTTTTTTTTTTTFFFFFFTTTTFFTTFFTTTFFTF
+e2ee_tcp relay-names-target-with-forward FTTTTTTTTTTTTTFFFFFFTTTTFFTTFFTTTFFTF
+e2ee_tcp agreement-without-key-check TFTTTTTTTTTTTTFFTFFFTTTTFFTTFTTTTFFTF
+e2ee_tcp clear-end TTTTTTTTTTFTFTFFFFFFTTTTFFTTFTTTTFFTF
+e2ee_tcp agent-clear-end TTTTTTTTTTTFTFFFFFFFTTTTFFTTFTTTTFFTF
+e2ee_tcp abort-as-close TTTTTTTTTTTTFTFFFFFFTTTTFFTTFTTTTFFTF
+e2ee_tcp client-abort-as-close TTTTTTTTTTTTTFFFFFFFTTTTFFTTFTTTTFFTF
 # Direct paths (lane DIRECTPATH): the answer at the relay's address taken
 # without the certificate check (21, 24; with direct-no-token too, 22), the
 # agent's token unchecked at the client (22), tokens without the QUIC key
 # (alone: the certificate check holds; without it a relay in the middle,
 # 21-24), one token for both roles (22: reflected), the agent binding a
 # connection on the relay's word (23).
-e2ee_tcp direct-no-cert-check TTTTTTTTTTTTTTFFFFFFFTTFFFTTFTTTTFF
-e2ee_tcp direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFF
-e2ee_tcp direct-no-cert-check,direct-no-token TTTTTTTTTTTTTTFFFFFFFFTFFFTTFTTTTFF
-e2ee_tcp token-unbound TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFF
-e2ee_tcp direct-no-cert-check,token-unbound TTTTTTTTTTTTTTFFFFFFFFFFFFTTFTTTTFF
-e2ee_tcp token-no-role TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFF
-e2ee_tcp agent-direct-no-token TTTTTTTTTTTTTTFFFFFFTTFTFFTTFTTTTFF
+e2ee_tcp direct-no-cert-check TTTTTTTTTTTTTTFFFFFFFTTFFFTTFTTTTFFFF
+e2ee_tcp direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFTF
+e2ee_tcp direct-no-cert-check,direct-no-token TTTTTTTTTTTTTTFFFFFFFFTFFFTTFTTTTFFFF
+e2ee_tcp token-unbound TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTF
+e2ee_tcp direct-no-cert-check,token-unbound TTTTTTTTTTTTTTFFFFFFFFFFFFTTFTTTTFFFF
+e2ee_tcp token-no-role TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFTF
+e2ee_tcp agent-direct-no-token TTTTTTTTTTTTTTFFFFFFTTFTFFTTFTTTTFFTF
 # The epoch in the token (gap G2): without it the relay replays ep2's
 # relayed OPEN as ep3's and the agent attaches (27), yet the bytes stay
 # secret (28 holds): a replay is denial only.
-e2ee_tcp token-no-epoch TTTTTTTTTTTTTTFFFFFFTTTTFFFTFTTTTFF
+e2ee_tcp token-no-epoch TTTTTTTTTTTTTTFFFFFFTTTTFFFTFTTTTFFTF
 # Services by name (lane SVCBIND, 30-35; nfltr
 # docs/decisions/service-discovery-2026-11-12.md section 4): the client
 # ignoring the negotiated ALPN protocol lets the relay rewrite its offer and
 # route web/pg to web's vault (33), and pg@db to vault as a machine dial
 # (31); the agent taking any offer serves the service the open names (31,
 # 33); the group-dial client taking any organisation machine (eve, group
-# web) gives the relay its bytes (30, 32); the agent serving <s>@<g> for a
-# service not published under g serves mal's pg, published under ops (31).
-e2ee_tcp client-no-alpn-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTFFF
-e2ee_tcp agent-no-alpn-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTFFF
-e2ee_tcp group-dial-no-group-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFFTFTFF
-e2ee_tcp agent-no-publish-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTTFF
+# web) gives the relay its bytes (30, 32) and, its direct check taking the
+# session's machine, the direct path to eve too (21, 22, 24); the agent
+# serving <s>@<g> for a service not published under g serves mal's pg,
+# published under ops (31).
+e2ee_tcp client-no-alpn-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTFFFTF
+e2ee_tcp agent-no-alpn-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTFFFTF
+e2ee_tcp group-dial-no-group-check TTTTTTTTTTTTTTFFFFFFFFTFFFTTFFTFTFFTF
+e2ee_tcp agent-no-publish-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTTFFTF
+# Direct paths under a group dial (lane DIRECTGROUP, 36-37): the group's
+# check on the direct answer instead of the session's machine holds alone
+# (the tokens bind the session); with the agent's token unchecked too the
+# relay moves the session's direct path to another instance, mal (36). The
+# certificate check off fails 36 with every direct-no-cert-check line.
+e2ee_tcp group-direct-no-name-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTF
+e2ee_tcp group-direct-no-name-check,direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFFF

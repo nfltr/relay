@@ -337,6 +337,8 @@ test-go-mutants`).
 | 32 | injective agreement for the group dial: the answer it takes, an agent sent in that session | holds (mutant `group-dial-no-group-check`) |
 | 33 | a machine dial reaches only the named agent's named service: the relay cannot route `web/pg` to web's `vault` | holds (mutants `client-no-alpn-check`, `agent-no-alpn-check`) |
 | 34, 35 | witnesses: the group dial completes; web's second service serves | attack (reachable) |
+| 36 | a direct connection a client takes names its session's machine: the relay cannot move a group dial's session to another instance | holds (lane DIRECTGROUP; mutant `group-direct-no-name-check` with `direct-no-token`; every `direct-no-cert-check` line) |
+| 37 | witness: a group dial's session goes direct | attack (reachable) |
 
 A TLS record is bound to its place in its direction's stream (TLS 1.3's
 sequence number in the AEAD nonce): the model's close record names the
@@ -433,6 +435,24 @@ protocol ignored: the relay rewrites the offer, 31, 33), `agent-no-alpn-check`
 under g, mal's `pg`: 31). Bindings `BIND:org.service`, `BIND:org.group`,
 `BIND:org.publish`. Not modelled: two agents on one machine (the ALPN
 names the agent; the model's agent is its machine).
+
+Direct paths under a group dial (queries 36-37; lane DIRECTGROUP, nfltr
+`docs/decisions/service-discovery-2026-11-12.md` section 4 "Direct paths
+under a group dial"). The group-dial client runs the direct path too; with
+no machine named, its direct check takes the name its session's
+certificate carries (the machine-dial client's, the name it dialled). 36:
+a direct connection any client takes names its session's machine, so the
+relay cannot move a group dial's session to another instance of the
+group. Mutant `group-direct-no-name-check` (the group's check on the
+direct answer, any db machine): alone it holds (the tokens bind the
+session: another instance holds no token for it); with `direct-no-token`
+the relay hands the client mal's certificate and the client takes it (36).
+`group-dial-no-group-check` now also gives the relay the direct path (21,
+22, 24): the session's machine is eve, so is the direct answer. Which agent
+the control exchange and a re-attach reach is the relay's routing, as the
+candidates already are: a wrong one is a denial. Not modelled, as above:
+two agents on one machine serving one `<s>@<g>` (the tokens refuse the
+other's direct answer).
 
 ### wg_exit.pv: WireGuard client and exit (Track B)
 
