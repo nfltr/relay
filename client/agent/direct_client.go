@@ -341,16 +341,7 @@ func (s *DirectSession) tryDirect() string {
 	p := s.pair
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	if p.q != nil && p.q.Context().Err() != nil {
-		// the next punch after a death waits until the last punch is the
-		// first backoff old: at once after a connection that lived that
-		// long (an agent whose address changed is direct again within the
-		// fallback and one exchange: TestDirectAgentRebindDirectAgain),
-		// never more often for one that keeps dying; here rather than on
-		// the death's notice, which a try may outrun
-		// (TestDirectPairDeathBacksOffWhateverItsNoticeOrder)
-		p.q, p.fails, p.next = nil, 1, p.punched.Add(s.d.repunch)
-	}
+	s.noticeDeath(p)
 	if p.q == nil {
 		if time.Now().Before(p.next) {
 			return "backoff"
@@ -373,6 +364,7 @@ func (s *DirectSession) tryDirect() string {
 	defer cancel()
 	st, err := s.d.node.Open(ctx, p.agent, nil)
 	if err != nil {
+		s.noticeDeath(p) // the connection died during this try: noticed now, not one try later
 		return ReasonNoAnswer
 	}
 	tc := &tokenCheck{pathStream: pathStream{Conn: st, sent: &s.d.directSent, recv: &s.d.directRecv}, ready: make(chan struct{})}
@@ -389,6 +381,21 @@ func (s *DirectSession) tryDirect() string {
 		return ReasonNoAnswer
 	}
 	return ""
+}
+
+// noticeDeath drops p's connection once it died; p.mu held. The next
+// punch after a death waits until the last punch is the first backoff
+// old: at once after a connection that lived that long (an agent whose
+// address changed is direct again within the fallback and one exchange:
+// TestDirectAgentRebindDirectAgain), never more often for one that keeps
+// dying; on a try rather than on the death's notice, which a try may
+// outrun, and again after a try's open fails, which the death may outrun
+// (TestDirectPairDeathBacksOffWhateverItsNoticeOrder: a starved machine
+// saw the open fail on a connection not yet dead at the try's start).
+func (s *DirectSession) noticeDeath(p *directPair) {
+	if p.q != nil && p.q.Context().Err() != nil {
+		p.q, p.fails, p.next = nil, 1, p.punched.Add(s.d.repunch)
+	}
 }
 
 // moving makes the stream of epoch e (heard once its peer answered) the
