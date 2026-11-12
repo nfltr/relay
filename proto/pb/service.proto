@@ -265,6 +265,14 @@ message TCPData {
   // not send it, and on a session no machine opened (a share visitor's):
   // the agent then knows no caller.
   CallerIdentity caller = 12;
+
+  // exclude, on a client's open that names a service by group
+  // (<service>@<group>), lists the instances (agent refs, relay-core
+  // identity.AgentRef) this open already failed on: the relay picks
+  // another instance of the name. At most dataplane.MaxExclude refs, each a
+  // lowercase DNS label (agentservices.ValidLabel), none repeated; an open
+  // with more or a malformed one is refused (dataplane.ParseOpenHeader).
+  repeated string exclude = 13;
 }
 
 // ---------------------------------------------------------------------------

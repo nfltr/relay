@@ -6,11 +6,15 @@ package dataplane
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"net"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/nfltr/link"
 	"github.com/nfltr/relay/proto/pb"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestLinkHello(t *testing.T) {
@@ -71,12 +75,43 @@ func TestParseAgentLinkOffer(t *testing.T) {
 }
 
 func TestOpenHeaderRoundTrip(t *testing.T) {
-	h, err := OpenHeader(&pb.TCPData{SessionId: "7", Open: true, AgentId: "a", TargetAddr: HTTPSessionTarget, E2Ee: true})
+	h, err := OpenHeader(&pb.TCPData{SessionId: "7", Open: true, AgentId: "a", TargetAddr: HTTPSessionTarget, E2Ee: true, Exclude: refs(MaxExclude)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	f, err := ParseOpenHeader(h)
-	if err != nil || f.GetSessionId() != "" || f.GetOpen() || f.GetAgentId() != "a" || f.GetTargetAddr() != HTTPSessionTarget || !f.GetE2Ee() {
+	if err != nil || f.GetSessionId() != "" || f.GetOpen() || f.GetAgentId() != "a" || f.GetTargetAddr() != HTTPSessionTarget || !f.GetE2Ee() || !slices.Equal(f.GetExclude(), refs(MaxExclude)) {
 		t.Fatalf("%v %v", f, err)
+	}
+}
+
+// refs is n distinct agent refs.
+func refs(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = fmt.Sprintf("m-%026d-pg", i)
+	}
+	return out
+}
+
+func TestOpenHeaderRefusesABadExclude(t *testing.T) {
+	for name, ex := range map[string][]string{
+		"over MaxExclude": refs(MaxExclude + 1),
+		"empty ref":       {""},
+		"not a label":     {"m-1/pg"},
+		"upper case":      {"M-1-PG"},
+		"over 63 bytes":   {strings.Repeat("a", 64)},
+		"repeated":        {"m-1-pg", "m-2-pg", "m-1-pg"},
+	} {
+		if _, err := OpenHeader(&pb.TCPData{AgentId: "a", Exclude: ex}); err == nil {
+			t.Errorf("%s: OpenHeader wrote %q", name, ex)
+		}
+		raw, err := proto.Marshal(&pb.TCPData{AgentId: "a", Exclude: ex})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ParseOpenHeader(raw); err == nil {
+			t.Errorf("%s: ParseOpenHeader read %q", name, ex)
+		}
 	}
 }

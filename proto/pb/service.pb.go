@@ -909,7 +909,14 @@ type TCPData struct {
 	// relay authenticated it (CallerIdentity). Absent from a relay that does
 	// not send it, and on a session no machine opened (a share visitor's):
 	// the agent then knows no caller.
-	Caller        *CallerIdentity `protobuf:"bytes,12,opt,name=caller,proto3" json:"caller,omitempty"`
+	Caller *CallerIdentity `protobuf:"bytes,12,opt,name=caller,proto3" json:"caller,omitempty"`
+	// exclude, on a client's open that names a service by group
+	// (<service>@<group>), lists the instances (agent refs, relay-core
+	// identity.AgentRef) this open already failed on: the relay picks
+	// another instance of the name. At most dataplane.MaxExclude refs, each a
+	// lowercase DNS label (agentservices.ValidLabel), none repeated; an open
+	// with more or a malformed one is refused (dataplane.ParseOpenHeader).
+	Exclude       []string `protobuf:"bytes,13,rep,name=exclude,proto3" json:"exclude,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1028,6 +1035,13 @@ func (x *TCPData) GetCaller() *CallerIdentity {
 	return nil
 }
 
+func (x *TCPData) GetExclude() []string {
+	if x != nil {
+		return x.Exclude
+	}
+	return nil
+}
+
 var File_service_proto protoreflect.FileDescriptor
 
 const file_service_proto_rawDesc = "" +
@@ -1106,7 +1120,7 @@ const file_service_proto_rawDesc = "" +
 	"\vstatus_code\x18\a \x01(\x05R\n" +
 	"statusCode\x12#\n" +
 	"\rstatus_detail\x18\b \x01(\tR\fstatusDetail\x12\"\n" +
-	"\fcontinuation\x18\t \x01(\bR\fcontinuation\"\xcc\x02\n" +
+	"\fcontinuation\x18\t \x01(\bR\fcontinuation\"\xe6\x02\n" +
 	"\aTCPData\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +
@@ -1123,7 +1137,8 @@ const file_service_proto_rawDesc = "" +
 	" \x01(\tR\n" +
 	"clientAddr\x12\x14\n" +
 	"\x05abort\x18\v \x01(\bR\x05abort\x121\n" +
-	"\x06caller\x18\f \x01(\v2\x19.rpcserver.CallerIdentityR\x06caller*S\n" +
+	"\x06caller\x18\f \x01(\v2\x19.rpcserver.CallerIdentityR\x06caller\x12\x18\n" +
+	"\aexclude\x18\r \x03(\tR\aexclude*S\n" +
 	"\x04Move\x12\x14\n" +
 	"\x10MOVE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eMOVE_RECONNECT\x10\x01\x12\x12\n" +

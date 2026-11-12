@@ -21,6 +21,7 @@ import (
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentwire"
+	"google.golang.org/protobuf/proto"
 )
 
 // muxPair returns an opener Mux and the accepting Mux's peer, serving
@@ -167,16 +168,21 @@ func TestUpgrade(t *testing.T) {
 	if !s.Answers() || s.Answered(context.Background()) != nil {
 		t.Fatalf("session answers %v, answered %v: want an accepted FeatureChain session", s.Answers(), s.Answered(context.Background()))
 	}
-	bad, err := m.m.Open([]byte{0xff})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer bad.Close() //nolint:errcheck
-	var a *link.Abort
-	if err := bad.Answered(context.Background()); !errors.As(err, &a) || !a.Refused {
-		t.Fatalf("an open whose header is no TCPData: %v, want a refusal", err)
-	} else if r, ok := AbortReason(a); !ok || r != relayv1.ErrorReason_ERROR_REASON_INVALID_ARGUMENT {
-		t.Fatalf("refusal %v: reason %v, want INVALID_ARGUMENT", a, r)
+	// A header that is no TCPData, and one whose exclude list is over
+	// MaxExclude (marshalled raw: OpenHeader refuses to write it).
+	oversized, _ := proto.Marshal(&pb.TCPData{AgentId: "echo", Exclude: refs(MaxExclude + 1)})
+	for _, h := range [][]byte{{0xff}, oversized} {
+		bad, err := m.m.Open(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer bad.Close() //nolint:errcheck
+		var a *link.Abort
+		if err := bad.Answered(context.Background()); !errors.As(err, &a) || !a.Refused {
+			t.Fatalf("an open whose header is no valid TCPData (%x): %v, want a refusal", h, err)
+		} else if r, ok := AbortReason(a); !ok || r != relayv1.ErrorReason_ERROR_REASON_INVALID_ARGUMENT {
+			t.Fatalf("refusal %v: reason %v, want INVALID_ARGUMENT", a, r)
+		}
 	}
 
 	nc, _ = serve("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")

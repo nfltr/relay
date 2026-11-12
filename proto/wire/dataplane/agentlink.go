@@ -8,11 +8,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/nfltr/link"
 	"github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/agentservices"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -65,17 +67,47 @@ const AgentLinkALPN = "nfltr-agent-link/1"
 func AgentLinkALPNs() []string { return []string{"peerlink-chain", AgentLinkALPN} }
 
 // OpenHeader is a session's header for open: its fields without session id
-// and open flag.
+// and open flag. An open whose exclude list CheckExclude refuses is an
+// error.
 func OpenHeader(open *pb.TCPData) ([]byte, error) {
+	if err := CheckExclude(open.GetExclude()); err != nil {
+		return nil, err
+	}
 	h := proto.CloneOf(open)
 	h.SessionId, h.Open = "", false
 	return proto.Marshal(h)
 }
 
-// ParseOpenHeader reads a session's header (OpenHeader).
+// ParseOpenHeader reads a session's header (OpenHeader): a TCPData whose
+// exclude list CheckExclude accepts.
 func ParseOpenHeader(header []byte) (*pb.TCPData, error) {
 	f := &pb.TCPData{}
-	return f, proto.Unmarshal(header, f)
+	if err := proto.Unmarshal(header, f); err != nil {
+		return f, err
+	}
+	return f, CheckExclude(f.GetExclude())
+}
+
+// MaxExclude bounds an open's exclude list (pb.TCPData.exclude): the
+// instances one open of a service name may have failed on.
+const MaxExclude = 16
+
+// CheckExclude accepts an open's exclude list: at most MaxExclude agent
+// refs, each a lowercase DNS label (agentservices.ValidLabel), none
+// repeated.
+func CheckExclude(refs []string) error {
+	if len(refs) > MaxExclude {
+		return fmt.Errorf("dataplane: exclude of %d instances (at most %d)", len(refs), MaxExclude)
+	}
+	for i, r := range refs {
+		if !agentservices.ValidLabel(r) {
+			return fmt.Errorf("dataplane: exclude: %q is no agent ref", r)
+		}
+		if slices.Contains(refs[:i], r) {
+			return fmt.Errorf("dataplane: exclude: %q twice", r)
+		}
+	}
+	return nil
 }
 
 // BindToken is an agent's credential on a link connection to its relay:

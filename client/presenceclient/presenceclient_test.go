@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/url"
 	"testing"
+
+	presencev1 "github.com/nfltr/relay/proto/nfltr/presence/v1"
 )
 
 func TestWaitAndTypedErrors(t *testing.T) {
@@ -58,4 +60,34 @@ func TestWaitAndTypedErrors(t *testing.T) {
 	if _, err := List(t.Context(), typed, map[string]string{"k": "v"}); !errors.As(err, &e) || e.Reason != "ERROR_REASON_UNAUTHENTICATED" {
 		t.Fatalf("typed error: %v", err)
 	}
+}
+
+// TestServicesCarried: an agent's declared services (group, direct,
+// health) come through List and Watch as the gateway's JSON sends them.
+func TestServicesCarried(t *testing.T) {
+	const svc = `"services":[{"name":"pg","kind":"tcp","e2ee":"e2ee","group":"db","direct":"on","down":true},{"name":"web","kind":"http"}]`
+	get := func(_ context.Context, path string) ([]byte, int, error) {
+		if u, _ := url.Parse(path); u.Path == AgentsPath {
+			return []byte(`{"cursor":"e.1","agents":[{"agentId":"a",` + svc + `}]}`), http.StatusOK, nil
+		}
+		return []byte(`{"cursor":"e.2","events":[{"revision":"2","agentId":"a","up":{` + svc + `}}]}`), http.StatusOK, nil
+	}
+	check := func(what string, got []*presencev1.Service) {
+		t.Helper()
+		if len(got) != 2 || got[0].GetName() != "pg" || got[0].GetKind() != "tcp" || got[0].GetE2Ee() != "e2ee" ||
+			got[0].GetGroup() != "db" || got[0].GetDirect() != "on" || !got[0].GetDown() ||
+			got[1].GetName() != "web" || got[1].GetGroup() != "" || got[1].GetDown() {
+			t.Fatalf("%s services = %v", what, got)
+		}
+	}
+	l, err := List(t.Context(), get, nil)
+	if err != nil || len(l.GetAgents()) != 1 {
+		t.Fatalf("List = %v, %v", l, err)
+	}
+	check("List", l.GetAgents()[0].GetServices())
+	w, err := Watch(t.Context(), get, "e.1", 0)
+	if err != nil || len(w.GetEvents()) != 1 {
+		t.Fatalf("Watch = %v, %v", w, err)
+	}
+	check("Watch", w.GetEvents()[0].GetUp().GetServices())
 }

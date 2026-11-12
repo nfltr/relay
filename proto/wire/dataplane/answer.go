@@ -12,6 +12,7 @@ import (
 
 	"github.com/nfltr/link"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
+	"github.com/nfltr/relay/proto/wire/agentservices"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -51,16 +52,28 @@ var ErrNoAnswer = errors.New("dataplane: the session ended without an answer")
 // AppendAnswer appends the answer with reason and msg (cut to MaxAnswer
 // bytes of valid UTF-8) to b.
 func AppendAnswer(b []byte, reason relayv1.ErrorReason, msg string) []byte {
+	b, _ = AppendInstanceAnswer(b, "", reason, msg) // no instance: never an error
+	return b
+}
+
+// AppendInstanceAnswer is AppendAnswer naming instance, the agent ref the
+// relay chose for an open of a service name (SessionAnswer.instance;
+// "": none). An instance that is no lowercase DNS label
+// (agentservices.ValidLabel) is an error.
+func AppendInstanceAnswer(b []byte, instance string, reason relayv1.ErrorReason, msg string) ([]byte, error) {
+	if instance != "" && !agentservices.ValidLabel(instance) {
+		return b, fmt.Errorf("dataplane: answer instance %q is no agent ref", instance)
+	}
 	if len(msg) > MaxAnswer {
 		msg = msg[:MaxAnswer]
 	}
 	msg = strings.ToValidUTF8(msg, "")
-	body, err := proto.Marshal(&relayv1.SessionAnswer{Reason: reason, Message: msg})
-	if err != nil { // a valid string and an enum always marshal
+	body, err := proto.Marshal(&relayv1.SessionAnswer{Reason: reason, Message: msg, Instance: instance})
+	if err != nil { // valid strings and an enum always marshal
 		panic(err)
 	}
-	b = binary.BigEndian.AppendUint16(b, uint16(len(body))) // #nosec G115 -- at most maxAnswerFrame: MaxAnswer bytes of message and an enum
-	return append(b, body...)
+	b = binary.BigEndian.AppendUint16(b, uint16(len(body))) // #nosec G115 -- at most maxAnswerFrame: MaxAnswer bytes of message, a 63-byte instance and an enum
+	return append(b, body...), nil
 }
 
 // WriteAnswer writes the answer with reason and msg to w in one write.
@@ -92,6 +105,9 @@ func ReadAnswer(r io.Reader) (*relayv1.SessionAnswer, error) {
 	a := &relayv1.SessionAnswer{}
 	if err := proto.Unmarshal(body, a); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrNoAnswer, err)
+	}
+	if i := a.GetInstance(); i != "" && !agentservices.ValidLabel(i) {
+		return nil, fmt.Errorf("%w: instance %q is no agent ref", ErrNoAnswer, i)
 	}
 	return a, nil
 }

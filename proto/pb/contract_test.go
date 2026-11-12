@@ -101,3 +101,18 @@ func TestTCPDataCallerWireVector(t *testing.T) {
 		t.Fatalf("routing info wire = %x", b)
 	}
 }
+
+// TestTCPDataExcludeWireVector pins the open's exclude list (field 13,
+// repeated string) on the wire.
+func TestTCPDataExcludeWireVector(t *testing.T) {
+	open := &TCPData{Open: true, Exclude: []string{"a-pg", "b-pg"}}
+	// open (0x28 01), then field 13 (0x6a) twice: 4 bytes each
+	const want = "28016a04612d70676a04622d7067"
+	b, err := proto.MarshalOptions{Deterministic: true}.Marshal(open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hex.EncodeToString(b); got != want {
+		t.Fatalf("wire = %s, want %s", got, want)
+	}
+}

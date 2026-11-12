@@ -42,7 +42,10 @@ type Agent struct {
 	// capabilities are the agent's advertised capabilities (at most 64).
 	Capabilities []string `protobuf:"bytes,3,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	// connected_at is when the relay accepted the agent's connection.
-	ConnectedAt   *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=connected_at,json=connectedAt,proto3" json:"connected_at,omitempty"`
+	ConnectedAt *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=connected_at,json=connectedAt,proto3" json:"connected_at,omitempty"`
+	// services are the services the agent declared (at most 64), in its
+	// declaration's order.
+	Services      []*Service `protobuf:"bytes,5,rep,name=services,proto3" json:"services,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -105,6 +108,111 @@ func (x *Agent) GetConnectedAt() *timestamppb.Timestamp {
 	return nil
 }
 
+func (x *Agent) GetServices() []*Service {
+	if x != nil {
+		return x.Services
+	}
+	return nil
+}
+
+// Service is one service an agent declared (agentservices.Decl) and its
+// health.
+type Service struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// name is the service name (agentservices.ValidName).
+	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// kind is "http" or "tcp".
+	Kind string `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	// e2ee is a tcp service's mode: "e2ee", "plain", or empty (the relay's
+	// policy).
+	E2Ee string `protobuf:"bytes,3,opt,name=e2ee,proto3" json:"e2ee,omitempty"`
+	// group is the organisation group the service is published under
+	// (dialled as <name>@<group>); empty: not published.
+	Group string `protobuf:"bytes,4,opt,name=group,proto3" json:"group,omitempty"`
+	// direct is the agent's direct-path setting for the service: "on",
+	// "public", or empty (off). Informational: each end's own configuration
+	// decides.
+	Direct string `protobuf:"bytes,5,opt,name=direct,proto3" json:"direct,omitempty"`
+	// down: the agent finds the service's target down (its label
+	// nfltr.health.<name> is "down", agentservices.HealthLabel); a change
+	// arrives as LabelsChanged.
+	Down          bool `protobuf:"varint,6,opt,name=down,proto3" json:"down,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Service) Reset() {
+	*x = Service{}
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Service) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Service) ProtoMessage() {}
+
+func (x *Service) ProtoReflect() protoreflect.Message {
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Service.ProtoReflect.Descriptor instead.
+func (*Service) Descriptor() ([]byte, []int) {
+	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *Service) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Service) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *Service) GetE2Ee() string {
+	if x != nil {
+		return x.E2Ee
+	}
+	return ""
+}
+
+func (x *Service) GetGroup() string {
+	if x != nil {
+		return x.Group
+	}
+	return ""
+}
+
+func (x *Service) GetDirect() string {
+	if x != nil {
+		return x.Direct
+	}
+	return ""
+}
+
+func (x *Service) GetDown() bool {
+	if x != nil {
+		return x.Down
+	}
+	return false
+}
+
 // ListAgentsRequest filters the inventory.
 type ListAgentsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -117,7 +225,7 @@ type ListAgentsRequest struct {
 
 func (x *ListAgentsRequest) Reset() {
 	*x = ListAgentsRequest{}
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[1]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -129,7 +237,7 @@ func (x *ListAgentsRequest) String() string {
 func (*ListAgentsRequest) ProtoMessage() {}
 
 func (x *ListAgentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[1]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -142,7 +250,7 @@ func (x *ListAgentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentsRequest.ProtoReflect.Descriptor instead.
 func (*ListAgentsRequest) Descriptor() ([]byte, []int) {
-	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{1}
+	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *ListAgentsRequest) GetSelector() map[string]string {
@@ -165,7 +273,7 @@ type ListAgentsResponse struct {
 
 func (x *ListAgentsResponse) Reset() {
 	*x = ListAgentsResponse{}
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[2]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -177,7 +285,7 @@ func (x *ListAgentsResponse) String() string {
 func (*ListAgentsResponse) ProtoMessage() {}
 
 func (x *ListAgentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[2]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -190,7 +298,7 @@ func (x *ListAgentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentsResponse.ProtoReflect.Descriptor instead.
 func (*ListAgentsResponse) Descriptor() ([]byte, []int) {
-	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{2}
+	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *ListAgentsResponse) GetAgents() []*Agent {
@@ -221,7 +329,7 @@ type WatchRequest struct {
 
 func (x *WatchRequest) Reset() {
 	*x = WatchRequest{}
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[3]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -233,7 +341,7 @@ func (x *WatchRequest) String() string {
 func (*WatchRequest) ProtoMessage() {}
 
 func (x *WatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[3]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -246,7 +354,7 @@ func (x *WatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchRequest.ProtoReflect.Descriptor instead.
 func (*WatchRequest) Descriptor() ([]byte, []int) {
-	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{3}
+	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *WatchRequest) GetCursor() string {
@@ -280,7 +388,7 @@ type WatchResponse struct {
 
 func (x *WatchResponse) Reset() {
 	*x = WatchResponse{}
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[4]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -292,7 +400,7 @@ func (x *WatchResponse) String() string {
 func (*WatchResponse) ProtoMessage() {}
 
 func (x *WatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[4]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -305,7 +413,7 @@ func (x *WatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchResponse.ProtoReflect.Descriptor instead.
 func (*WatchResponse) Descriptor() ([]byte, []int) {
-	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{4}
+	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *WatchResponse) GetCursor() string {
@@ -350,7 +458,7 @@ type PresenceEvent struct {
 
 func (x *PresenceEvent) Reset() {
 	*x = PresenceEvent{}
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[5]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -362,7 +470,7 @@ func (x *PresenceEvent) String() string {
 func (*PresenceEvent) ProtoMessage() {}
 
 func (x *PresenceEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[5]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -375,7 +483,7 @@ func (x *PresenceEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PresenceEvent.ProtoReflect.Descriptor instead.
 func (*PresenceEvent) Descriptor() ([]byte, []int) {
-	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{5}
+	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *PresenceEvent) GetRevision() uint64 {
@@ -457,14 +565,16 @@ type AgentUp struct {
 	// labels the agent connected with.
 	Labels map[string]string `protobuf:"bytes,1,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// capabilities the agent connected with.
-	Capabilities  []string `protobuf:"bytes,2,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	Capabilities []string `protobuf:"bytes,2,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
+	// services the agent declared, as in Agent.services.
+	Services      []*Service `protobuf:"bytes,3,rep,name=services,proto3" json:"services,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *AgentUp) Reset() {
 	*x = AgentUp{}
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[6]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -476,7 +586,7 @@ func (x *AgentUp) String() string {
 func (*AgentUp) ProtoMessage() {}
 
 func (x *AgentUp) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[6]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -489,7 +599,7 @@ func (x *AgentUp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentUp.ProtoReflect.Descriptor instead.
 func (*AgentUp) Descriptor() ([]byte, []int) {
-	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{6}
+	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *AgentUp) GetLabels() map[string]string {
@@ -506,6 +616,13 @@ func (x *AgentUp) GetCapabilities() []string {
 	return nil
 }
 
+func (x *AgentUp) GetServices() []*Service {
+	if x != nil {
+		return x.Services
+	}
+	return nil
+}
+
 // AgentDown is an agent disconnecting.
 type AgentDown struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -515,7 +632,7 @@ type AgentDown struct {
 
 func (x *AgentDown) Reset() {
 	*x = AgentDown{}
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[7]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -527,7 +644,7 @@ func (x *AgentDown) String() string {
 func (*AgentDown) ProtoMessage() {}
 
 func (x *AgentDown) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[7]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -540,7 +657,7 @@ func (x *AgentDown) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentDown.ProtoReflect.Descriptor instead.
 func (*AgentDown) Descriptor() ([]byte, []int) {
-	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{7}
+	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{8}
 }
 
 // LabelsChanged is an agent advertising new labels.
@@ -554,7 +671,7 @@ type LabelsChanged struct {
 
 func (x *LabelsChanged) Reset() {
 	*x = LabelsChanged{}
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[8]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -566,7 +683,7 @@ func (x *LabelsChanged) String() string {
 func (*LabelsChanged) ProtoMessage() {}
 
 func (x *LabelsChanged) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[8]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -579,7 +696,7 @@ func (x *LabelsChanged) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LabelsChanged.ProtoReflect.Descriptor instead.
 func (*LabelsChanged) Descriptor() ([]byte, []int) {
-	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{8}
+	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *LabelsChanged) GetLabels() map[string]string {
@@ -603,7 +720,7 @@ type UpdateLabelsRequest struct {
 
 func (x *UpdateLabelsRequest) Reset() {
 	*x = UpdateLabelsRequest{}
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[9]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -615,7 +732,7 @@ func (x *UpdateLabelsRequest) String() string {
 func (*UpdateLabelsRequest) ProtoMessage() {}
 
 func (x *UpdateLabelsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[9]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -628,7 +745,7 @@ func (x *UpdateLabelsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateLabelsRequest.ProtoReflect.Descriptor instead.
 func (*UpdateLabelsRequest) Descriptor() ([]byte, []int) {
-	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{9}
+	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *UpdateLabelsRequest) GetLabels() map[string]string {
@@ -656,7 +773,7 @@ type UpdateLabelsResponse struct {
 
 func (x *UpdateLabelsResponse) Reset() {
 	*x = UpdateLabelsResponse{}
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[10]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -668,7 +785,7 @@ func (x *UpdateLabelsResponse) String() string {
 func (*UpdateLabelsResponse) ProtoMessage() {}
 
 func (x *UpdateLabelsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[10]
+	mi := &file_nfltr_presence_v1_presence_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -681,7 +798,7 @@ func (x *UpdateLabelsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateLabelsResponse.ProtoReflect.Descriptor instead.
 func (*UpdateLabelsResponse) Descriptor() ([]byte, []int) {
-	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{10}
+	return file_nfltr_presence_v1_presence_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *UpdateLabelsResponse) GetLabels() map[string]string {
@@ -695,15 +812,23 @@ var File_nfltr_presence_v1_presence_proto protoreflect.FileDescriptor
 
 const file_nfltr_presence_v1_presence_proto_rawDesc = "" +
 	"\n" +
-	" nfltr/presence/v1/presence.proto\x12\x11nfltr.presence.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xfe\x01\n" +
+	" nfltr/presence/v1/presence.proto\x12\x11nfltr.presence.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xb6\x02\n" +
 	"\x05Agent\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12<\n" +
 	"\x06labels\x18\x02 \x03(\v2$.nfltr.presence.v1.Agent.LabelsEntryR\x06labels\x12\"\n" +
 	"\fcapabilities\x18\x03 \x03(\tR\fcapabilities\x12=\n" +
-	"\fconnected_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\vconnectedAt\x1a9\n" +
+	"\fconnected_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\vconnectedAt\x126\n" +
+	"\bservices\x18\x05 \x03(\v2\x1a.nfltr.presence.v1.ServiceR\bservices\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa0\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x87\x01\n" +
+	"\aService\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n" +
+	"\x04kind\x18\x02 \x01(\tR\x04kind\x12\x12\n" +
+	"\x04e2ee\x18\x03 \x01(\tR\x04e2ee\x12\x14\n" +
+	"\x05group\x18\x04 \x01(\tR\x05group\x12\x16\n" +
+	"\x06direct\x18\x05 \x01(\tR\x06direct\x12\x12\n" +
+	"\x04down\x18\x06 \x01(\bR\x04down\"\xa0\x01\n" +
 	"\x11ListAgentsRequest\x12N\n" +
 	"\bselector\x18\x01 \x03(\v22.nfltr.presence.v1.ListAgentsRequest.SelectorEntryR\bselector\x1a;\n" +
 	"\rSelectorEntry\x12\x10\n" +
@@ -725,10 +850,11 @@ const file_nfltr_presence_v1_presence_proto_rawDesc = "" +
 	"\x02up\x18\x03 \x01(\v2\x1a.nfltr.presence.v1.AgentUpH\x00R\x02up\x122\n" +
 	"\x04down\x18\x04 \x01(\v2\x1c.nfltr.presence.v1.AgentDownH\x00R\x04down\x12:\n" +
 	"\x06labels\x18\x05 \x01(\v2 .nfltr.presence.v1.LabelsChangedH\x00R\x06labelsB\b\n" +
-	"\x06change\"\xa8\x01\n" +
+	"\x06change\"\xe0\x01\n" +
 	"\aAgentUp\x12>\n" +
 	"\x06labels\x18\x01 \x03(\v2&.nfltr.presence.v1.AgentUp.LabelsEntryR\x06labels\x12\"\n" +
-	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities\x1a9\n" +
+	"\fcapabilities\x18\x02 \x03(\tR\fcapabilities\x126\n" +
+	"\bservices\x18\x03 \x03(\v2\x1a.nfltr.presence.v1.ServiceR\bservices\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\v\n" +
@@ -768,51 +894,54 @@ func file_nfltr_presence_v1_presence_proto_rawDescGZIP() []byte {
 	return file_nfltr_presence_v1_presence_proto_rawDescData
 }
 
-var file_nfltr_presence_v1_presence_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_nfltr_presence_v1_presence_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_nfltr_presence_v1_presence_proto_goTypes = []any{
 	(*Agent)(nil),                 // 0: nfltr.presence.v1.Agent
-	(*ListAgentsRequest)(nil),     // 1: nfltr.presence.v1.ListAgentsRequest
-	(*ListAgentsResponse)(nil),    // 2: nfltr.presence.v1.ListAgentsResponse
-	(*WatchRequest)(nil),          // 3: nfltr.presence.v1.WatchRequest
-	(*WatchResponse)(nil),         // 4: nfltr.presence.v1.WatchResponse
-	(*PresenceEvent)(nil),         // 5: nfltr.presence.v1.PresenceEvent
-	(*AgentUp)(nil),               // 6: nfltr.presence.v1.AgentUp
-	(*AgentDown)(nil),             // 7: nfltr.presence.v1.AgentDown
-	(*LabelsChanged)(nil),         // 8: nfltr.presence.v1.LabelsChanged
-	(*UpdateLabelsRequest)(nil),   // 9: nfltr.presence.v1.UpdateLabelsRequest
-	(*UpdateLabelsResponse)(nil),  // 10: nfltr.presence.v1.UpdateLabelsResponse
-	nil,                           // 11: nfltr.presence.v1.Agent.LabelsEntry
-	nil,                           // 12: nfltr.presence.v1.ListAgentsRequest.SelectorEntry
-	nil,                           // 13: nfltr.presence.v1.AgentUp.LabelsEntry
-	nil,                           // 14: nfltr.presence.v1.LabelsChanged.LabelsEntry
-	nil,                           // 15: nfltr.presence.v1.UpdateLabelsRequest.LabelsEntry
-	nil,                           // 16: nfltr.presence.v1.UpdateLabelsResponse.LabelsEntry
-	(*timestamppb.Timestamp)(nil), // 17: google.protobuf.Timestamp
+	(*Service)(nil),               // 1: nfltr.presence.v1.Service
+	(*ListAgentsRequest)(nil),     // 2: nfltr.presence.v1.ListAgentsRequest
+	(*ListAgentsResponse)(nil),    // 3: nfltr.presence.v1.ListAgentsResponse
+	(*WatchRequest)(nil),          // 4: nfltr.presence.v1.WatchRequest
+	(*WatchResponse)(nil),         // 5: nfltr.presence.v1.WatchResponse
+	(*PresenceEvent)(nil),         // 6: nfltr.presence.v1.PresenceEvent
+	(*AgentUp)(nil),               // 7: nfltr.presence.v1.AgentUp
+	(*AgentDown)(nil),             // 8: nfltr.presence.v1.AgentDown
+	(*LabelsChanged)(nil),         // 9: nfltr.presence.v1.LabelsChanged
+	(*UpdateLabelsRequest)(nil),   // 10: nfltr.presence.v1.UpdateLabelsRequest
+	(*UpdateLabelsResponse)(nil),  // 11: nfltr.presence.v1.UpdateLabelsResponse
+	nil,                           // 12: nfltr.presence.v1.Agent.LabelsEntry
+	nil,                           // 13: nfltr.presence.v1.ListAgentsRequest.SelectorEntry
+	nil,                           // 14: nfltr.presence.v1.AgentUp.LabelsEntry
+	nil,                           // 15: nfltr.presence.v1.LabelsChanged.LabelsEntry
+	nil,                           // 16: nfltr.presence.v1.UpdateLabelsRequest.LabelsEntry
+	nil,                           // 17: nfltr.presence.v1.UpdateLabelsResponse.LabelsEntry
+	(*timestamppb.Timestamp)(nil), // 18: google.protobuf.Timestamp
 }
 var file_nfltr_presence_v1_presence_proto_depIdxs = []int32{
-	11, // 0: nfltr.presence.v1.Agent.labels:type_name -> nfltr.presence.v1.Agent.LabelsEntry
-	17, // 1: nfltr.presence.v1.Agent.connected_at:type_name -> google.protobuf.Timestamp
-	12, // 2: nfltr.presence.v1.ListAgentsRequest.selector:type_name -> nfltr.presence.v1.ListAgentsRequest.SelectorEntry
-	0,  // 3: nfltr.presence.v1.ListAgentsResponse.agents:type_name -> nfltr.presence.v1.Agent
-	5,  // 4: nfltr.presence.v1.WatchResponse.events:type_name -> nfltr.presence.v1.PresenceEvent
-	6,  // 5: nfltr.presence.v1.PresenceEvent.up:type_name -> nfltr.presence.v1.AgentUp
-	7,  // 6: nfltr.presence.v1.PresenceEvent.down:type_name -> nfltr.presence.v1.AgentDown
-	8,  // 7: nfltr.presence.v1.PresenceEvent.labels:type_name -> nfltr.presence.v1.LabelsChanged
-	13, // 8: nfltr.presence.v1.AgentUp.labels:type_name -> nfltr.presence.v1.AgentUp.LabelsEntry
-	14, // 9: nfltr.presence.v1.LabelsChanged.labels:type_name -> nfltr.presence.v1.LabelsChanged.LabelsEntry
-	15, // 10: nfltr.presence.v1.UpdateLabelsRequest.labels:type_name -> nfltr.presence.v1.UpdateLabelsRequest.LabelsEntry
-	16, // 11: nfltr.presence.v1.UpdateLabelsResponse.labels:type_name -> nfltr.presence.v1.UpdateLabelsResponse.LabelsEntry
-	1,  // 12: nfltr.presence.v1.PresenceService.ListAgents:input_type -> nfltr.presence.v1.ListAgentsRequest
-	3,  // 13: nfltr.presence.v1.PresenceService.Watch:input_type -> nfltr.presence.v1.WatchRequest
-	9,  // 14: nfltr.presence.v1.PresenceService.UpdateLabels:input_type -> nfltr.presence.v1.UpdateLabelsRequest
-	2,  // 15: nfltr.presence.v1.PresenceService.ListAgents:output_type -> nfltr.presence.v1.ListAgentsResponse
-	4,  // 16: nfltr.presence.v1.PresenceService.Watch:output_type -> nfltr.presence.v1.WatchResponse
-	10, // 17: nfltr.presence.v1.PresenceService.UpdateLabels:output_type -> nfltr.presence.v1.UpdateLabelsResponse
-	15, // [15:18] is the sub-list for method output_type
-	12, // [12:15] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	12, // 0: nfltr.presence.v1.Agent.labels:type_name -> nfltr.presence.v1.Agent.LabelsEntry
+	18, // 1: nfltr.presence.v1.Agent.connected_at:type_name -> google.protobuf.Timestamp
+	1,  // 2: nfltr.presence.v1.Agent.services:type_name -> nfltr.presence.v1.Service
+	13, // 3: nfltr.presence.v1.ListAgentsRequest.selector:type_name -> nfltr.presence.v1.ListAgentsRequest.SelectorEntry
+	0,  // 4: nfltr.presence.v1.ListAgentsResponse.agents:type_name -> nfltr.presence.v1.Agent
+	6,  // 5: nfltr.presence.v1.WatchResponse.events:type_name -> nfltr.presence.v1.PresenceEvent
+	7,  // 6: nfltr.presence.v1.PresenceEvent.up:type_name -> nfltr.presence.v1.AgentUp
+	8,  // 7: nfltr.presence.v1.PresenceEvent.down:type_name -> nfltr.presence.v1.AgentDown
+	9,  // 8: nfltr.presence.v1.PresenceEvent.labels:type_name -> nfltr.presence.v1.LabelsChanged
+	14, // 9: nfltr.presence.v1.AgentUp.labels:type_name -> nfltr.presence.v1.AgentUp.LabelsEntry
+	1,  // 10: nfltr.presence.v1.AgentUp.services:type_name -> nfltr.presence.v1.Service
+	15, // 11: nfltr.presence.v1.LabelsChanged.labels:type_name -> nfltr.presence.v1.LabelsChanged.LabelsEntry
+	16, // 12: nfltr.presence.v1.UpdateLabelsRequest.labels:type_name -> nfltr.presence.v1.UpdateLabelsRequest.LabelsEntry
+	17, // 13: nfltr.presence.v1.UpdateLabelsResponse.labels:type_name -> nfltr.presence.v1.UpdateLabelsResponse.LabelsEntry
+	2,  // 14: nfltr.presence.v1.PresenceService.ListAgents:input_type -> nfltr.presence.v1.ListAgentsRequest
+	4,  // 15: nfltr.presence.v1.PresenceService.Watch:input_type -> nfltr.presence.v1.WatchRequest
+	10, // 16: nfltr.presence.v1.PresenceService.UpdateLabels:input_type -> nfltr.presence.v1.UpdateLabelsRequest
+	3,  // 17: nfltr.presence.v1.PresenceService.ListAgents:output_type -> nfltr.presence.v1.ListAgentsResponse
+	5,  // 18: nfltr.presence.v1.PresenceService.Watch:output_type -> nfltr.presence.v1.WatchResponse
+	11, // 19: nfltr.presence.v1.PresenceService.UpdateLabels:output_type -> nfltr.presence.v1.UpdateLabelsResponse
+	17, // [17:20] is the sub-list for method output_type
+	14, // [14:17] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_nfltr_presence_v1_presence_proto_init() }
@@ -820,7 +949,7 @@ func file_nfltr_presence_v1_presence_proto_init() {
 	if File_nfltr_presence_v1_presence_proto != nil {
 		return
 	}
-	file_nfltr_presence_v1_presence_proto_msgTypes[5].OneofWrappers = []any{
+	file_nfltr_presence_v1_presence_proto_msgTypes[6].OneofWrappers = []any{
 		(*PresenceEvent_Up)(nil),
 		(*PresenceEvent_Down)(nil),
 		(*PresenceEvent_Labels)(nil),
@@ -831,7 +960,7 @@ func file_nfltr_presence_v1_presence_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nfltr_presence_v1_presence_proto_rawDesc), len(file_nfltr_presence_v1_presence_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   17,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

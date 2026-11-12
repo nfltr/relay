@@ -49,6 +49,32 @@ message Agent {
   repeated string capabilities = 3;
   // connected_at is when the relay accepted the agent's connection.
   google.protobuf.Timestamp connected_at = 4;
+  // services are the services the agent declared (at most 64), in its
+  // declaration's order.
+  repeated Service services = 5;
+}
+
+// Service is one service an agent declared (agentservices.Decl) and its
+// health.
+message Service {
+  // name is the service name (agentservices.ValidName).
+  string name = 1;
+  // kind is "http" or "tcp".
+  string kind = 2;
+  // e2ee is a tcp service's mode: "e2ee", "plain", or empty (the relay's
+  // policy).
+  string e2ee = 3;
+  // group is the organisation group the service is published under
+  // (dialled as <name>@<group>); empty: not published.
+  string group = 4;
+  // direct is the agent's direct-path setting for the service: "on",
+  // "public", or empty (off). Informational: each end's own configuration
+  // decides.
+  string direct = 5;
+  // down: the agent finds the service's target down (its label
+  // nfltr.health.<name> is "down", agentservices.HealthLabel); a change
+  // arrives as LabelsChanged.
+  bool down = 6;
 }
 
 // ListAgentsRequest filters the inventory.
@@ -110,6 +136,8 @@ message AgentUp {
   map<string, string> labels = 1;
   // capabilities the agent connected with.
   repeated string capabilities = 2;
+  // services the agent declared, as in Agent.services.
+  repeated Service services = 3;
 }
 
 // AgentDown is an agent disconnecting.

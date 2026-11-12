@@ -44,7 +44,8 @@ func (m *Mux) Open(open *pb.TCPData) (*Session, error) {
 
 // Serve receives frames until the connection ends (link.Mux.Serve).
 // accept, nil on the opening side, gets each session the peer opens with
-// its open's fields; a session whose header is not a TCPData is refused
+// its open's fields; a session whose header is not a valid TCPData
+// (ParseOpenHeader) is refused
 // (INVALID_ARGUMENT where the connection negotiated link.FeatureChain).
 func (m *Mux) Serve(accept func(open *pb.TCPData, s *Session)) error {
 	if accept == nil {
@@ -53,7 +54,7 @@ func (m *Mux) Serve(accept func(open *pb.TCPData, s *Session)) error {
 	return m.m.Serve(func(header []byte, s *Session) {
 		f, err := ParseOpenHeader(header)
 		if err != nil {
-			_ = s.AbortWith(Refusal(relayv1.ErrorReason_ERROR_REASON_INVALID_ARGUMENT, "the open's header is no TCPData"))
+			_ = s.AbortWith(Refusal(relayv1.ErrorReason_ERROR_REASON_INVALID_ARGUMENT, "the open's header is no valid TCPData: "+err.Error()))
 			return
 		}
 		accept(f, s)

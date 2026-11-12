@@ -5,8 +5,10 @@
 // identity: the declaration an agent sends in its ConnectHTTP request metadata,
 // which the relay echoes in its response header when it routes services.
 //
-// The declaration names services and their kind only. Their targets stay
-// on the agent, which dials nothing else (its local allow-list).
+// The declaration names services, their kind and, for a service in
+// organisation mode, the group it is published under and its direct-path
+// setting. Their targets stay on the agent, which dials nothing else (its
+// local allow-list). A service's health is a presence label (HealthLabel).
 package agentservices
 
 import (
@@ -65,11 +67,30 @@ const (
 	E2EEOff E2EE = "plain"
 )
 
-// Decl is one declared service. E2EE applies to tcp services only.
+// Direct is a service's direct-path setting as its agent declares it.
+// Informational: each end's own configuration decides whether a direct
+// path is tried, never the relay's word.
+type Direct string
+
+const (
+	// DirectOff: relayed only (the attribute is absent).
+	DirectOff Direct = ""
+	// DirectOn: public and LAN candidates ("direct=on").
+	DirectOn Direct = "on"
+	// DirectPublic: the public address only ("direct=public").
+	DirectPublic Direct = "public"
+)
+
+// Decl is one declared service. E2EE applies to tcp services only; Group
+// (the organisation group the service is published under, dialled as
+// <service>@<group>) and Direct to tcp+e2ee services only, the ones in
+// organisation mode.
 type Decl struct {
-	Name string
-	Kind Kind
-	E2EE E2EE
+	Name   string
+	Kind   Kind
+	E2EE   E2EE
+	Group  string
+	Direct Direct
 }
 
 // kindValue is the declaration's kind as written: "http", "tcp",
@@ -79,6 +100,45 @@ func (d Decl) kindValue() string {
 		return string(d.Kind)
 	}
 	return string(d.Kind) + "+" + string(d.E2EE)
+}
+
+// value is the entry after "name=": the kind, then ";group=G" and
+// ";direct=D" when set, in that order.
+func (d Decl) value() string {
+	v := d.kindValue()
+	if d.Group != "" {
+		v += ";group=" + d.Group
+	}
+	if d.Direct != DirectOff {
+		v += ";direct=" + string(d.Direct)
+	}
+	return v
+}
+
+// HealthLabelPrefix and HealthDown are a service's health in its agent's
+// presence labels: "nfltr.health.<service>" = "down" while the agent finds
+// the service's target down; absent, the service is up.
+const (
+	HealthLabelPrefix = "nfltr.health."
+	HealthDown        = "down"
+)
+
+// HealthLabel is the presence label key of service name's health.
+func HealthLabel(name string) string { return HealthLabelPrefix + name }
+
+// ValidLabel reports whether s is one lowercase DNS label (a-z, 0-9, '-',
+// at most 63, no '-' at either end): an organisation group (a machine
+// certificate's OU), an agent ref.
+func ValidLabel(s string) bool {
+	if s == "" || len(s) > 63 || s[0] == '-' || s[len(s)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // ValidName reports whether name is a service name: a DNS label that starts
@@ -96,18 +156,20 @@ func ValidName(name string) bool {
 	return true
 }
 
-// Format is the header value of decls: "web=http,db=tcp,vault=tcp+e2ee".
+// Format is the header value of decls:
+// "web=http,db=tcp,pg=tcp+e2ee;group=db;direct=on".
 func Format(decls []Decl) string {
 	parts := make([]string, len(decls))
 	for i, d := range decls {
-		parts[i] = d.Name + "=" + d.kindValue()
+		parts[i] = d.Name + "=" + d.value()
 	}
 	return strings.Join(parts, ",")
 }
 
-// Parse reads a declaration. Every entry must be name=kind with a valid
-// name, a known kind and no repeated name; anything else is an error and
-// declares nothing.
+// Parse reads a declaration. Every entry must be name=kind, then at most
+// one ";group=G" (G a ValidLabel) and one ";direct=on|public", in that
+// order and on a tcp+e2ee service only, with a valid name, a known kind and
+// no repeated name; anything else is an error and declares nothing.
 func Parse(v string) ([]Decl, error) {
 	if v == "" {
 		return nil, errors.New("empty service declaration")
@@ -118,6 +180,7 @@ func Parse(v string) ([]Decl, error) {
 	var out []Decl
 	seen := map[string]bool{}
 	for entry := range strings.SplitSeq(v, ",") {
+		entry, attrs, hasAttrs := strings.Cut(entry, ";")
 		name, kind, ok := strings.Cut(entry, "=")
 		if !ok || !ValidName(name) {
 			return nil, fmt.Errorf("invalid service entry %q (want name=kind, name a DNS label starting with a letter)", entry)
@@ -133,9 +196,39 @@ func Parse(v string) ([]Decl, error) {
 			return nil, fmt.Errorf("service %q declared twice", name)
 		}
 		seen[name] = true
-		out = append(out, Decl{Name: name, Kind: Kind(kind), E2EE: E2EE(e2ee)})
+		d := Decl{Name: name, Kind: Kind(kind), E2EE: E2EE(e2ee)}
+		if hasAttrs {
+			if err := d.parseAttrs(attrs); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, d)
 	}
 	return out, nil
+}
+
+// parseAttrs reads the entry's attributes after its first ';' into d.
+func (d *Decl) parseAttrs(attrs string) error {
+	if d.Kind != TCP || d.E2EE != E2EEOn {
+		return fmt.Errorf("service %q: group and direct need a tcp+e2ee service (organisation mode)", d.Name)
+	}
+	if v, ok := strings.CutPrefix(attrs, "group="); ok {
+		v, rest, more := strings.Cut(v, ";")
+		if !ValidLabel(v) {
+			return fmt.Errorf("service %q: invalid group %q (a lowercase DNS label)", d.Name, v)
+		}
+		d.Group = v
+		if !more {
+			return nil
+		}
+		attrs = rest
+	}
+	switch v, _ := strings.CutPrefix(attrs, "direct="); Direct(v) {
+	case DirectOn, DirectPublic:
+		d.Direct = Direct(v)
+		return nil
+	}
+	return fmt.Errorf("service %q: invalid attributes %q (want ;group=<group> then ;direct=on|public)", d.Name, attrs)
 }
 
 // Find returns the declaration of the service named name.
