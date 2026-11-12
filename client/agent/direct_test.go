@@ -591,3 +591,121 @@ func TestParseDirectMode(t *testing.T) {
 		t.Error("lan parsed")
 	}
 }
+
+// rebindConn is an agent's UDP socket behind a NAT that rebinds: after
+// rebind its packets leave from a new port and the old one is gone, so
+// the client's direct connection (to the old port) dies as a QUIC server
+// does not migrate.
+type rebindConn struct {
+	mu     sync.Mutex
+	cur    *net.UDPConn
+	closed bool
+}
+
+func newRebindConn(t *testing.T) *rebindConn {
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &rebindConn{cur: pc}
+}
+
+func (c *rebindConn) conn() *net.UDPConn { c.mu.Lock(); defer c.mu.Unlock(); return c.cur }
+
+func (c *rebindConn) rebind(t *testing.T) {
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	old := c.cur
+	c.cur = pc
+	c.mu.Unlock()
+	_ = old.Close()
+}
+
+func (c *rebindConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	for {
+		s := c.conn()
+		n, a, err := s.ReadFrom(p)
+		c.mu.Lock()
+		again := err != nil && !c.closed && c.cur != s
+		c.mu.Unlock()
+		if !again {
+			return n, a, err
+		}
+	}
+}
+
+func (c *rebindConn) WriteTo(p []byte, a net.Addr) (int, error) { return c.conn().WriteTo(p, a) }
+func (c *rebindConn) LocalAddr() net.Addr                       { return c.conn().LocalAddr() }
+func (c *rebindConn) SetDeadline(t time.Time) error             { return c.conn().SetDeadline(t) }
+func (c *rebindConn) SetReadDeadline(t time.Time) error         { return c.conn().SetReadDeadline(t) }
+func (c *rebindConn) SetWriteDeadline(t time.Time) error        { return c.conn().SetWriteDeadline(t) }
+func (c *rebindConn) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	return c.conn().Close()
+}
+
+// TestDirectAgentRebindDirectAgain: the agent's address changes mid
+// transfer (link spec/DirectPath.tla Rebind): the session falls back to
+// the relay within the fallback bound, then goes direct again on the new
+// address after one fresh exchange (RePunch), not after the pair's
+// backoff, every byte once in order.
+func TestDirectAgentRebindDirectAgain(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	r.d.repunch = 0 // the last punch is old enough: as a connection that lived past the backoff
+	table := r.l.targets.services
+	old := table.direct
+	rc := newRebindConn(t)
+	ep := &DirectEndpoint{pc: rc, tr: &quic.Transport{Conn: rc}, loopback: true}
+	d, err := newDirectServerOn(ep, old.org, old.groups, old.modes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := old.relay.Load()
+	d.setRelay(q.addr, q.tls)
+	table.direct = d
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = d.node.Drain(ctx)
+		_ = ep.Close()
+	})
+	_, tc, events := r.session(t)
+	within := func(path string, bound time.Duration) (PathEvent, time.Duration) {
+		t.Helper()
+		start := time.Now()
+		select {
+		case e := <-events:
+			if e.Path != path {
+				t.Fatalf("path event %+v, want %s", e, path)
+			}
+			return e, time.Since(start)
+		case <-time.After(bound):
+			t.Fatalf("no path event %s within %s", path, bound)
+		}
+		return PathEvent{}, 0
+	}
+	echo(t, tc, 8<<20, func() {
+		first := waitPath(t, events, PathDirect)
+		t0 := time.Now()
+		rc.rebind(t)
+		if e, _ := within(PathRelayed, 10*time.Second); e.Reason != ReasonDirectLost {
+			t.Fatalf("fallback reason %q, want %s", e.Reason, ReasonDirectLost)
+		}
+		fell := time.Since(t0)
+		// one exchange: its QAD (3 s) and punch (5 s) bounds, not the
+		// pair's backoff (20 s)
+		e, _ := within(PathDirect, 8*time.Second)
+		if e.Peer.Port() == first.Peer.Port() || int(e.Peer.Port()) != rc.LocalAddr().(*net.UDPAddr).Port {
+			t.Fatalf("direct again at %s, want the agent's new port %s (was %s)", e.Peer, rc.LocalAddr(), first.Peer)
+		}
+		t.Logf("agent rebind: relayed after %s, direct again after %s", fell.Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
+	})
+	if st := r.d.Stats(); st.Punches["ok"] != 2 {
+		t.Fatalf("punches %v, want 2 ok", st.Punches)
+	}
+}

@@ -92,7 +92,7 @@ const tlsRecordHandshake = 0x16
 // and the direct connections share it, so the NAT mapping QAD reports is
 // the one a punch uses.
 type DirectEndpoint struct {
-	pc *net.UDPConn
+	pc net.PacketConn
 	tr *quic.Transport
 	// loopback admits loopback candidates (tests on one machine); else a
 	// peer could aim this machine's probes and punches at its own
@@ -147,7 +147,11 @@ func (e *DirectEndpoint) QAD(ctx context.Context, addr string, tc *tls.Config) (
 // hostCandidates are this machine's interface addresses on the socket's
 // port (DirectOn only): global and private unicast, no loopback.
 func (e *DirectEndpoint) hostCandidates() []netip.AddrPort {
-	port := uint16(e.pc.LocalAddr().(*net.UDPAddr).Port) // #nosec G115 -- a UDP port
+	ua, ok := e.pc.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		return nil
+	}
+	port := uint16(ua.Port) // #nosec G115 -- a UDP port
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
 		return nil

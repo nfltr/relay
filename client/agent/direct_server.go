@@ -66,8 +66,14 @@ func newDirectServer(org Org, groups []string, modes map[string]DirectMode) (*di
 	if err != nil {
 		return nil, err
 	}
+	return newDirectServerOn(ep, org, groups, modes)
+}
+
+// newDirectServerOn starts the listener on ep, which it owns.
+func newDirectServerOn(ep *DirectEndpoint, org Org, groups []string, modes map[string]DirectMode) (*directServer, error) {
 	d := &directServer{ep: ep, org: org, groups: groups, modes: modes, logger: slog.Default(),
 		sessions: map[*directSession]struct{}{}, quic: map[string][]byte{}}
+	var err error
 	d.node, err = quiclink.New(quiclink.Config{Transport: ep.tr, TLS: d.listenTLS(), ServedPeer: d.servedPeer,
 		Liveness: link.LivenessFast})
 	if err != nil {

@@ -84,6 +84,11 @@ type DirectClient struct {
 	// detach: a session with no stream (or only re-attaches reset within a
 	// second) this long ends; the agent's pathswitch default
 	detach time.Duration
+	// repunch: a pair whose direct connection died punches again at once
+	// when its last punch is this old (the agent's address may have
+	// changed: a fresh exchange learns the new one), else this long after
+	// that punch; directBackoff[0]
+	repunch time.Duration
 
 	directSent, directRecv, relayedSent, relayedRecv atomic.Uint64
 
@@ -105,6 +110,7 @@ type directPair struct {
 	qk      []byte
 	fails   int
 	next    time.Time
+	punched time.Time // the last punch's start
 }
 
 // directBackoff is the wait after the nth failed punch toward a pair (at
@@ -118,7 +124,7 @@ func NewDirectClient(cfg DirectClientConfig) (*DirectClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, pairs: map[string]*directPair{}, punches: map[string]uint64{},
+	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, repunch: directBackoff[0], pairs: map[string]*directPair{}, punches: map[string]uint64{},
 		sessions: map[*DirectSession]struct{}{}}
 	d.node, err = quiclink.New(quiclink.Config{Dial: d.dial, Liveness: link.LivenessFast})
 	if err != nil {
@@ -272,15 +278,20 @@ func (s *DirectSession) tryDirect() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.q != nil && p.q.Context().Err() != nil {
-		// the next punch after a death waits the first backoff, here
-		// rather than on the death's notice, which a try may outrun
+		// the next punch after a death waits until the last punch is the
+		// first backoff old: at once after a connection that lived that
+		// long (an agent whose address changed is direct again within the
+		// fallback and one exchange: TestDirectAgentRebindDirectAgain),
+		// never more often for one that keeps dying; here rather than on
+		// the death's notice, which a try may outrun
 		// (TestDirectPairDeathBacksOffWhateverItsNoticeOrder)
-		p.q, p.fails, p.next = nil, 1, time.Now().Add(directBackoff[0])
+		p.q, p.fails, p.next = nil, 1, p.punched.Add(s.d.repunch)
 	}
 	if p.q == nil {
 		if time.Now().Before(p.next) {
 			return "backoff"
 		}
+		p.punched = time.Now()
 		reason := s.punch(p)
 		if reason == "" {
 			s.d.count("ok")
