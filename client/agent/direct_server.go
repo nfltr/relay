@@ -55,8 +55,9 @@ type qadTarget struct {
 
 // directSession is a session that may move: its path layer and token key.
 type directSession struct {
-	c   *pathswitch.Conn
-	key []byte
+	c    *pathswitch.Conn
+	key  []byte
+	peer string // the direct connection it last moved to (servedPeer's name); d.mu
 }
 
 // newDirectServer starts the listener on a new endpoint.
@@ -116,7 +117,56 @@ func (d *directServer) servedPeer(q *quic.Conn) (string, error) {
 		delete(d.quic, name)
 		d.mu.Unlock()
 	})
+	d.holdConn(q, name)
 	return name, nil
+}
+
+// holdConn closes q once its client's admission ends (a CRL that revokes
+// it, its NotAfter): the revoked machine's direct connection does not
+// outlive its sessions, which holdAdmission cuts (nfltr direct-paths doc
+// "Lane REVOKEDIRECT"; TestDirectRevokedClientCutOnEveryPath).
+func (d *directServer) holdConn(q *quic.Conn, name string) {
+	certs := q.ConnectionState().TLS.PeerCertificates
+	cut := func() { go d.closeAfterSessions(q, name) }
+	changed := d.org.Changed() // before the check: a change after it is seen
+	until, err := d.org.CheckClient(certs, d.groups, time.Now())
+	if err != nil {
+		cut()
+		return
+	}
+	go holdAdmission(until, changed, d.org.Changed,
+		func(now time.Time) (time.Time, error) { return d.org.CheckClient(certs, d.groups, now) },
+		cut, q.Context().Done())
+}
+
+// directCutGrace bounds how long a direct connection whose admission
+// ended waits for the resets of the sessions on it (each its own
+// holdAdmission's, an ABORT the peer answers): closed at once, the
+// connection would drop the ABORTs, and the peer would re-attach the
+// sessions relayed instead of ending them.
+const directCutGrace = 5 * time.Second
+
+// closeAfterSessions closes q (named name) once every session on it ended,
+// or after directCutGrace.
+func (d *directServer) closeAfterSessions(q *quic.Conn, name string) {
+	defer q.CloseWithError(quiclink.CodeDone, "admission ended") //nolint:errcheck
+	var dones []<-chan struct{}
+	d.mu.Lock()
+	for s := range d.sessions {
+		if s.peer == name {
+			dones = append(dones, s.c.Done())
+		}
+	}
+	d.mu.Unlock()
+	t := time.NewTimer(directCutGrace)
+	defer t.Stop()
+	for _, done := range dones {
+		select {
+		case <-done:
+		case <-t.C:
+			return
+		}
+	}
 }
 
 // register makes s movable until it ends.
@@ -221,7 +271,11 @@ func (d *directServer) acceptDirect(peer string, _ []byte, s peerlink.Session) {
 	}
 	if err := sess.c.Attach(o, PathDirect); err != nil {
 		_ = s.Reset()
+		return
 	}
+	d.mu.Lock()
+	sess.peer = peer
+	d.mu.Unlock()
 }
 
 // serveService serves a session of the reserved service: a control

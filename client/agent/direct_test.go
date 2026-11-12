@@ -83,6 +83,7 @@ func qadServer(t *testing.T) string {
 type directRig struct {
 	l      *linkSessions
 	d      *DirectClient
+	org    *fakeOrg // the agent's organisation
 	client testMachine
 	mu     sync.Mutex
 	conns  []net.Conn // the client ends of open's sessions
@@ -117,7 +118,7 @@ func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 	}
 	table := mk()
 	r := &directRig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table, agent: "web", qad: tunnelQAD(qad)}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}},
-		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}, table: mk, relay: qad, mode: mode}
+		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}, org: web, table: mk, relay: qad, mode: mode}
 	var err error
 	r.d, err = NewDirectClient(DirectClientConfig{Machine: r.client,
 		Relayed: func(context.Context, string) (net.Conn, error) { return r.open(t, DirectServiceName) },
