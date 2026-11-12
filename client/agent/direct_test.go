@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/link/pathswitch"
 	"github.com/nfltr/quic-go"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentservices"
@@ -274,64 +275,74 @@ func TestDirectSessionMovesAndFallsBack(t *testing.T) {
 	}
 }
 
-// heldConn holds its writes once it read a byte (the agent's handshake
-// flight) until release: the agent's end of the handshake waits, as on a
-// starved agent, while this end's is over.
-type heldConn struct {
-	net.Conn
-	mu              sync.Mutex
-	armed, released bool
-	held            [][]byte
-}
-
-func (h *heldConn) Read(p []byte) (int, error) {
-	n, err := h.Conn.Read(p)
-	if n > 0 {
-		h.mu.Lock()
-		h.armed = true
-		h.mu.Unlock()
-	}
-	return n, err
-}
-
-func (h *heldConn) Write(p []byte) (int, error) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.armed && !h.released {
-		h.held = append(h.held, bytes.Clone(p))
-		return len(p), nil
-	}
-	return h.Conn.Write(p)
-}
-
-func (h *heldConn) release() {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, b := range h.held {
-		_, _ = h.Conn.Write(b)
-	}
-	h.held, h.released = nil, true
-}
-
-// TestDirectOpenBeforeTheAgentsHandshake: a client's TLS 1.3 handshake ends
-// a flight before the agent's, so its first direct OPEN can reach an agent
-// that has not registered the session yet (a starved agent: CI relay
-// a2a6b1de4, the first event relayed/direct_lost): the agent takes the
-// OPEN once that handshake ends, never refuses it, and the session's first
-// path event is direct.
+// TestDirectOpenBeforeTheAgentsHandshake: the client moves once the agent
+// acknowledged its handshake's bytes (TestDirectSessionOpenedAfterThePairIsDirect),
+// but the agent's handshake ends only after that (it verifies the Finished,
+// then registers the session; a starved agent: CI relay a2a6b1de4, the
+// first event relayed/direct_lost), so the first direct OPEN can reach an
+// agent that has not registered the session yet: find waits for the
+// handshake under way and takes the OPEN once it registered, never refuses
+// it.
 func TestDirectOpenBeforeTheAgentsHandshake(t *testing.T) {
-	r := newDirectRig(t, DirectOn)
-	h := &heldConn{}
-	r.wrap = func(c net.Conn) net.Conn { h.Conn = c; return h }
-	go func() { // the agent's handshake ends after the OPEN went
-		for r.d.Stats().DirectSent == 0 && t.Context().Err() == nil {
-			time.Sleep(time.Millisecond)
+	d := &directServer{sessions: map[*directSession]struct{}{}, quic: map[string][]byte{}}
+	key, qk := []byte("the session's exporter"), []byte("the connection's exporter")
+	handshook := d.handshaking()
+	found := make(chan *directSession, 1)
+	go func() { found <- d.find(pathswitch.Open{Epoch: 2, Token: pathToken(key, roleClient, 2, qk)}, qk) }()
+	select {
+	case s := <-found:
+		t.Fatalf("find returned %v during the handshake", s)
+	case <-time.After(50 * time.Millisecond):
+	}
+	a, b := net.Pipe()
+	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+	c := pathswitch.Server(pathStream{Conn: a}, PathRelayed, pathswitch.Config{Detach: 50 * time.Millisecond})
+	t.Cleanup(func() { c.Abort(); <-c.Done() }) // ends within its detach bound: register's goroutine with it
+	d.register(c, key)
+	handshook()
+	select {
+	case s := <-found:
+		if s == nil || s.c != c {
+			t.Fatalf("find returned %v, want the registered session", s)
 		}
-		time.Sleep(50 * time.Millisecond) // and after it arrived, on a loaded machine too
-		h.release()
-	}()
+	case <-time.After(5 * time.Second):
+		t.Fatal("find did not return after the handshake")
+	}
+}
+
+// slowWrites delays each write on a session's relayed stream: the client's
+// path layer is still writing an earlier frame when its TLS hands it the
+// handshake's last flight, so that flight is in the path layer's buffer,
+// not on the stream, when the handshake returns (a loaded machine, a slow
+// relay path).
+type slowWrites struct {
+	net.Conn
+	d time.Duration
+}
+
+func (c slowWrites) Write(p []byte) (int, error) {
+	time.Sleep(c.d)
+	return c.Conn.Write(p)
+}
+
+// TestDirectSessionOpenedAfterThePairIsDirect (lane DIRECTSTALL): a session
+// opened while its pair already has a direct connection carries bytes at
+// once. Its move waits until the agent acknowledged the client's handshake
+// bytes: a move right after the client's handshake left the client's last
+// flight to the direct stream, which the agent takes only once its own
+// handshake ended (the token's key), so the session stalled until the
+// agent's 10 s TLS bound and reset (nfltr
+// docs/decisions/perf-command-2026-11-12.md "a session opened after its
+// pair is direct can stall").
+func TestDirectSessionOpenedAfterThePairIsDirect(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
 	_, tc, events := r.session(t)
-	echo(t, tc, 1<<20, func() { waitPath(t, events, PathDirect) })
+	echo(t, tc, 1<<16, func() { waitPath(t, events, PathDirect) })
+
+	r.wrap = func(c net.Conn) net.Conn { return slowWrites{Conn: c, d: 100 * time.Millisecond} }
+	_, tc2, events2 := r.session(t)
+	_ = tc2.SetDeadline(time.Now().Add(3 * time.Second)) // far below the agent's 10 s TLS bound
+	echo(t, tc2, 1<<16, func() { waitPath(t, events2, PathDirect) })
 }
 
 // strangerTLS is the state of a TLS session no agent holds.

@@ -335,7 +335,7 @@ func (s *DirectSession) Run(cs tls.ConnectionState, agent, machine, service stri
 	s.d.mu.Lock()
 	s.d.sessions[s] = struct{}{}
 	s.d.mu.Unlock()
-	go s.loop()
+	go s.loop(s.c.Written())
 	return nil
 }
 
@@ -345,13 +345,19 @@ func (s *DirectSession) emit(e PathEvent) {
 	}
 }
 
-// loop tries a direct path while the session lasts.
-func (s *DirectSession) loop() {
+// loop tries a direct path while the session lasts, the first once the
+// agent acknowledged the bytes below proof (the client's handshake): the
+// agent takes a move only once its own handshake ended (the token's key),
+// and a move leaves the bytes not yet sent to the new stream, so a move
+// before stalled the session until the agent's TLS bound (link spec
+// DirectPath.tla Proof; TestDirectSessionOpenedAfterThePairIsDirect).
+func (s *DirectSession) loop(proof uint64) {
 	defer func() {
 		s.d.mu.Lock()
 		delete(s.d.sessions, s)
 		s.d.mu.Unlock()
 	}()
+	s.c.WaitAcked(proof, e2eeHeaderTimeout) // past it the agent's handshake failed: the session ends
 	for {
 		if reason := s.tryDirect(); reason != "" && reason != "backoff" {
 			s.emit(PathEvent{Path: PathRelayed, Reason: reason})
