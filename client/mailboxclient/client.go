@@ -66,8 +66,9 @@ func ReasonOf(err error) string {
 type Client struct {
 	ProxyURL string
 	APIKey   string
-	// HTTP defaults to http.DefaultClient; each call is bounded by its
-	// context (a pull by its wait plus a margin).
+	// HTTP defaults to a health-checked copy of Go's default transport
+	// (health.go); each call is bounded by its context (a pull by its wait
+	// plus a margin).
 	HTTP *http.Client
 }
 
@@ -147,7 +148,7 @@ func (c Client) call(ctx context.Context, method, path string, in, out proto.Mes
 	}
 	client := c.HTTP
 	if client == nil {
-		client = http.DefaultClient
+		client = relayHTTP()
 	}
 	resp, err := client.Do(req)
 	if err != nil {
