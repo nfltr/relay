@@ -48,7 +48,7 @@ func TestProcessStreamRelaysUpgrades(t *testing.T) {
 	stream := &flowStream{blockingStream{ctx: ctx, requests: make(chan *pb.HTTPProxyRequest, 8), sent: make(chan *pb.HTTPProxyResponse, 64)}}
 	done := make(chan error, 1)
 	go func() {
-		done <- processStream(ctx, stream, "agent", routes, Config{RequestTimeout: 5, Concurrency: 4}, newBackendClient(Config{RequestTimeout: 5, Concurrency: 4}), slog.Default(), nil, nil, nil)
+		done <- processStream(ctx, stream, "agent", routes, Config{RequestTimeout: 5, Concurrency: 4}, newBackendClient(Config{RequestTimeout: 5, Concurrency: 4}), slog.Default(), nil, nil, nil, nil)
 	}()
 	next := func() *pb.HTTPProxyResponse { // the next response chunk, acks skipped
 		for {

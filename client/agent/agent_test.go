@@ -800,7 +800,7 @@ func TestProcessStream_ServerSilenceTimeout(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		err = processStream(ctx, stream, "test-agent", routes, cfg, newBackendClient(cfg), slog.Default(), nil, nil, nil)
+		err = processStream(ctx, stream, "test-agent", routes, cfg, newBackendClient(cfg), slog.Default(), nil, nil, nil, nil)
 		if !errors.Is(err, errNoServerActivity) {
 			t.Fatalf("processStream error = %v, want errNoServerActivity", err)
 		}
@@ -823,7 +823,7 @@ func TestProcessStream_SilenceLimitFromRelayHeartbeat(t *testing.T) {
 			t.Fatal(err)
 		}
 		start := time.Now()
-		err = processStream(ctx, stream, "test-agent", routes, Config{RequestTimeout: 5, Concurrency: 1}, newBackendClient(Config{RequestTimeout: 5, Concurrency: 1}), slog.Default(), nil, nil, nil)
+		err = processStream(ctx, stream, "test-agent", routes, Config{RequestTimeout: 5, Concurrency: 1}, newBackendClient(Config{RequestTimeout: 5, Concurrency: 1}), slog.Default(), nil, nil, nil, nil)
 		if !errors.Is(err, errNoServerActivity) || time.Since(start) != 3*time.Second {
 			t.Fatalf("processStream = %v after %s, want errNoServerActivity after 3s", err, time.Since(start))
 		}
@@ -875,7 +875,7 @@ func TestProcessStream_ConcurrentRequests(t *testing.T) {
 		Concurrency:    numRequests, // allow all requests in parallel
 	}
 
-	processStream(ctx, stream, "test-agent", routes, cfg, newBackendClient(cfg), slog.Default(), nil, nil, nil) //nolint:errcheck // context cancel is expected
+	processStream(ctx, stream, "test-agent", routes, cfg, newBackendClient(cfg), slog.Default(), nil, nil, nil, nil) //nolint:errcheck // context cancel is expected
 
 	select {
 	case <-all:

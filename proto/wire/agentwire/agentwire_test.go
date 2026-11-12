@@ -5,6 +5,7 @@ package agentwire
 
 import (
 	"maps"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -131,5 +132,30 @@ func TestAgentRelaysNamesRelay(t *testing.T) {
 	}
 	if NamesRelay(nil, "A") || NamesRelay([]string{""}, "") {
 		t.Error("nothing named")
+	}
+}
+
+func TestCheckLabelUpdate(t *testing.T) {
+	long := strings.Repeat("x", MaxLabelBytes+1)
+	many := map[string]string{}
+	for i := range MaxLabelUpdateEntries + 1 {
+		many[strconv.Itoa(i)] = "v"
+	}
+	for _, tc := range []struct {
+		name   string
+		labels map[string]string
+		ok     bool
+	}{
+		{"none", nil, true},
+		{"health", map[string]string{"nfltr.health.pg": "down"}, true},
+		{"empty key", map[string]string{"": "down"}, false},
+		{"empty value", map[string]string{"k": ""}, false},
+		{"long key", map[string]string{long: "v"}, false},
+		{"long value", map[string]string{"k": long}, false},
+		{"too many", many, false},
+	} {
+		if err := CheckLabelUpdate(tc.labels); (err == nil) != tc.ok {
+			t.Errorf("%s: CheckLabelUpdate = %v, want ok=%v", tc.name, err, tc.ok)
+		}
 	}
 }

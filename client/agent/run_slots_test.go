@@ -40,7 +40,7 @@ func TestProcessStreamFullSlotsDoNotHoldTheReceiveLoop(t *testing.T) {
 	stream := &flowStream{blockingStream{ctx: ctx, requests: make(chan *pb.HTTPProxyRequest, 8), sent: make(chan *pb.HTTPProxyResponse, 64)}}
 	done := make(chan error, 1)
 	go func() {
-		done <- processStream(ctx, stream, "agent", routes, Config{RequestTimeout: 60, Concurrency: 1}, newBackendClient(Config{RequestTimeout: 60, Concurrency: 1}), slog.New(slog.DiscardHandler), nil, nil, nil)
+		done <- processStream(ctx, stream, "agent", routes, Config{RequestTimeout: 60, Concurrency: 1}, newBackendClient(Config{RequestTimeout: 60, Concurrency: 1}), slog.New(slog.DiscardHandler), nil, nil, nil, nil)
 	}()
 	defer func() { cancel(); <-done }()
 

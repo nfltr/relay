@@ -41,7 +41,7 @@ func TestHeartbeatAnsweredUnlessTheLinkStandsForIt(t *testing.T) {
 				cfg := Config{RequestTimeout: 5, Concurrency: 1, HeartbeatRecvThreshold: time.Hour}
 				done := make(chan error, 1)
 				go func() {
-					done <- processStream(ctx, stream, "a", routes, cfg, newBackendClient(cfg), slog.New(slog.DiscardHandler), nil, nil, func() bool { return tc.linkUp })
+					done <- processStream(ctx, stream, "a", routes, cfg, newBackendClient(cfg), slog.New(slog.DiscardHandler), nil, nil, func() bool { return tc.linkUp }, nil)
 				}()
 				stream.requests <- &pb.HTTPProxyRequest{} // the relay's heartbeat
 				synctest.Wait()

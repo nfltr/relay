@@ -139,6 +139,34 @@ func ParseLabels(raw string) map[string]string {
 	return labels
 }
 
+// LabelUpdatesKey, set to "1" in the relay's response headers on an
+// agent's ConnectHTTP stream, says the relay applies the agent's
+// pb.LabelUpdate frames on that stream. A relay without it reads such a
+// frame as a heartbeat: the agent sends none there.
+const LabelUpdatesKey = "x-nfltr-label-updates"
+
+// Bounds of one pb.LabelUpdate (CheckLabelUpdate).
+const (
+	MaxLabelUpdateEntries = 64
+	MaxLabelBytes         = 256
+)
+
+// CheckLabelUpdate refuses a label update the relay does not apply: more
+// than MaxLabelUpdateEntries labels, or a key or value empty or longer than
+// MaxLabelBytes. The agent checks before it sends; the relay ends a stream
+// whose update fails it.
+func CheckLabelUpdate(labels map[string]string) error {
+	if len(labels) > MaxLabelUpdateEntries {
+		return fmt.Errorf("label update: %d labels, at most %d", len(labels), MaxLabelUpdateEntries)
+	}
+	for k, v := range labels {
+		if k == "" || v == "" || len(k) > MaxLabelBytes || len(v) > MaxLabelBytes {
+			return fmt.Errorf("label update: label %.64q=%.64q: keys and values are 1 to %d bytes", k, v, MaxLabelBytes)
+		}
+	}
+	return nil
+}
+
 // The agent-wire session handshake (nfltr.relay.v1 Hello/Welcome), binary
 // metadata on every call to the relay's agent service: the client sends
 // Hello, the relay answers Welcome or refuses the call.

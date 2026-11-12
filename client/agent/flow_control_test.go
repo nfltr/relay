@@ -70,7 +70,7 @@ func TestProcessStreamStreamsUploadsAndHonoursCancel(t *testing.T) {
 	stream := &flowStream{blockingStream{ctx: ctx, requests: make(chan *pb.HTTPProxyRequest, 8), sent: make(chan *pb.HTTPProxyResponse, 64)}}
 	done := make(chan error, 1)
 	go func() {
-		done <- processStream(ctx, stream, "agent", routes, Config{RequestTimeout: 5, Concurrency: 4}, newBackendClient(Config{RequestTimeout: 5, Concurrency: 4}), slog.Default(), nil, nil, nil)
+		done <- processStream(ctx, stream, "agent", routes, Config{RequestTimeout: 5, Concurrency: 4}, newBackendClient(Config{RequestTimeout: 5, Concurrency: 4}), slog.Default(), nil, nil, nil, nil)
 	}()
 
 	stream.requests <- uploadChunkRequest("up", 0, false, "abc")
@@ -131,7 +131,7 @@ func TestProcessStreamRefusesAnUnackedUpload(t *testing.T) {
 	stream := &flowStream{blockingStream{ctx: ctx, requests: make(chan *pb.HTTPProxyRequest, 8), sent: make(chan *pb.HTTPProxyResponse, 64)}}
 	done := make(chan error, 1)
 	go func() {
-		done <- processStream(ctx, stream, "agent", routes, Config{RequestTimeout: 5, Concurrency: 4}, newBackendClient(Config{RequestTimeout: 5, Concurrency: 4}), slog.Default(), nil, nil, nil)
+		done <- processStream(ctx, stream, "agent", routes, Config{RequestTimeout: 5, Concurrency: 4}, newBackendClient(Config{RequestTimeout: 5, Concurrency: 4}), slog.Default(), nil, nil, nil, nil)
 	}()
 
 	unacked := func(index int, last bool, payload string) *pb.HTTPProxyRequest {

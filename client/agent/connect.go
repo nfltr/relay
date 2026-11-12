@@ -278,7 +278,7 @@ func (a *agent) runWithReconnect(
 				cycleCtx,
 				conn,
 				func() error {
-					err := processStream(ctx, stream, a.cfg.AgentID, a.routes, a.cfg, a.client, a.logger, a.wgx, mv, growth.linkUp)
+					err := processStream(ctx, stream, a.cfg.AgentID, a.routes, a.cfg, a.client, a.logger, a.wgx, mv, growth.linkUp, &a.labelUpdates)
 					switch {
 					case waitsForTCPSessions(err):
 						growth.waitIdle(ctx) // its TCP sessions end before the connection closes

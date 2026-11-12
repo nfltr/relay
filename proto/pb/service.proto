@@ -105,6 +105,18 @@ message HTTPProxyResponse {
   RoutingInfo  routing    = 3;
   // A move step from the agent (MOVE_CONNECTED), on a frame without response.
   Move         move       = 4;
+  // The agent's label update, on a frame without response, sent only to a
+  // relay that applies it (accept metadata x-nfltr-label-updates,
+  // proto/wire/agentwire LabelUpdatesKey).
+  LabelUpdate  labels     = 5;
+}
+
+// LabelUpdate replaces the labels an agent advertises beyond the labels it
+// connected with (those stay as advertised; an update can neither change
+// nor drop them). It names no agent: the relay applies it to the stream it
+// came on. Bounds: agentwire.CheckLabelUpdate.
+message LabelUpdate {
+  map<string, string> labels = 1;
 }
 
 // HTTPProxyRequest — server → agent on the ConnectHTTP stream.

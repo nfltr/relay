@@ -152,7 +152,7 @@ func TestServiceRequestHeaderRoutes(t *testing.T) {
 		}
 		stream := &mockStream{requests: []*pb.HTTPProxyRequest{msg}}
 		cfg := Config{RequestTimeout: 5, Concurrency: 1}
-		_ = processStream(context.Background(), stream, "svc", routes, cfg, newBackendClient(cfg), slog.New(slog.DiscardHandler), nil, nil, nil)
+		_ = processStream(context.Background(), stream, "svc", routes, cfg, newBackendClient(cfg), slog.New(slog.DiscardHandler), nil, nil, nil, nil)
 		if len(stream.sent) != 1 {
 			t.Fatalf("stream %s: %d responses", c.url, len(stream.sent))
 		}
@@ -303,7 +303,7 @@ func TestStreamResponseKeepsContentLength(t *testing.T) {
 	for _, method := range []string{http.MethodHead, http.MethodGet} {
 		stream := &mockStream{requests: []*pb.HTTPProxyRequest{newTestProxyRequest(method, "f")}}
 		cfg := Config{RequestTimeout: 5, Concurrency: 1}
-		_ = processStream(context.Background(), stream, "a", routes, cfg, newBackendClient(cfg), slog.New(slog.DiscardHandler), nil, nil, nil)
+		_ = processStream(context.Background(), stream, "a", routes, cfg, newBackendClient(cfg), slog.New(slog.DiscardHandler), nil, nil, nil, nil)
 		if len(stream.sent) == 0 {
 			t.Fatalf("%s: no response", method)
 		}

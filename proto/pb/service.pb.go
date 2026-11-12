@@ -579,7 +579,11 @@ type HTTPProxyResponse struct {
 	Timestamps *Timestamps            `protobuf:"bytes,2,opt,name=timestamps,proto3" json:"timestamps,omitempty"`
 	Routing    *RoutingInfo           `protobuf:"bytes,3,opt,name=routing,proto3" json:"routing,omitempty"`
 	// A move step from the agent (MOVE_CONNECTED), on a frame without response.
-	Move          Move `protobuf:"varint,4,opt,name=move,proto3,enum=rpcserver.Move" json:"move,omitempty"`
+	Move Move `protobuf:"varint,4,opt,name=move,proto3,enum=rpcserver.Move" json:"move,omitempty"`
+	// The agent's label update, on a frame without response, sent only to a
+	// relay that applies it (accept metadata x-nfltr-label-updates,
+	// proto/wire/agentwire LabelUpdatesKey).
+	Labels        *LabelUpdate `protobuf:"bytes,5,opt,name=labels,proto3" json:"labels,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -642,6 +646,61 @@ func (x *HTTPProxyResponse) GetMove() Move {
 	return Move_MOVE_UNSPECIFIED
 }
 
+func (x *HTTPProxyResponse) GetLabels() *LabelUpdate {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
+// LabelUpdate replaces the labels an agent advertises beyond the labels it
+// connected with (those stay as advertised; an update can neither change
+// nor drop them). It names no agent: the relay applies it to the stream it
+// came on. Bounds: agentwire.CheckLabelUpdate.
+type LabelUpdate struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Labels        map[string]string      `protobuf:"bytes,1,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LabelUpdate) Reset() {
+	*x = LabelUpdate{}
+	mi := &file_service_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LabelUpdate) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LabelUpdate) ProtoMessage() {}
+
+func (x *LabelUpdate) ProtoReflect() protoreflect.Message {
+	mi := &file_service_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LabelUpdate.ProtoReflect.Descriptor instead.
+func (*LabelUpdate) Descriptor() ([]byte, []int) {
+	return file_service_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *LabelUpdate) GetLabels() map[string]string {
+	if x != nil {
+		return x.Labels
+	}
+	return nil
+}
+
 // HTTPProxyRequest — server → agent on the ConnectHTTP stream.
 // Named for what it carries (the proxied HTTP request), not the stream
 // direction.
@@ -659,7 +718,7 @@ type HTTPProxyRequest struct {
 
 func (x *HTTPProxyRequest) Reset() {
 	*x = HTTPProxyRequest{}
-	mi := &file_service_proto_msgTypes[7]
+	mi := &file_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -671,7 +730,7 @@ func (x *HTTPProxyRequest) String() string {
 func (*HTTPProxyRequest) ProtoMessage() {}
 
 func (x *HTTPProxyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_service_proto_msgTypes[7]
+	mi := &file_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -684,7 +743,7 @@ func (x *HTTPProxyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HTTPProxyRequest.ProtoReflect.Descriptor instead.
 func (*HTTPProxyRequest) Descriptor() ([]byte, []int) {
-	return file_service_proto_rawDescGZIP(), []int{7}
+	return file_service_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *HTTPProxyRequest) GetRequest() *HTTPRequest {
@@ -751,7 +810,7 @@ type TunnelFrame struct {
 
 func (x *TunnelFrame) Reset() {
 	*x = TunnelFrame{}
-	mi := &file_service_proto_msgTypes[8]
+	mi := &file_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -763,7 +822,7 @@ func (x *TunnelFrame) String() string {
 func (*TunnelFrame) ProtoMessage() {}
 
 func (x *TunnelFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_service_proto_msgTypes[8]
+	mi := &file_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -776,7 +835,7 @@ func (x *TunnelFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelFrame.ProtoReflect.Descriptor instead.
 func (*TunnelFrame) Descriptor() ([]byte, []int) {
-	return file_service_proto_rawDescGZIP(), []int{8}
+	return file_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *TunnelFrame) GetPayload() []byte {
@@ -923,7 +982,7 @@ type TCPData struct {
 
 func (x *TCPData) Reset() {
 	*x = TCPData{}
-	mi := &file_service_proto_msgTypes[9]
+	mi := &file_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -935,7 +994,7 @@ func (x *TCPData) String() string {
 func (*TCPData) ProtoMessage() {}
 
 func (x *TCPData) ProtoReflect() protoreflect.Message {
-	mi := &file_service_proto_msgTypes[9]
+	mi := &file_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -948,7 +1007,7 @@ func (x *TCPData) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TCPData.ProtoReflect.Descriptor instead.
 func (*TCPData) Descriptor() ([]byte, []int) {
-	return file_service_proto_rawDescGZIP(), []int{9}
+	return file_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *TCPData) GetSessionId() string {
@@ -1093,14 +1152,20 @@ const file_service_proto_rawDesc = "" +
 	"statusCode\x1aV\n" +
 	"\fHeadersEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x120\n" +
-	"\x05value\x18\x02 \x01(\v2\x1a.rpcserver.HeaderValueListR\x05value:\x028\x01\"\xd6\x01\n" +
+	"\x05value\x18\x02 \x01(\v2\x1a.rpcserver.HeaderValueListR\x05value:\x028\x01\"\x86\x02\n" +
 	"\x11HTTPProxyResponse\x123\n" +
 	"\bresponse\x18\x01 \x01(\v2\x17.rpcserver.HTTPResponseR\bresponse\x125\n" +
 	"\n" +
 	"timestamps\x18\x02 \x01(\v2\x15.rpcserver.TimestampsR\n" +
 	"timestamps\x120\n" +
 	"\arouting\x18\x03 \x01(\v2\x16.rpcserver.RoutingInfoR\arouting\x12#\n" +
-	"\x04move\x18\x04 \x01(\x0e2\x0f.rpcserver.MoveR\x04move\"\xd2\x01\n" +
+	"\x04move\x18\x04 \x01(\x0e2\x0f.rpcserver.MoveR\x04move\x12.\n" +
+	"\x06labels\x18\x05 \x01(\v2\x16.rpcserver.LabelUpdateR\x06labels\"\x84\x01\n" +
+	"\vLabelUpdate\x12:\n" +
+	"\x06labels\x18\x01 \x03(\v2\".rpcserver.LabelUpdate.LabelsEntryR\x06labels\x1a9\n" +
+	"\vLabelsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xd2\x01\n" +
 	"\x10HTTPProxyRequest\x120\n" +
 	"\arequest\x18\x01 \x01(\v2\x16.rpcserver.HTTPRequestR\arequest\x125\n" +
 	"\n" +
@@ -1164,7 +1229,7 @@ func file_service_proto_rawDescGZIP() []byte {
 }
 
 var file_service_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_service_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_service_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_service_proto_goTypes = []any{
 	(Move)(0),                 // 0: rpcserver.Move
 	(*HeaderValueList)(nil),   // 1: rpcserver.HeaderValueList
@@ -1174,41 +1239,45 @@ var file_service_proto_goTypes = []any{
 	(*HTTPRequest)(nil),       // 5: rpcserver.HTTPRequest
 	(*HTTPResponse)(nil),      // 6: rpcserver.HTTPResponse
 	(*HTTPProxyResponse)(nil), // 7: rpcserver.HTTPProxyResponse
-	(*HTTPProxyRequest)(nil),  // 8: rpcserver.HTTPProxyRequest
-	(*TunnelFrame)(nil),       // 9: rpcserver.TunnelFrame
-	(*TCPData)(nil),           // 10: rpcserver.TCPData
-	nil,                       // 11: rpcserver.RoutingInfo.InitialMetadataEntry
-	nil,                       // 12: rpcserver.HTTPRequest.HeadersEntry
-	nil,                       // 13: rpcserver.HTTPResponse.HeadersEntry
+	(*LabelUpdate)(nil),       // 8: rpcserver.LabelUpdate
+	(*HTTPProxyRequest)(nil),  // 9: rpcserver.HTTPProxyRequest
+	(*TunnelFrame)(nil),       // 10: rpcserver.TunnelFrame
+	(*TCPData)(nil),           // 11: rpcserver.TCPData
+	nil,                       // 12: rpcserver.RoutingInfo.InitialMetadataEntry
+	nil,                       // 13: rpcserver.HTTPRequest.HeadersEntry
+	nil,                       // 14: rpcserver.HTTPResponse.HeadersEntry
+	nil,                       // 15: rpcserver.LabelUpdate.LabelsEntry
 }
 var file_service_proto_depIdxs = []int32{
-	11, // 0: rpcserver.RoutingInfo.initial_metadata:type_name -> rpcserver.RoutingInfo.InitialMetadataEntry
-	12, // 1: rpcserver.HTTPRequest.headers:type_name -> rpcserver.HTTPRequest.HeadersEntry
-	13, // 2: rpcserver.HTTPResponse.headers:type_name -> rpcserver.HTTPResponse.HeadersEntry
+	12, // 0: rpcserver.RoutingInfo.initial_metadata:type_name -> rpcserver.RoutingInfo.InitialMetadataEntry
+	13, // 1: rpcserver.HTTPRequest.headers:type_name -> rpcserver.HTTPRequest.HeadersEntry
+	14, // 2: rpcserver.HTTPResponse.headers:type_name -> rpcserver.HTTPResponse.HeadersEntry
 	6,  // 3: rpcserver.HTTPProxyResponse.response:type_name -> rpcserver.HTTPResponse
 	2,  // 4: rpcserver.HTTPProxyResponse.timestamps:type_name -> rpcserver.Timestamps
 	3,  // 5: rpcserver.HTTPProxyResponse.routing:type_name -> rpcserver.RoutingInfo
 	0,  // 6: rpcserver.HTTPProxyResponse.move:type_name -> rpcserver.Move
-	5,  // 7: rpcserver.HTTPProxyRequest.request:type_name -> rpcserver.HTTPRequest
-	2,  // 8: rpcserver.HTTPProxyRequest.timestamps:type_name -> rpcserver.Timestamps
-	3,  // 9: rpcserver.HTTPProxyRequest.routing:type_name -> rpcserver.RoutingInfo
-	0,  // 10: rpcserver.HTTPProxyRequest.move:type_name -> rpcserver.Move
-	2,  // 11: rpcserver.TunnelFrame.timestamps:type_name -> rpcserver.Timestamps
-	3,  // 12: rpcserver.TunnelFrame.routing:type_name -> rpcserver.RoutingInfo
-	4,  // 13: rpcserver.TCPData.caller:type_name -> rpcserver.CallerIdentity
-	1,  // 14: rpcserver.HTTPRequest.HeadersEntry.value:type_name -> rpcserver.HeaderValueList
-	1,  // 15: rpcserver.HTTPResponse.HeadersEntry.value:type_name -> rpcserver.HeaderValueList
-	7,  // 16: rpcserver.Dispatcher.ConnectHTTP:input_type -> rpcserver.HTTPProxyResponse
-	9,  // 17: rpcserver.Dispatcher.AgentTunnel:input_type -> rpcserver.TunnelFrame
-	10, // 18: rpcserver.Dispatcher.ConnectTCP:input_type -> rpcserver.TCPData
-	8,  // 19: rpcserver.Dispatcher.ConnectHTTP:output_type -> rpcserver.HTTPProxyRequest
-	9,  // 20: rpcserver.Dispatcher.AgentTunnel:output_type -> rpcserver.TunnelFrame
-	10, // 21: rpcserver.Dispatcher.ConnectTCP:output_type -> rpcserver.TCPData
-	19, // [19:22] is the sub-list for method output_type
-	16, // [16:19] is the sub-list for method input_type
-	16, // [16:16] is the sub-list for extension type_name
-	16, // [16:16] is the sub-list for extension extendee
-	0,  // [0:16] is the sub-list for field type_name
+	8,  // 7: rpcserver.HTTPProxyResponse.labels:type_name -> rpcserver.LabelUpdate
+	15, // 8: rpcserver.LabelUpdate.labels:type_name -> rpcserver.LabelUpdate.LabelsEntry
+	5,  // 9: rpcserver.HTTPProxyRequest.request:type_name -> rpcserver.HTTPRequest
+	2,  // 10: rpcserver.HTTPProxyRequest.timestamps:type_name -> rpcserver.Timestamps
+	3,  // 11: rpcserver.HTTPProxyRequest.routing:type_name -> rpcserver.RoutingInfo
+	0,  // 12: rpcserver.HTTPProxyRequest.move:type_name -> rpcserver.Move
+	2,  // 13: rpcserver.TunnelFrame.timestamps:type_name -> rpcserver.Timestamps
+	3,  // 14: rpcserver.TunnelFrame.routing:type_name -> rpcserver.RoutingInfo
+	4,  // 15: rpcserver.TCPData.caller:type_name -> rpcserver.CallerIdentity
+	1,  // 16: rpcserver.HTTPRequest.HeadersEntry.value:type_name -> rpcserver.HeaderValueList
+	1,  // 17: rpcserver.HTTPResponse.HeadersEntry.value:type_name -> rpcserver.HeaderValueList
+	7,  // 18: rpcserver.Dispatcher.ConnectHTTP:input_type -> rpcserver.HTTPProxyResponse
+	10, // 19: rpcserver.Dispatcher.AgentTunnel:input_type -> rpcserver.TunnelFrame
+	11, // 20: rpcserver.Dispatcher.ConnectTCP:input_type -> rpcserver.TCPData
+	9,  // 21: rpcserver.Dispatcher.ConnectHTTP:output_type -> rpcserver.HTTPProxyRequest
+	10, // 22: rpcserver.Dispatcher.AgentTunnel:output_type -> rpcserver.TunnelFrame
+	11, // 23: rpcserver.Dispatcher.ConnectTCP:output_type -> rpcserver.TCPData
+	21, // [21:24] is the sub-list for method output_type
+	18, // [18:21] is the sub-list for method input_type
+	18, // [18:18] is the sub-list for extension type_name
+	18, // [18:18] is the sub-list for extension extendee
+	0,  // [0:18] is the sub-list for field type_name
 }
 
 func init() { file_service_proto_init() }
@@ -1222,7 +1291,7 @@ func file_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_service_proto_rawDesc), len(file_service_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

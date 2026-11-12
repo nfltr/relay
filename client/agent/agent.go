@@ -328,6 +328,16 @@ type Agent interface {
 	// Stats returns the agent's counters (Stats): read when called, for
 	// a metrics collector at scrape time.
 	Stats() Stats
+
+	// SetLabels replaces the labels the agent advertises beyond its
+	// connect labels (WithLabels: those stay as advertised), on its
+	// current connection and on every later one (presence, listings, and
+	// a service's health: agentservices.HealthLabel). It returns
+	// agentwire.CheckLabelUpdate's error for labels past the bounds,
+	// ErrLabelUpdatesUnsupported when the current connection's relay
+	// applies no updates, else nil: sent on the current connection, or
+	// kept for the next one while none is up.
+	SetLabels(labels map[string]string) error
 }
 
 // New creates a new Agent from the given Config and options.
@@ -426,6 +436,8 @@ type agent struct {
 
 	// fleet / pool labels (WithLabels option)
 	labels map[string]string
+	// labels set after connect (SetLabels)
+	labelUpdates labelUpdates
 
 	// E2EE TLS termination (WithTLSCert / WithSelfSignedTLS option)
 	e2eeTLS *e2eeTLSConfig

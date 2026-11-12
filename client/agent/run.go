@@ -54,6 +54,7 @@ func processStream(
 	wgx WireGuardTunnel,
 	mv *move,
 	linkUp func() bool,
+	labels *labelUpdates,
 ) (err error) {
 	// Serialise all stream.Send calls — gRPC streams are not concurrent-safe.
 	var sendMu sync.Mutex
@@ -95,6 +96,11 @@ func processStream(
 	var reqWG sync.WaitGroup
 	defer reqWG.Wait()
 	header, _ := stream.Header() // sent with the relay's accept; nil on a stream that ended
+	detach, err := labels.attach(safeSend, len(header[agentwire.LabelUpdatesKey]) > 0 && header[agentwire.LabelUpdatesKey][0] == "1")
+	defer detach()
+	if err != nil {
+		return fmt.Errorf("label update: %w", err)
+	}
 	recvThreshold := heartbeatRecvThreshold(cfg, header)
 	// A relay that takes this agent's liveness from its agent link wants no
 	// answer to its heartbeats while the link is up.
