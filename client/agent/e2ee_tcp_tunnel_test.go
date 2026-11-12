@@ -35,15 +35,18 @@ func orgTunnel(t *testing.T, forward string) (*linkSessions, *testOrg, tls.Certi
 	t.Helper()
 	o := newTestOrg(t)
 	org := o.agentOrg(o.machine(t, "web", nil, time.Hour, false))
-	l := &linkSessions{ctx: t.Context(), targets: sessionTargets{forwardAddr: forward, defaultBackend: "http://" + forward, org: org, groups: []string{"db"}},
+	l := &linkSessions{ctx: t.Context(), targets: sessionTargets{forwardAddr: forward, defaultBackend: "http://" + forward, org: org, groups: []string{"db"}, agent: "web"},
 		logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 	return l, o, o.machine(t, "cli", []string{"db"}, time.Hour, false)
 }
 
-// orgClient is the client's TLS of organisation mode on c: web's machine
-// certificate checked against the root, cli presented.
-func orgClient(c net.Conn, o *testOrg, cli tls.Certificate) *tlsend.Conn {
-	return tlsend.Client(c, &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: o.pool, ServerName: "web.org.internal", Certificates: []tls.Certificate{cli}})
+// orgClient is the client's TLS of organisation mode on c, dialling
+// web/service: web's machine certificate checked against the root, cli
+// presented, the service bound (MachineALPN).
+func orgClient(c net.Conn, o *testOrg, cli tls.Certificate, service string) *tlsend.Conn {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: o.pool, ServerName: "web.org.internal", Certificates: []tls.Certificate{cli}}
+	BindServiceTLS(cfg, MachineALPN("web", service))
+	return tlsend.Client(c, cfg)
 }
 
 // With Config.TCPE2EEOnly in organisation mode (nfltr tcp --e2ee
@@ -102,7 +105,7 @@ func TestOrgTunnelCarriesBytes(t *testing.T) {
 	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
 		t.Fatalf("answer %v, %v", a, err)
 	}
-	tc := orgClient(c, o, cli)
+	tc := orgClient(c, o, cli, "localhost:1")
 	if err := tc.HandshakeContext(context.Background()); err != nil {
 		t.Fatalf("handshake: %v", err)
 	}
@@ -246,7 +249,7 @@ func TestOrgSessionCutIsResetAtTarget(t *testing.T) {
 		if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
 			t.Fatalf("answer %v, %v", a, err)
 		}
-		tc := orgClient(c, o, cli)
+		tc := orgClient(c, o, cli, "localhost:1")
 		if _, err := io.WriteString(tc, "hello"); err != nil {
 			t.Fatal(err)
 		}
@@ -305,7 +308,7 @@ func TestOrgSessionTargetResetIsResetAtClient(t *testing.T) {
 		if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
 			t.Fatalf("answer %v, %v", a, err)
 		}
-		tc := orgClient(c, o, cli)
+		tc := orgClient(c, o, cli, "localhost:1")
 		if _, err := io.WriteString(tc, "hello"); err != nil {
 			t.Fatal(err)
 		}

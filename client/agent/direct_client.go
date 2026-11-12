@@ -329,7 +329,7 @@ func (s *DirectSession) punch(p *directPair) string {
 	if err != nil {
 		return ReasonWithheld
 	}
-	tc := tls.Client(raw, s.d.controlTLS(p.machine))
+	tc := tls.Client(raw, s.d.controlTLS(p.agent, p.machine))
 	defer tc.Close() //nolint:errcheck
 	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 	defer stop()
@@ -431,10 +431,10 @@ func (d *DirectClient) punchTLS(p *directPair) *tls.Config {
 }
 
 // controlTLS is the control session's TLS: organisation mode, as any
-// session to machine.
-func (d *DirectClient) controlTLS(machine string) *tls.Config {
+// session to machine, bound to agent's reserved service (service_alpn.go).
+func (d *DirectClient) controlTLS(agent, machine string) *tls.Config {
 	cfg := d.punchTLS(&directPair{machine: machine})
-	cfg.NextProtos = nil
+	BindServiceTLS(cfg, MachineALPN(agent, DirectServiceName))
 	return cfg
 }
 

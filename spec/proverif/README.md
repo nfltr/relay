@@ -189,6 +189,7 @@ re-pinning (`make spec-bindings`, in `make ci`; nfltr
 |---|---|---|
 | `a2a_machine.pv` | `client/rpcclient/a2a_e2ee_bindings_test.go` `TestA2AE2EEModelBindings` | 17: message 1 (txn, role, caller, callee, key id, psk, warm), the ack's transcript, frames (direction, order, end, header), resumed calls' keys (txn, call number), the resume (txn, call number, pair) |
 | `e2ee_tcp.pv` (direct paths) | `client/agent/direct_bindings_test.go` `TestDirectModelBindings` | 6, one per `BIND:direct.*`: a look-alike certificate and another machine's name answering the punch (`refused_cert`), the token keyed by another session, bound to another or no QUIC connection, the other role's token (both ways), another epoch's token (lane DIRECTPATH3; Go mutants `direct-no-name`, `direct-no-cert-check`, `token-no-epoch`, `token-unbound`, `token-no-role`, `direct-no-token`) |
+| `e2ee_tcp.pv` (services by name) | `client/agent/service_bindings_test.go` `TestServiceModelBindings` | 3 here, one per `BIND:org.*`: a session routed to pg refuses an offer of web/vault, another agent's pg and no protocol, a session routed to vault refuses web/pg, and the client's `BindServiceTLS` refuses a server that negotiated none (`org.service`); a service published under a group the certificate lacks refused at `NewServiceTable`, and pg@db refused once a renewed certificate lacks db (`org.group`); pg@db refused for a pg published under ops, vault@db for a vault under none (`org.publish`) (lane SVCBIND; Go mutants `client-no-alpn-check`, `agent-no-alpn-check`, `no-protocol-accepted`, `agent-no-publish-check`, `agent-no-ou-check`, `publish-not-in-cert`). The group-dial client's own check (OU contains the group, no name) is nfltr's `orgpki`, with its row there (lane SVCCLIENT) |
 | `wg_exit.pv` | `client/agent/wgexit/wg_exit_bindings_test.go` `TestWGExitModelBindings` | 3 here (psk binds the exit's name; each end's psk on the key the relay told it) + 3 in nfltr `cmd/nfltr/internal/wgcli/wg_exit_bindings_test.go` (the key id of the machine named, psk whatever `x-wg-paired` says, one key per machine) |
 
 A planted Go mutant fails its row (lane E2EEVECTORS): the role, caller,
@@ -555,6 +556,8 @@ fails (`TestSecureConnFailedWriteEndsIt`).
 | e2ee_tcp.pv | client/agent/direct_server.go |
 | e2ee_tcp.pv | client/agent/direct_client.go |
 | e2ee_tcp.pv | client/agent/direct_bindings_test.go |
+| e2ee_tcp.pv | client/agent/service_alpn.go |
+| e2ee_tcp.pv | client/agent/service_bindings_test.go |
 | wg_exit.pv | client/wg/keys.go |
 | wg_exit.pv | client/wg/tunnel.go |
 | wg_exit.pv | client/agent/wgexit/wgexit.go |

@@ -103,7 +103,7 @@ func TestLinkSessionAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 	e2ee := newE2EETLSConfig(cert, "agent")
-	l := &linkSessions{ctx: t.Context(), targets: sessionTargets{services: tab}, e2ee: e2ee, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+	l := &linkSessions{ctx: t.Context(), targets: sessionTargets{services: tab, agent: "web"}, e2ee: e2ee, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 	open := func(target string, e2eeOpen bool) *net.TCPConn {
 		s, c := sessionPair(t)
 		h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: target, E2Ee: e2eeOpen, Answer: true})
@@ -152,7 +152,7 @@ func TestLinkSessionAnswers(t *testing.T) {
 	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
 		t.Fatalf("vault e2ee: answer %v, %v", a, err)
 	}
-	tc := orgClient(c, o, cli)
+	tc := orgClient(c, o, cli, "vault")
 	if err := tc.HandshakeContext(context.Background()); err != nil {
 		t.Fatalf("vault e2ee: handshake: %v", err)
 	}

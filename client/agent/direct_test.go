@@ -114,7 +114,7 @@ func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 		return table
 	}
 	table := mk()
-	r := &directRig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}},
+	r := &directRig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table, agent: "web"}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}},
 		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}, table: mk, mode: mode}
 	var err error
 	r.d, err = NewDirectClient(DirectClientConfig{Machine: r.client,
@@ -162,7 +162,9 @@ func (r *directRig) session(t *testing.T) (*DirectSession, *tls.Conn, chan PathE
 		t.Fatal(err)
 	}
 	ds := r.d.Start(first)
-	tc := tls.Client(ds.Conn(), r.d.controlTLS("web"))
+	cfg := r.d.punchTLS(&directPair{machine: "web"})
+	BindServiceTLS(cfg, MachineALPN("web", "blob"))
+	tc := tls.Client(ds.Conn(), cfg)
 	if err := tc.HandshakeContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -300,7 +302,7 @@ func TestDirectSessionReattachesOnANewConnection(t *testing.T) {
 			t.Fatal("Continue kept the new table's own direct paths")
 		}
 		r.mu.Lock()
-		r.l = &linkSessions{ctx: t.Context(), targets: sessionTargets{services: next}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+		r.l = &linkSessions{ctx: t.Context(), targets: sessionTargets{services: next, agent: "web"}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 		_ = r.conns[len(r.conns)-1].Close()
 		r.mu.Unlock()
 		if e := waitPath(t, events, PathRelayed); e.Reason != ReasonRelayLost {

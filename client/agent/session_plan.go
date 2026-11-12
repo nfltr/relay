@@ -41,6 +41,7 @@ type sessionPlan struct {
 	e2ee            *e2eeTLSConfig // the certificate an E2EE session ends with: its service's, else the tunnel's
 	org             Org            // a sessionE2EETCP's organisation
 	groups          []string       // ... its allow groups
+	bind            serviceBind    // ... the service protocols it accepts (service_alpn.go)
 	direct          *directServer  // ... the table's direct paths (nil: none); a sessionDirect's server
 }
 
@@ -84,6 +85,7 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 		p.network, p.target, p.backend, svcWrap = svc.network, svc.addr, svc.backend, svc.wrap
 		if svc.network == networkDirect {
 			p.kind, p.org, p.groups, p.direct = sessionDirect, svc.org, svc.groups, targets.services.direct
+			p.bind = serviceBind{agent: targets.agent, service: DirectServiceName}
 			return p, nil
 		}
 		if svc.org != nil {
@@ -91,6 +93,7 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 			// On); the session is the organisation's TLS, never the
 			// tunnel's certificate (e2ee_tcp.pv).
 			p.kind, p.org, p.groups, p.e2ee = sessionE2EETCP, svc.org, svc.groups, nil
+			p.bind = serviceBind{agent: targets.agent, service: open.GetTargetAddr(), group: svc.group}
 			p.client = clientAddr(open.GetClientAddr())
 			if targets.services.direct != nil && targets.services.direct.modes[open.GetTargetAddr()] != DirectOff {
 				p.direct = targets.services.direct
@@ -113,6 +116,7 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 				return sessionPlan{}, errE2EERequired(open)
 			}
 			p.kind, p.org, p.groups, p.e2ee = sessionE2EETCP, targets.org, targets.groups, nil
+			p.bind = serviceBind{agent: targets.agent, service: open.GetTargetAddr()}
 			p.client = clientAddr(open.GetClientAddr())
 			return p, nil
 		}
@@ -222,7 +226,7 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 			_ = s.Close()
 			return
 		}
-		p.direct.serveService(s, l.logger)
+		p.direct.serveService(s, p.bind, l.logger)
 	default:
 		target, reason, err := dialTarget(l.ctx, p.network, p.target)
 		if err != nil {

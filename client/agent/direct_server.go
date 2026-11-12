@@ -173,8 +173,9 @@ func (d *directServer) acceptDirect(peer string, _ []byte, s peerlink.Session) {
 }
 
 // serveService serves a session of the reserved service: a control
-// exchange (it starts with TLS) or a relayed re-attach (an OPEN).
-func (d *directServer) serveService(s net.Conn, logger *slog.Logger) {
+// exchange (it starts with TLS, bound to the reserved service as any
+// session's to its service: bind) or a relayed re-attach (an OPEN).
+func (d *directServer) serveService(s net.Conn, bind serviceBind, logger *slog.Logger) {
 	first, ps, err := peekFirst(s, e2eeHeaderTimeout)
 	if err != nil {
 		_ = s.Close()
@@ -186,7 +187,12 @@ func (d *directServer) serveService(s net.Conn, logger *slog.Logger) {
 		return
 	}
 	var adm orgAdmission
-	tc := tlsend.Server(s, orgServerConfig(d.org, d.groups, &adm, logger))
+	cfg, err := orgServerConfig(d.org, d.groups, bind, &adm, logger)
+	if err != nil {
+		_ = s.Close()
+		return
+	}
+	tc := tlsend.Server(s, cfg)
 	_ = tc.SetDeadline(time.Now().Add(e2eeHeaderTimeout))
 	if err := tc.Handshake(); err != nil {
 		_ = s.Close()

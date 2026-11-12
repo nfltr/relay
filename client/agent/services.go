@@ -52,6 +52,13 @@ type Service struct {
 	// AllowGroups are the organisation groups whose machines Org admits;
 	// required with Org, refused without it.
 	AllowGroups []string
+	// Group publishes an organisation-mode service under one organisation
+	// group, dialled as <service>@<group> (agentservices.Decl.Group): the
+	// group must be in this machine's certificate (NewServiceTable refuses
+	// it otherwise), and a session for <service>@<group> is served only
+	// for the group the service is published under (service_alpn.go;
+	// e2ee_tcp.pv mutant agent-no-publish-check). "": a machine dial only.
+	Group string
 	// Direct lets an organisation-mode service's sessions move to a direct
 	// path when their client asks (direct.go; DirectOff, the default:
 	// relayed only, no address of this machine sent). The table then
@@ -112,6 +119,7 @@ type tableService struct {
 	cert    *e2eeTLSConfig // Service.Cert; nil: the tunnel's
 	org     Org            // Service.Org: organisation mode; nil: no E2EE tcp session
 	groups  []string       // Service.AllowGroups
+	group   string         // Service.Group: published under it
 }
 
 // NewServiceTable validates services and returns their table.
@@ -146,7 +154,10 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if err := checkOrgService(s); err != nil {
 			return nil, err
 		}
-		e.org, e.groups = s.Org, s.AllowGroups
+		if err := checkPublish(s); err != nil {
+			return nil, err
+		}
+		e.org, e.groups, e.group = s.Org, s.AllowGroups, s.Group
 		switch s.Kind {
 		case agentservices.TCP:
 			e.network, e.addr = "tcp", s.Target
@@ -168,7 +179,7 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 			return nil, fmt.Errorf("service %q: unknown kind %q", s.Name, s.Kind)
 		}
 		t.byName[s.Name] = e
-		t.decls = append(t.decls, agentservices.Decl{Name: s.Name, Kind: s.Kind, E2EE: s.E2EE})
+		t.decls = append(t.decls, agentservices.Decl{Name: s.Name, Kind: s.Kind, E2EE: s.E2EE, Group: s.Group})
 	}
 	if err := t.addDirect(services); err != nil {
 		return nil, err

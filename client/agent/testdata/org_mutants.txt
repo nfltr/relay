@@ -25,3 +25,13 @@ token-no-epoch | direct_server.go | 		if hmac.Equal(o.Token, pathToken(s.key, ro
 token-unbound | direct_server.go | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, nil)) || hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | TestDirectModelBindings
 token-no-role | direct_server.go | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | 		if hmac.Equal(o.Token, pathToken(s.key, roleServer, o.Epoch, qk)) || hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | TestDirectModelBindings
 direct-no-token | direct_client.go | 		if !hmac.Equal(got, t.want) { | 		if !hmac.Equal(got, got) { | TestDirectModelBindings
+# Services by name (service_alpn.go; e2ee_tcp.pv queries 30-35): the
+# client's check of the negotiated protocol, the agent's choice, its OU and
+# publish checks, the start check, the hard cut (no protocol, no session).
+client-no-alpn-check | service_alpn.go | 		return checkNegotiated(cs, proto) | 		return nil | TestServiceModelBindings
+agent-no-alpn-check | org.go | 		NextProtos:             bind.protos(cert), | 		NextProtos:             nil, | TestServiceModelBindings
+agent-no-alpn-check | org.go | 			if cs.NegotiatedProtocol == "" { | 			if false { | TestServiceModelBindings
+no-protocol-accepted | org.go | 			if cs.NegotiatedProtocol == "" { | 			if false { | TestServiceModelBindings
+agent-no-publish-check | service_alpn.go | 		if g != "" && g == b.group { | 		if g != "" { | TestServiceModelBindings
+agent-no-ou-check | service_alpn.go | 	for _, g := range certGroups(cert) { | 	for _, g := range []string{b.group} { | TestServiceModelBindings
+publish-not-in-cert | service_alpn.go | 	if !slices.Contains(certGroups(cert), s.Group) { | 	if !slices.Contains(certGroups(cert), s.Group) && false { | TestServiceModelBindings

@@ -51,19 +51,35 @@ type orgAdmission struct {
 	until time.Time
 }
 
-// orgServerConfig is TLS 1.3 with o's machine certificate and a client
-// certificate required (crypto/tls checks its CertificateVerify against
-// the certificate's key) and checked by o for groups, into adm. No other
-// mode: a client without an organisation certificate is refused
-// (e2ee_tcp.pv mutant downgrade-any-client). VerifyConnection, not
-// VerifyPeerCertificate, runs on a resumed session too; tickets are off.
-func orgServerConfig(o Org, groups []string, adm *orgAdmission, logger *slog.Logger) *tls.Config {
+// errNoServiceProtocol: the client offered no service protocol (an old
+// client): a hard cut, no session without the binding.
+var errNoServiceProtocol = errors.New("e2ee: the client named no service (ALPN): a client of this release dials by service")
+
+// orgServerConfig is TLS 1.3 with o's machine certificate (read once per
+// session) and a client certificate required (crypto/tls checks its
+// CertificateVerify against the certificate's key) and checked by o for
+// groups, into adm; the session's service protocols only (bind.protos: an
+// offer of another ends the handshake with no_application_protocol, and
+// one without a protocol is refused). No other mode: a client without an
+// organisation certificate is refused (e2ee_tcp.pv mutant
+// downgrade-any-client). VerifyConnection, not VerifyPeerCertificate,
+// runs on a resumed session too; tickets are off.
+func orgServerConfig(o Org, groups []string, bind serviceBind, adm *orgAdmission, logger *slog.Logger) (*tls.Config, error) {
+	cert, err := o.Certificate()
+	if err != nil {
+		return nil, err
+	}
 	return &tls.Config{
 		MinVersion:             tls.VersionTLS13,
-		GetCertificate:         func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return o.Certificate() },
+		Certificates:           []tls.Certificate{*cert},
+		NextProtos:             bind.protos(cert),
 		ClientAuth:             tls.RequireAnyClientCert,
 		SessionTicketsDisabled: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
+			if cs.NegotiatedProtocol == "" {
+				logger.Warn("e2ee tcp: client refused", "error", errNoServiceProtocol)
+				return errNoServiceProtocol
+			}
 			until, err := o.CheckClient(cs.PeerCertificates, groups, time.Now())
 			if err != nil {
 				logger.Warn("e2ee tcp: organisation client refused", "error", err)
@@ -72,7 +88,7 @@ func orgServerConfig(o Org, groups []string, adm *orgAdmission, logger *slog.Log
 			adm.certs, adm.until = cs.PeerCertificates, until
 			return nil
 		},
-	}
+	}, nil
 }
 
 // holdAdmission ends a session at its admission's end: cut is called at
@@ -157,7 +173,14 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	}
 	var adm orgAdmission
 	changed := p.org.Changed() // before the check: a change after it is seen
-	tc := tlsend.Server(s, orgServerConfig(p.org, p.groups, &adm, logger))
+	cfg, err := orgServerConfig(p.org, p.groups, p.bind, &adm, logger)
+	if err != nil {
+		logger.Warn("e2ee tcp: this machine's certificate", "error", err)
+		_ = target.Close()
+		_ = s.Close()
+		return
+	}
+	tc := tlsend.Server(s, cfg)
 	_ = tc.SetDeadline(time.Now().Add(e2eeHeaderTimeout))
 	if err := tc.Handshake(); err != nil {
 		logger.Debug("e2ee tcp: handshake failed", "error", err)

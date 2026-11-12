@@ -193,10 +193,10 @@ func (a *agent) tunnelTargets(t *Tunnel) (targets sessionTargets, e2ee *e2eeTLSC
 		if t.E2EE != nil {
 			e2ee = t.E2EE.cfg
 		}
-		return sessionTargets{forwardAddr: t.ForwardAddr, defaultBackend: t.DefaultBackend, services: t.Services, http: t.HTTP, noRaw: !t.RawTCP && t.Services == nil},
+		return sessionTargets{forwardAddr: t.ForwardAddr, defaultBackend: t.DefaultBackend, services: t.Services, http: t.HTTP, noRaw: !t.RawTCP && t.Services == nil, agent: a.name},
 			e2ee, t.RawTCP || t.E2EE != nil || t.Services != nil
 	}
-	targets = sessionTargets{http: a.httpHandler, noRaw: !a.cfg.TCPTunnel}
+	targets = sessionTargets{http: a.httpHandler, noRaw: !a.cfg.TCPTunnel, agent: a.name}
 	if a.cfg.TCPTunnel {
 		targets.forwardAddr, e2ee = a.cfg.TCPForwardAddr, a.e2eeTLS
 		targets.org, targets.groups = a.cfg.TCPE2EEOrg, a.cfg.TCPE2EEAllowGroups

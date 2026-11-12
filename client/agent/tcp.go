@@ -828,7 +828,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 				if answer && t.answerOpen(id, q) != nil {
 					continue
 				}
-				go p.direct.serveService(newSessionConn(t, id, q), logger)
+				go p.direct.serveService(newSessionConn(t, id, q), p.bind, logger)
 			default:
 				go func() {
 					conn, reason, dialErr := dialTarget(ctx, p.network, p.target)
@@ -939,6 +939,7 @@ type sessionTargets struct {
 	noRaw          bool          // refuses sessions that would dial a target
 	org            Org           // Config.TCPE2EEOrg (TCPE2EEOnly): organisation TLS only, its bytes to forwardAddr; plain refused
 	groups         []string      // Config.TCPE2EEAllowGroups
+	agent          string        // the agent's name as clients dial it: an organisation-mode session's machine-dial protocol (service_alpn.go)
 }
 
 // RunServiceTunnel serves the ConnectTCP stream of an agent that serves

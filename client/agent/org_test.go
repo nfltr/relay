@@ -142,6 +142,7 @@ func orgSessionTo(t *testing.T, l *linkSessions, target string, pool *x509.CertP
 		return nil, fmt.Errorf("answer %v, %v", a, err)
 	}
 	cfg := &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: pool, ServerName: "web.org.internal"}
+	BindServiceTLS(cfg, MachineALPN("web", target))
 	if cert != nil {
 		cfg.Certificates = []tls.Certificate{*cert}
 	}
@@ -167,7 +168,7 @@ func orgSessions(t *testing.T, org Org, groups ...string) *linkSessions {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+	return &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table, agent: "web"}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 }
 
 // A service in organisation mode serves its machine certificate (the
@@ -181,7 +182,7 @@ func TestOrgServiceAdmitsGroup(t *testing.T) {
 	org := o.agentOrg(o.machine(t, "web", []string{"web"}, time.Hour, false))
 	l := orgSessions(t, org, "db", "ops")
 	// Config.TCPE2EEOrg: the tunnel of nfltr tcp --e2ee --allow-group.
-	tunnel := &linkSessions{ctx: t.Context(), targets: sessionTargets{forwardAddr: echoTarget(t), org: org, groups: []string{"db", "ops"}},
+	tunnel := &linkSessions{ctx: t.Context(), targets: sessionTargets{forwardAddr: echoTarget(t), org: org, groups: []string{"db", "ops"}, agent: "web"},
 		logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 	for _, tc := range []struct {
 		name string
