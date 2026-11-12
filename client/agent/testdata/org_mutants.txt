@@ -35,3 +35,9 @@ no-protocol-accepted | org.go | 			if cs.NegotiatedProtocol == "" { | 			if fals
 agent-no-publish-check | service_alpn.go | 		if g != "" && g == b.group { | 		if g != "" { | TestServiceModelBindings
 agent-no-ou-check | service_alpn.go | 	for _, g := range certGroups(cert) { | 	for _, g := range []string{b.group} { | TestServiceModelBindings
 publish-not-in-cert | service_alpn.go | 	if !slices.Contains(certGroups(cert), s.Group) { | 	if !slices.Contains(certGroups(cert), s.Group) && false { | TestServiceModelBindings
+# Direct paths under a group dial (e2ee_tcp.pv 36; nfltr
+# docs/decisions/service-discovery-2026-11-12.md "Direct paths under a
+# group dial"): the first exchange's check of the session's machine, its
+# exclusion of the other instances.
+group-control-no-name | direct_client.go | 				_, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, p.machine, time.Now()) | 				_, err := time.Now(), error(nil) | TestDirectGroupDialGoesDirectToItsInstance
+group-control-no-exclude | direct_client.go | 		if other != "" && !slices.Contains(exclude, other) && len(exclude) < dataplane.MaxExclude { | 		if other != "" && !slices.Contains(exclude, other) && false { | TestDirectGroupDialGoesDirectToItsInstance

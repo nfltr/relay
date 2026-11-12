@@ -15,6 +15,8 @@ import (
 	"maps"
 	"net"
 	"net/netip"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +25,8 @@ import (
 	"github.com/nfltr/link/pathswitch"
 	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/quic-go"
+	"github.com/nfltr/relay/proto/wire/agentservices"
+	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
 // DirectMachine is a client's organisation identity for direct paths:
@@ -42,6 +46,13 @@ type DirectClientConfig struct {
 	// DirectServiceName (organisation mode), answered: a control
 	// exchange's or a fallback's stream. Its bytes are this file's.
 	Relayed func(ctx context.Context, agent string) (net.Conn, error)
+	// RelayedGroup opens a session through the relay to the group dial
+	// name (<service>@<group>, its service), the instances exclude names
+	// (machine names) left out, answered: a group dial's first control
+	// exchange toward an instance (nfltr
+	// docs/decisions/service-discovery-2026-11-12.md "Direct paths under a
+	// group dial"). nil: group-dialled sessions stay relayed.
+	RelayedGroup func(ctx context.Context, name string, exclude []string) (net.Conn, error)
 	// QADTLS is the TLS QAD dials the relay at addr with.
 	QADTLS func(addr string) *tls.Config
 	// OwnQAD is the QAD address of the client's own relay (its agent
@@ -119,10 +130,15 @@ type DirectClient struct {
 }
 
 // directPair is the client's state toward one agent: the direct
-// connection, the candidates its next punch dials, the backoff.
+// connection, the candidates its next punch dials, the backoff. A group
+// dial's pair is one instance: its key the name and the session's machine,
+// its route (the agent the reserved service's opens go to) learnt from its
+// first exchange's offer, <machine>.<agent>.
 type directPair struct {
 	mu      sync.Mutex // one exchange at a time
-	agent   string
+	key     string     // DirectClient.pairs' and the Node's peer
+	group   string     // <service>@<group>: a group dial's; "" a machine dial
+	route   atomic.Pointer[string]
 	machine string
 	cands   []netip.AddrPort
 	refused atomic.Bool // the last punch met a certificate the check refused
@@ -220,15 +236,40 @@ func (d *DirectClient) reflexive(ctx context.Context, agentRelay string) []netip
 	return nil
 }
 
+// pair is the client's pair toward agent as dialled, the session's
+// machine machine: per agent for a machine dial, per instance for a group
+// dial (<service>@<group>, whose route the first exchange learns).
 func (d *DirectClient) pair(agent, machine string) *directPair {
+	key, group := agent, ""
+	if _, _, ok := groupName(agent); ok {
+		key, group = agent+" "+machine, agent
+	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	p := d.pairs[agent]
+	p := d.pairs[key]
 	if p == nil {
-		p = &directPair{agent: agent, machine: machine}
-		d.pairs[agent] = p
+		p = &directPair{key: key, group: group, machine: machine}
+		if group == "" {
+			p.route.Store(&agent)
+		}
+		d.pairs[key] = p
 	}
 	return p
+}
+
+// groupName splits a group dial's name, <service>@<group>.
+func groupName(agent string) (service, group string, ok bool) {
+	service, group, ok = strings.Cut(agent, "@")
+	return service, group, ok && agentservices.ValidName(service) && agentservices.ValidLabel(group)
+}
+
+// routeOf is the agent p's reserved-service opens go to; "": none known
+// (a group dial's pair before its first exchange).
+func (p *directPair) routeOf() string {
+	if r := p.route.Load(); r != nil {
+		return *r
+	}
+	return ""
 }
 
 // DirectSession is a client session framed for direct paths from its
@@ -244,7 +285,6 @@ type DirectSession struct {
 
 	mu      sync.Mutex
 	key     []byte
-	agent   string
 	service string
 	mode    DirectMode
 	on      func(PathEvent)
@@ -289,7 +329,7 @@ func (s *DirectSession) Run(cs tls.ConnectionState, agent, machine, service stri
 	}
 	pair := s.d.pair(agent, machine) // d.mu not under s.mu: Move's token callback takes s.mu under the path layer's lock (moving)
 	s.mu.Lock()
-	s.key, s.agent, s.service, s.mode, s.on = key, agent, service, mode, on
+	s.key, s.service, s.mode, s.on = key, service, mode, on
 	s.pair = pair
 	s.mu.Unlock()
 	s.d.mu.Lock()
@@ -362,7 +402,7 @@ func (s *DirectSession) tryDirect() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	st, err := s.d.node.Open(ctx, p.agent, nil)
+	st, err := s.d.node.Open(ctx, p.key, nil)
 	if err != nil {
 		s.noticeDeath(p) // the connection died during this try: noticed now, not one try later
 		return ReasonNoAnswer
@@ -414,17 +454,13 @@ func (s *DirectSession) moving(e uint64, heard *atomic.Bool) {
 func (s *DirectSession) punch(p *directPair) string {
 	ctx, cancel := context.WithTimeout(context.Background(), directControlBound)
 	defer cancel()
-	raw, err := s.d.cfg.Relayed(ctx, p.agent)
+	tc, err := s.d.control(ctx, p)
 	if err != nil {
 		return ReasonWithheld
 	}
-	tc := tls.Client(raw, s.d.controlTLS(p.agent, p.machine))
 	defer tc.Close() //nolint:errcheck
-	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
+	stop := context.AfterFunc(ctx, func() { _ = tc.NetConn().Close() })
 	defer stop()
-	if err := tc.HandshakeContext(ctx); err != nil {
-		return ReasonWithheld
-	}
 	enc, r := json.NewEncoder(tc), bufio.NewReader(io.LimitReader(tc, 8<<10))
 	var offer directOffer
 	if enc.Encode(directRequest{Service: s.service}) != nil || readJSONLine(r, &offer) != nil {
@@ -432,6 +468,10 @@ func (s *DirectSession) punch(p *directPair) string {
 	}
 	if offer.Error != "" {
 		return offer.Error
+	}
+	if p.routeOf() == "" && agentservices.ValidLabel(offer.Agent) {
+		r := p.machine + "." + offer.Agent // the session's machine (the control TLS checked it) and its agent
+		p.route.Store(&r)
 	}
 	theirs, err := s.d.ep.candidates(offer.Candidates)
 	if err != nil {
@@ -522,6 +562,84 @@ func (d *DirectClient) controlTLS(agent, machine string) *tls.Config {
 	return cfg
 }
 
+// groupControlTries bounds a group dial's first exchange's opens: one per
+// instance exclude can name, and a few more for instances that end the
+// stream without a certificate (their service takes no direct path).
+// ponytail: past MaxExclude+1 instances later picks are random (bounded
+// by directControlBound); an instance-pinned open would end that.
+const groupControlTries = dataplane.MaxExclude + 4
+
+// control opens p's control exchange, its TLS up: to the reserved service
+// of p's route, or, for a group dial's pair that knows none yet, on the
+// group dial's own route (directControlMark first), each certificate of
+// another machine than the session's refused and excluded from the next
+// open (BIND:direct.name: the relay picks, it never chooses who answers).
+func (d *DirectClient) control(ctx context.Context, p *directPair) (*tls.Conn, error) {
+	if r := p.routeOf(); r != "" {
+		return d.handshake(ctx, func() (net.Conn, error) { return d.cfg.Relayed(ctx, r) }, d.controlTLS(r, p.machine))
+	}
+	svc, group, ok := groupName(p.group)
+	if !ok || d.cfg.RelayedGroup == nil {
+		return nil, errors.New("direct path: no route to the session's agent")
+	}
+	var exclude []string
+	err := errors.New("direct path: no instance answered as the session's machine")
+	for range groupControlTries {
+		var other string
+		cfg := &tls.Config{
+			MinVersion:           tls.VersionTLS13,
+			GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return d.cfg.Machine.Certificate() },
+			InsecureSkipVerify:   true, // #nosec G402 -- VerifyConnection checks the organisation's chain and the session's machine
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				_, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, p.machine, time.Now())
+				if err != nil && len(cs.PeerCertificates) > 0 {
+					other = cs.PeerCertificates[0].Subject.CommonName
+				}
+				return err
+			},
+		}
+		BindServiceTLS(cfg, GroupALPN(svc, group))
+		tc, herr := d.handshake(ctx, func() (net.Conn, error) {
+			raw, err := d.cfg.RelayedGroup(ctx, p.group, exclude)
+			if err == nil {
+				if _, err = raw.Write([]byte{directControlMark}); err != nil {
+					_ = raw.Close()
+				}
+			}
+			return raw, err
+		}, cfg)
+		if herr == nil {
+			return tc, nil
+		}
+		if errors.Is(herr, errNoOpen) || ctx.Err() != nil {
+			return nil, herr
+		}
+		if other != "" && !slices.Contains(exclude, other) && len(exclude) < dataplane.MaxExclude {
+			exclude = append(exclude, other)
+		}
+	}
+	return nil, err
+}
+
+// errNoOpen: the relay did not open the exchange's session.
+var errNoOpen = errors.New("direct path: the relay opened no control session")
+
+// handshake opens a session with open and runs cfg's TLS on it within ctx.
+func (d *DirectClient) handshake(ctx context.Context, open func() (net.Conn, error), cfg *tls.Config) (*tls.Conn, error) {
+	raw, err := open()
+	if err != nil {
+		return nil, errors.Join(errNoOpen, err)
+	}
+	tc := tls.Client(raw, cfg)
+	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
+	defer stop()
+	if err := tc.HandshakeContext(ctx); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	return tc, nil
+}
+
 // fallback is the path layer's OnStreamEnd: the current stream died; a
 // relayed one takes the session (tokR) until the detach bound.
 func (s *DirectSession) fallback(epoch uint64, _ error) {
@@ -531,7 +649,7 @@ func (s *DirectSession) fallback(epoch uint64, _ error) {
 		return
 	}
 	s.mu.Lock()
-	key, agent, last, heard := s.key, s.agent, s.moveAt, s.heard.Load()
+	key, pair, last, heard := s.key, s.pair, s.moveAt, s.heard.Load()
 	// a loss starts here unless the ended stream was refused unanswered
 	// (however late its reset came: TestDirectSessionSlowRefusalsEnd)
 	if s.lostAt.IsZero() || epoch == s.epoch && s.heard.Load() {
@@ -576,7 +694,11 @@ func (s *DirectSession) fallback(epoch uint64, _ error) {
 		default:
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		rs, err := s.d.cfg.Relayed(ctx, agent)
+		var rs net.Conn
+		err := errNoOpen // no route: a group dial before its first exchange; the detach bound ends the session
+		if r := pair.routeOf(); r != "" {
+			rs, err = s.d.cfg.Relayed(ctx, r)
+		}
 		cancel()
 		if err == nil {
 			heard := new(atomic.Bool)

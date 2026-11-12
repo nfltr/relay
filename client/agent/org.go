@@ -165,7 +165,25 @@ func checkOrgService(s Service) error {
 // stream is framed (pathswitch) under the TLS, and with Service.Direct on
 // it may move (direct_server.go); without it the framed session stays on
 // the relay.
+//
+// On a service with direct paths, a stream whose first byte is
+// directControlMark is a control exchange (a group dial's first toward
+// this agent), never a session: target is closed unused.
 func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
+	if p.direct != nil {
+		first, peeked, err := peekFirst(s, e2eeHeaderTimeout)
+		if err != nil {
+			_ = target.Close()
+			_ = s.Close()
+			return
+		}
+		if first == directControlMark {
+			_ = target.Close()
+			p.direct.controlSession(s, p.org, p.groups, p.bind, p.relay, logger) // s: the mark read
+			return
+		}
+		s = peeked
+	}
 	ps, s, err := startDirect(s, p.direct)
 	if err != nil {
 		_ = target.Close()

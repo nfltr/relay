@@ -70,6 +70,14 @@ func ParseDirectMode(s string) (DirectMode, error) {
 // service of the table may not take it.
 const DirectServiceName = "nfltr-direct"
 
+// directControlMark is the first byte of a control exchange on a direct
+// service's own route (a group dial's first exchange toward an instance,
+// whose agent's name the client does not know yet: nfltr
+// docs/decisions/service-discovery-2026-11-12.md "Direct paths under a
+// group dial"): neither a TLS record (tlsRecordHandshake) nor a path
+// frame. The exchange's TLS follows, bound as the route's sessions.
+const directControlMark = 'C'
+
 // QADALPN is the relay's address answer (relay-core core/session/qad.go).
 const QADALPN = "nfltr-qad/1"
 

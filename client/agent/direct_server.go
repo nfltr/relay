@@ -239,8 +239,15 @@ func (d *directServer) serveService(s net.Conn, bind serviceBind, relay *qadTarg
 		d.reattach(pathStream{Conn: s})
 		return
 	}
+	d.controlSession(s, d.org, d.groups, bind, relay, logger)
+}
+
+// controlSession runs a control exchange on s: TLS as a session of bind's
+// (org, groups), then control. It serves the reserved service's exchanges
+// and those on a direct service's own route (directControlMark).
+func (d *directServer) controlSession(s net.Conn, org Org, groups []string, bind serviceBind, relay *qadTarget, logger *slog.Logger) {
 	var adm orgAdmission
-	cfg, err := orgServerConfig(d.org, d.groups, bind, &adm, logger)
+	cfg, err := orgServerConfig(org, groups, bind, &adm, logger)
 	if err != nil {
 		_ = s.Close()
 		return
@@ -253,7 +260,7 @@ func (d *directServer) serveService(s net.Conn, bind serviceBind, relay *qadTarg
 	}
 	_ = tc.SetDeadline(time.Now().Add(directControlBound))
 	defer tc.Close() //nolint:errcheck
-	if err := d.control(tc, relay); err != nil {
+	if err := d.control(tc, relay, bind.agent); err != nil {
 		logger.Info("direct path: control exchange ended", "error", err)
 	}
 }
@@ -292,7 +299,8 @@ type directRequest struct {
 
 type directOffer struct {
 	Candidates []string `json:"candidates,omitempty"`
-	QAD        string   `json:"qad,omitempty"` // the relay's QAD address, for the client's own
+	QAD        string   `json:"qad,omitempty"`   // the relay's QAD address, for the client's own
+	Agent      string   `json:"agent,omitempty"` // this agent's name: a group dial's route to it, <machine>.<agent>
 	Error      string   `json:"error,omitempty"`
 }
 
@@ -310,8 +318,9 @@ const (
 // client's, then probes toward them while the client punches. The offer's
 // reflexive candidate is relay's answer and its QAD names relay, the one
 // that carried this exchange: another relay's answer is never added (under
-// an endpoint-dependent NAT it would be wrong, else a duplicate).
-func (d *directServer) control(c net.Conn, relay *qadTarget) error {
+// an endpoint-dependent NAT it would be wrong, else a duplicate). agent is
+// this agent's name, which the offer carries.
+func (d *directServer) control(c net.Conn, relay *qadTarget, agent string) error {
 	r := bufio.NewReader(io.LimitReader(c, 8<<10))
 	var req directRequest
 	if err := readJSONLine(r, &req); err != nil {
@@ -322,7 +331,7 @@ func (d *directServer) control(c net.Conn, relay *qadTarget) error {
 	if mode == DirectOff {
 		return enc.Encode(directOffer{Error: reasonOff})
 	}
-	offer := directOffer{}
+	offer := directOffer{Agent: agent}
 	var cands []netip.AddrPort
 	if relay != nil {
 		offer.QAD = relay.addr
