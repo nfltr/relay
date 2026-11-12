@@ -74,6 +74,27 @@
    token without the epoch: the replay attaches). Either way the bytes on
    a re-attached stream are the session's TLS records, secret (28): a
    replay is a denial only.
+   Services by name (lane SVCBIND: nfltr
+   docs/decisions/service-discovery-2026-11-12.md section 4). Web serves
+   a second organisation service, vault (published under no group), and
+   machine mal (group db, a live certificate, the relay's choice to route
+   to) serves a pg published under ops, not db. A client offers one ALPN
+   protocol naming what it dialled: alpnM(agent, service) for a machine
+   dial (nfltr-svc/<agent>/<service>), alpnG(service, group) for a group
+   dial (nfltr-svc/<service>@<group>); the offer travels in the clear (the
+   model does not lean on the transcript covering it), the agent's choice
+   comes back in EncryptedExtensions under the session key. The agent
+   accepts an offer only for the service the session was routed to (its
+   process's svc) and, for alpnG, a group it publishes that service under
+   and its certificate's OU holds, else no_application_protocol; the client
+   requires the negotiated protocol to be its offer. A group-dial client
+   (GClient) checks the chain, OU contains the group, NotAfter and the CRL,
+   no name. Queries 30-35; mutants client-no-alpn-check,
+   agent-no-alpn-check, group-dial-no-group-check, agent-no-publish-check.
+     BIND:org.service     the ALPN name: offered, accepted by the agent, checked negotiated
+     BIND:org.group       the group: in the certificate's OU (the client's check; the agent's own)
+     BIND:org.publish     the agent serves <service>@<group> only for a service it publishes under group
+
    Bindings (direct-paths doc "E2EE"; each gets a refusal row in the
    code's bindings test when the code lands):
      BIND:direct.cert     the direct answer's certificate checked as the session's
@@ -96,7 +117,8 @@
                                                          is a reset; the target's reset is one to the client
      nfltr cmd/nfltr/internal/transportcli/org_session.go the client: ServerName <name>.<org>.internal, the check;
                                                          its mode is its own (enrolled: organisation), never the answer's
-     nfltr .../tcp_connect_session.go Pump, tlsSession.Reset: the local application's reset likewise *)
+     nfltr .../tcp_connect_session.go Pump, tlsSession.Reset: the local application's reset likewise
+     client/agent/service_alpn.go                        the ALPN protocols: the agent's choice, the client's check *)
 
 free c: channel.
 
@@ -123,10 +145,17 @@ const serWeb, serWebOld, serWebRev, serCli, serEve, serLost, serOld: bitstring.
 const noCert: bitstring.                      (* a client that presents no organisation certificate *)
 const labC, labS: bitstring.                  (* the direct token's roles: the client's, the agent's *)
 const ep1, ep2, ep3, noEpoch: bitstring.      (* attach epochs: ep1 direct, ep2 and ep3 relayed re-attaches *)
+const nameMal, serMal, grpOps, noGroup: bitstring.
+const svcPg, svcVault: bitstring.             (* service names *)
+const eeTag: bitstring.                       (* EncryptedExtensions: the negotiated ALPN protocol *)
+fun alpnM(bitstring, bitstring): bitstring [data].   (* nfltr-svc/<agent>/<service> *)
+fun alpnG(bitstring, bitstring): bitstring [data].   (* nfltr-svc/<service>@<group> *)
 
 free orgk: skey [private].                    (* the organisation: root, then issuer (enrol.pv) *)
-free skWeb, skCli: skey [private].
+free skWeb, skCli, skMal: skey [private].
 free payload: bitstring [private].            (* what the client sends machine web *)
+free vData: bitstring [private].              (* what a client sends web/vault *)
+free gData: bitstring [private].              (* what the group-dial client sends pg@db *)
 free svcData: bitstring [private].            (* what web's service answers an admitted client *)
 free dirData: bitstring [private].            (* what the client sends on a direct connection it took *)
 free attData: bitstring [private].            (* what the client sends on a relayed stream it re-attached *)
@@ -134,6 +163,17 @@ free attData: bitstring [private].            (* what the client sends on a rela
 (* The epoch a token binds; token-no-epoch: none. *)
 letfun tokEpoch(e: bitstring) = e. (* NOT:token-no-epoch *)
 letfun tokEpoch(e: bitstring) = noEpoch. (* ONLY:token-no-epoch *)
+
+(* The agent's ALPN choice for a session routed to its service svc,
+   published under pub, its certificate's OU ou: the machine dial of
+   itself and that service, or that service under a group the OU holds
+   and the service is published under. agent-no-publish-check: any group
+   the OU holds. *)
+letfun published(g: bitstring, pub: bitstring) = (g = pub). (* NOT:agent-no-publish-check *)
+letfun published(g: bitstring, pub: bitstring) = true. (* ONLY:agent-no-publish-check *)
+letfun alpnOK(offer: bitstring, name: bitstring, svc: bitstring, pub: bitstring, ou: bitstring) =
+  if offer = alpnM(name, svc) then true else
+  let alpnG(=svc, g) = offer in (if g = ou then published(g, pub) else false) else false.
 
 event ClientAccepted(bitstring).                       (* the serial of the server certificate the client took *)
 event ClientSent(bitstring, bitstring).                (* its own serial, its bytes *)
@@ -153,6 +193,10 @@ event ClientDirect(bitstring, bitstring, bitstring).   (* session key, direct ke
 event AgentDirect(bitstring, bitstring).               (* session key, direct key: bound to that session *)
 event ClientAttach(bitstring, bitstring).              (* session key, epoch: the client's OPEN sent *)
 event AgentAttach(bitstring, bitstring).               (* session key, epoch: the agent attached that stream *)
+event Dialled(bitstring, bitstring, bitstring).        (* a machine dial: agent, service, the bytes it sends *)
+event Publishes(bitstring, bitstring, bitstring).      (* an agent: machine, service, the group it publishes it under *)
+event Served(bitstring, bitstring, bitstring).         (* an agent: machine, service, the bytes its service got *)
+event GClientRecv(bitstring, bitstring).               (* the group-dial client: session key, response *)
 
 (* The client's direct path for its session k: the relay hands it an
    address (cand); whoever the attacker routes there answers with a
@@ -206,11 +250,11 @@ let AttachAgent(k: bitstring, ns: bitstring, e: bitstring) =
 (* Web's agent: a direct connection (its certificate, the session's key
    pair) bound to its session k only on that session's client token.
    agent-direct-no-token: bound on the relay's word (a session id). *)
-let DirectAgent(k: bitstring) =
+let DirectAgent(k: bitstring, sk: skey) =
   in(c, ekd: bitstring);
   let ls = labS in (* NOT:token-no-role *)
   let ls = labC in (* ONLY:token-no-role *)
-  let kd = adec(ekd, skWeb) in
+  let kd = adec(ekd, sk) in
   let tokC = h((k, kd, labC, tokEpoch(ep1))) in (* NOT:token-unbound *)
   let tokS = h((k, kd, ls, tokEpoch(ep1))) in (* NOT:token-unbound *)
   let tokC = h((k, labC, tokEpoch(ep1))) in (* ONLY:token-unbound *)
@@ -220,13 +264,16 @@ let DirectAgent(k: bitstring) =
   event AgentDirect(k, kd);
   out(c, senc((ls, tokS), kd)).
 
-(* The client, enrolled: names machine web, organisation mode whatever the
-   relay answers. *)
-let Client(certCli: bitstring) =
+(* The client, enrolled: names machine web and its service svc (pg or
+   vault), sends data, organisation mode whatever the relay answers. *)
+let Client(certCli: bitstring, svc: bitstring, payload: bitstring) =
+  event Dialled(nameWeb, svc, payload);
   out(c, (nameWeb, true));                             (* the open: web's service, E2Ee *)
   in(c, answer: bitstring);
   if answer = answerPlain then out(c, payload) else (* ONLY:downgrade-plain *)
   if answer = answerOK then
+  let offer = alpnM(nameWeb, svc) in
+  out(c, offer);                                       (* ClientHello: ALPN *)
   in(c, (scert: bitstring, spk: pkey, ns: bitstring)); (* the session's certificate, key and server random *)
   let (sn: bitstring, sg: bitstring, =spk, ss: bitstring, se: bitstring) = checksign(scert, pk(orgk)) in (* NOT:client-no-chain-check *)
   let (sn: bitstring, sg: bitstring, =spk, ss: bitstring, se: bitstring) = getmsg(scert) in (* ONLY:client-no-chain-check *)
@@ -235,7 +282,10 @@ let Client(certCli: bitstring) =
   if ss <> serWebRev && ss <> serLost then             (* the CRL *) (* NOT:client-no-crl-check *)
   event ClientAccepted(ss);
   new k: bitstring;
-  out(c, aenc(k, spk));
+  out(c, aenc((k, ns), spk));                          (* the key exchange, bound to the server random (the transcript) *)
+  in(c, ee: bitstring);
+  let (=eeTag, np: bitstring) = sdec(ee, k) in
+  if np = offer then                                   (* the negotiated protocol is the offer *) (* NOT:client-no-alpn-check *)
   out(c, (certCli, sign(h((k, spk)), skCli)));          (* Certificate + CertificateVerify *)
   (DirectClient(k)) | (ReAttach(k, ns)) | (
   event ClientSent(serCli, payload);
@@ -262,23 +312,54 @@ let Client(certCli: bitstring) =
   let (=s2c, =closeAlert, =r) = sdec(e2, k) in
   event ClientCleanEnd(k, r)).
 
+(* The group-dial client, enrolled: pg@db, any machine of group db the
+   relay routes to; no name. *)
+let GClient(certCli: bitstring) =
+  out(c, (svcPg, grpDb, true));                        (* the open: pg@db, E2Ee *)
+  in(c, answer: bitstring);
+  if answer = answerOK then
+  let offer = alpnG(svcPg, grpDb) in
+  out(c, offer);
+  in(c, (scert: bitstring, spk: pkey, ns: bitstring));
+  let (sn: bitstring, sg: bitstring, =spk, ss: bitstring, se: bitstring) = checksign(scert, pk(orgk)) in
+  if sg = grpDb then                                   (* OU contains the group *) (* NOT:group-dial-no-group-check *)
+  if se = live then
+  if ss <> serWebRev && ss <> serLost then
+  new k: bitstring;
+  out(c, aenc((k, ns), spk));                          (* the key exchange, bound to the server random (the transcript) *)
+  in(c, ee: bitstring);
+  let (=eeTag, np: bitstring) = sdec(ee, k) in
+  if np = offer then (* NOT:client-no-alpn-check *)
+  out(c, (certCli, sign(h((k, spk)), skCli)));
+  event ClientSent(serCli, gData);
+  out(c, senc((c2s, appData, gData), k));
+  in(c, e: bitstring);
+  let (=s2c, =appData, r: bitstring) = sdec(e, k) in
+  event GClientRecv(k, r).
+
 (* Web's agent: a tcp service in organisation mode, allow_group db. fixed:
    the agent has a target of its own (a service table, --forward); a
    tunnel without one is refused at New (ErrE2EENoFixedTarget), modelled
    as an agent that serves nothing. relay-names-target: before E2EEPROOF
-   finding 1's fix, that agent dialled the open's target. *)
-let Agent(certWeb: bitstring, fixed: bool) =
+   finding 1's fix, that agent dialled the open's target. The session is
+   routed to service svc, which the agent publishes under pub (noGroup:
+   none), on machine name with key sk and certificate certWeb (OU ou). *)
+let Agent(certWeb: bitstring, sk: skey, name: bitstring, ou: bitstring, svc: bitstring, pub: bitstring, fixed: bool) =
+  event Publishes(name, svc, pub);
   in(c, (target: bitstring, e2ee: bool));
   if e2ee = true then                                  (* a plain session is refused *)
+  in(c, offer: bitstring);                             (* ClientHello: ALPN *)
+  if alpnOK(offer, name, svc, pub, ou) then            (* else no_application_protocol *) (* NOT:agent-no-alpn-check *)
   let t0 = if fixed then svcAddr else target in (* ONLY:relay-names-target *)
   if fixed = true then (* NOT:relay-names-target *)
   let t0 = svcAddr in (* NOT:relay-names-target *)
   let t = t0 in (* NOT:relay-names-target-with-forward *)
   let t = target in (* ONLY:relay-names-target-with-forward *)
   new ns: bitstring;                                   (* ServerHello.random *)
-  out(c, (certWeb, pk(skWeb), ns));
+  out(c, (certWeb, pk(sk), ns));
   in(c, ek: bitstring);
-  let k = adec(ek, skWeb) in
+  let (k: bitstring, =ns) = adec(ek, sk) in           (* a handshake replayed to another session fails *)
+  out(c, senc((eeTag, offer), k));                     (* EncryptedExtensions: the protocol it chose *)
   in(c, (ccert: bitstring, cv: bitstring));
   if ccert = noCert then (in(c, e0: bitstring); let (=c2s, =appData, m0: bitstring) = sdec(e0, k) in event ServiceGot(noCert, m0); out(c, senc((s2c, appData, svcData), k))) else (* ONLY:downgrade-any-client *)
   let (cn: bitstring, cg: bitstring, cpk: pkey, cs: bitstring, ce: bitstring) = checksign(ccert, pk(orgk)) in (* NOT:agent-no-chain-check *)
@@ -286,12 +367,13 @@ let Agent(certWeb: bitstring, fixed: bool) =
   if cg = grpDb then                                   (* allow_group *) (* NOT:no-group-check *)
   if ce = live then                                    (* NotAfter *) (* NOT:agent-no-expiry-check *)
   if cs <> serWebRev && cs <> serLost then             (* the CRL *) (* NOT:agent-no-crl-check *)
-  if checksign(cv, cpk) = h((k, pk(skWeb))) then       (* CertificateVerify (crypto/tls) *) (* NOT:skip-certificate-verify *)
-  (DirectAgent(k)) | (AttachAgent(k, ns, ep2)) | (AttachAgent(k, ns, ep3)) | (
+  if checksign(cv, cpk) = h((k, pk(sk))) then       (* CertificateVerify (crypto/tls) *) (* NOT:skip-certificate-verify *)
+  (DirectAgent(k, sk)) | (AttachAgent(k, ns, ep2)) | (AttachAgent(k, ns, ep3)) | (
   in(c, e: bitstring);
   let (=c2s, =appData, m: bitstring) = sdec(e, k) in
   if t = svcAddr then (
     event ServiceGot(cs, m);                           (* to its own service, on its machine *)
+    event Served(name, svc, m);
     new r: bitstring;
     event AgentSent(k, (r, svcData));
     out(c, senc((s2c, appData, (r, svcData)), k));
@@ -418,14 +500,41 @@ query attacker(attData).
 (* expect false *)
 query k: bitstring; event(AgentAttach(k, ep3)).
 
+(* Services by name (lane SVCBIND). 30. what the group-dial client sends
+   for pg@db reaches no one outside group db (mutant
+   group-dial-no-group-check) *)
+(* expect true *)
+query attacker(gData).
+(* 31. ... and only a service its machine publishes under db: not web's
+   vault, not mal's pg published under ops (mutants agent-no-alpn-check,
+   agent-no-publish-check, client-no-alpn-check) *)
+(* expect true *)
+query n: bitstring, s: bitstring; event(Served(n, s, gData)) ==> event(Publishes(n, s, grpDb)).
+(* 32. injective agreement for the group dial *)
+(* expect true *)
+query k: bitstring, r: bitstring; inj-event(GClientRecv(k, r)) ==> inj-event(AgentSent(k, r)).
+(* 33. a machine dial reaches only the named agent's named service: the
+   relay cannot route web/pg to web's vault (mutants client-no-alpn-check,
+   agent-no-alpn-check) *)
+(* expect true *)
+query n: bitstring, s: bitstring; event(Served(n, s, payload)) ==> event(Dialled(n, s, payload)).
+(* 34, 35. witnesses: the group dial completes; the second service serves *)
+(* expect false *)
+query k: bitstring, r: bitstring; event(GClientRecv(k, r)).
+(* expect false *)
+query m: bitstring; event(Served(nameWeb, svcVault, m)).
+
 process
   new skEve: skey; new skLost: skey; new skOld: skey; new skWebOld: skey; new skWebRev: skey;
-  let certWeb = sign((nameWeb, grpWeb, pk(skWeb), serWeb, live), orgk) in
+  let certWeb = sign((nameWeb, grpDb, pk(skWeb), serWeb, live), orgk) in
   let certCli = sign((nameCli, grpDb, pk(skCli), serCli, live), orgk) in
-  out(c, certWeb); out(c, certCli);
+  let certMal = sign((nameMal, grpDb, pk(skMal), serMal, live), orgk) in
+  out(c, certWeb); out(c, certCli); out(c, certMal);
   out(c, (skEve, sign((nameEve, grpWeb, pk(skEve), serEve, live), orgk)));
   out(c, (skLost, sign((nameLost, grpDb, pk(skLost), serLost, live), orgk)));
   out(c, (skOld, sign((nameOld, grpDb, pk(skOld), serOld, expired), orgk)));
   out(c, (skWebOld, sign((nameWeb, grpWeb, pk(skWebOld), serWebOld, expired), orgk)));
   out(c, (skWebRev, sign((nameWeb, grpWeb, pk(skWebRev), serWebRev, live), orgk)));
-  ((!Agent(certWeb, true)) | (!Agent(certWeb, false)) | (!Client(certCli)))
+  ((!Agent(certWeb, skWeb, nameWeb, grpDb, svcPg, grpDb, true)) | (!Agent(certWeb, skWeb, nameWeb, grpDb, svcPg, grpDb, false)) |
+   (!Agent(certWeb, skWeb, nameWeb, grpDb, svcVault, noGroup, true)) | (!Agent(certMal, skMal, nameMal, grpDb, svcPg, grpOps, true)) |
+   (!Client(certCli, svcPg, payload)) | (!Client(certCli, svcVault, vData)) | (!GClient(certCli)))

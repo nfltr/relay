@@ -331,6 +331,11 @@ test-go-mutants`).
 | 27 | injective agreement per (session, epoch): the agent attaches a stream at epoch e only on the client's OPEN for e | holds (lane DIRECTPATH2, gap G2; mutant `token-no-epoch`) |
 | 28 | what the client sends on a re-attached relayed stream stays secret | holds, also under `token-no-epoch`: a replay is a denial only |
 | 29 | witness: the agent attaches a relayed re-attach | attack (reachable) |
+| 30 | what the group-dial client sends for `pg@db` reaches no one outside group db | holds (lane SVCBIND; mutant `group-dial-no-group-check`) |
+| 31 | ... and only a service its machine publishes under db: not web's `vault`, not mal's `pg` published under ops | holds (mutants `agent-no-alpn-check`, `agent-no-publish-check`, `client-no-alpn-check`) |
+| 32 | injective agreement for the group dial: the answer it takes, an agent sent in that session | holds (mutant `group-dial-no-group-check`) |
+| 33 | a machine dial reaches only the named agent's named service: the relay cannot route `web/pg` to web's `vault` | holds (mutants `client-no-alpn-check`, `agent-no-alpn-check`) |
+| 34, 35 | witnesses: the group dial completes; web's second service serves | attack (reachable) |
 
 A TLS record is bound to its place in its direction's stream (TLS 1.3's
 sequence number in the AEAD nonce): the model's close record names the
@@ -396,6 +401,37 @@ key (28 holds): the replay is a denial only. A client mutant that takes
 the relay's certificate gives it the key, and so the re-attached bytes
 (28); an agent mutant that admits the relay's own client lets it attach
 its own session (27).
+
+Services by name (queries 30-35; lane SVCBIND, nfltr
+`docs/decisions/service-discovery-2026-11-12.md` section 4). The machine
+certificate names the machine, which every agent and service on it share,
+so the name check alone lets a relay route `web/pg` to web's `vault`, and,
+with discovery, `pg@db` to any service of any db machine. The model adds
+web's second service `vault` (published under no group), machine `mal`
+(group db, live; its `pg` published under ops, not db), and a group-dial
+client beside the machine-dial ones; web's certificate is in group db. A
+client offers one ALPN protocol naming what it dialled, `alpnM(agent,
+service)` (`nfltr-svc/<agent>/<service>`) or `alpnG(service, group)`
+(`nfltr-svc/<service>@<group>`); the model sends the offer in the clear
+(it does not lean on the transcript covering the ClientHello) and the
+agent's choice back in EncryptedExtensions under the session key. The
+agent accepts an offer only for the service the session was routed to,
+and for a group only one it publishes that service under and its
+certificate's OU holds, else the handshake ends (`no_application_protocol`);
+the client requires the negotiated protocol to equal its offer. The
+group-dial client checks the chain, OU contains the group, NotAfter and
+the CRL, and no name. The key exchange is bound to the server's random (as
+TLS 1.3's key schedule takes the transcript): without it the relay replays
+a client's handshake to a second agent session of the same machine, web's
+`vault`, which then reads the session; queries 1-29 keep their results
+with or without it. Mutants: `client-no-alpn-check` (the negotiated
+protocol ignored: the relay rewrites the offer, 31, 33), `agent-no-alpn-check`
+(any offer taken: the open names the service, 31, 33),
+`group-dial-no-group-check` (any organisation machine, eve: 30, 32),
+`agent-no-publish-check` (`<s>@<g>` served for a service not published
+under g, mal's `pg`: 31). Bindings `BIND:org.service`, `BIND:org.group`,
+`BIND:org.publish`. Not modelled: two agents on one machine (the ALPN
+names the agent; the model's agent is its machine).
 
 ### wg_exit.pv: WireGuard client and exit (Track B)
 
