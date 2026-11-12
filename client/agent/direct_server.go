@@ -17,7 +17,6 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/nfltr/link"
@@ -38,7 +37,6 @@ type directServer struct {
 	groups []string              // every direct service's allow groups
 	modes  map[string]DirectMode // by service
 	node   *quiclink.Node
-	relay  atomic.Pointer[qadTarget] // the relay's QAD address: the agent link's offer
 	logger *slog.Logger
 	detach time.Duration // a session's pathswitch Detach; 0: its default
 
@@ -49,6 +47,7 @@ type directServer struct {
 	changed  chan struct{}     // closed when one of them ends; nil: none waits
 }
 
+// qadTarget is a relay's QAD: its agent link's UDP address and TLS.
 type qadTarget struct {
 	addr string
 	tls  *tls.Config
@@ -82,11 +81,6 @@ func newDirectServerOn(ep *DirectEndpoint, org Org, groups []string, modes map[s
 	}
 	go func() { _ = d.node.Serve(d.acceptDirect) }() // ponytail: the process's lifetime: a later table takes it over (Continue)
 	return d, nil
-}
-
-// setRelay records the relay's QAD address (its agent link's UDP port).
-func (d *directServer) setRelay(addr string, tc *tls.Config) {
-	d.relay.Store(&qadTarget{addr: addr, tls: tc})
 }
 
 // listenTLS is a direct connection's TLS at the agent: this machine's
@@ -232,8 +226,9 @@ func (d *directServer) acceptDirect(peer string, _ []byte, s peerlink.Session) {
 
 // serveService serves a session of the reserved service: a control
 // exchange (it starts with TLS, bound to the reserved service as any
-// session's to its service: bind) or a relayed re-attach (an OPEN).
-func (d *directServer) serveService(s net.Conn, bind serviceBind, logger *slog.Logger) {
+// session's to its service: bind) or a relayed re-attach (an OPEN). relay
+// is the QAD of the relay the session arrived through (nil: none).
+func (d *directServer) serveService(s net.Conn, bind serviceBind, relay *qadTarget, logger *slog.Logger) {
 	first, ps, err := peekFirst(s, e2eeHeaderTimeout)
 	if err != nil {
 		_ = s.Close()
@@ -258,7 +253,7 @@ func (d *directServer) serveService(s net.Conn, bind serviceBind, logger *slog.L
 	}
 	_ = tc.SetDeadline(time.Now().Add(directControlBound))
 	defer tc.Close() //nolint:errcheck
-	if err := d.control(tc); err != nil {
+	if err := d.control(tc, relay); err != nil {
 		logger.Info("direct path: control exchange ended", "error", err)
 	}
 }
@@ -312,8 +307,11 @@ const (
 )
 
 // control runs one exchange on c: the request, this end's candidates, the
-// client's, then probes toward them while the client punches.
-func (d *directServer) control(c net.Conn) error {
+// client's, then probes toward them while the client punches. The offer's
+// reflexive candidate is relay's answer and its QAD names relay, the one
+// that carried this exchange: another relay's answer is never added (under
+// an endpoint-dependent NAT it would be wrong, else a duplicate).
+func (d *directServer) control(c net.Conn, relay *qadTarget) error {
 	r := bufio.NewReader(io.LimitReader(c, 8<<10))
 	var req directRequest
 	if err := readJSONLine(r, &req); err != nil {
@@ -326,9 +324,9 @@ func (d *directServer) control(c net.Conn) error {
 	}
 	offer := directOffer{}
 	var cands []netip.AddrPort
-	if t := d.relay.Load(); t != nil {
-		offer.QAD = t.addr
-		if a, err := d.ep.QAD(context.Background(), t.addr, t.tls); err == nil {
+	if relay != nil {
+		offer.QAD = relay.addr
+		if a, err := d.ep.QAD(context.Background(), relay.addr, relay.tls); err == nil {
 			cands = append(cands, a)
 		} else {
 			d.logger.Info("direct path: qad", "error", err)

@@ -43,6 +43,7 @@ type sessionPlan struct {
 	groups          []string       // ... its allow groups
 	bind            serviceBind    // ... the service protocols it accepts (service_alpn.go)
 	direct          *directServer  // ... the table's direct paths (nil: none); a sessionDirect's server
+	relay           *qadTarget     // ... a sessionDirect's: the QAD of the relay its tunnel is on (nil: none offered)
 }
 
 // ErrE2EENoFixedTarget: Config.TCPE2EEOnly without Config.TCPForwardAddr.
@@ -85,6 +86,7 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 		p.network, p.target, p.backend, svcWrap = svc.network, svc.addr, svc.backend, svc.wrap
 		if svc.network == networkDirect {
 			p.kind, p.org, p.groups, p.direct = sessionDirect, svc.org, svc.groups, targets.services.direct
+			p.relay = targets.relayQAD()
 			p.bind = serviceBind{agent: targets.agent, service: DirectServiceName}
 			return p, nil
 		}
@@ -226,7 +228,7 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 			_ = s.Close()
 			return
 		}
-		p.direct.serveService(s, p.bind, l.logger)
+		p.direct.serveService(s, p.bind, p.relay, l.logger)
 	default:
 		target, reason, err := dialTarget(l.ctx, p.network, p.target)
 		if err != nil {

@@ -543,6 +543,11 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 			q.Transport = tr
 			dial.QUIC = &q
 		}
+		if targets.services.directServer() != nil {
+			// this tunnel's relay: the rendezvous of the control sessions
+			// it carries, whatever other relay the table is on
+			targets.qad = new(atomic.Pointer[qadTarget])
+		}
 	}
 	if e2eeTLS != nil {
 		// Name the shares whose policy this agent enforces on E2EE
@@ -658,8 +663,8 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 		close(parkDone)
 		data = dataplane.PickVersion(md.Get(dataplane.Header)) > 0
 		offer := dataplane.ParseAgentLinkOffer(md.Get(dataplane.AgentLinkHeader), md.Get(dataplane.AgentLinkQUICHeader))
-		if d := targets.services.directServer(); d != nil && offer.QUICPort > 0 && dial.QUIC != nil {
-			d.setRelay(net.JoinHostPort(dial.QUIC.Host, strconv.Itoa(offer.QUICPort)), dial.QUIC.TLS)
+		if targets.qad != nil && offer.QUICPort > 0 && dial.QUIC != nil {
+			targets.qad.Store(&qadTarget{addr: net.JoinHostPort(dial.QUIC.Host, strconv.Itoa(offer.QUICPort)), tls: dial.QUIC.TLS})
 		}
 		if quicOK, tcpOK := dial.linkPlan(offer); token != "" && (quicOK || tcpOK) {
 			select {
@@ -828,7 +833,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 				if answer && t.answerOpen(id, q) != nil {
 					continue
 				}
-				go p.direct.serveService(newSessionConn(t, id, q), p.bind, logger)
+				go p.direct.serveService(newSessionConn(t, id, q), p.bind, p.relay, logger)
 			default:
 				go func() {
 					conn, reason, dialErr := dialTarget(ctx, p.network, p.target)
@@ -940,6 +945,19 @@ type sessionTargets struct {
 	org            Org           // Config.TCPE2EEOrg (TCPE2EEOnly): organisation TLS only, its bytes to forwardAddr; plain refused
 	groups         []string      // Config.TCPE2EEAllowGroups
 	agent          string        // the agent's name as clients dial it: an organisation-mode session's machine-dial protocol (service_alpn.go)
+
+	// qad is the QAD of this tunnel's relay, from its agent-link offer (nil: no direct service)
+	qad *atomic.Pointer[qadTarget]
+}
+
+// relayQAD is the QAD of the tunnel's relay, nil before (or without) its
+// offer. A control session's offer names it, and only it: the relay that
+// carried the session (direct-paths doc, QAD against more than one relay).
+func (t sessionTargets) relayQAD() *qadTarget {
+	if t.qad == nil {
+		return nil
+	}
+	return t.qad.Load()
 }
 
 // RunServiceTunnel serves the ConnectTCP stream of an agent that serves

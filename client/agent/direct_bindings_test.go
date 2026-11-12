@@ -73,7 +73,7 @@ func rogueAnswer(t *testing.T, cert func(o *testOrg) tls.Certificate) {
 		_ = rogue.node.Drain(ctx)
 		_ = rogue.ep.Close()
 	})
-	r.l.targets.services.direct.setRelay(lyingQAD(t, fmt.Sprintf("127.0.0.1:%d", rogue.ep.pc.LocalAddr().(*net.UDPAddr).Port)), &tls.Config{InsecureSkipVerify: true}) // #nosec G402 -- a test's relay
+	r.l.targets.qad = tunnelQAD(lyingQAD(t, fmt.Sprintf("127.0.0.1:%d", rogue.ep.pc.LocalAddr().(*net.UDPAddr).Port)))
 	_, tc, events := r.session(t)
 	if e := waitPath(t, events, PathRelayed); e.Reason != ReasonRefusedCert {
 		t.Fatalf("reason %q, want %s", e.Reason, ReasonRefusedCert)

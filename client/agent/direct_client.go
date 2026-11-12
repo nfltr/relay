@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"net/netip"
 	"sync"
@@ -43,6 +44,11 @@ type DirectClientConfig struct {
 	Relayed func(ctx context.Context, agent string) (net.Conn, error)
 	// QADTLS is the TLS QAD dials the relay at addr with.
 	QADTLS func(addr string) *tls.Config
+	// OwnQAD is the QAD address of the client's own relay (its agent
+	// link's UDP port, host:port), asked beside the one the agent's offer
+	// names and taken when that one gives no answer (the client cannot
+	// reach the agent's relay, the offer names none); "": none.
+	OwnQAD string
 }
 
 // Punch results and fallback reasons, as path events carry them.
@@ -57,6 +63,15 @@ const (
 	ReasonRelayLost    = "relay_lost"    // the relayed stream died: a new one
 )
 
+// Where a client's reflexive candidate came from, as DirectStats.QAD
+// counts it (direct-paths doc, QAD against more than one relay).
+const (
+	QADAgentRelay = "agent_relay" // the relay the agent's offer names: the pair's rendezvous
+	QADOwnRelay   = "own_relay"   // the client's own relay (OwnQAD): the agent's gave no answer
+	QADNone       = "none"        // neither answered
+	QADDiffer     = "differ"      // both answered, differently: the NAT is endpoint dependent (information, never policy)
+)
+
 // PathEvent is a session's change of path: Path direct (Peer the agent's
 // address it learned) or relayed (Reason why).
 type PathEvent struct {
@@ -66,12 +81,13 @@ type PathEvent struct {
 }
 
 // DirectStats are a client's direct-path counts: bytes per path (path
-// frames included), punches by result, sessions by path. No label names a
-// machine.
+// frames included), punches by result, sessions by path, reflexive
+// candidates by source (QADAgentRelay...). No label names a machine.
 type DirectStats struct {
 	DirectSent, DirectReceived, RelayedSent, RelayedReceived uint64
 	Punches                                                  map[string]uint64
 	Sessions                                                 map[string]int
+	QAD                                                      map[string]uint64
 }
 
 // DirectClient is a client process's direct paths: its DirectEndpoint,
@@ -89,12 +105,16 @@ type DirectClient struct {
 	// changed: a fresh exchange learns the new one), else this long after
 	// that punch; directBackoff[0]
 	repunch time.Duration
+	// qadGrace: how long the own relay's QAD answer is waited for once the
+	// agent's relay's is in (only to see whether they differ)
+	qadGrace time.Duration
 
 	directSent, directRecv, relayedSent, relayedRecv atomic.Uint64
 
 	mu       sync.Mutex
 	pairs    map[string]*directPair
 	punches  map[string]uint64
+	qad      map[string]uint64
 	sessions map[*DirectSession]struct{}
 }
 
@@ -124,8 +144,8 @@ func NewDirectClient(cfg DirectClientConfig) (*DirectClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, repunch: directBackoff[0], pairs: map[string]*directPair{}, punches: map[string]uint64{},
-		sessions: map[*DirectSession]struct{}{}}
+	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, repunch: directBackoff[0], qadGrace: 250 * time.Millisecond, pairs: map[string]*directPair{}, punches: map[string]uint64{},
+		qad: map[string]uint64{}, sessions: map[*DirectSession]struct{}{}}
 	d.node, err = quiclink.New(quiclink.Config{Dial: d.dial, Liveness: link.LivenessFast})
 	if err != nil {
 		_ = ep.Close()
@@ -138,12 +158,11 @@ func NewDirectClient(cfg DirectClientConfig) (*DirectClient, error) {
 func (d *DirectClient) Stats() DirectStats {
 	st := DirectStats{DirectSent: d.directSent.Load(), DirectReceived: d.directRecv.Load(),
 		RelayedSent: d.relayedSent.Load(), RelayedReceived: d.relayedRecv.Load(),
-		Punches: map[string]uint64{}, Sessions: map[string]int{PathDirect: 0, PathRelayed: 0}}
+		Sessions: map[string]int{PathDirect: 0, PathRelayed: 0}}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	for k, v := range d.punches {
-		st.Punches[k] = v
-	}
+	st.Punches = maps.Clone(d.punches)
+	st.QAD = maps.Clone(d.qad)
 	for s := range d.sessions {
 		st.Sessions[s.c.Path()]++
 	}
@@ -154,6 +173,51 @@ func (d *DirectClient) count(result string) {
 	d.mu.Lock()
 	d.punches[result]++
 	d.mu.Unlock()
+}
+
+// reflexive is this socket's address as a relay sees it, at most one: the
+// answer of agentRelay (the offer's QAD), else that of the client's own
+// relay (OwnQAD), asked at once beside it. Never both: they differ only
+// under an endpoint-dependent NAT, where neither reaches the agent. With
+// the agent's relay's answer in, the own one is waited for qadGrace at
+// most (an own address that never answers delays no punch).
+func (d *DirectClient) reflexive(ctx context.Context, agentRelay string) []netip.AddrPort {
+	if d.cfg.QADTLS == nil {
+		return nil
+	}
+	ownc := make(chan netip.AddrPort, 1)
+	if o := d.cfg.OwnQAD; o != "" && o != agentRelay {
+		go func() { a, _ := d.ep.QAD(ctx, o, d.cfg.QADTLS(o)); ownc <- a }()
+	} else {
+		close(ownc)
+	}
+	var theirs, own netip.AddrPort
+	if agentRelay != "" {
+		theirs, _ = d.ep.QAD(ctx, agentRelay, d.cfg.QADTLS(agentRelay))
+	}
+	if !theirs.IsValid() {
+		own = <-ownc
+	} else {
+		select {
+		case own = <-ownc:
+		case <-time.After(d.qadGrace):
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if theirs.IsValid() && own.IsValid() && theirs != own {
+		d.qad[QADDiffer]++
+	}
+	switch {
+	case theirs.IsValid():
+		d.qad[QADAgentRelay]++
+		return []netip.AddrPort{theirs}
+	case own.IsValid():
+		d.qad[QADOwnRelay]++
+		return []netip.AddrPort{own}
+	}
+	d.qad[QADNone]++
+	return nil
 }
 
 func (d *DirectClient) pair(agent, machine string) *directPair {
@@ -366,12 +430,7 @@ func (s *DirectSession) punch(p *directPair) string {
 	if err != nil {
 		return ReasonNoQAD
 	}
-	var mine []netip.AddrPort
-	if offer.QAD != "" && s.d.cfg.QADTLS != nil {
-		if a, err := s.d.ep.QAD(ctx, offer.QAD, s.d.cfg.QADTLS(offer.QAD)); err == nil {
-			mine = append(mine, a)
-		}
-	}
+	mine := s.d.reflexive(ctx, offer.QAD)
 	if s.mode == DirectOn {
 		mine = append(mine, s.d.ep.hostCandidates()...)
 	}

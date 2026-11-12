@@ -15,6 +15,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -86,6 +87,7 @@ type directRig struct {
 	mu     sync.Mutex
 	conns  []net.Conn // the client ends of open's sessions
 	table  func() *ServiceTable
+	relay  string // the agent's relay's QAD (its tunnel's)
 	mode   DirectMode
 	wrap   func(net.Conn) net.Conn // the client's end of a session, if set
 }
@@ -103,7 +105,6 @@ func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 		}
 		if table.direct != nil {
 			table.direct.ep.loopback = true
-			table.direct.setRelay(qad, &tls.Config{InsecureSkipVerify: true}) // #nosec G402 -- a test's relay
 			d := table.direct
 			t.Cleanup(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -115,8 +116,8 @@ func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 		return table
 	}
 	table := mk()
-	r := &directRig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table, agent: "web"}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}},
-		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}, table: mk, mode: mode}
+	r := &directRig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table, agent: "web", qad: tunnelQAD(qad)}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}},
+		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}, table: mk, relay: qad, mode: mode}
 	var err error
 	r.d, err = NewDirectClient(DirectClientConfig{Machine: r.client,
 		Relayed: func(context.Context, string) (net.Conn, error) { return r.open(t, DirectServiceName) },
@@ -132,6 +133,14 @@ func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 		_ = r.d.ep.Close()
 	})
 	return r
+}
+
+// tunnelQAD is a tunnel's relay QAD at addr, as its agent-link offer sets
+// it.
+func tunnelQAD(addr string) *atomic.Pointer[qadTarget] {
+	p := new(atomic.Pointer[qadTarget])
+	p.Store(&qadTarget{addr: addr, tls: &tls.Config{InsecureSkipVerify: true}}) // #nosec G402 -- a test's relay
+	return p
 }
 
 // open is a relayed session to target, answered.
@@ -415,7 +424,7 @@ func TestDirectSessionReattachesOnANewConnection(t *testing.T) {
 			t.Fatal("Continue kept the new table's own direct paths")
 		}
 		r.mu.Lock()
-		r.l = &linkSessions{ctx: t.Context(), targets: sessionTargets{services: next, agent: "web"}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+		r.l = &linkSessions{ctx: t.Context(), targets: sessionTargets{services: next, agent: "web", qad: r.l.targets.qad}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
 		_ = r.conns[len(r.conns)-1].Close()
 		r.mu.Unlock()
 		if e := waitPath(t, events, PathRelayed); e.Reason != ReasonRelayLost {
@@ -665,8 +674,6 @@ func TestDirectAgentRebindDirectAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	q := old.relay.Load()
-	d.setRelay(q.addr, q.tls)
 	table.direct = d
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
