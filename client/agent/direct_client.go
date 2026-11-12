@@ -217,9 +217,10 @@ func (s *DirectSession) Run(cs tls.ConnectionState, agent, machine, service stri
 	if err != nil {
 		return err
 	}
+	pair := s.d.pair(agent, machine) // d.mu not under s.mu: Move's token callback takes s.mu under the path layer's lock (moving)
 	s.mu.Lock()
 	s.key, s.agent, s.service, s.mode, s.on = key, agent, service, mode, on
-	s.pair = s.d.pair(agent, machine)
+	s.pair = pair
 	s.mu.Unlock()
 	s.d.mu.Lock()
 	s.d.sessions[s] = struct{}{}
@@ -303,22 +304,28 @@ func (s *DirectSession) tryDirect() string {
 	peer, _ := netip.ParseAddrPort(p.q.RemoteAddr().String())
 	heard := new(atomic.Bool)
 	tc.ok = func() { heard.Store(true); s.emit(PathEvent{Path: PathDirect, Peer: peer}) }
-	tc.bad = func() { s.emit(PathEvent{Path: PathRelayed, Reason: ReasonRefusedToken}) }
 	qk := p.qk
-	e, err := s.c.Move(tc, PathDirect, func(e uint64) []byte {
+	if _, err := s.c.Move(tc, PathDirect, func(e uint64) []byte {
 		tc.want = pathToken(s.key, roleServer, e, qk)
 		close(tc.ready)
+		s.moving(e, heard)
 		return pathToken(s.key, roleClient, e, qk)
-	})
-	if err != nil {
+	}); err != nil {
 		return ReasonNoAnswer
 	}
+	return ""
+}
+
+// moving makes the stream of epoch e (heard once its peer answered) the
+// session's, from Move's token callback: before the stream runs, so its
+// end, however soon, is judged by it (fallback), never by the stream
+// before it.
+func (s *DirectSession) moving(e uint64, heard *atomic.Bool) {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if e > s.epoch {
 		s.epoch, s.heard = e, heard
 	}
-	s.mu.Unlock()
-	return ""
 }
 
 // punch runs one control exchange and the punch it starts; p.mu held.
@@ -447,7 +454,7 @@ func (s *DirectSession) fallback(epoch uint64, _ error) {
 		return
 	}
 	s.mu.Lock()
-	key, agent, last := s.key, s.agent, s.moveAt
+	key, agent, last, heard := s.key, s.agent, s.moveAt, s.heard.Load()
 	// a loss starts here unless the ended stream was refused unanswered
 	// (however late its reset came: TestDirectSessionSlowRefusalsEnd)
 	if s.lostAt.IsZero() || epoch == s.epoch && s.heard.Load() {
@@ -479,6 +486,11 @@ func (s *DirectSession) fallback(epoch uint64, _ error) {
 	reason := ReasonRelayLost
 	if s.c.Path() == PathDirect {
 		reason = ReasonDirectLost
+		if !heard {
+			// never announced (no agent's token): a refused move, not a
+			// lost path (TestDirectUnprovedMoveIsRefusedNotLost)
+			reason = ReasonRefusedToken
+		}
 	}
 	for {
 		select {
@@ -490,16 +502,12 @@ func (s *DirectSession) fallback(epoch uint64, _ error) {
 		rs, err := s.d.cfg.Relayed(ctx, agent)
 		cancel()
 		if err == nil {
-			var e uint64
 			heard := new(atomic.Bool)
-			e, err = s.c.Move(pathStream{Conn: rs, sent: &s.d.relayedSent, recv: &s.d.relayedRecv, heard: heard}, PathRelayed,
-				func(e uint64) []byte { return pathToken(key, roleClient, e, nil) })
+			_, err = s.c.Move(pathStream{Conn: rs, sent: &s.d.relayedSent, recv: &s.d.relayedRecv, heard: heard}, PathRelayed,
+				func(e uint64) []byte { s.moving(e, heard); return pathToken(key, roleClient, e, nil) })
 			if err == nil {
 				s.mu.Lock()
 				s.moveAt = time.Now()
-				if e > s.epoch {
-					s.epoch, s.heard = e, heard
-				}
 				s.mu.Unlock()
 				s.emit(PathEvent{Path: PathRelayed, Reason: reason})
 				select {
@@ -535,7 +543,7 @@ type tokenCheck struct {
 	ready   chan struct{}
 	want    []byte
 	checked bool
-	ok, bad func()
+	ok      func()
 }
 
 func (t *tokenCheck) Read(p []byte) (int, error) {
@@ -546,8 +554,7 @@ func (t *tokenCheck) Read(p []byte) (int, error) {
 			return 0, err
 		}
 		if !hmac.Equal(got, t.want) {
-			t.bad()
-			_ = t.Reset()
+			_ = t.Reset() // the fallback reports it: refused_token
 			return 0, errDirectRefused
 		}
 		t.checked = true

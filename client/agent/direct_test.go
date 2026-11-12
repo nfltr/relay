@@ -87,6 +87,7 @@ type directRig struct {
 	conns  []net.Conn // the client ends of open's sessions
 	table  func() *ServiceTable
 	mode   DirectMode
+	wrap   func(net.Conn) net.Conn // the client's end of a session, if set
 }
 
 func newDirectRig(t *testing.T, mode DirectMode) *directRig {
@@ -157,9 +158,23 @@ func (r *directRig) open(t *testing.T, target string) (net.Conn, error) {
 // events gets its path changes.
 func (r *directRig) session(t *testing.T) (*DirectSession, *tls.Conn, chan PathEvent) {
 	t.Helper()
+	ds, tc := r.handshake(t)
+	events := make(chan PathEvent, 16)
+	if err := ds.Run(tc.ConnectionState(), "web", "web", "blob", r.mode, func(e PathEvent) { events <- e }); err != nil {
+		t.Fatal(err)
+	}
+	return ds, tc, events
+}
+
+// handshake opens a framed session to blob, its TLS up, not Run.
+func (r *directRig) handshake(t *testing.T) (*DirectSession, *tls.Conn) {
+	t.Helper()
 	first, err := r.open(t, "blob")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if r.wrap != nil {
+		first = r.wrap(first)
 	}
 	ds := r.d.Start(first)
 	cfg := r.d.punchTLS(&directPair{machine: "web"})
@@ -176,11 +191,7 @@ func (r *directRig) session(t *testing.T) (*DirectSession, *tls.Conn, chan PathE
 			t.Error("the session did not end after its Close")
 		}
 	})
-	events := make(chan PathEvent, 16)
-	if err := ds.Run(tc.ConnectionState(), "web", "web", "blob", r.mode, func(e PathEvent) { events <- e }); err != nil {
-		t.Fatal(err)
-	}
-	return ds, tc, events
+	return ds, tc
 }
 
 func waitPath(t *testing.T, events chan PathEvent, path string) PathEvent {
@@ -250,6 +261,108 @@ func TestDirectSessionMovesAndFallsBack(t *testing.T) {
 	st := r.d.Stats()
 	if st.DirectSent == 0 || st.RelayedSent == 0 || st.Punches["ok"] != 1 {
 		t.Fatalf("stats %+v", st)
+	}
+}
+
+// heldConn holds its writes once it read a byte (the agent's handshake
+// flight) until release: the agent's end of the handshake waits, as on a
+// starved agent, while this end's is over.
+type heldConn struct {
+	net.Conn
+	mu              sync.Mutex
+	armed, released bool
+	held            [][]byte
+}
+
+func (h *heldConn) Read(p []byte) (int, error) {
+	n, err := h.Conn.Read(p)
+	if n > 0 {
+		h.mu.Lock()
+		h.armed = true
+		h.mu.Unlock()
+	}
+	return n, err
+}
+
+func (h *heldConn) Write(p []byte) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.armed && !h.released {
+		h.held = append(h.held, bytes.Clone(p))
+		return len(p), nil
+	}
+	return h.Conn.Write(p)
+}
+
+func (h *heldConn) release() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, b := range h.held {
+		_, _ = h.Conn.Write(b)
+	}
+	h.held, h.released = nil, true
+}
+
+// TestDirectOpenBeforeTheAgentsHandshake: a client's TLS 1.3 handshake ends
+// a flight before the agent's, so its first direct OPEN can reach an agent
+// that has not registered the session yet (a starved agent: CI relay
+// a2a6b1de4, the first event relayed/direct_lost): the agent takes the
+// OPEN once that handshake ends, never refuses it, and the session's first
+// path event is direct.
+func TestDirectOpenBeforeTheAgentsHandshake(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	h := &heldConn{}
+	r.wrap = func(c net.Conn) net.Conn { h.Conn = c; return h }
+	go func() { // the agent's handshake ends after the OPEN went
+		for r.d.Stats().DirectSent == 0 && t.Context().Err() == nil {
+			time.Sleep(time.Millisecond)
+		}
+		time.Sleep(50 * time.Millisecond) // and after it arrived, on a loaded machine too
+		h.release()
+	}()
+	_, tc, events := r.session(t)
+	echo(t, tc, 1<<20, func() { waitPath(t, events, PathDirect) })
+}
+
+// strangerTLS is the state of a TLS session no agent holds.
+func strangerTLS(t *testing.T) tls.ConnectionState {
+	t.Helper()
+	cert := newTestOrg(t).machine(t, "stranger", nil, time.Hour, false)
+	a, b := net.Pipe()
+	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+	go func() { _ = tls.Server(b, &tls.Config{Certificates: []tls.Certificate{cert}}).Handshake() }()
+	c := tls.Client(a, &tls.Config{InsecureSkipVerify: true}) // #nosec G402 -- a test's own session
+	if err := c.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	return c.ConnectionState()
+}
+
+// TestDirectUnprovedMoveIsRefusedNotLost: a move whose direct stream the
+// agent resets before its token (here a client token under a key no
+// agent's session holds) never announced a direct path: its fallback
+// reports refused_token, never direct_lost.
+func TestDirectUnprovedMoveIsRefusedNotLost(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	r.d.detach = 2 * time.Second
+	r.l.targets.services.direct.detach = 2 * time.Second // the agent's session ends too
+	ds, _ := r.handshake(t)
+	events := make(chan PathEvent, 16)
+	if err := ds.Run(strangerTLS(t), "web", "web", "blob", r.mode, func(e PathEvent) { events <- e }); err != nil {
+		t.Fatal(err)
+	}
+	if e := waitPath(t, events, PathRelayed); e.Reason != ReasonRefusedToken {
+		t.Fatalf("reason %q, want %s", e.Reason, ReasonRefusedToken)
+	}
+	select {
+	case <-ds.Done(): // its re-attaches are refused too: it ends after the detach bound
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session re-attaches past its detach bound")
+	}
+	for range len(events) {
+		if e := <-events; e.Path == PathDirect || e.Reason == ReasonDirectLost {
+			t.Fatalf("path event %+v of a move never proved", e)
+		}
 	}
 }
 

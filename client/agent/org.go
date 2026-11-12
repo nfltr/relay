@@ -171,6 +171,11 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 		_ = target.Close()
 		return
 	}
+	handshook := func() {}
+	if ps != nil && p.direct != nil {
+		handshook = p.direct.handshaking()
+		defer handshook()
+	}
 	var adm orgAdmission
 	changed := p.org.Changed() // before the check: a change after it is seen
 	cfg, err := orgServerConfig(p.org, p.groups, p.bind, &adm, logger)
@@ -194,6 +199,7 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 			p.direct.register(ps, key)
 		}
 	}
+	handshook()
 	done := make(chan struct{})
 	defer close(done)
 	go holdAdmission(adm.until, changed, p.org.Changed,

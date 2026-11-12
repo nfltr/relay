@@ -45,6 +45,8 @@ type directServer struct {
 	mu       sync.Mutex
 	sessions map[*directSession]struct{}
 	quic     map[string][]byte // a direct connection's exporter, by its peer name
+	pending  int               // framed sessions in their TLS handshake (handshaking)
+	changed  chan struct{}     // closed when one of them ends; nil: none waits
 }
 
 type qadTarget struct {
@@ -131,11 +133,61 @@ func (d *directServer) register(c *pathswitch.Conn, key []byte) {
 	}()
 }
 
+// handshaking counts a framed session's TLS handshake until the returned
+// func (idempotent), called after register: the client's TLS 1.3
+// handshake ends a flight before this end's, so its OPEN can arrive before
+// the session is registered, and find waits for it
+// (TestDirectOpenBeforeTheAgentsHandshake).
+func (d *directServer) handshaking() func() {
+	d.mu.Lock()
+	d.pending++
+	d.mu.Unlock()
+	return sync.OnceFunc(func() {
+		d.mu.Lock()
+		d.pending--
+		if d.changed != nil {
+			close(d.changed)
+			d.changed = nil
+		}
+		d.mu.Unlock()
+	})
+}
+
 // find is the session whose client token for o's epoch, bound to qk, o
-// carries (BIND:direct.token, role, epoch, quic).
+// carries (BIND:direct.token, role, epoch, quic). While a session is in
+// its handshake it waits for it, at most e2eeHeaderTimeout: a session an
+// OPEN names had its client's handshake done, so its handshake here was
+// under way and ends within that bound.
 func (d *directServer) find(o pathswitch.Open, qk []byte) *directSession {
+	var bound <-chan time.Time
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	for {
+		if s := d.matchLocked(o, qk); s != nil || d.pending == 0 {
+			return s
+		}
+		if bound == nil {
+			t := time.NewTimer(e2eeHeaderTimeout)
+			defer t.Stop()
+			bound = t.C
+		}
+		if d.changed == nil {
+			d.changed = make(chan struct{})
+		}
+		changed := d.changed
+		d.mu.Unlock()
+		select {
+		case <-changed:
+		case <-bound:
+			d.mu.Lock()
+			return nil
+		}
+		d.mu.Lock()
+	}
+}
+
+// matchLocked is find's match; d.mu held.
+func (d *directServer) matchLocked(o pathswitch.Open, qk []byte) *directSession {
 	for s := range d.sessions {
 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) {
 			return s

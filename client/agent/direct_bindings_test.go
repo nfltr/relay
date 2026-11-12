@@ -140,7 +140,7 @@ var directBindings = map[string]func(t *testing.T){
 		refusedOpen(t, "the agent's token as the client's", d, o, qk)
 		a, b := tcpPair(t)
 		var took bool
-		tc := &tokenCheck{pathStream: pathStream{Conn: a}, ready: make(chan struct{}), want: pathToken(key, roleServer, 2, qk), ok: func() { took = true }, bad: func() {}}
+		tc := &tokenCheck{pathStream: pathStream{Conn: a}, ready: make(chan struct{}), want: pathToken(key, roleServer, 2, qk), ok: func() { took = true }}
 		close(tc.ready)
 		go func() { _, _ = b.Write(pathToken(key, roleClient, 2, qk)); _ = b.Close() }()
 		if _, err := tc.Read(make([]byte, 1)); took || !errors.Is(err, errDirectRefused) {
