@@ -66,10 +66,10 @@ message SessionAnswer {
   ErrorReason reason = 1;
   // Human-readable detail of a refusal, at most 512 bytes; never branched on.
   string message = 2;
-  // instance, on the answer to an open that named a service by group
-  // (<service>@<group>), is the agent ref the relay chose (relay-core
-  // identity.AgentRef; a lowercase DNS label, at most 63 bytes): what the
-  // client puts in its next open's pb.TCPData.exclude when this one failed.
-  // Empty on any other answer.
-  string instance = 3;
+  // 3 was instance, the agent ref the relay chose for an open of
+  // <service>@<group> (dropped 2026-11-12: the client learns the instance
+  // from the server certificate; nfltr
+  // docs/decisions/service-discovery-2026-11-12.md section 3).
+  reserved 3;
+  reserved "instance";
 }

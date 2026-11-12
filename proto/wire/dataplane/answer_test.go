@@ -5,14 +5,12 @@ package dataplane
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/nfltr/link"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
-	"google.golang.org/protobuf/proto"
 )
 
 func TestAnswerRoundTrip(t *testing.T) {
@@ -37,30 +35,6 @@ func TestAnswerRoundTrip(t *testing.T) {
 	for _, in := range [][]byte{nil, {0}, {0, 5, 1}, {0xff, 0xff}, {0, 2, 0xff, 0xff}} {
 		if _, err := ReadAnswer(bytes.NewReader(in)); !errors.Is(err, ErrNoAnswer) {
 			t.Fatalf("ReadAnswer(%x) = %v, want ErrNoAnswer", in, err)
-		}
-	}
-}
-
-func TestAnswerInstance(t *testing.T) {
-	const ref = "m-abcdefghijklmnopqrstuvwxyz-pg"
-	b, err := AppendInstanceAnswer(nil, ref, relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED, strings.Repeat("é", MaxAnswer))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a, err := ReadAnswer(bytes.NewReader(b)); err != nil || a.GetInstance() != ref || a.GetReason() != relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED {
-		t.Fatalf("answer %v, %v", a, err)
-	}
-	if a, err := ReadAnswer(bytes.NewReader(AppendAnswer(nil, 0, ""))); err != nil || a.GetInstance() != "" {
-		t.Fatalf("an answer without an instance: %v, %v", a, err)
-	}
-	for _, bad := range []string{"M-1-PG", "m-1/pg", strings.Repeat("a", 64), "-pg"} {
-		if _, err := AppendInstanceAnswer(nil, bad, 0, ""); err == nil {
-			t.Errorf("AppendInstanceAnswer(%q) wrote it", bad)
-		}
-		body, _ := proto.Marshal(&relayv1.SessionAnswer{Instance: bad})
-		frame := append(binary.BigEndian.AppendUint16(nil, uint16(len(body))), body...)
-		if _, err := ReadAnswer(bytes.NewReader(frame)); !errors.Is(err, ErrNoAnswer) {
-			t.Errorf("ReadAnswer of instance %q = %v, want ErrNoAnswer", bad, err)
 		}
 	}
 }

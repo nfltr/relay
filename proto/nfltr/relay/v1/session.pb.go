@@ -236,13 +236,7 @@ type SessionAnswer struct {
 	// UNSPECIFIED: the session is open; any other value: why it is not.
 	Reason ErrorReason `protobuf:"varint,1,opt,name=reason,proto3,enum=nfltr.relay.v1.ErrorReason" json:"reason,omitempty"`
 	// Human-readable detail of a refusal, at most 512 bytes; never branched on.
-	Message string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	// instance, on the answer to an open that named a service by group
-	// (<service>@<group>), is the agent ref the relay chose (relay-core
-	// identity.AgentRef; a lowercase DNS label, at most 63 bytes): what the
-	// client puts in its next open's pb.TCPData.exclude when this one failed.
-	// Empty on any other answer.
-	Instance      string `protobuf:"bytes,3,opt,name=instance,proto3" json:"instance,omitempty"`
+	Message       string `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -291,13 +285,6 @@ func (x *SessionAnswer) GetMessage() string {
 	return ""
 }
 
-func (x *SessionAnswer) GetInstance() string {
-	if x != nil {
-		return x.Instance
-	}
-	return ""
-}
-
 var File_nfltr_relay_v1_session_proto protoreflect.FileDescriptor
 
 const file_nfltr_relay_v1_session_proto_rawDesc = "" +
@@ -314,11 +301,10 @@ const file_nfltr_relay_v1_session_proto_rawDesc = "" +
 	"\aWelcome\x12)\n" +
 	"\x10protocol_version\x18\x01 \x01(\rR\x0fprotocolVersion\x12#\n" +
 	"\rrelay_version\x18\x02 \x01(\tR\frelayVersion\x12\x19\n" +
-	"\brelay_id\x18\x03 \x01(\tR\arelayId\"z\n" +
+	"\brelay_id\x18\x03 \x01(\tR\arelayId\"n\n" +
 	"\rSessionAnswer\x123\n" +
 	"\x06reason\x18\x01 \x01(\x0e2\x1b.nfltr.relay.v1.ErrorReasonR\x06reason\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1a\n" +
-	"\binstance\x18\x03 \x01(\tR\binstanceB\xb1\x01\n" +
+	"\amessage\x18\x02 \x01(\tR\amessageJ\x04\b\x03\x10\x04R\binstanceB\xb1\x01\n" +
 	"\x12com.nfltr.relay.v1B\fSessionProtoP\x01Z3github.com/nfltr/relay/proto/nfltr/relay/v1;relayv1\xa2\x02\x03NRX\xaa\x02\x0eNfltr.Relay.V1\xca\x02\x0eNfltr\\Relay\\V1\xe2\x02\x1aNfltr\\Relay\\V1\\GPBMetadata\xea\x02\x10Nfltr::Relay::V1b\x06proto3"
 
 var (
