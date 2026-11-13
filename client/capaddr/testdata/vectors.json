@@ -1,0 +1,35 @@
+{
+  "relay": "relay.example.com",
+  "rid": "000102030405060708090a0b0c0d0e0f",
+  "secret": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+  "ed25519_seed": "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f",
+  "spki": "302a300506032b65700321002543b92ff1095511476adc8369db6ddc933665a11978dda1404ee1066ca9559d",
+  "pin": "51408bcfcc5be7222f3caf148eb1c61a2c88f24ed61786282a35446d60c812cd",
+  "address": "nf1aeixezlmmf4s4zlymfwxa3dffzrw63iaaebagbafaydqqcikbmga2dqpkfaixt6mlptselz4v4ki5mogdiwir4so2ylymkbkgvcg2ygiclgsaijcemsckjrhfausukzmfuxc6mbrgiztinjwg44dsor3hq6t4p7z4zsqo",
+  "hints": "68696e7473",
+  "record": "d0434de9f73226c709fbaeebb7ea56c4a7e6713cc69c5785d019cea1ec21c3df03a319967b357b1d149857dc0bbf0e1580eb24f1e79a5166ea3bb570b1eba607",
+  "exporter": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
+  "proof": "bc4fa1aa2ae8af9a65ef443973c4030579c9b8f992d2d8789b3845d0e6e30a45",
+  "refused": [
+    {
+      "text": "nf1aeixezlamf4s4zlymfwxa3dffzrw63iaaebagbafaydqqcikbmga2dqpkfaixt6mlptselz4v4ki5mogdiwir4so2ylymkbkgvcg2ygiclgsaijcemsckjrhfausukzmfuxc6mbrgiztinjwg44dsor3hq6t4p7z4zsqo",
+      "error": "checksum"
+    },
+    {
+      "text": "nf1aiixezlmmf4s4zlymfwxa3dffzrw63iaaebagbafaydqqcikbmga2dqpkfaixt6mlptselz4v4ki5mogdiwir4so2ylymkbkgvcg2ygiclgsaijcemsckjrhfausukzmfuxc6mbrgiztinjwg44dsor3hq6t4p3waytqq",
+      "error": "version"
+    },
+    {
+      "text": "nf1aeixezlmmf4s4zlymfwxa3dffzrw63iaaebagbafaydqqcikbmga2dqpkfaixt6mlptselz4v4ki5mogdiwir4so2ylymkbkgvcg2ygiclgqaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaagsy4ava",
+      "error": "secret"
+    },
+    {
+      "text": "nf1aeixezlmmf4s4zlymfwxa3dffzrw63iaaebagbafaydqqcikbmga2dqpkfaixt6mlptselz4v4ki5mogdiwir4so2ylymkbkgvcg2ygiclgsaijcemsckjrhfausukzmfuxc6mbrgiztinjwg44dsor3hq6t56qmghta",
+      "error": "length"
+    },
+    {
+      "text": "nf1aeixezlmmf4s4zlymfwxa3dffzrw63iaaebagbafaydqqcikbmga2dqpkfaixt6mlptselz4v4ki5mogdiwir4so2ylymkbkgvcg2ygiclgsaijcemsckjrhfausukzmfuxc6mbrgiztinjwg44dsor3hq6t4p7z4zsqp",
+      "error": "encoding"
+    }
+  ]
+}

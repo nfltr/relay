@@ -24,6 +24,7 @@ TARGETS=(
 	"proto ./wire/blobwire FuzzParseDigest"
 	"client ./mailboxclient FuzzDecodeError"
 	"client ./rpcclient FuzzA2AE2EE0RTTAccept"
+	"client ./capaddr FuzzParse"
 )
 failed=0
 for t in "${TARGETS[@]}"; do

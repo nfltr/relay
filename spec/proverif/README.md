@@ -183,7 +183,13 @@ in an honest message of the real code (fixed keys, as the vectors) and
 requires a refusal. The test fails when the model's ids and its rows
 differ, so a binding added to a model needs its row, and a row outlives any
 re-pinning (`make spec-bindings`, in `make ci`; nfltr
-`docs/decisions/e2ee-model-code-link-2026-11-09.md`).
+`docs/decisions/e2ee-model-code-link-2026-11-09.md`). A model whose
+bindings test is missing would be checked by nothing:
+`client/model_bindings_guard_test.go` `TestEveryModelBindingHasARow` (in
+`make test`) fails when a model declares a `BIND` id that no
+`*_bindings_test.go` has as a quoted row key, or whose test `make
+spec-bindings` does not run, unless its `pendingBindings` lists the id with
+where its row is.
 
 | model | test | rows |
 |---|---|---|
@@ -191,7 +197,7 @@ re-pinning (`make spec-bindings`, in `make ci`; nfltr
 | `e2ee_tcp.pv` (direct paths) | `client/agent/direct_bindings_test.go` `TestDirectModelBindings` | 6, one per `BIND:direct.*`: a look-alike certificate and another machine's name answering the punch (`refused_cert`), the token keyed by another session, bound to another or no QUIC connection, the other role's token (both ways), another epoch's token (lane DIRECTPATH3; Go mutants `direct-no-name`, `direct-no-cert-check`, `token-no-epoch`, `token-unbound`, `token-no-role`, `direct-no-token`). Under a group dial (36), `TestDirectGroupDialGoesDirectToItsInstance`: the relay's pick of the other instance for the first exchange refused and excluded, the session's instance taken (lane DIRECTGROUP; Go mutants `group-control-no-name`, `group-control-no-exclude`) |
 | `e2ee_tcp.pv` (services by name) | `client/agent/service_bindings_test.go` `TestServiceModelBindings` | 3 here, one per `BIND:org.*`: a session routed to pg refuses an offer of web/vault, another agent's pg and no protocol, a session routed to vault refuses web/pg, and the client's `BindServiceTLS` refuses a server that negotiated none (`org.service`); a service published under a group the certificate lacks refused at `NewServiceTable`, and pg@db refused once a renewed certificate lacks db (`org.group`); pg@db refused for a pg published under ops, vault@db for a vault under none (`org.publish`) (lane SVCBIND; Go mutants `client-no-alpn-check`, `agent-no-alpn-check`, `no-protocol-accepted`, `agent-no-publish-check`, `agent-no-ou-check`, `publish-not-in-cert`). The group-dial client's own check (OU contains the group, no name) is nfltr's `orgpki`, with its row there (lane SVCCLIENT) |
 | `wg_exit.pv` | `client/agent/wgexit/wg_exit_bindings_test.go` `TestWGExitModelBindings` | 3 here (psk binds the exit's name; each end's psk on the key the relay told it) + 3 in nfltr `cmd/nfltr/internal/wgcli/wg_exit_bindings_test.go` (the key id of the machine named, psk whatever `x-wg-paired` says, one key per machine) |
-| `cap_address.pv` | none yet: the four `BIND:cap.*` (pin, secret, service, rendezvous) get their rows with the codec and the client and server that use it (lane NF1PV; until then `make spec-bindings` checks no row of this model) | 0 of 4 |
+| `cap_address.pv` | `client/capaddr/capaddr_bindings_test.go` `TestCapAddressModelBindings` | 4 of 4, one per `BIND:cap.*`, against the codec `client/capaddr` (real TLS 1.3 over a pipe): the answer's key and the TLS certificate's key of another server, and a plain answer with no key (`cap.pin`); the record over another relay, rid, tag or hints, under another key, or none (`cap.rendezvous`); the proof over another session's exporter, under another secret, without the exporter (`cap.secret`); A1's proof at A2's acceptor and A2's at A1's, one key (`cap.service`). Go mutants caught by hand: the answer's key unchecked, the certificate unchecked, the relay out of the record, the exporter out of the proof. `pin-unkeyed` is no binding: `TestRoundTrip` requires two addresses of one key to differ in pin |
 
 A planted Go mutant fails its row (lane E2EEVECTORS): the role, caller,
 callee or txn left out of `a2aE2EEPrologue`, the psk not keyed, a warm's
@@ -538,7 +544,7 @@ number only after a write succeeded, so a record write that failed in part
 nonce; a failed record write now spends its number and every later `Write`
 fails (`TestSecureConnFailedWriteEndsIt`).
 
-### cap_address.pv: the capability address nf1 (lane NF1PV, a design, no code yet)
+### cap_address.pv: the capability address nf1 (lane NF1PV; codec `client/capaddr`, lane NF1CODEC)
 
 A server publishes one service under an address; whoever holds it reaches
 that service end to end encrypted, with no account and no certificate of
@@ -559,6 +565,15 @@ message flow the address codec and its clients and servers implement:
 | 4. TLS 1.3 through the relay's stream | the server's certificate must carry exactly that `pk`; the client presents none | |
 | 5. PROOF (the client's first record inside TLS) | `H("nf1-proof", sec, exporter)` | the exporter covers the handshake transcript, the server's certificate included; the server checks it with the secret of the address the session was routed to (`rid`'s acceptor), never another address it serves under the same key, and closes the session otherwise; nothing of the service runs before |
 | 6. the service | its bytes both ways under the TLS key | |
+
+The codec (`client/capaddr`): the text is `nf1` + base32 (RFC 4648
+alphabet, lowercase, no padding) of `version (1) | len(R) | R | rid | pin |
+sec | CRC-32C` of the bytes before it; only the canonical text parses. The
+pin and the proof are HMAC-SHA256 keyed by `sec` over the model's tag and
+the key's DER SubjectPublicKeyInfo (`nf1-pin`) or the TLS exporter
+(`nf1-proof`, label `EXPORTER-nf1-proof`, 32 bytes); the record is Ed25519
+over `nf1-rdv | len(R) | R | rid | hints`. Vectors:
+`client/capaddr/testdata/vectors.json`.
 
 The attacker owns every relay, answers every open, opens sessions of its
 own to any `rid`, and holds a second address (A2) of the same server and
@@ -651,5 +666,7 @@ none").
 | wg_exit.pv | client/wg/tunnel.go |
 | wg_exit.pv | client/agent/wgexit/wgexit.go |
 | wg_exit.pv | proto/wire/wgwire/wgwire.go |
+| cap_address.pv | client/capaddr/capaddr.go |
+| cap_address.pv | client/capaddr/capaddr_bindings_test.go |
 | p2p_e2e.pv | client/p2p/e2e.go |
 | p2p_e2e.pv | client/p2p/rtcdata.go |

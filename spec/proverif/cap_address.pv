@@ -1,9 +1,9 @@
 (* Copyright 2026 nfltr
    SPDX-License-Identifier: Apache-2.0
 
-   cap_address.pv: the capability address nf1... (a design, no code yet:
-   the address codec in client/, then the clients and servers that use
-   it). spec/proverif/README.md "cap_address.pv".
+   cap_address.pv: the capability address nf1... (the address codec and
+   its checks: client/capaddr; the clients and servers that use it come
+   next). spec/proverif/README.md "cap_address.pv".
 
    A server publishes one service under an address; whoever holds the
    address reaches that service, end to end encrypted, with no account and
@@ -73,8 +73,8 @@
      proof-unbound             the proof without the exporter (caught only
                                with client-no-pin-check)
 
-   Bindings (README "Bindings"): each gets a refusal row in the code's
-   bindings test when the code lands (the codec lane):
+   Bindings (README "Bindings"): each has a refusal row in
+   client/capaddr/capaddr_bindings_test.go:
      BIND:cap.pin         the answer's key and the TLS certificate's key, each against pinOf(sec, key)
      BIND:cap.secret      the proof: the address's secret over this session's exporter
      BIND:cap.service     the acceptor checks the proof with the secret of the address routed to it
