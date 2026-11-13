@@ -67,7 +67,7 @@ func TestDirectRevokedClientCutOnEveryPath(t *testing.T) {
 	o := pathswitch.Open{Epoch: ds.c.Epoch() + 1, Token: pathToken(key, roleClient, ds.c.Epoch()+1, nil)}
 	d := r.l.targets.services.direct
 	d.mu.Lock()
-	sess := d.matchLocked(o, nil)
+	sess := d.matchLocked(tokenMatch(o, nil))
 	d.mu.Unlock()
 	if sess != nil {
 		if _, err := sess.c.Write([]byte("x")); err == nil {

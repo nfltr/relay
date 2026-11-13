@@ -62,6 +62,11 @@ var nf1Bindings = map[string]func(t *testing.T){
 			return err
 		})
 		refusedBy(t, "hints the record does not cover", err, capaddr.ErrRendezvous)
+		_, err, _ = run(t, l.Address(), func(s net.Conn) error {
+			_, err := s.Write(appendAnswer(nil, l.spki, l.rec, []byte(HintDirect)))
+			return err
+		})
+		refusedBy(t, "a direct-path hint the record does not cover (cap_address.pv hint-unbound)", err, capaddr.ErrRendezvous)
 	},
 	// A proof over another exporter than this session's: the listener
 	// refuses it and sends no verdict.

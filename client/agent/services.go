@@ -147,8 +147,8 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if s.Name == DirectServiceName {
 			return nil, fmt.Errorf("service %q: the name is reserved for direct paths", s.Name)
 		}
-		if s.Direct != DirectOff && (s.Org == nil || s.Direct != DirectOn && s.Direct != DirectPublic) {
-			return nil, fmt.Errorf("service %q: direct %q needs organisation mode (want %q or %q)", s.Name, s.Direct, DirectOn, DirectPublic)
+		if s.Direct != DirectOff && (s.Org == nil && s.NF1 == nil || s.Direct != DirectOn && s.Direct != DirectPublic) {
+			return nil, fmt.Errorf("service %q: direct %q needs organisation mode or a capability address (want %q or %q)", s.Name, s.Direct, DirectOn, DirectPublic)
 		}
 		e := &tableService{kind: s.Kind, e2ee: s.E2EE}
 		if s.Cert != nil {
@@ -166,10 +166,17 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if err := checkPublish(s); err != nil {
 			return nil, err
 		}
-		if s.NF1 != nil && (s.Kind != agentservices.TCP || s.E2EE != agentservices.E2EEOn || s.Org != nil || s.Group != "" || len(s.AllowGroups) > 0 || s.Direct != DirectOff) {
-			return nil, fmt.Errorf("service %q: a capability address (nf1) needs a tcp service with e2ee on and no organisation, group or direct", s.Name)
+		if s.NF1 != nil && (s.Kind != agentservices.TCP || s.E2EE != agentservices.E2EEOn || s.Org != nil || s.Group != "" || len(s.AllowGroups) > 0) {
+			return nil, fmt.Errorf("service %q: a capability address (nf1) needs a tcp service with e2ee on and no organisation or group", s.Name)
 		}
 		e.org, e.groups, e.group, e.nf1 = s.Org, s.AllowGroups, s.Group, s.NF1
+		if s.NF1 != nil && s.Direct != DirectOff {
+			l, err := s.NF1.WithDirect()
+			if err != nil {
+				return nil, err
+			}
+			e.nf1 = l
+		}
 		switch s.Kind {
 		case agentservices.TCP:
 			e.network, e.addr = "tcp", s.Target
@@ -205,13 +212,20 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 
 // addDirect serves DirectServiceName when a service has Direct: in
 // organisation mode (the first direct service's Org), its allow groups
-// every direct service's.
+// every direct service's. A table whose direct services are all under
+// capability addresses gets the direct paths without the reserved service
+// (its control exchanges and re-attaches come on the address's own
+// sessions: direct_nf1.go).
 func (t *ServiceTable) addDirect(services []Service) error {
 	var org Org
 	var groups []string
 	modes := map[string]DirectMode{}
 	for _, s := range services {
 		if s.Direct == DirectOff {
+			continue
+		}
+		if s.NF1 != nil {
+			modes[s.Name] = s.Direct
 			continue
 		}
 		if org == nil {
@@ -224,8 +238,13 @@ func (t *ServiceTable) addDirect(services []Service) error {
 			}
 		}
 	}
-	if org == nil {
+	if len(modes) == 0 {
 		return nil
+	}
+	if org == nil {
+		d, err := newDirectServer(nil, nil, modes)
+		t.direct = d
+		return err
 	}
 	if len(t.decls) >= agentservices.MaxServices {
 		return fmt.Errorf("services: direct paths take one of the %d services", agentservices.MaxServices)
@@ -254,6 +273,7 @@ func (t *ServiceTable) Continue(prev *ServiceTable) {
 		return // ponytail: prev's lives on with its sessions; a relay that changes a service's mode mid-process leaves one socket
 	}
 	t.direct = o
+	o.dropAddressesNotIn(t)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	_ = n.node.Drain(ctx)
