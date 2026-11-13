@@ -62,10 +62,22 @@ func ReasonOf(err error) string {
 	return ""
 }
 
+// Share declarations (Client.Share): a shared mailbox's holder or one of
+// its members (relay-server docs/decisions/mailbox-shared-holds-2026-11-13.md).
+const (
+	ShareHolder = "holder"
+	ShareMember = "member"
+)
+
 // Client calls the relay with an account credential.
 type Client struct {
 	ProxyURL string
 	APIKey   string
+	// Share, when set (ShareHolder, ShareMember), declares every call's
+	// mailbox shared: a broadcast (its holder appends, every machine of
+	// the account pulls) or a drop box (every machine appends, its holder
+	// pulls), across the account's groups.
+	Share string
 	// HTTP defaults to a health-checked copy of Go's default transport
 	// (health.go); each call is bounded by its context (a pull by its wait
 	// plus a margin).
@@ -146,6 +158,9 @@ func (c Client) call(ctx context.Context, method, path string, in, out proto.Mes
 	if c.APIKey != "" {
 		req.Header.Set("X-Api-Key", c.APIKey)
 	}
+	if c.Share != "" {
+		req.Header.Set(shareHeader, c.Share)
+	}
 	client := c.HTTP
 	if client == nil {
 		client = relayHTTP()
@@ -181,6 +196,9 @@ func decodeError(code int, data []byte) error {
 	}
 	return e
 }
+
+// shareHeader carries Client.Share (relay-server mailbox.ShareHeader).
+const shareHeader = "X-Nfltr-Mailbox-Share"
 
 func mailboxPath(name, suffix string) string {
 	return "/api/v1/mailboxes/" + url.PathEscape(name) + suffix

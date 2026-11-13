@@ -4,7 +4,11 @@
 package mailboxclient
 
 import (
+	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"slices"
 	"testing"
 
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
@@ -47,4 +51,27 @@ func FuzzDecodeError(f *testing.F) {
 			t.Fatalf("decode = %v", err)
 		}
 	})
+}
+
+// Share travels on every call as the declaration header; none without it.
+func TestShareDeclaresEveryCall(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = append(got, r.Header.Get("X-Nfltr-Mailbox-Share"))
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	ctx := context.Background()
+	for _, share := range []string{ShareMember, ""} {
+		c := Client{ProxyURL: srv.URL, Share: share, HTTP: srv.Client()}
+		if _, err := c.Append(ctx, "org.o.enrol", []byte("x"), AppendOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := c.Pull(ctx, "org.o.answers", 0, 0, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if want := []string{"member", "member", "", ""}; !slices.Equal(got, want) {
+		t.Fatalf("declarations %q, want %q", got, want)
+	}
 }
