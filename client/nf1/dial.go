@@ -34,43 +34,49 @@ var (
 	ErrBalance = errors.New("nf1: the serving account's balance is exhausted")
 )
 
-// Options are Dial's transport to the address's relay; the zero value
-// dials it over TCP with the system's roots.
+// Options are Dial's transport to the address's relay.
 type Options struct {
-	// TLSConfig is the TLS to the relay (nil: system roots, ServerName the
-	// relay's host). Never the server's pin: that is the session's own TLS.
-	TLSConfig *tls.Config
-	// DialContext dials the relay (nil: net.Dialer).
-	DialContext func(ctx context.Context, network, address string) (net.Conn, error)
+	// DialRelay connects to the address's relay (its host and port) and
+	// returns the connection with its TLS done; nil: TCP to the relay
+	// (port 443 when it names none) and TLS with the system's roots. The
+	// session's security does not rest on it (the pin and the proof do:
+	// every relay is untrusted); it keeps the rendezvous id from the
+	// network.
+	DialRelay func(ctx context.Context, relay string) (net.Conn, error)
 }
 
 // window is a client data connection's window (one session).
 const window = 1 << 20
 
+// dialRelay is Options.DialRelay's default.
+func dialRelay(ctx context.Context, relay string) (net.Conn, error) {
+	addr := relay
+	if _, _, err := net.SplitHostPort(addr); err != nil {
+		addr = net.JoinHostPort(relay, "443")
+	}
+	host, _, _ := net.SplitHostPort(addr)
+	nc, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	tc := tls.Client(nc, &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12})
+	if err := tc.HandshakeContext(ctx); err != nil {
+		_ = nc.Close()
+		return nil, err
+	}
+	return tc, nil
+}
+
 // Dial opens a session to addr's service: at addr.Relay only, over an
 // anonymous data connection, through the rendezvous, pinned TLS and the
 // proof (Handshake). The conn's Close ends the data connection too.
 func Dial(ctx context.Context, addr capaddr.Address, opt Options) (net.Conn, error) {
-	relayAddr := addr.Relay
-	if _, _, err := net.SplitHostPort(relayAddr); err != nil {
-		relayAddr = net.JoinHostPort(addr.Relay, "443")
-	}
-	host, _, _ := net.SplitHostPort(relayAddr)
-	dial := opt.DialContext
+	dial := opt.DialRelay
 	if dial == nil {
-		dial = (&net.Dialer{}).DialContext
+		dial = dialRelay
 	}
-	nc, err := dial(ctx, "tcp", relayAddr)
+	tc, err := dial(ctx, addr.Relay)
 	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrUnreachable, err)
-	}
-	cfg := &tls.Config{ServerName: host, MinVersion: tls.VersionTLS12}
-	if opt.TLSConfig != nil {
-		cfg = opt.TLSConfig.Clone()
-	}
-	tc := tls.Client(nc, cfg)
-	if err := tc.HandshakeContext(ctx); err != nil {
-		_ = nc.Close()
 		return nil, fmt.Errorf("%w: %v", ErrUnreachable, err)
 	}
 	done := bound(ctx, tc)
@@ -79,8 +85,11 @@ func Dial(ctx context.Context, addr capaddr.Address, opt Options) (net.Conn, err
 	if err != nil {
 		_ = tc.Close()
 		var nu *dataplane.NoUpgradeError
-		if errors.As(err, &nu) && nu.Status == http.StatusUnauthorized {
+		switch {
+		case errors.As(err, &nu) && nu.Status == http.StatusUnauthorized:
 			return nil, ErrNotServed // a relay that serves no nf1 addresses
+		case errors.As(err, &nu) && nu.Status == http.StatusTooManyRequests:
+			return nil, fmt.Errorf("%w: too many connections from this address", ErrRefused)
 		}
 		return nil, fmt.Errorf("%w: %v", ErrUnreachable, err)
 	}
