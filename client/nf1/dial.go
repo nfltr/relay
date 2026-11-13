@@ -95,10 +95,12 @@ func Dial(ctx context.Context, addr capaddr.Address, opt Options) (net.Conn, err
 	}
 	go func() { _ = mux.Serve(nil) }()
 	s, err := mux.Open(&pb.TCPData{Nf1Rid: addr.RID[:], E2Ee: true, Answer: true})
-	if err == nil {
-		err = answerErr(s.Answered(ctx))
-	}
 	if err != nil {
+		_ = mux.Close()
+		return nil, answerErr(err)
+	}
+	if err := answerErr(s.Answered(ctx)); err != nil {
+		_ = s.Close()
 		_ = mux.Close()
 		return nil, err
 	}
