@@ -161,16 +161,28 @@ e2ee_tcp group-direct-no-name-check,direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTT
 # the exporter in the proof prevents (client-no-pin-check alone: 2, 3, 6
 # hold). cap_address_link is query 10 as an equivalence; ProVerif reads a
 # broken diff-equivalence as ? (its log has the derivation).
-cap_address - TTTTTTTTTTFFFF
-cap_address client-no-pin-check FTTFFTTTTTFFFF
-cap_address rendezvous-any-key FTTFFTFFTTFFFF
-cap_address relay-substitutes-relay TTTTTTTFTTFFFF
-cap_address server-no-secret-check TFFFTFTTTTFFFF
-cap_address address-secret-optional TFFTTFTTTFFFFF
-cap_address server-any-secret TFFFTFTTTTFFFF
-cap_address pin-unkeyed TTTTTTTTTFFFFF
-cap_address downgrade-plain FTTTTTTTFTFFFF
-cap_address proof-unbound TTTTTTTTTTFFFF
-cap_address client-no-pin-check,proof-unbound FFFFFFTTTTFFFF
+cap_address - TTTTTTTTTTFFFFTTTTFF
+cap_address client-no-pin-check FTTFFTTTTTFFFFFFFTFF
+cap_address rendezvous-any-key FTTFFTFFTTFFFFFFFTFF
+cap_address relay-substitutes-relay TTTTTTTFTTFFFFTTTTFF
+cap_address server-no-secret-check TFFFTFTTTTFFFFTTFFFF
+cap_address address-secret-optional TFFTTFTTTFFFFFTTTFFF
+cap_address server-any-secret TFFFTFTTTTFFFFTTFFFF
+cap_address pin-unkeyed TTTTTTTTTFFFFFTTTTFF
+cap_address downgrade-plain FTTTTTTTFTFFFFTTTTFF
+cap_address proof-unbound TTTTTTTTTTFFFFTTTTFF
+cap_address client-no-pin-check,proof-unbound FFFFFFTTTTFFFFFFFFFF
+# Direct paths (lane NF1DIRECT, queries 15-20): a hint the record does not
+# cover fails only 7 (the client frames or not; the direct queries hold:
+# a forged hint is a refusal or a relayed session, never a wrong peer); the
+# direct key unpinned fails 16 alone (the transcript-bound tokens still
+# refuse a middle) and 15-18 with the tokens unbound from the QUIC exporter,
+# which alone holds (the pin keeps the middle out).
+cap_address hint-unbound TTTTTTFTTTFFFFTTTTFF
+cap_address direct-no-pin-check TTTTTTTTTTFFFFTFTTFF
+cap_address nf1-token-unbound TTTTTTTTTTFFFFTTTTFF
+cap_address nf1-direct-no-token TTTTTTTTTTFFFFTTFTFF
+cap_address nf1-agent-no-token TTTTTTTTTTFFFFTTTFFF
+cap_address direct-no-pin-check,nf1-token-unbound TTTTTTTTTTFFFFFFFFFF
 cap_address_link - T
 cap_address_link pin-unkeyed ?

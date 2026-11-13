@@ -603,6 +603,26 @@ key. TLS 1.3 as in `e2ee_tcp.pv`; the exporter is `h((k, ns, pk))`
 | 9 | the client never sends in plain | T | `downgrade-plain` |
 | 10 | the attacker, which sees `rid1`, the key, the registration and every session and holds A2, cannot produce A1's pin | T | `pin-unkeyed`, `address-secret-optional` |
 | 11-14 | witnesses: the client takes the answer; A1's acceptor admits it; A1's service gets its bytes; the client gets the answer | F (reachable) | |
+| 15 | what A1's client sends on a direct connection it took reaches only A1's server, wherever the relay routed the punch | T | `client-no-pin-check`, `rendezvous-any-key`, `direct-no-pin-check` with `nf1-token-unbound` |
+| 16 | the client's direct handshake ends only at the pinned key | T | `direct-no-pin-check`, `client-no-pin-check`, `rendezvous-any-key` |
+| 17 | a direct connection the client takes is bound, once, by A1's agent to the client's own session | T | `nf1-direct-no-token`, `direct-no-pin-check` with `nf1-token-unbound`, `server-any-secret`, `server-no-secret-check` |
+| 18 | A1's agent binds a direct connection only for the session's own client | T | `nf1-agent-no-token`, the secret-check mutants |
+| 19, 20 | witnesses: the client takes a direct connection; A1's agent binds one | F (reachable) | |
+
+Direct paths (lane NF1DIRECT, nfltr `docs/decisions/nf1-direct-2026-11-14.md`):
+the record's `hints` carry one fact, `d1` (the listener takes direct
+paths), which the client acts on (it frames its session) only once the
+record covers it; the candidates travel inside the session's TLS. After
+admission the session may move to a direct QUIC connection (link
+pathswitch under the session's TLS, the organisation's mechanism of
+`e2ee_tcp.pv` 21-26): the client takes it only from the pinned key
+(`BIND:nf1direct.pin`) and with the agent's token, the agent binds it to a
+session only on that session's client token; the tokens are keyed by the
+session's exporter and bind the direct connection's exporter, which covers
+its handshake's key. Mutants: `hint-unbound` (hints taken from the frame,
+not the record: fails 7 only), `direct-no-pin-check` (16; with
+`nf1-token-unbound` 15-18), `nf1-token-unbound` (holds alone),
+`nf1-direct-no-token` (17), `nf1-agent-no-token` (18).
 
 `cap_address_link.pv` states 10 as an observational equivalence: two
 servers register `rid1` and `rid2`, the attacker reads both registrations,
