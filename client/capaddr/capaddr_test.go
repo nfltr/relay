@@ -72,7 +72,7 @@ func encode(body []byte) string {
 
 // payload is the fixed address's body (no checksum).
 func payload(t testing.TB) []byte {
-	s := Format(fixedAddress(t))
+	s := fixedAddress(t).String()
 	b, err := b32.DecodeString(s[len(Prefix):])
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestRoundTrip(t *testing.T) {
 		}
 		got, err := Parse(s)
 		if err != nil || got != a {
-			t.Fatalf("Parse(Format(a)) = %+v, %v; want %+v", got, err, a)
+			t.Fatalf("Parse(a.String()) = %+v, %v; want %+v", got, err, a)
 		}
 	}
 	b, _ := New("relay.example.com", spki)
@@ -112,6 +112,19 @@ func TestNewRefusesBadRelay(t *testing.T) {
 		if _, err := New(r, spki); !errors.Is(err, ErrRelay) {
 			t.Errorf("New(%q) = %v, want ErrRelay", r, err)
 		}
+		a := fixedAddress(t)
+		a.Relay = r
+		if _, err := Format(a); !errors.Is(err, ErrRelay) {
+			t.Errorf("Format with relay %q = %v, want ErrRelay", r, err)
+		}
+		if _, err := SignRecord(nil, r, a.RID, nil); !errors.Is(err, ErrRelay) {
+			t.Errorf("SignRecord(%q) = %v, want ErrRelay", r, err)
+		}
+	}
+	a := fixedAddress(t)
+	a.Secret = [SecretSize]byte{}
+	if _, err := Format(a); !errors.Is(err, ErrSecret) {
+		t.Errorf("Format with an all-zero secret = %v, want ErrSecret", err)
 	}
 }
 
@@ -119,7 +132,7 @@ func TestNewRefusesBadRelay(t *testing.T) {
 // an address fails (CRC-32C detects every burst of up to 32 bits; one
 // base32 character is 5, two adjacent 10).
 func TestTypoFailsChecksum(t *testing.T) {
-	s := Format(fixedAddress(t))
+	s := fixedAddress(t).String()
 	const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
 	for i := len(Prefix); i < len(s); i++ {
 		for _, c := range alphabet {
@@ -156,7 +169,7 @@ func TestParseRefusals(t *testing.T) {
 	version0 := with(func(b []byte) []byte { b[0] = 0; return b })
 	badRelay := encode(append([]byte{Version, 3, 'a', '/', 'b'}, body[2+len("relay.example.com"):]...))
 	noRelay := encode(append([]byte{Version, 0}, body[2+len("relay.example.com"):]...))
-	good := Format(fixedAddress(t))
+	good := fixedAddress(t).String()
 	for _, c := range []struct {
 		s    string
 		want error
@@ -187,7 +200,7 @@ func TestParseRefusals(t *testing.T) {
 // A last character whose unused low bits are set decodes to the same
 // bytes; only the canonical text parses.
 func TestParseRefusesNonCanonical(t *testing.T) {
-	s := Format(fixedAddress(t))
+	s := fixedAddress(t).String()
 	const alphabet = "abcdefghijklmnopqrstuvwxyz234567"
 	i := strings.IndexByte(alphabet, s[len(s)-1])
 	n := 0
@@ -262,8 +275,8 @@ func computeVectors(t *testing.T) vectors {
 	v := vectors{
 		Relay: a.Relay, RID: hex.EncodeToString(a.RID[:]), Secret: hex.EncodeToString(a.Secret[:]),
 		KeySeed: hex.EncodeToString(sk.Seed()), SPKI: hex.EncodeToString(spki), Pin: hex.EncodeToString(a.Pin[:]),
-		Address: Format(a), Hints: hex.EncodeToString(hints),
-		Record:   hex.EncodeToString(SignRecord(sk, a.Relay, a.RID, hints)),
+		Address: a.String(), Hints: hex.EncodeToString(hints),
+		Record:   hex.EncodeToString(mustSign(t, sk, a.Relay, a.RID, hints)),
 		Exporter: hex.EncodeToString(exp), Proof: hex.EncodeToString(p[:]),
 	}
 	body := payload(t)

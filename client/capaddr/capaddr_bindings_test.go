@@ -41,7 +41,7 @@ func newHonest(t *testing.T) honest {
 		t.Fatal(err)
 	}
 	hints := []byte("direct candidates")
-	return honest{sk, spki, a1, a2, hints, SignRecord(sk, a1.Relay, a1.RID, hints)}
+	return honest{sk, spki, a1, a2, hints, mustSign(t, sk, a1.Relay, a1.RID, hints)}
 }
 
 func refused(t *testing.T, what string, err, want error) {
@@ -56,7 +56,7 @@ var capBindings = map[string]func(t *testing.T, h honest){
 	// pinOf(sec, key): another key, with a record honestly signed by it.
 	"cap.pin": func(t *testing.T, h honest) {
 		osk, ospki := newKey(t)
-		refused(t, "answer with another key", h.a1.CheckAnswer(ospki, SignRecord(osk, h.a1.Relay, h.a1.RID, h.hints), h.hints), ErrPin)
+		refused(t, "answer with another key", h.a1.CheckAnswer(ospki, mustSign(t, osk, h.a1.Relay, h.a1.RID, h.hints), h.hints), ErrPin)
 		refused(t, "answer with no key (plain)", h.a1.CheckAnswer(nil, nil, h.hints), ErrPin)
 		if _, _, err := session(t, h.a1, osk); !errors.Is(err, ErrPin) {
 			t.Errorf("TLS certificate of another key: %v, want ErrPin", err)
@@ -69,11 +69,11 @@ var capBindings = map[string]func(t *testing.T, h honest){
 		a := h.a1
 		otherTag := ed25519.Sign(h.sk, append([]byte("nf1-xxx"), rendezvousMessage(a.Relay, a.RID, h.hints)[len(tagRendezvous):]...))
 		for what, rec := range map[string][]byte{
-			"another relay": SignRecord(h.sk, "other.example.com", a.RID, h.hints),
-			"another rid":   SignRecord(h.sk, a.Relay, h.a2.RID, h.hints),
-			"other hints":   SignRecord(h.sk, a.Relay, a.RID, []byte("attacker candidates")),
+			"another relay": mustSign(t, h.sk, "other.example.com", a.RID, h.hints),
+			"another rid":   mustSign(t, h.sk, a.Relay, h.a2.RID, h.hints),
+			"other hints":   mustSign(t, h.sk, a.Relay, a.RID, []byte("attacker candidates")),
 			"another tag":   otherTag,
-			"another key":   SignRecord(osk, a.Relay, a.RID, h.hints),
+			"another key":   mustSign(t, osk, a.Relay, a.RID, h.hints),
 			"no record":     nil,
 		} {
 			refused(t, what, a.CheckAnswer(h.spki, rec, h.hints), ErrRendezvous)
@@ -155,4 +155,13 @@ func TestCapAddressModelBindings(t *testing.T) {
 	for _, id := range rows {
 		t.Run(id, func(t *testing.T) { capBindings[id](t, h) })
 	}
+}
+
+func mustSign(t testing.TB, sk ed25519.PrivateKey, relay string, rid [RIDSize]byte, hints []byte) []byte {
+	t.Helper()
+	rec, err := SignRecord(sk, relay, rid, hints)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rec
 }

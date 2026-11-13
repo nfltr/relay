@@ -8,7 +8,7 @@ import "testing"
 // FuzzParse: Parse never panics, and an address it accepts is canonical and
 // round-trips.
 func FuzzParse(f *testing.F) {
-	f.Add(Format(fixedAddress(f)))
+	f.Add(fixedAddress(f).String())
 	f.Add("nf1")
 	f.Add("nf1aaaa")
 	f.Add("home/db")
@@ -17,10 +17,10 @@ func FuzzParse(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if Format(a) != s {
-			t.Fatalf("accepted non-canonical %q (canonical %q)", s, Format(a))
+		if a.String() != s {
+			t.Fatalf("accepted non-canonical %q (canonical %q)", s, a.String())
 		}
-		if b, err := Parse(Format(a)); err != nil || b != a {
+		if b, err := Parse(a.String()); err != nil || b != a {
 			t.Fatalf("round trip: %+v, %v", b, err)
 		}
 	})

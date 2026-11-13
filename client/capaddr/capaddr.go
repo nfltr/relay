@@ -115,13 +115,28 @@ func New(relay string, spki []byte) (Address, error) {
 	return a, nil
 }
 
-// String is Format.
-func (a Address) String() string { return Format(a) }
+// String is Format's text, or "" for an address Format refuses.
+func (a Address) String() string {
+	s, _ := Format(a)
+	return s
+}
 
-// Format is the address's text form. It does not validate: Parse does.
-func Format(a Address) string {
+// Format is the address's text form. It refuses what Parse refuses: a
+// relay that is not a host[:port] of at most 255 bytes, an all-zero
+// secret.
+func Format(a Address) (string, error) {
+	if err := checkRelay(a.Relay); err != nil {
+		return "", err
+	}
+	if a.Secret == ([SecretSize]byte{}) {
+		return "", ErrSecret
+	}
+	return format(a), nil
+}
+
+func format(a Address) string {
 	b := make([]byte, 0, 2+len(a.Relay)+RIDSize+PinSize+SecretSize+4)
-	b = append(b, Version, byte(len(a.Relay)))
+	b = append(b, Version, byte(len(a.Relay))) // #nosec G115 -- checkRelay bounds len(R) to 255
 	b = append(b, a.Relay...)
 	b = append(b, a.RID[:]...)
 	b = append(b, a.Pin[:]...)
@@ -168,7 +183,7 @@ func Parse(s string) (Address, error) {
 	if err := checkRelay(a.Relay); err != nil {
 		return Address{}, err
 	}
-	if Format(a) != s { // non-zero trailing bits of the last base32 character
+	if format(a) != s { // non-zero trailing bits of the last base32 character
 		return Address{}, ErrEncoding
 	}
 	return a, nil
@@ -210,7 +225,7 @@ func (a Address) CheckKey(spki []byte) error {
 func rendezvousMessage(relay string, rid [RIDSize]byte, hints []byte) []byte {
 	b := make([]byte, 0, len(tagRendezvous)+2+len(relay)+RIDSize+len(hints))
 	b = append(b, tagRendezvous...)
-	b = binary.BigEndian.AppendUint16(b, uint16(len(relay)))
+	b = binary.BigEndian.AppendUint16(b, uint16(len(relay))) // #nosec G115 -- callers checkRelay: at most 255
 	b = append(b, relay...)
 	b = append(b, rid[:]...)
 	return append(b, hints...)
@@ -221,13 +236,19 @@ func rendezvousMessage(relay string, rid [RIDSize]byte, hints []byte) []byte {
 // candidates), opaque here.
 //
 // ponytail: Ed25519 keys only; add ECDSA when a server needs another key.
-func SignRecord(sk ed25519.PrivateKey, relay string, rid [RIDSize]byte, hints []byte) []byte {
-	return ed25519.Sign(sk, rendezvousMessage(relay, rid, hints))
+func SignRecord(sk ed25519.PrivateKey, relay string, rid [RIDSize]byte, hints []byte) ([]byte, error) {
+	if err := checkRelay(relay); err != nil {
+		return nil, err
+	}
+	return ed25519.Sign(sk, rendezvousMessage(relay, rid, hints)), nil
 }
 
 // VerifyRecord checks rec under the key spki over the tag, relay, rid and
 // hints.
 func VerifyRecord(spki, rec []byte, relay string, rid [RIDSize]byte, hints []byte) error {
+	if checkRelay(relay) != nil {
+		return ErrRendezvous
+	}
 	k, err := x509.ParsePKIXPublicKey(spki)
 	pub, ok := k.(ed25519.PublicKey)
 	if err != nil || !ok || !ed25519.Verify(pub, rendezvousMessage(relay, rid, hints), rec) {
