@@ -191,6 +191,7 @@ re-pinning (`make spec-bindings`, in `make ci`; nfltr
 | `e2ee_tcp.pv` (direct paths) | `client/agent/direct_bindings_test.go` `TestDirectModelBindings` | 6, one per `BIND:direct.*`: a look-alike certificate and another machine's name answering the punch (`refused_cert`), the token keyed by another session, bound to another or no QUIC connection, the other role's token (both ways), another epoch's token (lane DIRECTPATH3; Go mutants `direct-no-name`, `direct-no-cert-check`, `token-no-epoch`, `token-unbound`, `token-no-role`, `direct-no-token`). Under a group dial (36), `TestDirectGroupDialGoesDirectToItsInstance`: the relay's pick of the other instance for the first exchange refused and excluded, the session's instance taken (lane DIRECTGROUP; Go mutants `group-control-no-name`, `group-control-no-exclude`) |
 | `e2ee_tcp.pv` (services by name) | `client/agent/service_bindings_test.go` `TestServiceModelBindings` | 3 here, one per `BIND:org.*`: a session routed to pg refuses an offer of web/vault, another agent's pg and no protocol, a session routed to vault refuses web/pg, and the client's `BindServiceTLS` refuses a server that negotiated none (`org.service`); a service published under a group the certificate lacks refused at `NewServiceTable`, and pg@db refused once a renewed certificate lacks db (`org.group`); pg@db refused for a pg published under ops, vault@db for a vault under none (`org.publish`) (lane SVCBIND; Go mutants `client-no-alpn-check`, `agent-no-alpn-check`, `no-protocol-accepted`, `agent-no-publish-check`, `agent-no-ou-check`, `publish-not-in-cert`). The group-dial client's own check (OU contains the group, no name) is nfltr's `orgpki`, with its row there (lane SVCCLIENT) |
 | `wg_exit.pv` | `client/agent/wgexit/wg_exit_bindings_test.go` `TestWGExitModelBindings` | 3 here (psk binds the exit's name; each end's psk on the key the relay told it) + 3 in nfltr `cmd/nfltr/internal/wgcli/wg_exit_bindings_test.go` (the key id of the machine named, psk whatever `x-wg-paired` says, one key per machine) |
+| `cap_address.pv` | none yet: the four `BIND:cap.*` (pin, secret, service, rendezvous) get their rows with the codec and the client and server that use it (lane NF1PV; until then `make spec-bindings` checks no row of this model) | 0 of 4 |
 
 A planted Go mutant fails its row (lane E2EEVECTORS): the role, caller,
 callee or txn left out of `a2aE2EEPrologue`, the psk not keyed, a warm's
@@ -536,6 +537,74 @@ number only after a write succeeded, so a record write that failed in part
 (a write deadline) left the next `Write` sealing other bytes under the same
 nonce; a failed record write now spends its number and every later `Write`
 fails (`TestSecureConnFailedWriteEndsIt`).
+
+### cap_address.pv: the capability address nf1 (lane NF1PV, a design, no code yet)
+
+A server publishes one service under an address; whoever holds it reaches
+that service end to end encrypted, with no account and no certificate of
+their own (nfltr `docs/decisions/cli-cat-2026-11-12.md` section 5). The
+client knows only the address `A = (R, rid, pin, sec)`. The model fixes the
+message flow the address codec and its clients and servers implement:
+
+| field or message | what it is | what it binds |
+|---|---|---|
+| `R` | the relay host the server registered at | the client opens there and nowhere else (not a saved relay, `--server` or a redirect) |
+| `rid` | the rendezvous id: 16 random bytes, independent of the key and the secret | what the relay routes by; the only field of the address a relay learns |
+| `sec` | the secret: 32 random bytes, always present (no empty or absent secret in the format; the codec refuses all zeros) | admission: only its holders are served |
+| `pin` | `H("nf1-pin", sec, pk)`: the server's TLS key, keyed by the secret | the key the client accepts, and unlinkability: a relay that sees `pk` cannot compute it |
+| encoding | `nf1` + a checksummed encoding of a version and the four fields | parsed offline; a bad checksum or a missing field is exit 1 |
+| 1. REGISTER (server -> R, on its agent session) | `rid`, `pk`, `rec = Sign_sk("nf1-rdv", R, rid, hints)` | `hints` is whatever a client acts on before TLS (direct candidates) |
+| 2. OPEN (client -> R) | `rid`, end to end encrypted | no plain mode: an answer "plain" is refused |
+| 3. rendezvous answer (R -> client) | `(pk, rec)` | the client requires `pinOf(sec, pk) = pin` and `rec` a signature under that `pk` over the tag, the relay it opened at, its `rid` and `hints`, before it uses `hints` or opens TLS |
+| 4. TLS 1.3 through the relay's stream | the server's certificate must carry exactly that `pk`; the client presents none | |
+| 5. PROOF (the client's first record inside TLS) | `H("nf1-proof", sec, exporter)` | the exporter covers the handshake transcript, the server's certificate included; the server checks it with the secret of the address the session was routed to (`rid`'s acceptor), never another address it serves under the same key, and closes the session otherwise; nothing of the service runs before |
+| 6. the service | its bytes both ways under the TLS key | |
+
+The attacker owns every relay, answers every open, opens sessions of its
+own to any `rid`, and holds a second address (A2) of the same server and
+key. TLS 1.3 as in `e2ee_tcp.pv`; the exporter is `h((k, ns, pk))`
+(RFC 8446 7.5: the exporter secret derives from the transcript).
+
+| # | query | result | fails under mutant |
+|---|---|---|---|
+| 1 | secrecy of what A1's client sends | T | `client-no-pin-check`, `rendezvous-any-key`, `downgrade-plain` |
+| 2 | secrecy of what A1's service answers (only holders of `sec1` admitted, the holder of A2 included) | T | `server-no-secret-check`, `address-secret-optional`, `server-any-secret`, `client-no-pin-check` with `proof-unbound` |
+| 3 | what A1's acceptor takes was sent once by A1's client in that session | T | as 2 |
+| 4 | what the client of `rid` takes was sent once, in that session, by `rid`'s acceptor: injective agreement on the service | T | `client-no-pin-check`, `rendezvous-any-key`, `server-no-secret-check`, `server-any-secret` |
+| 5 | the client's TLS session ends only at the pinned key | T | `client-no-pin-check`, `rendezvous-any-key` |
+| 6 | A1's acceptor admits only a session whose client proved `sec1` | T | as 2 |
+| 7 | the rendezvous answer the client takes is the server's registration (key, `rid`, `hints`) | T | `rendezvous-any-key` |
+| 8 | a session the client completes went through the relay the server registered `rid` at | T | `relay-substitutes-relay`, `rendezvous-any-key` |
+| 9 | the client never sends in plain | T | `downgrade-plain` |
+| 10 | the attacker, which sees `rid1`, the key, the registration and every session and holds A2, cannot produce A1's pin | T | `pin-unkeyed`, `address-secret-optional` |
+| 11-14 | witnesses: the client takes the answer; A1's acceptor admits it; A1's service gets its bytes; the client gets the answer | F (reachable) | |
+
+`cap_address_link.pv` states 10 as an observational equivalence: two
+servers register `rid1` and `rid2`, the attacker reads both registrations,
+opens TLS sessions to both and is handed one pin (rid1's on the left,
+rid2's on the right); it cannot tell which (T). Under `pin-unkeyed` it
+hashes each registration's key (`?`: ProVerif's answer for a broken
+diff-equivalence; the derivation is in its log).
+
+Mutants: `client-no-pin-check` (the TLS certificate's key not compared),
+`rendezvous-any-key` (the answer's key not compared to the pin),
+`relay-substitutes-relay` (the client opens at another relay than its
+address's), `server-no-secret-check`, `address-secret-optional` (the
+format lets the secret be empty: A1 has none), `server-any-secret` (an
+acceptor takes a proof under any of its key's secrets and serves its own
+service: a client of A1 routed to A2's acceptor, and the holder of A2 into
+A1), `pin-unkeyed` (`pin = H(pk)`: the relay reads `pk` in every
+registration and TLS handshake, so it links `rid` to the pin),
+`downgrade-plain`, `proof-unbound` (the proof without the exporter: caught
+only with `client-no-pin-check`, where a fooled client's proof opens the
+real server; with the exporter it does not, 2, 3 and 6 hold).
+
+Not covered: an active relay sees `pk` (TLS shows the certificate to
+whoever opens a session), so the rendezvous ids of addresses that share a
+key link to each other; addresses that must not link use a key each. A
+leaked address is a capability: revoking it is stopping the server (no
+rotation, no relay state across opens: nfltr's cli-cat decision, "TLA+:
+none").
 
 ### First use
 

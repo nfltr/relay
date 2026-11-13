@@ -1,0 +1,245 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   cap_address.pv: the capability address nf1... (a design, no code yet:
+   the address codec in client/, then the clients and servers that use
+   it). spec/proverif/README.md "cap_address.pv".
+
+   A server publishes one service under an address; whoever holds the
+   address reaches that service, end to end encrypted, with no account and
+   no certificate of their own. The client knows only the address:
+     A = (R, rid, pin, sec)
+     R    the relay host the server registered at
+     rid  the rendezvous id: 16 random bytes, drawn independently of the
+          key and the secret
+     sec  the secret: 32 random bytes, always present (the format has no
+          empty or absent secret)
+     pin  pinOf(sec, pk) = H("nf1-pin", sec, pk): the server's TLS key pk,
+          keyed by the secret, so a relay that sees pk cannot compute it
+   The address is nf1 followed by a checksummed encoding of a version and
+   these four fields; the codec parses offline and refuses a bad checksum,
+   a missing field and an all-zero secret.
+
+   Message flow (each line: what it binds):
+     1. REGISTER, server -> relay R, on its agent session:
+          rid, pk, rec = Sign_sk("nf1-rdv", R, rid, hints)
+        hints: whatever the client acts on before TLS (direct candidates);
+        the relay learns rid, pk, hints, never sec or pin.
+     2. OPEN, client -> R (the address's relay, never a saved one, --server
+        or a redirect): rid, end to end encrypted (no plain mode).
+     3. RENDEZVOUS answer, R -> client: (pk, rec). The client requires
+        pinOf(sec, pk) = pin (BIND:cap.pin) and rec a signature under that
+        pk over ("nf1-rdv", the relay it opened at, its rid, hints)
+        (BIND:cap.rendezvous); only then does it use hints or open TLS. An
+        answer "plain" is refused.
+     4. TLS 1.3 through the relay's stream: the server's certificate must
+        carry exactly pk (BIND:cap.pin); the client presents none.
+     5. PROOF, the client's first record inside TLS:
+          H("nf1-proof", sec, exporter)
+        exporter: the TLS exporter of this session, which covers the whole
+        handshake transcript, the server's certificate included
+        (BIND:cap.secret). The server checks it against the secret of the
+        address the session was routed to (rid's acceptor), never another
+        address it serves, even under the same key (BIND:cap.service), and
+        closes the session otherwise. Nothing of the service runs before.
+     6. The service's bytes both ways, under the TLS key.
+
+   The attacker owns every relay (R and any other: one Dolev-Yao attacker
+   is the colluding case), the network and the rendezvous: it reads every
+   registration, answers every open, opens sessions of its own to any rid,
+   and holds a second address of the same server and key (A2: rid2, sec2,
+   so pin2): a holder of one address gains nothing on another. The server
+   key skS serves both A1 (service 1) and A2 (service 2).
+
+   TLS 1.3 is not re-proven (as e2ee_tcp.pv): a client that checked the
+   server's key shares a fresh key only with that key's holder; the key
+   share is modelled as encryption to the key, bound to the server random.
+   The exporter (RFC 8446 7.5) is derived from the transcript: h((k, ns,
+   pk)). Without pk in it a client fooled about the key would hand the
+   attacker a proof it can forward to the real server (see proof-unbound).
+
+   Mutants (each a check left out; expect.txt "Part 5"):
+     client-no-pin-check       the TLS certificate's key not compared
+     rendezvous-any-key        the answer's key not compared to the pin
+     relay-substitutes-relay   the client opens at a relay other than its
+                               address's and takes the answer's relay
+     server-no-secret-check    the proof not checked
+     address-secret-optional   the format lets the secret be empty: A1 has
+                               none
+     server-any-secret         an acceptor takes a proof under any secret
+                               of its key and serves its own service
+     pin-unkeyed               pin = H(pk)
+     downgrade-plain           the client sends in plain on the answer
+     proof-unbound             the proof without the exporter (caught only
+                               with client-no-pin-check)
+
+   Bindings (README "Bindings"): each gets a refusal row in the code's
+   bindings test when the code lands (the codec lane):
+     BIND:cap.pin         the answer's key and the TLS certificate's key, each against pinOf(sec, key)
+     BIND:cap.secret      the proof: the address's secret over this session's exporter
+     BIND:cap.service     the acceptor checks the proof with the secret of the address routed to it
+     BIND:cap.rendezvous  the answer: signed under the pinned key, over the tag, the relay opened at, rid and hints *)
+
+free c: channel.
+
+type skey.
+type pkey.
+fun pk(skey): pkey.
+fun aenc(bitstring, pkey): bitstring.
+reduc forall m: bitstring, k: skey; adec(aenc(m, pk(k)), k) = m.
+fun senc(bitstring, bitstring): bitstring.
+reduc forall m: bitstring, k: bitstring; sdec(senc(m, k), k) = m.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+reduc forall m: bitstring, k: skey; getmsg(sign(m, k)) = m.
+fun h(bitstring): bitstring.
+
+const labPin, labRdv, labProof, labExp: bitstring.
+const c2s, s2c, appData: bitstring.
+const answerPlain: bitstring.                 (* the relay's word: "this rid is plain" *)
+const noSecret: bitstring.                    (* an empty secret (address-secret-optional) *)
+const relayR: bitstring.                      (* the relay the server registered at, A1's and A2's *)
+free rid1, rid2: bitstring.                   (* rendezvous ids: the relay learns them *)
+
+free skS: skey [private].                     (* the server's TLS key, A1's and A2's *)
+free sec1: bitstring [private].               (* A1's secret *)
+free sec2: bitstring.                         (* A2's secret: the attacker holds A2 *)
+free payload: bitstring [private].            (* what A1's client sends *)
+free svcData1: bitstring [private].           (* what A1's service answers *)
+free svcData2: bitstring.                     (* what A2's service answers (the attacker may read it) *)
+
+letfun pinOf(s: bitstring, x: pkey) = h((labPin, s, x)). (* NOT:pin-unkeyed *)
+letfun pinOf(s: bitstring, x: pkey) = h((labPin, x)). (* ONLY:pin-unkeyed *)
+letfun secOf(s: bitstring) = s. (* NOT:address-secret-optional *)
+letfun secOf(s: bitstring) = noSecret. (* ONLY:address-secret-optional *)
+letfun exporter(k: bitstring, ns: bitstring, x: pkey) = h((labExp, k, ns, x)).
+letfun proofOf(s: bitstring, k: bitstring, ns: bitstring, x: pkey) = h((labProof, s, exporter(k, ns, x))). (* NOT:proof-unbound *)
+letfun proofOf(s: bitstring, k: bitstring, ns: bitstring, x: pkey) = h((labProof, s)). (* ONLY:proof-unbound *)
+
+(* The acceptor's proof check: its own address's secret. *)
+letfun accepts(p: bitstring, sec: bitstring, other: bitstring, k: bitstring, ns: bitstring) = (p = proofOf(sec, k, ns, pk(skS))). (* NOT:server-any-secret *)
+letfun accepts(p: bitstring, sec: bitstring, other: bitstring, k: bitstring, ns: bitstring) = (p = proofOf(sec, k, ns, pk(skS))) || (p = proofOf(other, k, ns, pk(skS))). (* ONLY:server-any-secret *)
+
+event ServerKey(pkey).                                  (* the server's key *)
+event Registered(bitstring, bitstring, bitstring, pkey). (* relay, rid, hints, key *)
+event ClientRdv(bitstring, bitstring, bitstring, pkey).  (* the relay opened at, rid, hints, key: the answer taken *)
+event ClientTLS(bitstring, pkey).                       (* rid, the key the client's TLS session ended at *)
+event ClientProved(bitstring, bitstring).               (* rid, session key: the proof sent *)
+event ClientSent(bitstring, bitstring, bitstring).      (* rid, session key, bytes *)
+event ClientRecv(bitstring, bitstring, bitstring, bitstring). (* relay opened at, rid, session key, response *)
+event ClientPlain(bitstring).                           (* rid: bytes sent in plain *)
+event Admitted(bitstring, bitstring).                   (* rid of the acceptor, session key *)
+event ServiceGot(bitstring, bitstring, bitstring).      (* rid of the acceptor, session key, bytes *)
+event AgentSent(bitstring, bitstring, bitstring).       (* rid of the acceptor, session key, response *)
+event PinGuessed.                                       (* the attacker produced A1's pin *)
+
+(* The server registers rid at relay R (1). *)
+let Register(R: bitstring, rid: bitstring) =
+  new hints: bitstring;
+  event Registered(R, rid, hints, pk(skS));
+  out(c, (rid, pk(skS), sign((labRdv, R, rid, hints), skS))).
+
+(* rid's acceptor on the server: a session the relay routed to rid, its
+   address's secret sec; other is the secret of the key's other address
+   (server-any-secret). *)
+let Acceptor(rid: bitstring, sec: bitstring, other: bitstring, resp: bitstring) =
+  in(c, (=rid, e2ee: bool));
+  if e2ee = true then                                   (* a plain open to an address is refused *)
+  new ns: bitstring;
+  out(c, (pk(skS), ns));                                (* ServerHello, Certificate *)
+  in(c, ek: bitstring);
+  let (k: bitstring, =ns) = adec(ek, skS) in
+  in(c, ep: bitstring);
+  let (=c2s, p: bitstring) = sdec(ep, k) in
+  if accepts(p, sec, other, k, ns) then (* NOT:server-no-secret-check *)
+  event Admitted(rid, k);
+  in(c, e: bitstring);
+  let (=c2s, =appData, m: bitstring) = sdec(e, k) in
+  event ServiceGot(rid, k, m);
+  new r: bitstring;
+  event AgentSent(rid, k, (r, resp));
+  out(c, senc((s2c, appData, (r, resp)), k)).
+
+(* A1's client: knows only A1 = (relayR, rid, pin, sec). *)
+let Client(rid: bitstring, pin: bitstring, sec: bitstring) =
+  in(c, other: bitstring);                              (* a saved relay, --server, a redirect *)
+  let ru = relayR in (* NOT:relay-substitutes-relay *)
+  let ru = other in (* ONLY:relay-substitutes-relay *)
+  out(c, (ru, rid, true));                              (* OPEN (2) *)
+  in(c, answer: bitstring);
+  if answer = answerPlain then (event ClientPlain(rid); out(c, payload)) else (* ONLY:downgrade-plain *)
+  let (rpk: pkey, rec: bitstring) = answer in           (* the rendezvous answer (3) *)
+  if pinOf(sec, rpk) = pin then (* NOT:rendezvous-any-key *)
+  let (=labRdv, rr: bitstring, =rid, hints: bitstring) = checksign(rec, rpk) in
+  if rr = ru then (* NOT:relay-substitutes-relay *)
+  event ClientRdv(ru, rid, hints, rpk);
+  in(c, (spk: pkey, ns: bitstring));                    (* TLS (4) *)
+  if spk = rpk then (* NOT:client-no-pin-check *)
+  new k: bitstring;
+  out(c, aenc((k, ns), spk));
+  event ClientTLS(rid, spk);
+  event ClientProved(rid, k);
+  out(c, senc((c2s, proofOf(sec, k, ns, spk)), k));      (* PROOF (5) *)
+  event ClientSent(rid, k, payload);
+  out(c, senc((c2s, appData, payload), k));             (* (6) *)
+  in(c, e: bitstring);
+  let (=s2c, =appData, r: bitstring) = sdec(e, k) in
+  event ClientRecv(ru, rid, k, r).
+
+(* 1, 2. session secrecy against every relay: A1's client's bytes, A1's
+   service's answer (the latter is also: only holders of sec1 are admitted) *)
+(* expect true *)
+query attacker(payload).
+(* expect true *)
+query attacker(svcData1).
+(* 3. integrity toward the service: what A1's acceptor takes was sent by
+   A1's client in that session, once *)
+(* expect true *)
+query k: bitstring, m: bitstring; inj-event(ServiceGot(rid1, k, m)) ==> inj-event(ClientSent(rid1, k, m)).
+(* 4. integrity toward the client and injective agreement on the service:
+   what the client of rid takes was sent once, in that session, by rid's
+   acceptor (not another address's of the same key) *)
+(* expect true *)
+query ru: bitstring, rid: bitstring, k: bitstring, r: bitstring; inj-event(ClientRecv(ru, rid, k, r)) ==> inj-event(AgentSent(rid, k, r)).
+(* 5. the client's TLS session ends only at the pinned key *)
+(* expect true *)
+query rid: bitstring, x: pkey; event(ClientTLS(rid, x)) ==> event(ServerKey(x)).
+(* 6. A1's acceptor admits only a session whose client proved sec1 *)
+(* expect true *)
+query k: bitstring; event(Admitted(rid1, k)) ==> event(ClientProved(rid1, k)).
+(* 7. the rendezvous answer the client takes is the server's registration:
+   its key, its rid, its hints *)
+(* expect true *)
+query ru: bitstring, rid: bitstring, hs: bitstring, x: pkey, r0: bitstring; event(ClientRdv(ru, rid, hs, x)) ==> event(Registered(r0, rid, hs, x)).
+(* 8. the relay is the address's: a session the client completes went
+   through the relay the server registered rid at *)
+(* expect true *)
+query ru: bitstring, rid: bitstring, k: bitstring, r: bitstring, hs: bitstring, x: pkey; event(ClientRecv(ru, rid, k, r)) ==> event(Registered(ru, rid, hs, x)).
+(* 9. no downgrade: the client never sends in plain *)
+(* expect true *)
+query rid: bitstring; event(ClientPlain(rid)).
+(* 10. the rendezvous id does not link to the pin: the attacker, which
+   sees rid1, the key, the registration, every session and holds A2,
+   cannot produce A1's pin *)
+(* expect true *)
+query event(PinGuessed).
+(* 11-14. witnesses: the client takes the answer; A1's acceptor admits it;
+   A1's service gets its bytes; the client gets the answer *)
+(* expect false *)
+query ru: bitstring, rid: bitstring, hs: bitstring, x: pkey; event(ClientRdv(ru, rid, hs, x)).
+(* expect false *)
+query k: bitstring; event(Admitted(rid1, k)).
+(* expect false *)
+query k: bitstring, m: bitstring; event(ServiceGot(rid1, k, m)).
+(* expect false *)
+query ru: bitstring, rid: bitstring, k: bitstring, r: bitstring; event(ClientRecv(ru, rid, k, r)).
+
+process
+  let s1 = secOf(sec1) in
+  let pin1 = pinOf(s1, pk(skS)) in
+  event ServerKey(pk(skS));
+  out(c, pk(skS));
+  ( Register(relayR, rid1) | Register(relayR, rid2) |
+    (!Acceptor(rid1, s1, sec2, svcData1)) | (!Acceptor(rid2, sec2, s1, svcData2)) |
+    (!Client(rid1, pin1, s1)) |
+    (in(c, g: bitstring); if g = pin1 then event PinGuessed) )

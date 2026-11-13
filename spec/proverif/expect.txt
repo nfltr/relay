@@ -152,3 +152,25 @@ e2ee_tcp agent-no-publish-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTTFFTF
 # certificate check off fails 36 with every direct-no-cert-check line.
 e2ee_tcp group-direct-no-name-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTF
 e2ee_tcp group-direct-no-name-check,direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFFF
+#
+# Part 5: the capability address nf1... (cap_address; a design, no code
+# yet; queries in README "cap_address.pv"). Every query holds; each mutant
+# fails the ones it targets. proof-unbound alone holds (the proof travels
+# only inside TLS to the pinned key); with client-no-pin-check the proof a
+# fooled client gives the attacker opens the real server (2, 3, 6), which
+# the exporter in the proof prevents (client-no-pin-check alone: 2, 3, 6
+# hold). cap_address_link is query 10 as an equivalence; ProVerif reads a
+# broken diff-equivalence as ? (its log has the derivation).
+cap_address - TTTTTTTTTTFFFF
+cap_address client-no-pin-check FTTFFTTTTTFFFF
+cap_address rendezvous-any-key FTTFFTFFTTFFFF
+cap_address relay-substitutes-relay TTTTTTTFTTFFFF
+cap_address server-no-secret-check TFFFTFTTTTFFFF
+cap_address address-secret-optional TFFTTFTTTFFFFF
+cap_address server-any-secret TFFFTFTTTTFFFF
+cap_address pin-unkeyed TTTTTTTTTFFFFF
+cap_address downgrade-plain FTTTTTTTFTFFFF
+cap_address proof-unbound TTTTTTTTTTFFFF
+cap_address client-no-pin-check,proof-unbound FFFFFFTTTTFFFF
+cap_address_link - T
+cap_address_link pin-unkeyed ?
