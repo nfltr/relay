@@ -45,7 +45,7 @@ func TestNF1ServiceDeclaresAndServes(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, s := net.Pipe()
-	go serveNF1(t.Context(), s, tc, l, slog.New(slog.DiscardHandler))
+	go serveNF1(t.Context(), s, tc, p, slog.New(slog.DiscardHandler))
 	conn, err := nf1.Handshake(t.Context(), c, l.Address())
 	if err != nil {
 		t.Fatal(err)

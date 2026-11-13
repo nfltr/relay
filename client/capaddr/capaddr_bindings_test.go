@@ -126,7 +126,7 @@ func TestCapAddressModelBindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	var model, rows []string
-	for _, m := range regexp.MustCompile(`BIND:([a-z0-9][a-z0-9.]*[a-z0-9])`).FindAllSubmatch(src, -1) {
+	for _, m := range regexp.MustCompile(`BIND:(cap\.[a-z0-9.]*[a-z0-9])`).FindAllSubmatch(src, -1) { // nf1direct.*: client/agent's rows
 		model = append(model, string(m[1]))
 	}
 	for id := range capBindings {

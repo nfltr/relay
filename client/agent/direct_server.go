@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,6 +25,7 @@ import (
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/quic-go"
+	"github.com/nfltr/relay/client/nf1"
 	"github.com/nfltr/relay/client/tlsend"
 )
 
@@ -57,7 +59,9 @@ type qadTarget struct {
 type directSession struct {
 	c    *pathswitch.Conn
 	key  []byte
-	peer string // the direct connection it last moved to (servedPeer's name); d.mu
+	peer string        // the direct connection it last moved to (servedPeer's name); d.mu
+	nf1  *nf1.Listener // a capability address's session: its listener (nil: organisation mode)
+	sni  string        // ... the server name its direct connection asks for (nf1SNI)
 }
 
 // newDirectServer starts the listener on a new endpoint.
@@ -86,15 +90,21 @@ func newDirectServerOn(ep *DirectEndpoint, org Org, groups []string, modes map[s
 
 // listenTLS is a direct connection's TLS at the agent: this machine's
 // certificate, a client's certificate of the organisation in a direct
-// service's groups. It admits the connection only: a stream on it moves a
+// service's groups; or, for a server name a capability address's session
+// asked for (nf1SNI), that address's certificate and no client's
+// (nf1ListenTLS). It admits the connection only: a stream on it moves a
 // session only on that session's token (acceptDirect).
 func (d *directServer) listenTLS() *tls.Config {
 	return &tls.Config{
 		MinVersion:             tls.VersionTLS13,
+		GetConfigForClient:     d.nf1ListenTLS,
 		GetCertificate:         func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return d.org.Certificate() },
 		ClientAuth:             tls.RequireAnyClientCert,
 		SessionTicketsDisabled: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
+			if d.org == nil {
+				return errors.New("direct path: no organisation direct service")
+			}
 			_, err := d.org.CheckClient(cs.PeerCertificates, d.groups, time.Now())
 			return err
 		},
@@ -126,6 +136,9 @@ func (d *directServer) servedPeer(q *quic.Conn) (string, error) {
 // outlive its sessions, which holdAdmission cuts (nfltr direct-paths doc
 // "Lane REVOKEDIRECT"; TestDirectRevokedClientCutOnEveryPath).
 func (d *directServer) holdConn(q *quic.Conn, name string) {
+	if isNF1SNI(q.ConnectionState().TLS.ServerName) {
+		return // a capability address's: no admission to end (its sessions end with the serving process)
+	}
 	certs := q.ConnectionState().TLS.PeerCertificates
 	cut := func() { go d.closeAfterSessions(q, name) }
 	changed := d.org.Changed() // before the check: a change after it is seen
@@ -171,12 +184,15 @@ func (d *directServer) closeAfterSessions(q *quic.Conn, name string) {
 
 // register makes s movable until it ends.
 func (d *directServer) register(c *pathswitch.Conn, key []byte) {
-	s := &directSession{c: c, key: key}
+	d.registerSession(&directSession{c: c, key: key})
+}
+
+func (d *directServer) registerSession(s *directSession) {
 	d.mu.Lock()
 	d.sessions[s] = struct{}{}
 	d.mu.Unlock()
 	go func() {
-		<-c.Done()
+		<-s.c.Done()
 		d.mu.Lock()
 		delete(d.sessions, s)
 		d.mu.Unlock()
@@ -209,11 +225,27 @@ func (d *directServer) handshaking() func() {
 // OPEN names had its client's handshake done, so its handshake here was
 // under way and ends within that bound.
 func (d *directServer) find(o pathswitch.Open, qk []byte) *directSession {
+	return d.findBy(tokenMatch(o, qk))
+}
+
+// tokenMatch matches the session whose client token for o's epoch, bound
+// to qk, o carries.
+func tokenMatch(o pathswitch.Open, qk []byte) func(*directSession) bool {
+	return func(s *directSession) bool {
+		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) {
+			return true
+		}
+		return false
+	}
+}
+
+// findBy is the registered session match takes, waiting as find does.
+func (d *directServer) findBy(match func(*directSession) bool) *directSession {
 	var bound <-chan time.Time
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for {
-		if s := d.matchLocked(o, qk); s != nil || d.pending == 0 {
+		if s := d.matchLocked(match); s != nil || d.pending == 0 {
 			return s
 		}
 		if bound == nil {
@@ -236,10 +268,10 @@ func (d *directServer) find(o pathswitch.Open, qk []byte) *directSession {
 	}
 }
 
-// matchLocked is find's match; d.mu held.
-func (d *directServer) matchLocked(o pathswitch.Open, qk []byte) *directSession {
+// matchLocked is findBy's match; d.mu held.
+func (d *directServer) matchLocked(match func(*directSession) bool) *directSession {
 	for s := range d.sessions {
-		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) {
+		if match(s) {
 			return s
 		}
 	}
@@ -314,7 +346,7 @@ func (d *directServer) controlSession(s net.Conn, org Org, groups []string, bind
 	}
 	_ = tc.SetDeadline(time.Now().Add(directControlBound))
 	defer tc.Close() //nolint:errcheck
-	if err := d.control(tc, relay, bind.agent); err != nil {
+	if err := d.control(tc, relay, bind.agent, func(s string) DirectMode { return d.modes[s] }); err != nil {
 		logger.Info("direct path: control exchange ended", "error", err)
 	}
 }
@@ -373,14 +405,15 @@ const (
 // reflexive candidate is relay's answer and its QAD names relay, the one
 // that carried this exchange: another relay's answer is never added (under
 // an endpoint-dependent NAT it would be wrong, else a duplicate). agent is
-// this agent's name, which the offer carries.
-func (d *directServer) control(c net.Conn, relay *qadTarget, agent string) error {
+// this agent's name, which the offer carries; modeOf the mode of the
+// service the request names (a capability address's exchange: its own).
+func (d *directServer) control(c net.Conn, relay *qadTarget, agent string, modeOf func(string) DirectMode) error {
 	r := bufio.NewReader(io.LimitReader(c, 8<<10))
 	var req directRequest
 	if err := readJSONLine(r, &req); err != nil {
 		return err
 	}
-	mode := d.modes[req.Service]
+	mode := modeOf(req.Service)
 	enc := json.NewEncoder(c)
 	if mode == DirectOff {
 		return enc.Encode(directOffer{Error: reasonOff})

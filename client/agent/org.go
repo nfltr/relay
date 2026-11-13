@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/nfltr/link/peerlink"
-	"github.com/nfltr/relay/client/nf1"
 	"github.com/nfltr/relay/client/tlsend"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 )
@@ -236,9 +235,9 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 // listener's rendezvous answer, pinned TLS and proof on s (nf1.Listener),
 // then the plaintext bridged to target. A refused client's target gets
 // only a connection that closes: no byte of it is read or written.
-func serveNF1(ctx context.Context, s, target net.Conn, l *nf1.Listener, logger *slog.Logger) {
+func serveNF1(ctx context.Context, s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	hctx, cancel := context.WithTimeout(ctx, e2eeHeaderTimeout)
-	tc, err := l.Accept(hctx, s)
+	tc, err := p.nf1.Accept(hctx, s)
 	cancel()
 	if err != nil {
 		logger.Debug("nf1: session refused", "error", err)

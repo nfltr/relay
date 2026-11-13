@@ -147,6 +147,8 @@ type directPair struct {
 	fails   int
 	next    time.Time
 	punched time.Time // the last punch's start
+	nf1     *NF1Route // a capability address's pair (direct_nf1.go); nil: organisation mode
+	sni     string    // ... the server name of its last punch (the punching session's); mu
 }
 
 // directBackoff is the wait after the nth failed punch toward a pair (at
@@ -500,6 +502,9 @@ func (s *DirectSession) punch(p *directPair) string {
 	}
 	p.cands = theirs
 	p.refused.Store(false)
+	if p.nf1 != nil {
+		p.sni = nf1SNI(s.key)
+	}
 	q, err := s.d.dialPair(ctx, p)
 	if err != nil {
 		if p.refused.Load() {
@@ -546,6 +551,9 @@ func (d *DirectClient) dialPair(ctx context.Context, p *directPair) (*quic.Conn,
 // session named (BIND:direct.cert, BIND:direct.name) whatever the address
 // it came from (the relay chose it).
 func (d *DirectClient) punchTLS(p *directPair) *tls.Config {
+	if p.nf1 != nil {
+		return d.nf1PunchTLS(p)
+	}
 	return &tls.Config{
 		MinVersion:           tls.VersionTLS13,
 		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return d.cfg.Machine.Certificate() },
@@ -581,6 +589,9 @@ const groupControlTries = dataplane.MaxExclude + 4
 // another machine than the session's refused and excluded from the next
 // open (BIND:direct.name: the relay picks, it never chooses who answers).
 func (d *DirectClient) control(ctx context.Context, p *directPair) (*tls.Conn, error) {
+	if p.nf1 != nil {
+		return d.nf1Control(ctx, p)
+	}
 	if r := p.routeOf(); r != "" {
 		return d.handshake(ctx, func() (net.Conn, error) { return d.cfg.Relayed(ctx, r) }, d.controlTLS(r, p.machine))
 	}
@@ -702,7 +713,9 @@ func (s *DirectSession) fallback(epoch uint64, _ error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		var rs net.Conn
 		err := errNoOpen // no route: a group dial before its first exchange; the detach bound ends the session
-		if r := pair.routeOf(); r != "" {
+		if pair.nf1 != nil {
+			rs, err = s.d.nf1Open(ctx, pair, nf1MarkAttach)
+		} else if r := pair.routeOf(); r != "" {
 			rs, err = s.d.cfg.Relayed(ctx, r)
 		}
 		cancel()

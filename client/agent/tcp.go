@@ -834,6 +834,11 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 					continue
 				}
 				go p.direct.serveService(newSessionConn(t, id, q), p.bind, p.relay, logger)
+			case sessionNF1Direct:
+				if answer && t.answerOpen(id, q) != nil {
+					continue
+				}
+				go serveNF1Direct(ctx, newSessionConn(t, id, q), p, logger)
 			default:
 				go func() {
 					conn, reason, dialErr := dialTarget(ctx, p.network, p.target)
@@ -857,7 +862,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 						return
 					}
 					if p.kind == sessionNF1 {
-						serveNF1(ctx, newSessionConn(t, id, q), conn, p.nf1, logger)
+						serveNF1(ctx, newSessionConn(t, id, q), conn, p, logger)
 						return
 					}
 					t.pump(id, q, conn)

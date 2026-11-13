@@ -25,12 +25,13 @@ import (
 type sessionKind int
 
 const (
-	sessionRaw     sessionKind = iota // a TCP connection to the target
-	sessionE2EE                       // TLS ended here, proxied to the backend
-	sessionHTTP                       // the HTTP tunnel (dataplane.HTTPSessionTarget)
-	sessionE2EETCP                    // organisation TLS ended here, bytes to a tcp service's target
-	sessionDirect                     // the reserved DirectServiceName, served in process
-	sessionNF1                        // a capability address's listener here, bytes to a tcp service's target
+	sessionRaw       sessionKind = iota // a TCP connection to the target
+	sessionE2EE                         // TLS ended here, proxied to the backend
+	sessionHTTP                         // the HTTP tunnel (dataplane.HTTPSessionTarget)
+	sessionE2EETCP                      // organisation TLS ended here, bytes to a tcp service's target
+	sessionDirect                       // the reserved DirectServiceName, served in process
+	sessionNF1                          // a capability address's listener here, bytes to a tcp service's target
+	sessionNF1Direct                    // ... whose listener takes direct paths: the target dialled only for a session, after its first byte (direct_nf1.go)
 )
 
 // sessionPlan is how one session is served.
@@ -97,6 +98,10 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 			// A capability address: an E2EE session only (resolve refused
 			// a plain one); its listener's TLS, never the tunnel's.
 			p.kind, p.nf1, p.e2ee = sessionNF1, svc.nf1, nil
+			if svc.nf1.TakesDirect() && targets.services.direct != nil {
+				p.kind, p.direct, p.relay = sessionNF1Direct, targets.services.direct, targets.relayQAD()
+				p.bind = serviceBind{agent: targets.agent, service: open.GetTargetAddr()}
+			}
 			return p, nil
 		}
 		if svc.org != nil {
@@ -238,6 +243,12 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 			return
 		}
 		p.direct.serveService(s, p.bind, p.relay, l.logger)
+	case sessionNF1Direct:
+		if a.accept() != nil {
+			_ = s.Close()
+			return
+		}
+		serveNF1Direct(l.ctx, s, p, l.logger)
 	default:
 		target, reason, err := dialTarget(l.ctx, p.network, p.target)
 		if err != nil {
@@ -258,7 +269,7 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 			return
 		}
 		if p.kind == sessionNF1 {
-			serveNF1(l.ctx, s, target, p.nf1, l.logger)
+			serveNF1(l.ctx, s, target, p, l.logger)
 			return
 		}
 		_ = peerlink.Join(s, target)

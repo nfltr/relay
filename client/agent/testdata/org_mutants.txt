@@ -41,3 +41,6 @@ publish-not-in-cert | service_alpn.go | 	if !slices.Contains(certGroups(cert), s
 # exclusion of the other instances.
 group-control-no-name | direct_client.go | 				_, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, p.machine, time.Now()) | 				_, err := time.Now(), error(nil) | TestDirectGroupDialGoesDirectToItsInstance
 group-control-no-exclude | direct_client.go | 		if other != "" && !slices.Contains(exclude, other) && len(exclude) < dataplane.MaxExclude { | 		if other != "" && !slices.Contains(exclude, other) && false { | TestDirectGroupDialGoesDirectToItsInstance
+# nf1 direct paths (direct_nf1.go; cap_address.pv queries 15-18): the
+# client's pin of the direct answer's key.
+nf1-direct-no-pin | direct_nf1.go | 			if err := addr.VerifyConnection(cs); err != nil { | 			if _, err := addr, error(nil); err != nil { | TestNF1DirectModelBindings

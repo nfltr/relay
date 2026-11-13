@@ -17,6 +17,11 @@
 //     capaddr.Admit with its own address's secret (BIND:cap.service) and
 //     closes on a refusal;
 //  4. server -> client inside TLS: one byte, Admitted. Then the service.
+//
+// A listener WithDirect signs the hints HintDirect: its sessions may move
+// to a direct path, the client's first byte after the answer then picking
+// a plain session, a framed one, a control exchange or a re-attach
+// (client/agent direct_nf1.go; nfltr docs/decisions/nf1-direct-2026-11-14.md).
 package nf1
 
 import (
@@ -35,6 +40,16 @@ import (
 
 	"github.com/nfltr/relay/client/capaddr"
 )
+
+// HintDirect is the rendezvous hints of a listener that takes direct
+// paths (nfltr docs/decisions/nf1-direct-2026-11-14.md H1): the record
+// signs it, so a client frames its session for them only when this
+// listener said so (cap_address.pv mutant hint-unbound).
+const HintDirect = "d1"
+
+// TakesDirect reports whether checked hints (CheckAnswer accepted them)
+// say the listener takes direct paths.
+func TakesDirect(hints []byte) bool { return string(hints) == HintDirect }
 
 // Admitted is the server's verdict byte once Admit accepted the proof.
 const Admitted = 0x01
@@ -55,10 +70,12 @@ var ErrAnswer = errors.New("nf1: no rendezvous answer")
 // Listener serves one capability address: its key, certificate, signed
 // record and secret. Safe for concurrent Accepts.
 type Listener struct {
-	addr capaddr.Address
-	spki []byte
-	rec  []byte
-	cfg  *tls.Config
+	addr  capaddr.Address
+	key   ed25519.PrivateKey
+	spki  []byte
+	rec   []byte
+	hints []byte
+	cfg   *tls.Config
 }
 
 // Mint draws a fresh Ed25519 key and an address for it at relay (the host
@@ -107,11 +124,31 @@ func NewListener(addr capaddr.Address, key ed25519.PrivateKey) (*Listener, error
 		Certificates:           []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
 		SessionTicketsDisabled: true, // every session shows the certificate (README environment assumptions)
 	}
-	return &Listener{addr: addr, spki: spki, rec: rec, cfg: cfg}, nil
+	return &Listener{addr: addr, key: key, spki: spki, rec: rec, cfg: cfg}, nil
 }
 
 // Address is the address the listener serves.
 func (l *Listener) Address() capaddr.Address { return l.addr }
+
+// WithDirect is a copy of l whose rendezvous answer says it takes direct
+// paths (HintDirect, signed): the services table makes it for a service
+// with a direct mode.
+func (l *Listener) WithDirect() (*Listener, error) {
+	rec, err := capaddr.SignRecord(l.key, l.addr.Relay, l.addr.RID, []byte(HintDirect))
+	if err != nil {
+		return nil, err
+	}
+	c := *l
+	c.rec, c.hints = rec, []byte(HintDirect)
+	return &c, nil
+}
+
+// TakesDirect reports whether l's answer says it takes direct paths.
+func (l *Listener) TakesDirect() bool { return TakesDirect(l.hints) }
+
+// Certificate is the listener's certificate (the address's key), which a
+// direct connection presents too (BIND:nf1direct.pin).
+func (l *Listener) Certificate() tls.Certificate { return l.cfg.Certificates[0] }
 
 // Accept runs the server's side of steps 1-4 on conn, a session the relay
 // routed to this address: the TLS stream of an admitted client, or an
@@ -129,9 +166,22 @@ func (l *Listener) Accept(ctx context.Context, conn net.Conn) (net.Conn, error) 
 }
 
 func (l *Listener) accept(ctx context.Context, conn net.Conn) (net.Conn, error) {
-	if _, err := conn.Write(appendAnswer(nil, l.spki, l.rec, nil)); err != nil {
+	if err := l.WriteAnswer(conn); err != nil {
 		return nil, err
 	}
+	return l.Admit(ctx, conn)
+}
+
+// WriteAnswer writes the rendezvous answer frame (step 1) to conn.
+func (l *Listener) WriteAnswer(conn net.Conn) error {
+	_, err := conn.Write(appendAnswer(nil, l.spki, l.rec, l.hints))
+	return err
+}
+
+// Admit runs steps 2-4 at the server on conn, its answer written: the TLS
+// stream of an admitted client, or an error (conn is the caller's to
+// close). It sets no deadline (Accept bounds it).
+func (l *Listener) Admit(ctx context.Context, conn net.Conn) (*tls.Conn, error) {
 	tc := tls.Server(conn, l.cfg)
 	if err := tc.HandshakeContext(ctx); err != nil {
 		return nil, err
@@ -169,6 +219,16 @@ func Handshake(ctx context.Context, conn net.Conn, addr capaddr.Address) (net.Co
 }
 
 func handshake(ctx context.Context, conn net.Conn, addr capaddr.Address) (net.Conn, error) {
+	if _, err := ReadAnswer(conn, addr); err != nil {
+		return nil, err
+	}
+	return ClientTLS(ctx, conn, addr)
+}
+
+// ReadAnswer reads the rendezvous answer frame (step 1) from conn and
+// returns its hints once addr.CheckAnswer accepted them: ErrAnswer,
+// capaddr.ErrPin or ErrRendezvous otherwise. It sets no deadline.
+func ReadAnswer(conn net.Conn, addr capaddr.Address) ([]byte, error) {
 	spki, rec, hints, err := readAnswer(conn)
 	if err != nil {
 		return nil, err
@@ -176,6 +236,14 @@ func handshake(ctx context.Context, conn net.Conn, addr capaddr.Address) (net.Co
 	if err := addr.CheckAnswer(spki, rec, hints); err != nil {
 		return nil, err
 	}
+	return hints, nil
+}
+
+// ClientTLS runs steps 2-4 at the client on conn, the answer read: the
+// TLS stream to the admitted service, or capaddr.ErrPin, ErrTLS, ErrProof
+// or a connection error (conn is the caller's to close). It sets no
+// deadline.
+func ClientTLS(ctx context.Context, conn net.Conn, addr capaddr.Address) (*tls.Conn, error) {
 	tc := tls.Client(conn, &tls.Config{
 		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 		InsecureSkipVerify: true, // #nosec G402 -- the pin replaces the CA: VerifyConnection
