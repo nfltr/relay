@@ -48,6 +48,9 @@ func TestNewServiceTableValidates(t *testing.T) {
 		"http ftp":       {{Name: "web", Kind: agentservices.HTTP, Target: "ftp://x/"}},
 		"unknown kind":   {{Name: "x", Kind: "udp", Target: "a:1"}},
 		"unix relative":  {{Name: "db", Kind: agentservices.TCP, Target: "unix:db.sock"}},
+		"public default": {{Name: "mc", Kind: agentservices.TCP, Target: "a:1", Public: true}},
+		"public e2ee":    {{Name: "mc", Kind: agentservices.TCP, E2EE: agentservices.E2EEOn, Target: "a:1", Public: true}},
+		"public http":    {{Name: "mc", Kind: agentservices.HTTP, E2EE: agentservices.E2EEOff, Target: "http://a:1", Public: true}},
 	} {
 		if _, err := NewServiceTable(svcs); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -56,6 +59,10 @@ func TestNewServiceTableValidates(t *testing.T) {
 	tab, err := NewServiceTable([]Service{{Name: "web", Kind: agentservices.HTTP, Target: "http://127.0.0.1:3000"}, {Name: "db", Kind: agentservices.TCP, Target: "127.0.0.1:5432"}})
 	if err != nil || agentservices.Format(tab.decls) != "web=http,db=tcp" {
 		t.Fatalf("%v %v", err, tab.decls)
+	}
+	pub, err := NewServiceTable([]Service{{Name: "mc", Kind: agentservices.TCP, E2EE: agentservices.E2EEOff, Target: "127.0.0.1:25565", Public: true}})
+	if err != nil || agentservices.Format(pub.decls) != "mc=tcp+plain;public" {
+		t.Fatalf("public: %v %v", err, pub.decls)
 	}
 	if err := tab.RequireSharePolicy("db", "swift-bay", SharePolicy{BasicAuth: "a:b"}); err == nil {
 		t.Error("share policy on a tcp service accepted")
