@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nfltr/link/peerlink"
+	"github.com/nfltr/relay/client/nf1"
 	"github.com/nfltr/relay/client/tlsend"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 )
@@ -137,8 +139,8 @@ func checkOrgService(s Service) error {
 	switch {
 	case s.Org == nil && len(s.AllowGroups) > 0:
 		return fmt.Errorf("service %q: allow groups need the organisation (Org)", s.Name)
-	case s.Org == nil && s.Kind == agentservices.TCP && s.E2EE == agentservices.E2EEOn:
-		return fmt.Errorf("service %q: e2ee %q needs organisation mode (Org and at least one allow group)", s.Name, agentservices.E2EEOn)
+	case s.Org == nil && s.NF1 == nil && s.Kind == agentservices.TCP && s.E2EE == agentservices.E2EEOn:
+		return fmt.Errorf("service %q: e2ee %q needs organisation mode (Org and at least one allow group) or a capability address (NF1)", s.Name, agentservices.E2EEOn)
 	case s.Org == nil:
 		return nil
 	case s.Kind != agentservices.TCP || s.E2EE != agentservices.E2EEOn:
@@ -227,5 +229,21 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 			_ = tc.Reset()
 			_ = target.Close()
 		}, done)
+	_ = peerlink.Join(tc, target)
+}
+
+// serveNF1 serves a session of a service under a capability address: the
+// listener's rendezvous answer, pinned TLS and proof on s (nf1.Listener),
+// then the plaintext bridged to target. A refused client's target gets
+// only a connection that closes: no byte of it is read or written.
+func serveNF1(ctx context.Context, s, target net.Conn, l *nf1.Listener, logger *slog.Logger) {
+	hctx, cancel := context.WithTimeout(ctx, e2eeHeaderTimeout)
+	tc, err := l.Accept(hctx, s)
+	cancel()
+	if err != nil {
+		logger.Debug("nf1: session refused", "error", err)
+		_ = target.Close()
+		return
+	}
 	_ = peerlink.Join(tc, target)
 }

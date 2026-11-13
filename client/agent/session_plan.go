@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/nfltr/link/peerlink"
+	"github.com/nfltr/relay/client/nf1"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/dataplane"
@@ -29,6 +30,7 @@ const (
 	sessionHTTP                       // the HTTP tunnel (dataplane.HTTPSessionTarget)
 	sessionE2EETCP                    // organisation TLS ended here, bytes to a tcp service's target
 	sessionDirect                     // the reserved DirectServiceName, served in process
+	sessionNF1                        // a capability address's listener here, bytes to a tcp service's target
 )
 
 // sessionPlan is how one session is served.
@@ -44,6 +46,7 @@ type sessionPlan struct {
 	bind            serviceBind    // ... the service protocols it accepts (service_alpn.go)
 	direct          *directServer  // ... the table's direct paths (nil: none); a sessionDirect's server
 	relay           *qadTarget     // ... a sessionDirect's, or a direct service's: the QAD of the relay its tunnel is on (nil: none offered)
+	nf1             *nf1.Listener  // a sessionNF1's
 }
 
 // ErrE2EENoFixedTarget: Config.TCPE2EEOnly without Config.TCPForwardAddr.
@@ -88,6 +91,12 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 			p.kind, p.org, p.groups, p.direct = sessionDirect, svc.org, svc.groups, targets.services.direct
 			p.relay = targets.relayQAD()
 			p.bind = serviceBind{agent: targets.agent, service: DirectServiceName}
+			return p, nil
+		}
+		if svc.nf1 != nil {
+			// A capability address: an E2EE session only (resolve refused
+			// a plain one); its listener's TLS, never the tunnel's.
+			p.kind, p.nf1, p.e2ee = sessionNF1, svc.nf1, nil
 			return p, nil
 		}
 		if svc.org != nil {
@@ -246,6 +255,10 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 		}
 		if p.kind == sessionE2EETCP {
 			serveE2EETCP(s, target, p, l.logger)
+			return
+		}
+		if p.kind == sessionNF1 {
+			serveNF1(l.ctx, s, target, p.nf1, l.logger)
 			return
 		}
 		_ = peerlink.Join(s, target)

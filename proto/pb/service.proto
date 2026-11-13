@@ -285,6 +285,13 @@ message TCPData {
   // lowercase DNS label (agentservices.ValidLabel), none repeated; an open
   // with more or a malformed one is refused (dataplane.ParseOpenHeader).
   repeated string exclude = 13;
+  // nf1_rid, on a client's open of a capability address (nf1...), is the
+  // address's rendezvous id: exactly 16 bytes. Such an open names no
+  // agent_id or target_addr and asks e2ee and answer; the relay routes it
+  // to the one live agent whose service declaration carries the rid
+  // (agentservices ";nf1="), and refuses anything else as an unknown rid
+  // (nfltr docs/decisions/nf1-rendezvous-2026-11-13.md).
+  bytes nf1_rid = 14;
 }
 
 // ---------------------------------------------------------------------------

@@ -575,6 +575,16 @@ the key's DER SubjectPublicKeyInfo (`nf1-pin`) or the TLS exporter
 over `nf1-rdv | len(R) | R | rid | hints`. Vectors:
 `client/capaddr/testdata/vectors.json`.
 
+The wire (lane NF1RDV, package `client/nf1`; nfltr
+`docs/decisions/nf1-rendezvous-2026-11-13.md`): REGISTER is the service's
+declaration on the agent's session (`agentservices` `;nf1=<rid hex>`), so
+the relay gets `rid` at registration and `pk`, `rec` only on an open, which
+the model's attacker can make (it knows `rid`); the answer is the agent's
+first bytes in the routed session (`"nf1a"` and three length-prefixed
+fields), which every relay on the way may replace, as in the model; after
+`Admit` the server sends one verdict byte inside the pinned TLS. The model
+is unchanged: each step gives the attacker no more than the model's.
+
 The attacker owns every relay, answers every open, opens sessions of its
 own to any `rid`, and holds a second address (A2) of the same server and
 key. TLS 1.3 as in `e2ee_tcp.pv`; the exporter is `h((k, ns, pk))`
@@ -668,5 +678,7 @@ none").
 | wg_exit.pv | proto/wire/wgwire/wgwire.go |
 | cap_address.pv | client/capaddr/capaddr.go |
 | cap_address.pv | client/capaddr/capaddr_bindings_test.go |
+| cap_address.pv | client/nf1/nf1.go |
+| cap_address.pv | client/nf1/dial.go |
 | p2p_e2e.pv | client/p2p/e2e.go |
 | p2p_e2e.pv | client/p2p/rtcdata.go |

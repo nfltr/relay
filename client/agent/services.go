@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/nfltr/quic-go"
+	"github.com/nfltr/relay/client/nf1"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentservices"
@@ -64,6 +65,13 @@ type Service struct {
 	// relayed only, no address of this machine sent). The table then
 	// serves DirectServiceName too.
 	Direct DirectMode
+	// NF1 serves the service under a capability address (nf1...): a tcp
+	// service with E2EE On and no Org, Group, AllowGroups or Direct. Its
+	// sessions run the listener's rendezvous answer, pinned TLS and proof
+	// before one byte reaches Target (package nf1; nfltr
+	// docs/decisions/nf1-rendezvous-2026-11-13.md); the relay finds the
+	// service by the address's rendezvous id, declared with it.
+	NF1 *nf1.Listener
 }
 
 // ServiceTable is the services an agent serves under its identity: the
@@ -120,6 +128,7 @@ type tableService struct {
 	org     Org            // Service.Org: organisation mode; nil: no E2EE tcp session
 	groups  []string       // Service.AllowGroups
 	group   string         // Service.Group: published under it
+	nf1     *nf1.Listener  // Service.NF1: served under a capability address
 }
 
 // NewServiceTable validates services and returns their table.
@@ -157,7 +166,10 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if err := checkPublish(s); err != nil {
 			return nil, err
 		}
-		e.org, e.groups, e.group = s.Org, s.AllowGroups, s.Group
+		if s.NF1 != nil && (s.Kind != agentservices.TCP || s.E2EE != agentservices.E2EEOn || s.Org != nil || s.Group != "" || len(s.AllowGroups) > 0 || s.Direct != DirectOff) {
+			return nil, fmt.Errorf("service %q: a capability address (nf1) needs a tcp service with e2ee on and no organisation, group or direct", s.Name)
+		}
+		e.org, e.groups, e.group, e.nf1 = s.Org, s.AllowGroups, s.Group, s.NF1
 		switch s.Kind {
 		case agentservices.TCP:
 			e.network, e.addr = "tcp", s.Target
@@ -179,7 +191,11 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 			return nil, fmt.Errorf("service %q: unknown kind %q", s.Name, s.Kind)
 		}
 		t.byName[s.Name] = e
-		t.decls = append(t.decls, agentservices.Decl{Name: s.Name, Kind: s.Kind, E2EE: s.E2EE, Group: s.Group})
+		d := agentservices.Decl{Name: s.Name, Kind: s.Kind, E2EE: s.E2EE, Group: s.Group}
+		if s.NF1 != nil {
+			d.NF1 = s.NF1.Address().RID
+		}
+		t.decls = append(t.decls, d)
 	}
 	if err := t.addDirect(services); err != nil {
 		return nil, err
@@ -323,11 +339,11 @@ func (t *ServiceTable) resolve(target string, e2ee, terminatesE2EE, connect bool
 	switch {
 	case e == nil:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_UNKNOWN_SERVICE, "no such service")
-	case e2ee && !terminatesE2EE && e.cert == nil && e.org == nil:
+	case e2ee && !terminatesE2EE && e.cert == nil && e.org == nil && e.nf1 == nil:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "the agent does not terminate end-to-end TLS")
 	case e2ee && e.kind == agentservices.TCP && !connect:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "an end-to-end encrypted share session needs an http service")
-	case e2ee && e.kind == agentservices.TCP && e.org == nil:
+	case e2ee && e.kind == agentservices.TCP && e.org == nil && e.nf1 == nil:
 		// Only organisation mode is end to end encrypted (E2EE Off, or a
 		// Default service the relay's policy made plain).
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "the service is not end-to-end encrypted (not in organisation mode)")

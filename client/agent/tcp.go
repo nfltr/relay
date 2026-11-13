@@ -856,6 +856,10 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 						serveE2EETCP(newSessionConn(t, id, q), conn, p, logger)
 						return
 					}
+					if p.kind == sessionNF1 {
+						serveNF1(ctx, newSessionConn(t, id, q), conn, p.nf1, logger)
+						return
+					}
 					t.pump(id, q, conn)
 				}()
 			}

@@ -975,7 +975,14 @@ type TCPData struct {
 	// another instance of the name. At most dataplane.MaxExclude refs, each a
 	// lowercase DNS label (agentservices.ValidLabel), none repeated; an open
 	// with more or a malformed one is refused (dataplane.ParseOpenHeader).
-	Exclude       []string `protobuf:"bytes,13,rep,name=exclude,proto3" json:"exclude,omitempty"`
+	Exclude []string `protobuf:"bytes,13,rep,name=exclude,proto3" json:"exclude,omitempty"`
+	// nf1_rid, on a client's open of a capability address (nf1...), is the
+	// address's rendezvous id: exactly 16 bytes. Such an open names no
+	// agent_id or target_addr and asks e2ee and answer; the relay routes it
+	// to the one live agent whose service declaration carries the rid
+	// (agentservices ";nf1="), and refuses anything else as an unknown rid
+	// (nfltr docs/decisions/nf1-rendezvous-2026-11-13.md).
+	Nf1Rid        []byte `protobuf:"bytes,14,opt,name=nf1_rid,json=nf1Rid,proto3" json:"nf1_rid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1101,6 +1108,13 @@ func (x *TCPData) GetExclude() []string {
 	return nil
 }
 
+func (x *TCPData) GetNf1Rid() []byte {
+	if x != nil {
+		return x.Nf1Rid
+	}
+	return nil
+}
+
 var File_service_proto protoreflect.FileDescriptor
 
 const file_service_proto_rawDesc = "" +
@@ -1185,7 +1199,7 @@ const file_service_proto_rawDesc = "" +
 	"\vstatus_code\x18\a \x01(\x05R\n" +
 	"statusCode\x12#\n" +
 	"\rstatus_detail\x18\b \x01(\tR\fstatusDetail\x12\"\n" +
-	"\fcontinuation\x18\t \x01(\bR\fcontinuation\"\xe6\x02\n" +
+	"\fcontinuation\x18\t \x01(\bR\fcontinuation\"\xff\x02\n" +
 	"\aTCPData\x12\x1d\n" +
 	"\n" +
 	"session_id\x18\x01 \x01(\tR\tsessionId\x12\x19\n" +
@@ -1203,7 +1217,8 @@ const file_service_proto_rawDesc = "" +
 	"clientAddr\x12\x14\n" +
 	"\x05abort\x18\v \x01(\bR\x05abort\x121\n" +
 	"\x06caller\x18\f \x01(\v2\x19.rpcserver.CallerIdentityR\x06caller\x12\x18\n" +
-	"\aexclude\x18\r \x03(\tR\aexclude*S\n" +
+	"\aexclude\x18\r \x03(\tR\aexclude\x12\x17\n" +
+	"\anf1_rid\x18\x0e \x01(\fR\x06nf1Rid*S\n" +
 	"\x04Move\x12\x14\n" +
 	"\x10MOVE_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eMOVE_RECONNECT\x10\x01\x12\x12\n" +

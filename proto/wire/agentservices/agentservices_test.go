@@ -105,3 +105,38 @@ func FuzzParse(f *testing.F) {
 		}
 	})
 }
+
+// TestParseNF1 is the capability address's registration
+// (nfltr docs/decisions/nf1-rendezvous-2026-11-13.md section 1): ";nf1=<rid
+// hex>" on a tcp+e2ee service alone, a non-zero rid, once per declaration.
+func TestParseNF1(t *testing.T) {
+	rid := [16]byte{1, 2, 3}
+	good := []Decl{{Name: "clip", Kind: TCP, E2EE: E2EEOn, NF1: rid}, {Name: "pg", Kind: TCP, E2EE: E2EEOn, Group: "db"}}
+	v := Format(good)
+	if v != "clip=tcp+e2ee;nf1=01020300000000000000000000000000,pg=tcp+e2ee;group=db" {
+		t.Fatalf("Format = %q", v)
+	}
+	got, err := Parse(v)
+	if err != nil || !slices.Equal(got, good) {
+		t.Fatalf("Parse(%q) = %v, %v", v, got, err)
+	}
+	if d, ok := FindNF1(got, rid); !ok || d.Name != "clip" {
+		t.Fatalf("FindNF1 = %v, %v", d, ok)
+	}
+	if _, ok := FindNF1(got, [16]byte{9}); ok {
+		t.Fatal("FindNF1 found another rid")
+	}
+	h := "01020300000000000000000000000000"
+	for _, v := range []string{
+		"a=tcp;nf1=" + h, "a=tcp+plain;nf1=" + h, "a=http;nf1=" + h,
+		"a=tcp+e2ee;nf1=", "a=tcp+e2ee;nf1=00000000000000000000000000000000", "a=tcp+e2ee;nf1=0102",
+		"a=tcp+e2ee;nf1=0102030000000000000000000000000G", "a=tcp+e2ee;nf1=0102030000000000000000000000000A",
+		"a=tcp+e2ee;nf1=" + h + "00", "a=tcp+e2ee;nf1=" + h + ";", "a=tcp+e2ee;group=db;nf1=" + h,
+		"a=tcp+e2ee;nf1=" + h + ";group=db", "a=tcp+e2ee;nf1=" + h + ";direct=on",
+		"a=tcp+e2ee;nf1=" + h + ",b=tcp+e2ee;nf1=" + h,
+	} {
+		if d, err := Parse(v); err == nil {
+			t.Errorf("Parse(%q) = %v, want an error", v, d)
+		}
+	}
+}

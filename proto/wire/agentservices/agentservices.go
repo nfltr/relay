@@ -12,6 +12,7 @@
 package agentservices
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -91,7 +92,16 @@ type Decl struct {
 	E2EE   E2EE
 	Group  string
 	Direct Direct
+	// NF1 is the rendezvous id of the capability address (nf1...) the
+	// service is served under, zero for none: a tcp+e2ee service with no
+	// group or direct attribute, each rid once per declaration (";nf1=" and
+	// 32 lowercase hex digits; nfltr docs/decisions/nf1-rendezvous-2026-11-13.md).
+	NF1 [RIDSize]byte
 }
+
+// RIDSize is the size of a capability address's rendezvous id
+// (relay client/capaddr.RIDSize).
+const RIDSize = 16
 
 // kindValue is the declaration's kind as written: "http", "tcp",
 // "tcp+e2ee" or "tcp+plain".
@@ -111,6 +121,9 @@ func (d Decl) value() string {
 	}
 	if d.Direct != DirectOff {
 		v += ";direct=" + string(d.Direct)
+	}
+	if d.NF1 != ([RIDSize]byte{}) {
+		v += ";nf1=" + hex.EncodeToString(d.NF1[:])
 	}
 	return v
 }
@@ -179,6 +192,7 @@ func Parse(v string) ([]Decl, error) {
 	}
 	var out []Decl
 	seen := map[string]bool{}
+	rids := map[[RIDSize]byte]bool{}
 	for entry := range strings.SplitSeq(v, ",") {
 		entry, attrs, hasAttrs := strings.Cut(entry, ";")
 		name, kind, ok := strings.Cut(entry, "=")
@@ -202,6 +216,12 @@ func Parse(v string) ([]Decl, error) {
 				return nil, err
 			}
 		}
+		if d.NF1 != ([RIDSize]byte{}) {
+			if rids[d.NF1] {
+				return nil, fmt.Errorf("service %q: nf1 rendezvous id declared twice", name)
+			}
+			rids[d.NF1] = true
+		}
 		out = append(out, d)
 	}
 	return out, nil
@@ -210,7 +230,10 @@ func Parse(v string) ([]Decl, error) {
 // parseAttrs reads the entry's attributes after its first ';' into d.
 func (d *Decl) parseAttrs(attrs string) error {
 	if d.Kind != TCP || d.E2EE != E2EEOn {
-		return fmt.Errorf("service %q: group and direct need a tcp+e2ee service (organisation mode)", d.Name)
+		return fmt.Errorf("service %q: group, direct and nf1 need a tcp+e2ee service", d.Name)
+	}
+	if v, ok := strings.CutPrefix(attrs, "nf1="); ok {
+		return d.parseNF1(v)
 	}
 	if v, ok := strings.CutPrefix(attrs, "group="); ok {
 		v, rest, more := strings.Cut(v, ";")
@@ -229,6 +252,30 @@ func (d *Decl) parseAttrs(attrs string) error {
 		return nil
 	}
 	return fmt.Errorf("service %q: invalid attributes %q (want ;group=<group> then ;direct=on|public)", d.Name, attrs)
+}
+
+// parseNF1 reads ";nf1=" 's value, the entry's only attribute: 32
+// lowercase hex digits, not all zero.
+func (d *Decl) parseNF1(v string) error {
+	b, err := hex.DecodeString(v)
+	if err != nil || len(b) != RIDSize || v != strings.ToLower(v) {
+		return fmt.Errorf("service %q: invalid nf1 rendezvous id (want %d lowercase hex digits)", d.Name, 2*RIDSize)
+	}
+	if d.NF1 = [RIDSize]byte(b); d.NF1 == ([RIDSize]byte{}) {
+		return fmt.Errorf("service %q: all-zero nf1 rendezvous id", d.Name)
+	}
+	return nil
+}
+
+// FindNF1 returns the declaration of the service served under the
+// capability address whose rendezvous id is rid.
+func FindNF1(decls []Decl, rid [RIDSize]byte) (Decl, bool) {
+	for _, d := range decls {
+		if rid != ([RIDSize]byte{}) && d.NF1 == rid {
+			return d, true
+		}
+	}
+	return Decl{}, false
 }
 
 // Find returns the declaration of the service named name.
