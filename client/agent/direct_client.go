@@ -363,7 +363,7 @@ func (s *DirectSession) loop(proof uint64) {
 			s.emit(PathEvent{Path: PathRelayed, Reason: reason})
 		}
 		s.pair.mu.Lock()
-		wait := time.Until(s.pair.next)
+		wait := max(time.Until(s.pair.next), 0) // a past (or no) backoff: try again, never wait for a move that will not come (a try that found the death before its notice: TestDirectPairDeathBacksOffWhateverItsNoticeOrder)
 		s.pair.mu.Unlock()
 		if s.c.Path() == PathDirect {
 			wait = -1 // until the direct path dies
