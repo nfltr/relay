@@ -140,3 +140,29 @@ func TestParseNF1(t *testing.T) {
 		}
 	}
 }
+
+func TestParsePublic(t *testing.T) {
+	good := []Decl{{Name: "mc", Kind: TCP, E2EE: E2EEOff, Public: true}, {Name: "db", Kind: TCP}}
+	v := Format(good)
+	if v != "mc=tcp+plain;public,db=tcp" {
+		t.Fatalf("Format = %q", v)
+	}
+	got, err := Parse(v)
+	if err != nil || !slices.Equal(got, good) {
+		t.Fatalf("Parse(%q) = %v, %v", v, got, err)
+	}
+	if d, ok := Find(got, "mc"); !ok || !d.Public {
+		t.Fatalf("Find = %v, %v", d, ok)
+	}
+	// A public service is plain tcp by declaration: never e2ee, http, a
+	// group, direct or an nf1 address, and the attribute stands alone.
+	for _, v := range []string{
+		"a=tcp;public", "a=tcp+e2ee;public", "a=http;public", "a=tcp+plain;public;public",
+		"a=tcp+plain;public=1", "a=tcp+plain;pub", "a=tcp+plain;group=db", "a=tcp+plain;public;direct=on",
+		"a=tcp+e2ee;group=db;public", "a=tcp+e2ee;on", "a=tcp+e2ee;group=db;on",
+	} {
+		if d, err := Parse(v); err == nil {
+			t.Errorf("Parse(%q) = %v, want an error", v, d)
+		}
+	}
+}
