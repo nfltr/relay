@@ -73,12 +73,40 @@
      proof-unbound             the proof without the exporter (caught only
                                with client-no-pin-check)
 
+   Direct paths (lane NF1DIRECT, nfltr docs/decisions/nf1-direct-2026-11-14.md):
+   the record's hints carry one fact, hintD ("d1": this listener takes
+   direct paths); the client acts on it only once the record covers it.
+   After admission the session may move to a direct QUIC connection
+   (link pathswitch below the session's TLS, the organisation's mechanism,
+   e2ee_tcp.pv 21-26): the attacker routes the client's punch wherever it
+   likes; whoever answers shows a key and a server random; the client takes
+   the connection only from the pinned key (BIND:nf1direct.pin) and only
+   with the agent's token; the agent binds the connection to a session only
+   on that session's client token. Tokens: h((k, qx, role, ep1)), k the
+   session key (its exporter), qx the QUIC exporter h((labQ, kd, dn, dpk)),
+   which covers the direct handshake's key as TLS 1.3's exporter does.
+   Queries 15-20; mutants:
+     hint-unbound              the client takes hints from the answer frame,
+                               not from what the record signs
+     direct-no-pin-check       the direct answer's key not compared to the
+                               pinned key (caught by 16 alone; by 15, 17,
+                               18 only with nf1-token-unbound, because the
+                               transcript-bound tokens refuse a middle)
+     nf1-token-unbound         the tokens without the QUIC exporter (holds
+                               alone: the pin keeps the middle out)
+     nf1-direct-no-token       the client does not check the agent's token
+     nf1-agent-no-token        the agent binds a direct connection to a
+                               session on the relay's word, no token
+
    Bindings (README "Bindings"): each has a refusal row in
    client/capaddr/capaddr_bindings_test.go:
      BIND:cap.pin         the answer's key and the TLS certificate's key, each against pinOf(sec, key)
      BIND:cap.secret      the proof: the address's secret over this session's exporter
      BIND:cap.service     the acceptor checks the proof with the secret of the address routed to it
-     BIND:cap.rendezvous  the answer: signed under the pinned key, over the tag, the relay opened at, rid and hints *)
+     BIND:cap.rendezvous  the answer: signed under the pinned key, over the tag, the relay opened at, rid and hints
+   and, for the direct phase (client/nf1 TestNF1DirectModelBindings, with
+   the organisation's direct.token, direct.quic, direct.role rows):
+     BIND:nf1direct.pin   the direct connection's key against the pinned key *)
 
 free c: channel.
 
@@ -99,6 +127,9 @@ const c2s, s2c, appData: bitstring.
 const answerPlain: bitstring.                 (* the relay's word: "this rid is plain" *)
 const noSecret: bitstring.                    (* an empty secret (address-secret-optional) *)
 const relayR: bitstring.                      (* the relay the server registered at, A1's and A2's *)
+const hintD: bitstring.                       (* hints "d1": the listener takes direct paths *)
+const labC, labS, labQ, ep1: bitstring.       (* the direct token's roles, the QUIC exporter's label, the attach epoch *)
+free dirData: bitstring [private].            (* what A1's client sends on a direct connection it took *)
 free rid1, rid2: bitstring.                   (* rendezvous ids: the relay learns them *)
 
 free skS: skey [private].                     (* the server's TLS key, A1's and A2's *)
@@ -132,10 +163,48 @@ event Admitted(bitstring, bitstring).                   (* rid of the acceptor, 
 event ServiceGot(bitstring, bitstring, bitstring).      (* rid of the acceptor, session key, bytes *)
 event AgentSent(bitstring, bitstring, bitstring).       (* rid of the acceptor, session key, response *)
 event PinGuessed.                                       (* the attacker produced A1's pin *)
+event ClientQUIC(bitstring, pkey).                      (* session key, the key the client's direct handshake ended at *)
+event ClientDirectOffer(bitstring, bitstring).          (* session key, QUIC exporter: the client's token sent *)
+event ClientDirect(bitstring, bitstring, pkey).         (* session key, QUIC exporter, the direct key: taken *)
+event AgentDirect(bitstring, bitstring, bitstring).     (* rid of the acceptor, session key, QUIC exporter: bound *)
+
+(* The QUIC exporter, and the tokens (nf1-token-unbound: without it). *)
+letfun qexp(kd: bitstring, dn: bitstring, x: pkey) = h((labQ, kd, dn, x)).
+letfun tok(k: bitstring, qx: bitstring, role: bitstring) = h((k, qx, role, ep1)). (* NOT:nf1-token-unbound *)
+letfun tok(k: bitstring, qx: bitstring, role: bitstring) = h((k, role, ep1)). (* ONLY:nf1-token-unbound *)
+
+(* A1's client's direct path for its session k, its pinned key rpk: the
+   candidates came inside TLS, but the attacker routes the punch, so
+   whoever it routes there answers with a key and a server random. *)
+let DirectClient(k: bitstring, rpk: pkey) =
+  in(c, (dpk: pkey, dn: bitstring));
+  if dpk = rpk then (* NOT:direct-no-pin-check *)
+  new kd: bitstring;
+  out(c, aenc((kd, dn), dpk));
+  let qx = qexp(kd, dn, dpk) in
+  event ClientQUIC(k, dpk);
+  event ClientDirectOffer(k, qx);
+  out(c, senc((labC, tok(k, qx, labC)), kd));
+  in(c, x: bitstring);
+  let (=labS, =tok(k, qx, labS)) = sdec(x, kd) in (* NOT:nf1-direct-no-token *)
+  event ClientDirect(k, qx, dpk);
+  out(c, senc(dirData, kd)).
+
+(* rid's agent: a direct connection under its key, bound to its admitted
+   session k only on that session's client token. *)
+let DirectAgent(rid: bitstring, k: bitstring) =
+  new dn: bitstring;
+  out(c, (pk(skS), dn));
+  in(c, ekd: bitstring);
+  let (kd: bitstring, =dn) = adec(ekd, skS) in
+  let qx = qexp(kd, dn, pk(skS)) in
+  in(c, x: bitstring);
+  let (=labC, =tok(k, qx, labC)) = sdec(x, kd) in (* NOT:nf1-agent-no-token *)
+  event AgentDirect(rid, k, qx);
+  out(c, senc((labS, tok(k, qx, labS)), kd)).
 
 (* The server registers rid at relay R (1). *)
-let Register(R: bitstring, rid: bitstring) =
-  new hints: bitstring;
+let Register(R: bitstring, rid: bitstring, hints: bitstring) =
   event Registered(R, rid, hints, pk(skS));
   out(c, (rid, pk(skS), sign((labRdv, R, rid, hints), skS))).
 
@@ -153,12 +222,13 @@ let Acceptor(rid: bitstring, sec: bitstring, other: bitstring, resp: bitstring) 
   let (=c2s, p: bitstring) = sdec(ep, k) in
   if accepts(p, sec, other, k, ns) then (* NOT:server-no-secret-check *)
   event Admitted(rid, k);
+  ( DirectAgent(rid, k) | (
   in(c, e: bitstring);
   let (=c2s, =appData, m: bitstring) = sdec(e, k) in
   event ServiceGot(rid, k, m);
   new r: bitstring;
   event AgentSent(rid, k, (r, resp));
-  out(c, senc((s2c, appData, (r, resp)), k)).
+  out(c, senc((s2c, appData, (r, resp)), k)) )).
 
 (* A1's client: knows only A1 = (relayR, rid, pin, sec). *)
 let Client(rid: bitstring, pin: bitstring, sec: bitstring) =
@@ -168,9 +238,11 @@ let Client(rid: bitstring, pin: bitstring, sec: bitstring) =
   out(c, (ru, rid, true));                              (* OPEN (2) *)
   in(c, answer: bitstring);
   if answer = answerPlain then (event ClientPlain(rid); out(c, payload)) else (* ONLY:downgrade-plain *)
-  let (rpk: pkey, rec: bitstring) = answer in           (* the rendezvous answer (3) *)
+  let (rpk: pkey, rec: bitstring, hu: bitstring) = answer in (* the rendezvous answer (3); hu the frame's hints field *)
   if pinOf(sec, rpk) = pin then (* NOT:rendezvous-any-key *)
-  let (=labRdv, rr: bitstring, =rid, hints: bitstring) = checksign(rec, rpk) in
+  let (=labRdv, rr: bitstring, =rid, hs: bitstring) = checksign(rec, rpk) in
+  let hints = hs in (* NOT:hint-unbound *)
+  let hints = hu in (* ONLY:hint-unbound *)
   if rr = ru then (* NOT:relay-substitutes-relay *)
   event ClientRdv(ru, rid, hints, rpk);
   in(c, (spk: pkey, ns: bitstring));                    (* TLS (4) *)
@@ -184,7 +256,8 @@ let Client(rid: bitstring, pin: bitstring, sec: bitstring) =
   out(c, senc((c2s, appData, payload), k));             (* (6) *)
   in(c, e: bitstring);
   let (=s2c, =appData, r: bitstring) = sdec(e, k) in
-  event ClientRecv(ru, rid, k, r).
+  event ClientRecv(ru, rid, k, r);
+  if hints = hintD then DirectClient(k, spk).
 
 (* 1, 2. session secrecy against every relay: A1's client's bytes, A1's
    service's answer (the latter is also: only holders of sec1 are admitted) *)
@@ -233,13 +306,35 @@ query k: bitstring; event(Admitted(rid1, k)).
 query k: bitstring, m: bitstring; event(ServiceGot(rid1, k, m)).
 (* expect false *)
 query ru: bitstring, rid: bitstring, k: bitstring, r: bitstring; event(ClientRecv(ru, rid, k, r)).
+(* 15. what A1's client sends on a direct connection it took reaches only
+   A1's server: the relay's routing cannot put another host there *)
+(* expect true *)
+query attacker(dirData).
+(* 16. the client's direct handshake ends only at the pinned key (mutant
+   direct-no-pin-check) *)
+(* expect true *)
+query k: bitstring, x: pkey; event(ClientQUIC(k, x)) ==> event(ServerKey(x)).
+(* 17. a direct connection the client takes is bound, once, by A1's agent
+   to the client's own session (mutants nf1-direct-no-token;
+   direct-no-pin-check with nf1-token-unbound) *)
+(* expect true *)
+query k: bitstring, qx: bitstring, x: pkey; inj-event(ClientDirect(k, qx, x)) ==> inj-event(AgentDirect(rid1, k, qx)).
+(* 18. A1's agent binds a direct connection to a session only for that
+   session's own client (mutant nf1-agent-no-token) *)
+(* expect true *)
+query k: bitstring, qx: bitstring; event(AgentDirect(rid1, k, qx)) ==> event(ClientDirectOffer(k, qx)).
+(* 19, 20. witnesses: the client takes a direct connection; A1's agent binds one *)
+(* expect false *)
+query k: bitstring, qx: bitstring, x: pkey; event(ClientDirect(k, qx, x)).
+(* expect false *)
+query k: bitstring, qx: bitstring; event(AgentDirect(rid1, k, qx)).
 
 process
   let s1 = secOf(sec1) in
   let pin1 = pinOf(s1, pk(skS)) in
   event ServerKey(pk(skS));
   out(c, pk(skS));
-  ( Register(relayR, rid1) | Register(relayR, rid2) |
+  ( Register(relayR, rid1, hintD) | Register(relayR, rid2, hintD) |
     (!Acceptor(rid1, s1, sec2, svcData1)) | (!Acceptor(rid2, sec2, s1, svcData2)) |
     (!Client(rid1, pin1, s1)) |
     (in(c, g: bitstring); if g = pin1 then event PinGuessed) )
