@@ -12,6 +12,7 @@
 package agentservices
 
 import (
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -317,4 +318,48 @@ func Lookup(decls []Decl, name string) Kind {
 		}
 	}
 	return ""
+}
+
+// RegHeader is the ConnectHTTP request metadata, beside Header, carrying
+// the registration proof of each capability address the declaration names
+// (relay client/capaddr.RegistrationProof): one value per nf1 rid,
+// FormatReg's. The relay checks each against its declaration
+// (capaddr.CheckRegistration) and drops it: it is never part of a Decl, a
+// record, the echo or a log (nfltr docs/decisions/nf1-risks-2026-11-14.md).
+const RegHeader = "x-nfltr-nf1-reg"
+
+// MaxRegProof bounds one registration proof (an Ed25519 one is 126 bytes).
+const MaxRegProof = 512
+
+// FormatReg is one RegHeader value: "<rid hex>:<proof, base64 raw URL>".
+func FormatReg(rid [RIDSize]byte, proof []byte) string {
+	return hex.EncodeToString(rid[:]) + ":" + base64.RawURLEncoding.EncodeToString(proof)
+}
+
+// ParseReg reads RegHeader's values: rid -> proof. It refuses a malformed
+// value, an all-zero rid, a rid twice, an empty or oversized proof and
+// more values than MaxServices. Whether each proof holds is the caller's
+// check.
+func ParseReg(vals []string) (map[[RIDSize]byte][]byte, error) {
+	if len(vals) > MaxServices {
+		return nil, fmt.Errorf("%s: more than %d values", RegHeader, MaxServices)
+	}
+	out := make(map[[RIDSize]byte][]byte, len(vals))
+	for _, v := range vals {
+		h, p, ok := strings.Cut(v, ":")
+		b, err := hex.DecodeString(h)
+		if !ok || err != nil || len(b) != RIDSize || h != strings.ToLower(h) || [RIDSize]byte(b) == ([RIDSize]byte{}) {
+			return nil, fmt.Errorf("%s: invalid rendezvous id in %q", RegHeader, v)
+		}
+		rid := [RIDSize]byte(b)
+		if _, dup := out[rid]; dup {
+			return nil, fmt.Errorf("%s: rendezvous id %s twice", RegHeader, h)
+		}
+		proof, err := base64.RawURLEncoding.DecodeString(p)
+		if err != nil || len(proof) == 0 || len(proof) > MaxRegProof {
+			return nil, fmt.Errorf("%s: invalid proof for %s", RegHeader, h)
+		}
+		out[rid] = proof
+	}
+	return out, nil
 }

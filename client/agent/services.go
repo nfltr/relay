@@ -345,6 +345,19 @@ func (t *ServiceTable) RequireSharePolicy(service, code string, p SharePolicy) e
 // relay (agentservices.Header): the direct-path service included.
 func (t *ServiceTable) Declaration() string { return agentservices.Format(t.decls) }
 
+// Registrations are the RegHeader values the table's capability addresses
+// are declared with (agentservices.FormatReg of each listener's proof),
+// one per address that has one; send them beside Declaration.
+func (t *ServiceTable) Registrations() []string {
+	var out []string
+	for _, d := range t.decls {
+		if l := t.byName[d.Name].nf1; l != nil && l.RegistrationProof() != nil {
+			out = append(out, agentservices.FormatReg(d.NF1, l.RegistrationProof()))
+		}
+	}
+	return out
+}
+
 // Refused is how many sessions the table has refused.
 // allow:wrapper — the counter is the table's own.
 func (t *ServiceTable) Refused() uint64 { return t.refused.Load() }

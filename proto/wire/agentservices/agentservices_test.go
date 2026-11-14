@@ -166,3 +166,37 @@ func TestParsePublic(t *testing.T) {
 		}
 	}
 }
+
+// A registration proof round-trips; malformed, duplicate, empty and
+// oversized values are refused (nfltr docs/decisions/nf1-risks-2026-11-14.md).
+func TestParseReg(t *testing.T) {
+	rid := [RIDSize]byte{0xab, 2, 3}
+	proof := []byte("proof bytes")
+	got, err := ParseReg([]string{FormatReg(rid, proof)})
+	if err != nil || string(got[rid]) != string(proof) || len(got) != 1 {
+		t.Fatalf("round trip: %v, %v", got, err)
+	}
+	if got, err := ParseReg(nil); err != nil || len(got) != 0 {
+		t.Fatalf("no values: %v, %v", got, err)
+	}
+	ok := FormatReg(rid, proof)
+	many := make([]string, MaxServices+1)
+	for i := range many {
+		many[i] = FormatReg([RIDSize]byte{byte(i + 1)}, proof)
+	}
+	for what, vals := range map[string][]string{
+		"no colon":    {strings.Replace(ok, ":", "", 1)},
+		"short rid":   {ok[2:]},
+		"upper hex":   {strings.ToUpper(ok[:2*RIDSize]) + ok[2*RIDSize:]},
+		"zero rid":    {FormatReg([RIDSize]byte{}, proof)},
+		"rid twice":   {ok, ok},
+		"empty proof": {FormatReg(rid, nil)},
+		"bad base64":  {ok + "!"},
+		"oversized":   {FormatReg(rid, make([]byte, MaxRegProof+1))},
+		"too many":    many,
+	} {
+		if _, err := ParseReg(vals); err == nil {
+			t.Errorf("%s: accepted", what)
+		}
+	}
+}
