@@ -199,6 +199,12 @@ where its row is.
 | `wg_exit.pv` | `client/agent/wgexit/wg_exit_bindings_test.go` `TestWGExitModelBindings` | 3 here (psk binds the exit's name; each end's psk on the key the relay told it) + 3 in nfltr `cmd/nfltr/internal/wgcli/wg_exit_bindings_test.go` (the key id of the machine named, psk whatever `x-wg-paired` says, one key per machine) |
 | `cap_address.pv` | `client/capaddr/capaddr_bindings_test.go` `TestCapAddressModelBindings` | 4 of 4, one per `BIND:cap.*`, against the codec `client/capaddr` (real TLS 1.3 over a pipe): the answer's key and the TLS certificate's key of another server, and a plain answer with no key (`cap.pin`); the record over another relay, rid, tag or hints, under another key, or none (`cap.rendezvous`); the proof over another session's exporter, under another secret, without the exporter (`cap.secret`); A1's proof at A2's acceptor and A2's at A1's, one key (`cap.service`). Go mutants caught by hand: the answer's key unchecked, the certificate unchecked, the relay out of the record, the exporter out of the proof. `pin-unkeyed` is no binding: `TestRoundTrip` requires two addresses of one key to differ in pin; and 4 of 4 against the transport, `client/nf1/nf1_bindings_test.go` `TestNF1ModelBindings` (lane NF1RDV): a relay routing to another server or running TLS under another key (`cap.pin`), a record over another rid or with hints it does not cover (`cap.rendezvous`), a proof over another exporter (`cap.secret`, no verdict), A1's client at A2's listener (`cap.service`); Go mutants caught by hand: the answer unchecked, `VerifyConnection` dropped, `Admit` skipped; and 1 of 1 for the direct phase (lane NF1DIRECT), `client/agent/direct_nf1_bindings_test.go` `TestNF1DirectModelBindings`: a holder of another key answering the punch at the agent's candidate, for the session's own server name, is refused (`refused_cert`) and the session stays relayed with its bytes intact (`nf1direct.pin`; Go mutant `nf1-direct-no-pin` in `org_mutants.txt`); the tokens are `e2ee_tcp.pv`'s rows (`TestDirectModelBindings`), and the `d1` hint's binding is `cap.rendezvous` (a hint the record does not cover) |
 
+Pending, in `pendingBindings` until their code lands (nfltr
+`docs/decisions/nf1-udp-2026-11-14.md`): `dgram.tag` (`cap_address.pv` and
+`e2ee_tcp.pv` datagrams, lane UDP3), `cap.kind` (the dial's kind against
+the record's `u1`) and `org.kind` (the ALPN's kind prefix `nfltr-dg/`),
+lane UDP2.
+
 A planted Go mutant fails its row (lane E2EEVECTORS): the role, caller,
 callee or txn left out of `a2aE2EEPrologue`, the psk not keyed, a warm's
 message 1 untyped, a call's keys or a resume's tag without the call number,
@@ -346,6 +352,11 @@ test-go-mutants`).
 | 34, 35 | witnesses: the group dial completes; web's second service serves | attack (reachable) |
 | 36 | a direct connection a client takes names its session's machine: the relay cannot move a group dial's session to another instance | holds (lane DIRECTGROUP; mutant `group-direct-no-name-check` with `direct-no-token`; every `direct-no-cert-check` line) |
 | 37 | witness: a group dial's session goes direct | attack (reachable) |
+| 38 | a datagram a client sends on a direct connection it took (a QUIC DATAGRAM frame) reaches only web's agent | holds (lane UDP1, design; fails where a machine dial's 21 does: `direct-no-cert-check`) |
+| 39 | the agent hands a datagram to session k only if k's own client sent it, on a connection bound to k (not injective: a replayed packet is QUIC's to discard) | holds (mutant `dgram-tag-unbound`; fails where 23 does, and with `direct-no-cert-check`: the direct key leaks) |
+| 40, 41 | witnesses: a client sends a datagram direct; the agent hands one on | attack (reachable) |
+| 42 | what reaches a service of a kind was dialled with that kind: the relay cannot route a stream client to the datagram service of the same name, or the reverse | holds (mutants `agent-ignores-kind`, `client-no-alpn-check`, `agent-no-alpn-check`; fails where 7 does) |
+| 43 | witness: the datagram client reaches the datagram service | attack (reachable) |
 
 A TLS record is bound to its place in its direction's stream (TLS 1.3's
 sequence number in the AEAD nonce): the model's close record names the
@@ -460,6 +471,30 @@ the control exchange and a re-attach reach is the relay's routing, as the
 candidates already are: a wrong one is a denial. Not modelled, as above:
 two agents on one machine serving one `<s>@<g>` (the tokens refuse the
 other's direct answer).
+
+Datagram services (queries 38-43; lane UDP1, nfltr
+`docs/decisions/nf1-udp-2026-11-14.md` section 3; design, no code yet). A
+service has a kind, stream or datagram, and one name may serve both (dns
+over tcp and udp): web serves `pg` as a stream and as a datagram service,
+both published under db, and another machine-dial client dials web's
+datagram `pg`. The ALPN carries the kind, the prefix `nfltr-svc/` for a
+stream and `nfltr-dg/` for a datagram service in both dial forms
+(`alpnM(kind, agent, service)`, `alpnG(kind, service, group)`); the agent
+accepts an offer only of its service's kind (`BIND:org.kind`, its row
+pending lane UDP2), and the client's existing check of the negotiated
+protocol (`BIND:org.service`) carries the kind back. Mutant
+`agent-ignores-kind` (the agent takes an offer of either kind: the relay
+routes the stream client to the datagram `pg`) fails 42 alone;
+`client-no-alpn-check` now fails 42 too (the relay rewrites the offer's
+kind). The attack needs one name under both kinds: with names unique per
+agent the service name in the ALPN already refuses it and the prefix is
+defence in depth. Once a datagram session is direct, its datagrams ride the direct
+connection as QUIC DATAGRAM frames under its keys, tagged with the attach,
+and the agent hands one to a session only on a connection bound to it
+(`BIND:dgram.tag`, as `cap_address.pv` 21-24): `dgram-tag-unbound` (the
+agent accepts a datagram on any direct connection it accepted, before the
+client's token) fails 39 alone. Every earlier query keeps its result under
+every mutant. The flows inside the association are `spec/DatagramAssoc.tla`.
 
 ### wg_exit.pv: WireGuard client and exit (Track B)
 
@@ -611,6 +646,8 @@ key. TLS 1.3 as in `e2ee_tcp.pv`; the exporter is `h((k, ns, pk))`
 | 21 | a datagram A1's client sends on a direct connection (a QUIC DATAGRAM frame) reaches only A1's server | T | as 15 |
 | 22 | A1's agent hands a datagram to session k only if k's own client sent it, on a connection bound to k (not injective: a replayed packet is QUIC's to discard) | T | `dgram-tag-unbound`, `nf1-agent-no-token`, the secret-check mutants |
 | 23, 24 | witnesses: the client sends a datagram direct; A1's agent hands one on | F (reachable) | |
+| 25 | a client takes an answer for its dial's kind (stream, datagram) only if the server registered the address with that kind | T | `client-no-kind-check`, `hint-unbound-u1`, `hint-unbound`, `rendezvous-any-key` |
+| 26 | witness: a datagram client takes A1's answer | F (reachable) | |
 
 Direct paths (lane NF1DIRECT, nfltr `docs/decisions/nf1-direct-2026-11-14.md`):
 the record's `hints` carry one fact, `d1` (the listener takes direct
@@ -623,7 +660,7 @@ pathswitch under the session's TLS, the organisation's mechanism of
 session only on that session's client token; the tokens are keyed by the
 session's exporter and bind the direct connection's exporter, which covers
 its handshake's key. Mutants: `hint-unbound` (hints taken from the frame,
-not the record: fails 7 only), `direct-no-pin-check` (16; with
+not the record: fails 7, and the kind's 25), `direct-no-pin-check` (16; with
 `nf1-token-unbound` 15-18), `nf1-token-unbound` (holds alone),
 `nf1-direct-no-token` (17), `nf1-agent-no-token` (18).
 
@@ -637,6 +674,18 @@ Mutant `dgram-tag-unbound` (the agent accepts a datagram on any direct
 connection it accepted, bound or not): fails 22 alone. The flows inside
 the session, the tag's lifetime across associations and the revocation
 are the relay's `spec/DatagramAssoc.tla`.
+
+The kind (lane UDP1, queries 25-26; design, no code yet): the hints are a
+flag list (`d1`, `u1`, `d1,u1`), modelled as the pair (direct, kind); `u1`
+says the address serves datagrams. A1 is a datagram service, A2 a stream
+service, and A1 has two clients, one dialling each kind (`cat forward
+--udp` or not). A client takes an answer only when the record's kind is
+its dial's (`BIND:cap.kind`, its row pending lane UDP2), so a relay cannot
+make a stream client speak to a datagram service or the reverse. Mutants:
+`client-no-kind-check` (the dial's kind not compared) and
+`hint-unbound-u1` (the kind taken from the answer frame's hints, `d1`
+still from the record) each fail 25 alone; 1-24 keep their results under
+every mutant.
 
 `cap_address_link.pv` states 10 as an observational equivalence: two
 servers register `rid1` and `rid2`, the attacker reads both registrations,

@@ -104,6 +104,17 @@
    21-24; mutant:
      dgram-tag-unbound         the agent hands a datagram to a session on any
                                direct connection it accepted, bound or not
+   The kind (lane UDP1): the hints are a flag list, modelled as the pair
+   (direct, kind): "d1" or none, "u1" (a datagram service) or none (a
+   stream service). A1 serves datagrams, A2 streams. A client dials with
+   a kind of its own (cat forward --udp or not) and takes an answer only
+   when the record's kind is its dial's (BIND:cap.kind), so a relay cannot
+   make a stream client speak to a datagram service or the reverse.
+   Queries 25-26; mutants:
+     client-no-kind-check      the dial's kind not compared to the record's
+     hint-unbound-u1           the kind taken from the answer frame's hints,
+                               "d1" still from the record (hint-unbound
+                               takes both from the frame)
 
    Bindings (README "Bindings"): each has a refusal row in
    client/capaddr/capaddr_bindings_test.go:
@@ -115,7 +126,8 @@
    the organisation's direct.token, direct.quic, direct.role rows):
      BIND:nf1direct.pin   the direct connection's key against the pinned key
    and, for datagrams (pending: the code lane's row, client/model_bindings_guard_test.go):
-     BIND:dgram.tag       a frame's tag: a session attached on this connection, up *)
+     BIND:dgram.tag       a frame's tag: a session attached on this connection, up
+     BIND:cap.kind        the dial's kind against the record's hints (u1 or none) *)
 
 free c: channel.
 
@@ -137,6 +149,7 @@ const answerPlain: bitstring.                 (* the relay's word: "this rid is 
 const noSecret: bitstring.                    (* an empty secret (address-secret-optional) *)
 const relayR: bitstring.                      (* the relay the server registered at, A1's and A2's *)
 const hintD: bitstring.                       (* hints "d1": the listener takes direct paths *)
+const kindS, kindU: bitstring.                (* hints without "u1": a stream service; with: a datagram service *)
 const labC, labS, labQ, ep1: bitstring.       (* the direct token's roles, the QUIC exporter's label, the attach epoch *)
 free dirData: bitstring [private].            (* what A1's client sends on a direct connection it took *)
 free dgData: bitstring [private].             (* a datagram A1's client sends on it (lane NF1UDP) *)
@@ -180,6 +193,7 @@ event ClientDirect(bitstring, bitstring, pkey).         (* session key, QUIC exp
 event AgentDirect(bitstring, bitstring, bitstring).     (* rid of the acceptor, session key, QUIC exporter: bound *)
 event ClientDgram(bitstring, bitstring).                (* session key, datagram: sent on its direct connection *)
 event AgentDgram(bitstring, bitstring, bitstring).      (* rid, session key, datagram: handed to the session's flow *)
+event ClientKind(bitstring, bitstring).                 (* rid, the dial's kind: the answer taken for it *)
 
 (* The QUIC exporter, and the tokens (nf1-token-unbound: without it). *)
 letfun qexp(kd: bitstring, dn: bitstring, x: pkey) = h((labQ, kd, dn, x)).
@@ -252,7 +266,7 @@ let Acceptor(rid: bitstring, sec: bitstring, other: bitstring, resp: bitstring) 
   out(c, senc((s2c, appData, (r, resp)), k)) )).
 
 (* A1's client: knows only A1 = (relayR, rid, pin, sec). *)
-let Client(rid: bitstring, pin: bitstring, sec: bitstring) =
+let Client(rid: bitstring, pin: bitstring, sec: bitstring, kind: bitstring) =
   in(c, other: bitstring);                              (* a saved relay, --server, a redirect *)
   let ru = relayR in (* NOT:relay-substitutes-relay *)
   let ru = other in (* ONLY:relay-substitutes-relay *)
@@ -265,6 +279,11 @@ let Client(rid: bitstring, pin: bitstring, sec: bitstring) =
   let hints = hs in (* NOT:hint-unbound *)
   let hints = hu in (* ONLY:hint-unbound *)
   if rr = ru then (* NOT:relay-substitutes-relay *)
+  let (hd: bitstring, hk0: bitstring) = hints in
+  let hk = hk0 in (* NOT:hint-unbound-u1 *)
+  let (hdu: bitstring, hk: bitstring) = hu in (* ONLY:hint-unbound-u1 *)
+  if hk = kind then (* NOT:client-no-kind-check *)
+  event ClientKind(rid, kind);
   event ClientRdv(ru, rid, hints, rpk);
   in(c, (spk: pkey, ns: bitstring));                    (* TLS (4) *)
   if spk = rpk then (* NOT:client-no-pin-check *)
@@ -278,7 +297,7 @@ let Client(rid: bitstring, pin: bitstring, sec: bitstring) =
   in(c, e: bitstring);
   let (=s2c, =appData, r: bitstring) = sdec(e, k) in
   event ClientRecv(ru, rid, k, r);
-  if hints = hintD then DirectClient(k, spk).
+  if hd = hintD then DirectClient(k, spk).
 
 (* 1, 2. session secrecy against every relay: A1's client's bytes, A1's
    service's answer (the latter is also: only holders of sec1 are admitted) *)
@@ -365,12 +384,21 @@ query k: bitstring, m: bitstring; event(ClientDgram(k, m)).
 (* expect false *)
 query k: bitstring, m: bitstring; event(AgentDgram(rid1, k, m)).
 
+(* 25. the kind (lane UDP1): a client takes an answer for its dial's kind
+   only if the server registered the address with that kind (mutants
+   client-no-kind-check, hint-unbound, hint-unbound-u1) *)
+(* expect true *)
+query rid: bitstring, kd: bitstring, r0: bitstring, hd: bitstring, x: pkey; event(ClientKind(rid, kd)) ==> event(Registered(r0, rid, (hd, kd), x)).
+(* 26. witness: a datagram client takes A1's answer *)
+(* expect false *)
+query event(ClientKind(rid1, kindU)).
+
 process
   let s1 = secOf(sec1) in
   let pin1 = pinOf(s1, pk(skS)) in
   event ServerKey(pk(skS));
   out(c, pk(skS));
-  ( Register(relayR, rid1, hintD) | Register(relayR, rid2, hintD) |
+  ( Register(relayR, rid1, (hintD, kindU)) | Register(relayR, rid2, (hintD, kindS)) |
     (!Acceptor(rid1, s1, sec2, svcData1)) | (!Acceptor(rid2, sec2, s1, svcData2)) |
-    (!Client(rid1, pin1, s1)) |
+    (!Client(rid1, pin1, s1, kindU)) | (!Client(rid1, pin1, s1, kindS)) |
     (in(c, g: bitstring); if g = pin1 then event PinGuessed) )
