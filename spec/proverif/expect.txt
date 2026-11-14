@@ -95,42 +95,42 @@ p2p_e2e relay-kid TTTTFTFFFFFF
 # client mutant that takes the relay's certificate gives it the session's
 # key, so the re-attached bytes too (28); an agent mutant that admits the
 # relay's client lets it attach its own session (27).
-e2ee_tcp - TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTF
-e2ee_tcp downgrade-plain FTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTF
-e2ee_tcp client-no-chain-check FFFTFTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTF
-e2ee_tcp no-name-check FFFTTTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTF
-e2ee_tcp client-no-expiry-check FFTTFTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTF
-e2ee_tcp client-no-crl-check FFTFTTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTF
-e2ee_tcp agent-no-chain-check TTTTTFFFTFTFTFFFFFFFTTFTFFFTFTTTTFFTF
-e2ee_tcp no-group-check TTTTTFFFTTTFTFFFFFFFTTFTFFFTFTTTTFFTF
-e2ee_tcp agent-no-expiry-check TTTTTFFTTFTFTFFFFFFFTTFTFFFTFTTTTFFTF
-e2ee_tcp agent-no-crl-check TTTTTFFTFTTFTFFFFFFFTTFTFFFTFTTTTFFTF
-e2ee_tcp downgrade-any-client TFTTTFFTTTTTTTFFFFFFTTTTFFTTFTTFTFFTF
-e2ee_tcp skip-certificate-verify TTTTTFFTTTTFTFFFFFFFTTFTFFFTFTTTTFFTF
-e2ee_tcp relay-names-target FTTTTTTTTTTTTTFFFFFFTTTTFFTTFFTTTFFTF
-e2ee_tcp relay-names-target-with-forward FTTTTTTTTTTTTTFFFFFFTTTTFFTTFFTTTFFTF
-e2ee_tcp agreement-without-key-check TFTTTTTTTTTTTTFFTFFFTTTTFFTTFTTTTFFTF
-e2ee_tcp clear-end TTTTTTTTTTFTFTFFFFFFTTTTFFTTFTTTTFFTF
-e2ee_tcp agent-clear-end TTTTTTTTTTTFTFFFFFFFTTTTFFTTFTTTTFFTF
-e2ee_tcp abort-as-close TTTTTTTTTTTTFTFFFFFFTTTTFFTTFTTTTFFTF
-e2ee_tcp client-abort-as-close TTTTTTTTTTTTTFFFFFFFTTTTFFTTFTTTTFFTF
+e2ee_tcp - TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp downgrade-plain FTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp client-no-chain-check FFFTFTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTFTTFFTF
+e2ee_tcp no-name-check FFFTTTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTFTTFFTF
+e2ee_tcp client-no-expiry-check FFTTFTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTFTTFFTF
+e2ee_tcp client-no-crl-check FFTFTTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTFTTFFTF
+e2ee_tcp agent-no-chain-check TTTTTFFFTFTFTFFFFFFFTTFTFFFTFTTTTFFTFTFFFFF
+e2ee_tcp no-group-check TTTTTFFFTTTFTFFFFFFFTTFTFFFTFTTTTFFTFTFFFFF
+e2ee_tcp agent-no-expiry-check TTTTTFFTTFTFTFFFFFFFTTFTFFFTFTTTTFFTFTFFFFF
+e2ee_tcp agent-no-crl-check TTTTTFFTFTTFTFFFFFFFTTFTFFFTFTTTTFFTFTFFFFF
+e2ee_tcp downgrade-any-client TFTTTFFTTTTTTTFFFFFFTTTTFFTTFTTFTFFTFTTFFTF
+e2ee_tcp skip-certificate-verify TTTTTFFTTTTFTFFFFFFFTTFTFFFTFTTTTFFTFTFFFFF
+e2ee_tcp relay-names-target FTTTTTTTTTTTTTFFFFFFTTTTFFTTFFTTTFFTFTTFFTF
+e2ee_tcp relay-names-target-with-forward FTTTTTTTTTTTTTFFFFFFTTTTFFTTFFTTTFFTFTTFFTF
+e2ee_tcp agreement-without-key-check TFTTTTTTTTTTTTFFTFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp clear-end TTTTTTTTTTFTFTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp agent-clear-end TTTTTTTTTTTFTFFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp abort-as-close TTTTTTTTTTTTFTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp client-abort-as-close TTTTTTTTTTTTTFFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
 # Direct paths (lane DIRECTPATH): the answer at the relay's address taken
 # without the certificate check (21, 24; with direct-no-token too, 22), the
 # agent's token unchecked at the client (22), tokens without the QUIC key
 # (alone: the certificate check holds; without it a relay in the middle,
 # 21-24), one token for both roles (22: reflected), the agent binding a
 # connection on the relay's word (23).
-e2ee_tcp direct-no-cert-check TTTTTTTTTTTTTTFFFFFFFTTFFFTTFTTTTFFFF
-e2ee_tcp direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFTF
-e2ee_tcp direct-no-cert-check,direct-no-token TTTTTTTTTTTTTTFFFFFFFFTFFFTTFTTTTFFFF
-e2ee_tcp token-unbound TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTF
-e2ee_tcp direct-no-cert-check,token-unbound TTTTTTTTTTTTTTFFFFFFFFFFFFTTFTTTTFFFF
-e2ee_tcp token-no-role TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFTF
-e2ee_tcp agent-direct-no-token TTTTTTTTTTTTTTFFFFFFTTFTFFTTFTTTTFFTF
+e2ee_tcp direct-no-cert-check TTTTTTTTTTTTTTFFFFFFFTTFFFTTFTTTTFFFFFFFFTF
+e2ee_tcp direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp direct-no-cert-check,direct-no-token TTTTTTTTTTTTTTFFFFFFFFTFFFTTFTTTTFFFFFFFFTF
+e2ee_tcp token-unbound TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp direct-no-cert-check,token-unbound TTTTTTTTTTTTTTFFFFFFFFFFFFTTFTTTTFFFFFFFFTF
+e2ee_tcp token-no-role TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp agent-direct-no-token TTTTTTTTTTTTTTFFFFFFTTFTFFTTFTTTTFFTFTFFFTF
 # The epoch in the token (gap G2): without it the relay replays ep2's
 # relayed OPEN as ep3's and the agent attaches (27), yet the bytes stay
 # secret (28 holds): a replay is denial only.
-e2ee_tcp token-no-epoch TTTTTTTTTTTTTTFFFFFFTTTTFFFTFTTTTFFTF
+e2ee_tcp token-no-epoch TTTTTTTTTTTTTTFFFFFFTTTTFFFTFTTTTFFTFTTFFTF
 # Services by name (lane SVCBIND, 30-35; nfltr
 # docs/decisions/service-discovery-2026-11-12.md section 4): the client
 # ignoring the negotiated ALPN protocol lets the relay rewrite its offer and
@@ -141,17 +141,27 @@ e2ee_tcp token-no-epoch TTTTTTTTTTTTTTFFFFFFTTTTFFFTFTTTTFFTF
 # session's machine, the direct path to eve too (21, 22, 24); the agent
 # serving <s>@<g> for a service not published under g serves mal's pg,
 # published under ops (31).
-e2ee_tcp client-no-alpn-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTFFFTF
-e2ee_tcp agent-no-alpn-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTFFFTF
-e2ee_tcp group-dial-no-group-check TTTTTTTTTTTTTTFFFFFFFFTFFFTTFFTFTFFTF
-e2ee_tcp agent-no-publish-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTTFFTF
+e2ee_tcp client-no-alpn-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTFFFTFTTFFFF
+e2ee_tcp agent-no-alpn-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTFFFTFTTFFFF
+e2ee_tcp group-dial-no-group-check TTTTTTTTTTTTTTFFFFFFFFTFFFTTFFTFTFFTFTTFFTF
+e2ee_tcp agent-no-publish-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTTFFTFTTFFTF
 # Direct paths under a group dial (lane DIRECTGROUP, 36-37): the group's
 # check on the direct answer instead of the session's machine holds alone
 # (the tokens bind the session); with the agent's token unchecked too the
 # relay moves the session's direct path to another instance, mal (36). The
 # certificate check off fails 36 with every direct-no-cert-check line.
-e2ee_tcp group-direct-no-name-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTF
-e2ee_tcp group-direct-no-name-check,direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFFF
+e2ee_tcp group-direct-no-name-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp group-direct-no-name-check,direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFFFTTFFTF
+# Datagram services (lane UDP1, queries 38-43): a direct datagram is secret
+# wherever a machine dial's direct path is (38 fails with its 21; the group
+# dial sends none) and handed only to its own session (39 fails with 23,
+# and with direct-no-cert-check, whose direct key leaks). The kind:
+# what reaches a service was dialled with its kind (42) wherever the
+# agent's admission holds (it fails with 7) and the ALPN is checked at both
+# ends (client-no-alpn-check, agent-no-alpn-check); the kind ignored by the
+# agent fails 42 alone, a datagram taken on an unbound connection 39 alone.
+e2ee_tcp agent-ignores-kind TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTTFFFF
+e2ee_tcp dgram-tag-unbound TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTFFFTF
 #
 # Part 5: the capability address nf1... (cap_address; a design, no code
 # yet; queries in README "cap_address.pv"). Every query holds; each mutant
@@ -161,19 +171,19 @@ e2ee_tcp group-direct-no-name-check,direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTT
 # the exporter in the proof prevents (client-no-pin-check alone: 2, 3, 6
 # hold). cap_address_link is query 10 as an equivalence; ProVerif reads a
 # broken diff-equivalence as ? (its log has the derivation).
-cap_address - TTTTTTTTTTFFFFTTTTFFTTFF
-cap_address client-no-pin-check FTTFFTTTTTFFFFFFFTFFFTFF
-cap_address rendezvous-any-key FTTFFTFFTTFFFFFFFTFFFTFF
-cap_address relay-substitutes-relay TTTTTTTFTTFFFFTTTTFFTTFF
-cap_address server-no-secret-check TFFFTFTTTTFFFFTTFFFFTFFF
-cap_address address-secret-optional TFFTTFTTTFFFFFTTTFFFTFFF
-cap_address server-any-secret TFFFTFTTTTFFFFTTFFFFTFFF
-cap_address pin-unkeyed TTTTTTTTTFFFFFTTTTFFTTFF
-cap_address downgrade-plain FTTTTTTTFTFFFFTTTTFFTTFF
-cap_address proof-unbound TTTTTTTTTTFFFFTTTTFFTTFF
-cap_address client-no-pin-check,proof-unbound FFFFFFTTTTFFFFFFFFFFFFFF
+cap_address - TTTTTTTTTTFFFFTTTTFFTTFFTF
+cap_address client-no-pin-check FTTFFTTTTTFFFFFFFTFFFTFFTF
+cap_address rendezvous-any-key FTTFFTFFTTFFFFFFFTFFFTFFFF
+cap_address relay-substitutes-relay TTTTTTTFTTFFFFTTTTFFTTFFTF
+cap_address server-no-secret-check TFFFTFTTTTFFFFTTFFFFTFFFTF
+cap_address address-secret-optional TFFTTFTTTFFFFFTTTFFFTFFFTF
+cap_address server-any-secret TFFFTFTTTTFFFFTTFFFFTFFFTF
+cap_address pin-unkeyed TTTTTTTTTFFFFFTTTTFFTTFFTF
+cap_address downgrade-plain FTTTTTTTFTFFFFTTTTFFTTFFTF
+cap_address proof-unbound TTTTTTTTTTFFFFTTTTFFTTFFTF
+cap_address client-no-pin-check,proof-unbound FFFFFFTTTTFFFFFFFFFFFFFFTF
 # Direct paths (lane NF1DIRECT, queries 15-20): a hint the record does not
-# cover fails only 7 (the client frames or not; the direct queries hold:
+# cover fails only 7 and the kind's 25 (the client frames or not; the direct queries hold:
 # a forged hint is a refusal or a relayed session, never a wrong peer); the
 # direct key unpinned fails 16 alone (the transcript-bound tokens still
 # refuse a middle) and 15-18 with the tokens unbound from the QUIC exporter,
@@ -181,12 +191,17 @@ cap_address client-no-pin-check,proof-unbound FFFFFFTTTTFFFFFFFFFFFFFF
 # queries 21-24): secret on the direct connection wherever 15 holds;
 # handed to a session only on a connection bound to it (22) wherever 18
 # holds, and failed alone by dgram-tag-unbound.
-cap_address hint-unbound TTTTTTFTTTFFFFTTTTFFTTFF
-cap_address direct-no-pin-check TTTTTTTTTTFFFFTFTTFFTTFF
-cap_address nf1-token-unbound TTTTTTTTTTFFFFTTTTFFTTFF
-cap_address nf1-direct-no-token TTTTTTTTTTFFFFTTFTFFTTFF
-cap_address nf1-agent-no-token TTTTTTTTTTFFFFTTTFFFTFFF
-cap_address dgram-tag-unbound TTTTTTTTTTFFFFTTTTFFTFFF
-cap_address direct-no-pin-check,nf1-token-unbound TTTTTTTTTTFFFFFFFFFFFFFF
+cap_address hint-unbound TTTTTTFTTTFFFFTTTTFFTTFFFF
+cap_address direct-no-pin-check TTTTTTTTTTFFFFTFTTFFTTFFTF
+cap_address nf1-token-unbound TTTTTTTTTTFFFFTTTTFFTTFFTF
+cap_address nf1-direct-no-token TTTTTTTTTTFFFFTTFTFFTTFFTF
+cap_address nf1-agent-no-token TTTTTTTTTTFFFFTTTFFFTFFFTF
+cap_address dgram-tag-unbound TTTTTTTTTTFFFFTTTTFFTFFFTF
+cap_address direct-no-pin-check,nf1-token-unbound TTTTTTTTTTFFFFFFFFFFFFFFTF
+# The kind (lane UDP1, queries 25-26): a client takes an answer only for
+# the kind the record carries; the kind unchecked, or taken from the answer
+# frame, fails 25 alone (hint-unbound and rendezvous-any-key fail it too).
+cap_address client-no-kind-check TTTTTTTTTTFFFFTTTTFFTTFFFF
+cap_address hint-unbound-u1 TTTTTTTTTTFFFFTTTTFFTTFFFF
 cap_address_link - T
 cap_address_link pin-unkeyed ?

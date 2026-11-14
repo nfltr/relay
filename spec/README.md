@@ -865,6 +865,8 @@ dropped), `W_Revoked`, `W_Refused` (an open after the revocation),
 |---|---|
 | The stream is ordered and credited and survives path moves | github.com/nfltr/link `spec/Link.tla`, `spec/DirectPath.tla` |
 | An association binds to a direct connection only on both ends' tokens | `spec/proverif/cap_address.pv` queries 17-18, `spec/proverif/e2ee_tcp.pv` 21-26 |
+| A frame reaches an association only under a tag bound on its connection | `spec/proverif/cap_address.pv` query 22, `spec/proverif/e2ee_tcp.pv` 39 |
+| An association is of its service's kind: a relay cannot join a stream client to a datagram service or the reverse | `spec/proverif/cap_address.pv` query 25 (`u1` in the record), `spec/proverif/e2ee_tcp.pv` 42 (the ALPN's kind) |
 | A QUIC frame is authenticated; a replayed packet is discarded | RFC 9000 section 12.3 (quic-go) |
 | A UDP write never waits | the design's zero-wait writes and per-association sender |
 
