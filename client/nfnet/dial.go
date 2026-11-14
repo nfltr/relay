@@ -111,16 +111,34 @@ func (d *Dialer) Close() error {
 	return nil
 }
 
-// DirectStats are the organisation sessions' direct-path counts; ok is
-// false before a session asked.
+// DirectStats are the direct-path counts of the Dialer's sessions that
+// asked for one, organisation and nf1 sessions summed; ok is false before
+// a session asked.
 func (d *Dialer) DirectStats() (agent.DirectStats, bool) {
 	d.mu.Lock()
-	dc := d.direct[""]
-	d.mu.Unlock()
-	if dc == nil {
-		return agent.DirectStats{}, false
+	dcs := make([]*agent.DirectClient, 0, len(d.direct))
+	for _, dc := range d.direct {
+		dcs = append(dcs, dc)
 	}
-	return dc.Stats(), true
+	d.mu.Unlock()
+	sum := agent.DirectStats{Punches: map[string]uint64{}, Sessions: map[string]int{}, QAD: map[string]uint64{}}
+	for _, dc := range dcs {
+		s := dc.Stats()
+		sum.DirectSent += s.DirectSent
+		sum.DirectReceived += s.DirectReceived
+		sum.RelayedSent += s.RelayedSent
+		sum.RelayedReceived += s.RelayedReceived
+		for k, v := range s.Punches {
+			sum.Punches[k] += v
+		}
+		for k, v := range s.Sessions {
+			sum.Sessions[k] += v
+		}
+		for k, v := range s.QAD {
+			sum.QAD[k] += v
+		}
+	}
+	return sum, len(dcs) > 0
 }
 
 func (d *Dialer) emit(e Event) {

@@ -153,3 +153,24 @@ func TestNF1HandshakeErrors(t *testing.T) {
 		t.Errorf("Plain to an nf1 address: %v, want usage", err)
 	}
 }
+
+// TestDirectStatsCountNF1Sessions: the direct paths of nf1 sessions (kept
+// per address relay) are in DirectStats beside the organisation's: nfltr
+// cat perf's relay bytes to an address come from it.
+func TestDirectStatsCountNF1Sessions(t *testing.T) {
+	l, _, err := nf1.Mint("relay.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := dialer(t, Config{Relay: "relay.example:443", APIKey: "k"})
+	if _, ok := d.DirectStats(); ok {
+		t.Fatal("stats before any session asked for a direct path")
+	}
+	if _, err := d.nf1Direct(l.Address()); err != nil {
+		t.Fatal(err)
+	}
+	st, ok := d.DirectStats()
+	if !ok || st.Sessions == nil {
+		t.Fatalf("stats %+v, %v: an nf1 relay's direct paths are not counted", st, ok)
+	}
+}
