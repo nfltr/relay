@@ -10,8 +10,10 @@
    no certificate of their own. The client knows only the address:
      A = (R, rid, pin, sec)
      R    the relay host the server registered at
-     rid  the rendezvous id: 16 random bytes, drawn independently of the
-          key and the secret
+     rid  the rendezvous id: ridOf(n, pk) = H("nf1-rid", n, pk), n 16
+          random bytes the server keeps (public: the relay learns it), so
+          rid is fresh per address and bound to the server's key (lane
+          NF1RISKS; queries 1-24 hold for any public rid)
      sec  the secret: 32 random bytes, always present (the format has no
           empty or absent secret)
      pin  pinOf(sec, pk) = H("nf1-pin", sec, pk): the server's TLS key pk,
@@ -24,7 +26,14 @@
      1. REGISTER, server -> relay R, on its agent session:
           rid, pk, rec = Sign_sk("nf1-rdv", R, rid, hints)
         hints: whatever the client acts on before TLS (direct candidates);
-        the relay learns rid, pk, hints, never sec or pin.
+        the relay learns rid, pk, hints, never sec or pin. With the
+        declaration, to R only (inside the agent's TLS to R, never in an
+        answer): the registration proof (n, pk, Sign_sk("nf1-reg", R,
+        rid)); R takes a declaration of rid only when rid = ridOf(n, pk)
+        and the signature verifies under pk (BIND:cap.register), so only
+        the holder of sk makes an agent serve rid: an address holder
+        cannot declare it and turn every open into "not served" (nfltr
+        docs/decisions/nf1-risks-2026-11-14.md). Queries 25, 26.
      2. OPEN, client -> R (the address's relay, never a saved one, --server
         or a redirect): rid, end to end encrypted (no plain mode).
      3. RENDEZVOUS answer, R -> client: (pk, rec). The client requires
@@ -105,12 +114,22 @@
      dgram-tag-unbound         the agent hands a datagram to a session on any
                                direct connection it accepted, bound or not
 
+   Registration (lane NF1RISKS): R's check of a declaration of A1's rid
+   from any agent; the server's own declaration reaches R on a private
+   channel (its TLS to R), everything else on c. Mutants:
+     rid-unbound               R does not check rid = ridOf(n, pk): an
+                               address holder declares rid under its own key
+     reg-is-rec                R takes the rendezvous record (which every
+                               opener gets) as the proof
+     reg-unsigned              R does not check the signature
+
    Bindings (README "Bindings"): each has a refusal row in
    client/capaddr/capaddr_bindings_test.go:
      BIND:cap.pin         the answer's key and the TLS certificate's key, each against pinOf(sec, key)
      BIND:cap.secret      the proof: the address's secret over this session's exporter
      BIND:cap.service     the acceptor checks the proof with the secret of the address routed to it
      BIND:cap.rendezvous  the answer: signed under the pinned key, over the tag, the relay opened at, rid and hints
+     BIND:cap.register    a declaration of rid: rid = ridOf(n, key) and a signature under key over the tag, R and rid
    and, for the direct phase (client/nf1 TestNF1DirectModelBindings, with
    the organisation's direct.token, direct.quic, direct.role rows):
      BIND:nf1direct.pin   the direct connection's key against the pinned key
@@ -132,6 +151,9 @@ reduc forall m: bitstring, k: skey; getmsg(sign(m, k)) = m.
 fun h(bitstring): bitstring.
 
 const labPin, labRdv, labProof, labExp: bitstring.
+const labRid, labReg: bitstring.              (* the rid's and the registration proof's tags *)
+free n1: bitstring.                           (* A1's rid nonce: public *)
+free cReg: channel [private].                 (* the server's TLS session to R *)
 const c2s, s2c, appData: bitstring.
 const answerPlain: bitstring.                 (* the relay's word: "this rid is plain" *)
 const noSecret: bitstring.                    (* an empty secret (address-secret-optional) *)
@@ -180,6 +202,20 @@ event ClientDirect(bitstring, bitstring, pkey).         (* session key, QUIC exp
 event AgentDirect(bitstring, bitstring, bitstring).     (* rid of the acceptor, session key, QUIC exporter: bound *)
 event ClientDgram(bitstring, bitstring).                (* session key, datagram: sent on its direct connection *)
 event AgentDgram(bitstring, bitstring, bitstring).      (* rid, session key, datagram: handed to the session's flow *)
+event RegOwn(bitstring, pkey).                          (* R took the server's own declaration of rid under key *)
+event Hijacked(bitstring, pkey).                        (* R took a declaration of rid from anyone else *)
+
+letfun ridOf(nn: bitstring, x: pkey) = h((labRid, nn, x)).
+letfun regOK(rs: bitstring, x: pkey, r: bitstring) = let (=labReg, =relayR, =r) = checksign(rs, x) in true else false. (* NOT:reg-is-rec *)
+letfun regOK(rs: bitstring, x: pkey, r: bitstring) = let (=labRdv, =relayR, =r, hs: bitstring) = checksign(rs, x) in true else false. (* ONLY:reg-is-rec *)
+
+(* R's check of a declaration of rid r: from the server's own session (own)
+   or from anyone (c). *)
+let Registrar(r: bitstring, ch: channel, own: bool) =
+  in(ch, (=r, nn: bitstring, x: pkey, rs: bitstring));
+  if r = ridOf(nn, x) then (* NOT:rid-unbound *)
+  if regOK(rs, x, r) = true then (* NOT:reg-unsigned *)
+  if own = true then event RegOwn(r, x) else event Hijacked(r, x).
 
 (* The QUIC exporter, and the tokens (nf1-token-unbound: without it). *)
 letfun qexp(kd: bitstring, dn: bitstring, x: pkey) = h((labQ, kd, dn, x)).
@@ -365,6 +401,15 @@ query k: bitstring, m: bitstring; event(ClientDgram(k, m)).
 (* expect false *)
 query k: bitstring, m: bitstring; event(AgentDgram(rid1, k, m)).
 
+(* 25. only the server key's holder makes R take a declaration of its
+   address's rid: an address holder, which sees every answer and holds A2,
+   cannot (mutants rid-unbound, reg-is-rec, reg-unsigned) *)
+(* expect true *)
+query r: bitstring, x: pkey; event(Hijacked(r, x)).
+(* 26. witness: R takes the server's own declaration *)
+(* expect false *)
+query r: bitstring, x: pkey; event(RegOwn(r, x)).
+
 process
   let s1 = secOf(sec1) in
   let pin1 = pinOf(s1, pk(skS)) in
@@ -373,4 +418,9 @@ process
   ( Register(relayR, rid1, hintD) | Register(relayR, rid2, hintD) |
     (!Acceptor(rid1, s1, sec2, svcData1)) | (!Acceptor(rid2, sec2, s1, svcData2)) |
     (!Client(rid1, pin1, s1)) |
+    (let r1 = ridOf(n1, pk(skS)) in
+       Register(relayR, r1, hintD) |
+       out(cReg, (r1, n1, pk(skS), sign((labReg, relayR, r1), skS))) | (* NOT:reg-is-rec *)
+       out(cReg, (r1, n1, pk(skS), sign((labRdv, relayR, r1, hintD), skS))) | (* ONLY:reg-is-rec *)
+       Registrar(r1, cReg, true) | (!Registrar(r1, c, false))) |
     (in(c, g: bitstring); if g = pin1 then event PinGuessed) )

@@ -555,11 +555,11 @@ message flow the address codec and its clients and servers implement:
 | field or message | what it is | what it binds |
 |---|---|---|
 | `R` | the relay host the server registered at | the client opens there and nowhere else (not a saved relay, `--server` or a redirect) |
-| `rid` | the rendezvous id: 16 random bytes, independent of the key and the secret | what the relay routes by; the only field of the address a relay learns |
+| `rid` | the rendezvous id: `ridOf(n, pk) = H("nf1-rid", n, pk)` (16 bytes), `n` 16 random bytes the server keeps (lane NF1RISKS: before it, 16 random bytes) | what the relay routes by; the only field of the address a relay learns; bound to the server's key, so only its holder can declare it |
 | `sec` | the secret: 32 random bytes, always present (no empty or absent secret in the format; the codec refuses all zeros) | admission: only its holders are served |
 | `pin` | `H("nf1-pin", sec, pk)`: the server's TLS key, keyed by the secret | the key the client accepts, and unlinkability: a relay that sees `pk` cannot compute it |
 | encoding | `nf1` + a checksummed encoding of a version and the four fields | parsed offline; a bad checksum or a missing field is exit 1 |
-| 1. REGISTER (server -> R, on its agent session) | `rid`, `pk`, `rec = Sign_sk("nf1-rdv", R, rid, hints)` | `hints` is whatever a client acts on before TLS (direct candidates) |
+| 1. REGISTER (server -> R, on its agent session) | `rid`, `pk`, `rec = Sign_sk("nf1-rdv", R, rid, hints)`; to R only, with the declaration: the registration proof `(n, pk, Sign_sk("nf1-reg", R, rid))` | `hints` is whatever a client acts on before TLS (direct candidates); R takes the declaration only when `rid = ridOf(n, pk)` and the proof verifies (`BIND:cap.register`) |
 | 2. OPEN (client -> R) | `rid`, end to end encrypted | no plain mode: an answer "plain" is refused |
 | 3. rendezvous answer (R -> client) | `(pk, rec)` | the client requires `pinOf(sec, pk) = pin` and `rec` a signature under that `pk` over the tag, the relay it opened at, its `rid` and `hints`, before it uses `hints` or opens TLS |
 | 4. TLS 1.3 through the relay's stream | the server's certificate must carry exactly that `pk`; the client presents none | |
@@ -611,6 +611,8 @@ key. TLS 1.3 as in `e2ee_tcp.pv`; the exporter is `h((k, ns, pk))`
 | 21 | a datagram A1's client sends on a direct connection (a QUIC DATAGRAM frame) reaches only A1's server | T | as 15 |
 | 22 | A1's agent hands a datagram to session k only if k's own client sent it, on a connection bound to k (not injective: a replayed packet is QUIC's to discard) | T | `dgram-tag-unbound`, `nf1-agent-no-token`, the secret-check mutants |
 | 23, 24 | witnesses: the client sends a datagram direct; A1's agent hands one on | F (reachable) | |
+| 25 | R takes a declaration of A1's `rid` only from the holder of its server key: an address holder, which sees every answer and holds A2, cannot make an agent serve it | T | `rid-unbound`, `reg-is-rec`, `reg-unsigned` |
+| 26 | witness: R takes the server's own declaration | F (reachable) | |
 
 Direct paths (lane NF1DIRECT, nfltr `docs/decisions/nf1-direct-2026-11-14.md`):
 the record's `hints` carry one fact, `d1` (the listener takes direct
@@ -637,6 +639,23 @@ Mutant `dgram-tag-unbound` (the agent accepts a datagram on any direct
 connection it accepted, bound or not): fails 22 alone. The flows inside
 the session, the tag's lifetime across associations and the revocation
 are the relay's `spec/DatagramAssoc.tla`.
+
+Registration (lane NF1RISKS, nfltr `docs/decisions/nf1-risks-2026-11-14.md`;
+design, no code yet): an open is refused unless the relay can route it, and
+before this lane any agent could declare any `rid`, so an address holder's
+declaration made every open of the address fail (the relay refused a `rid`
+two agents declare). Now `rid = ridOf(n, pk)` and the declaration carries
+the proof `(n, pk, Sign_sk("nf1-reg", R, rid))`, which the server sends
+only to R inside its agent session (never in an answer) and R does not
+store; R takes the declaration only if both check (`BIND:cap.register`,
+its row pending the code lane). The model gives R's check its own process,
+fed by the server's private channel and by the attacker. `n` is public
+(the relay learns it), so `rid` stays public as before: queries 1-24 and
+`cap_address_link.pv` are unchanged. Mutants: `rid-unbound` (R does not
+check `rid = ridOf(n, pk)`: the holder declares A1's `rid` under its own
+key), `reg-is-rec` (R takes the rendezvous record, which every opener
+gets, as the proof), `reg-unsigned`: each fails 25 alone. Which of several
+holders of the key an open reaches is relay-core `spec/NF1Claim.tla`.
 
 `cap_address_link.pv` states 10 as an observational equivalence: two
 servers register `rid1` and `rid2`, the attacker reads both registrations,

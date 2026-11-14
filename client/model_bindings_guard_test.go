@@ -15,7 +15,8 @@ import (
 // in this module yet: id -> where the row is (or why it waits). A model's
 // id with no row and no entry here fails TestEveryModelBindingHasARow.
 var pendingBindings = map[string]string{
-	"dgram.tag": "cap_address.pv datagrams: design (nfltr docs/decisions/nf1-udp-2026-11-14.md, lane UDP3 adds the row with the direct datagram code)",
+	"cap.register": "cap_address.pv registration: design (nfltr docs/decisions/nf1-risks-2026-11-14.md, lane NF1REG adds the row with the codec's registration proof)",
+	"dgram.tag":    "cap_address.pv datagrams: design (nfltr docs/decisions/nf1-udp-2026-11-14.md, lane UDP3 adds the row with the direct datagram code)",
 }
 
 // TestEveryModelBindingHasARow: each BIND:<id> a model in spec/proverif
