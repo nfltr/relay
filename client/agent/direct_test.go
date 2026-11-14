@@ -92,15 +92,23 @@ type directRig struct {
 	relay  string // the agent's relay's QAD (its tunnel's)
 	mode   DirectMode
 	wrap   func(net.Conn) net.Conn // the client's end of a session, if set
+	svc    string                  // blob's session target (blob, blob+udp)
+	alpn   string                  // and its ALPN
 }
 
 func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 	t.Helper()
+	return newDirectRigOf(t, mode, agentservices.TCP, echoTarget(t))
+}
+
+// newDirectRigOf is newDirectRig with blob a service of kind at target.
+func newDirectRigOf(t *testing.T, mode DirectMode, kind agentservices.Kind, target string) *directRig {
+	t.Helper()
 	o := newTestOrg(t)
 	web := o.agentOrg(o.machine(t, "web", nil, time.Hour, false))
-	target, qad := echoTarget(t), qadServer(t)
+	qad := qadServer(t)
 	mk := func() *ServiceTable {
-		table, err := NewServiceTable([]Service{{Name: "blob", Kind: agentservices.TCP, Target: target, E2EE: agentservices.E2EEOn,
+		table, err := NewServiceTable([]Service{{Name: "blob", Kind: kind, Target: target, E2EE: agentservices.E2EEOn,
 			Org: web, AllowGroups: []string{"db"}, Direct: mode}})
 		if err != nil {
 			t.Fatal(err)
@@ -119,7 +127,11 @@ func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 	}
 	table := mk()
 	r := &directRig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table, agent: "web", qad: tunnelQAD(qad)}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}},
-		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}, org: web, table: mk, relay: qad, mode: mode}
+		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}, org: web, table: mk, relay: qad, mode: mode,
+		svc: "blob", alpn: MachineALPN("web", "blob")}
+	if kind == agentservices.UDP {
+		r.svc, r.alpn = agentservices.DatagramTarget("blob"), DatagramALPN(r.alpn)
+	}
 	var err error
 	r.d, err = NewDirectClient(DirectClientConfig{Machine: r.client,
 		Relayed: func(context.Context, string) (net.Conn, error) { return r.open(t, DirectServiceName) },
@@ -180,7 +192,7 @@ func (r *directRig) session(t *testing.T) (*DirectSession, *tls.Conn, chan PathE
 // handshake opens a framed session to blob, its TLS up, not Run.
 func (r *directRig) handshake(t *testing.T) (*DirectSession, *tls.Conn) {
 	t.Helper()
-	first, err := r.open(t, "blob")
+	first, err := r.open(t, r.svc)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +201,7 @@ func (r *directRig) handshake(t *testing.T) (*DirectSession, *tls.Conn) {
 	}
 	ds := r.d.Start(first)
 	cfg := r.d.punchTLS(&directPair{machine: "web"})
-	BindServiceTLS(cfg, MachineALPN("web", "blob"))
+	BindServiceTLS(cfg, r.alpn)
 	tc := tls.Client(ds.Conn(), cfg)
 	if err := tc.HandshakeContext(t.Context()); err != nil {
 		t.Fatal(err)

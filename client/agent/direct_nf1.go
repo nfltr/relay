@@ -118,7 +118,7 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 			dropTarget(target)
 			return
 		}
-		d.registerSession(&directSession{c: c, key: key, nf1: l, sni: nf1SNI(key)})
+		setDirect(target, d.registerSession(&directSession{c: c, key: key, nf1: l, sni: nf1SNI(key)}))
 		done()
 		join(tc, target)
 	}

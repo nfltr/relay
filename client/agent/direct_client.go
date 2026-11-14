@@ -25,6 +25,7 @@ import (
 	"github.com/nfltr/link/pathswitch"
 	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/quic-go"
+	"github.com/nfltr/relay/client/dgram"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
@@ -165,7 +166,7 @@ func NewDirectClient(cfg DirectClientConfig) (*DirectClient, error) {
 	}
 	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, repunch: directBackoff[0], qadGrace: 250 * time.Millisecond, pairs: map[string]*directPair{}, punches: map[string]uint64{},
 		qad: map[string]uint64{}, sessions: map[*DirectSession]struct{}{}}
-	d.node, err = quiclink.New(quiclink.Config{Dial: d.dial, Liveness: link.LivenessFast})
+	d.node, err = quiclink.New(quiclink.Config{Dial: d.dial, Liveness: link.LivenessFast, Datagrams: true})
 	if err != nil {
 		_ = ep.Close()
 		return nil, err
@@ -281,6 +282,7 @@ type DirectSession struct {
 	d     *DirectClient
 	c     *pathswitch.Conn
 	nc    *psConn
+	dg    *sessionDatagrams
 	moved chan struct{} // a fallback happened: the loop tries again
 	// falling: one fallback at a time, so that a stream end while another
 	// waits out its second does not re-attach beside it
@@ -307,8 +309,13 @@ func (d *DirectClient) Start(first net.Conn) *DirectSession {
 		pathswitch.Config{OnStreamEnd: s.fallback, Detach: d.detach})
 	s.epoch = s.c.Epoch()
 	s.nc = newPSConn(s.c, first)
+	s.dg = &sessionDatagrams{c: s.c, recv: &d.directRecv}
 	return s
 }
+
+// Datagrams is the session's direct datagrams, for a datagram service's
+// association (dgram.Client.SetDirect).
+func (s *DirectSession) Datagrams() dgram.Direct { return s.dg }
 
 // Conn is the net.Conn the session's TLS runs on.
 func (s *DirectSession) Conn() net.Conn { return s.nc }
@@ -421,6 +428,9 @@ func (s *DirectSession) tryDirect() string {
 	heard := new(atomic.Bool)
 	tc.ok = func() { heard.Store(true); s.emit(PathEvent{Path: PathDirect, Peer: peer}) }
 	qk := p.qk
+	if q, ok := st.(*quiclink.Session); ok {
+		s.dg.take(tc, q, heard.Load) // its agent's token checked: bound by both
+	}
 	if _, err := s.c.Move(tc, PathDirect, func(e uint64) []byte {
 		tc.want = pathToken(s.key, roleServer, e, qk)
 		close(tc.ready)

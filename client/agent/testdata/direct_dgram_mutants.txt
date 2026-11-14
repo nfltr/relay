@@ -1,0 +1,8 @@
+# Planted bugs of the direct path's datagrams (scripts/go-mutants.sh
+# client/agent/testdata/direct_dgram_mutants.txt, make test-go-mutants, in
+# make ci): each line "<mutant> | <file> | <exact line text> | <replacement> | <test>".
+# Models: spec/DatagramAssoc.tla (direct-ignores-assoc: NoDeliverAfterRevoke;
+# tag-unchecked: NoCrossFlow) and spec/proverif/cap_address.pv, e2ee_tcp.pv
+# (BIND:dgram.tag).
+direct-ignores-assoc | direct_datagram.go | 		if d.c.Current() != cur || bound != nil && !bound() { | 		if bound != nil && !bound() { | TestDatagramRevokeOnDirect
+tag-unchecked | direct_datagram.go | 		if d.c.Current() != cur || bound != nil && !bound() { | 		if d.c.Current() == nil || bound != nil && !bound() { | TestDatagramModelBindings

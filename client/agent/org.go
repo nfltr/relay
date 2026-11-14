@@ -215,7 +215,7 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	_ = tc.SetDeadline(time.Time{})
 	if ps != nil && p.direct != nil {
 		if key, err := sessionKey(tc.ConnectionState()); err == nil {
-			p.direct.register(ps, key)
+			setDirect(target, p.direct.register(ps, key))
 		}
 	}
 	handshook()

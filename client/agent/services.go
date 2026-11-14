@@ -38,9 +38,10 @@ type Service struct {
 	// (http or tcp) of that name (dns over tcp and udp); its sessions are
 	// associations, each flow a socket of its own to Target (or, with
 	// Queue, the association itself, for the application to serve with
-	// dgram.Serve). E2EE, Org, AllowGroups, Group and NF1 as a tcp
-	// service's; Direct not yet (nfltr docs/decisions/nf1-udp-2026-11-14.md
-	// lane UDP3).
+	// dgram.Serve). E2EE, Org, AllowGroups, Group, NF1 and Direct as a tcp
+	// service's: on a direct path its datagrams ride QUIC datagrams
+	// (nfltr docs/decisions/nf1-udp-2026-11-14.md "The direct path"; a
+	// Queue's association takes the stream only).
 	// E2EE of a TCP service: On, its sessions are TLS in organisation mode
 	// (Org, required; a plain session is refused); Off, plain bytes only;
 	// Default, either as the relay's policy resolves it, and a session
@@ -160,9 +161,6 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if s.Name == DirectServiceName {
 			return nil, fmt.Errorf("service %q: the name is reserved for direct paths", s.Name)
 		}
-		if s.Direct != DirectOff && s.Kind == agentservices.UDP {
-			return nil, fmt.Errorf("service %q: direct paths of a udp service are not served yet", s.Name)
-		}
 		if s.Direct != DirectOff && (s.Org == nil && s.NF1 == nil || s.Direct != DirectOn && s.Direct != DirectPublic) {
 			return nil, fmt.Errorf("service %q: direct %q needs organisation mode or a capability address (want %q or %q)", s.Name, s.Direct, DirectOn, DirectPublic)
 		}
@@ -265,14 +263,15 @@ func (t *ServiceTable) addDirect(services []Service) error {
 		if s.Direct == DirectOff {
 			continue
 		}
+		key := agentservices.Decl{Name: s.Name, Kind: s.Kind}.Target() // a name may be tcp and udp, each its mode
 		if s.NF1 != nil {
-			modes[s.Name] = s.Direct
+			modes[key] = s.Direct
 			continue
 		}
 		if org == nil {
 			org = s.Org
 		}
-		modes[s.Name] = s.Direct
+		modes[key] = s.Direct
 		for _, g := range s.AllowGroups {
 			if !slices.Contains(groups, g) {
 				groups = append(groups, g)

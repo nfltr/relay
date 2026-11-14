@@ -22,8 +22,24 @@ func dialDatagram(ctx context.Context, target string) (net.Conn, relayv1.ErrorRe
 		return nil, relayv1.ErrorReason_ERROR_REASON_TARGET_UNREACHABLE, err
 	}
 	session, assoc := net.Pipe()
-	go func() {
-		_ = dgram.Serve(ctx, assoc, dgram.Config{}, func() (net.Conn, error) { return net.DialUDP("udp", nil, addr) })
-	}()
-	return session, 0, nil
+	s := dgram.NewServer(assoc, dgram.Config{}, func() (net.Conn, error) { return net.DialUDP("udp", nil, addr) })
+	stop := context.AfterFunc(ctx, func() { _ = s.Close() })
+	go func() { <-s.Done(); stop() }()
+	return datagramTarget{Conn: session, srv: s}, 0, nil
+}
+
+// datagramTarget is a udp service's session end: its association's
+// server, which takes the session's direct path once the session is
+// framed for one (setDirect).
+type datagramTarget struct {
+	net.Conn
+	srv *dgram.Server
+}
+
+// setDirect gives target's association (a udp service's) the direct
+// datagrams of its session s; any other target, or none, is left as it is.
+func setDirect(target net.Conn, s *directSession) {
+	if t, ok := target.(datagramTarget); ok && s != nil {
+		t.srv.SetDirect(s.dg)
+	}
 }

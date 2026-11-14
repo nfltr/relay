@@ -62,7 +62,7 @@ func TestPacketListenerFlows(t *testing.T) {
 
 func TestDialDatagramUsage(t *testing.T) {
 	d := &Dialer{}
-	for _, o := range []DialOptions{{Direct: DirectOn}, {Early: true}} {
+	for _, o := range []DialOptions{{Early: true}} {
 		if _, err := d.DialDatagram(t.Context(), "web/dns", o); CodeOf(err) != CodeUsage {
 			t.Fatalf("%+v: %v", o, err)
 		}

@@ -59,6 +59,7 @@ type qadTarget struct {
 // directSession is a session that may move: its path layer and token key.
 type directSession struct {
 	c    *pathswitch.Conn
+	dg   *sessionDatagrams // its direct datagrams (a datagram service's association)
 	key  []byte
 	peer string        // the direct connection it last moved to (servedPeer's name); d.mu
 	nf1  *nf1.Listener // a capability address's session: its listener (nil: organisation mode)
@@ -80,7 +81,7 @@ func newDirectServerOn(ep *DirectEndpoint, org Org, groups []string, modes map[s
 		sessions: map[*directSession]struct{}{}, quic: map[string][]byte{}}
 	var err error
 	d.node, err = quiclink.New(quiclink.Config{Transport: ep.tr, TLS: d.listenTLS(), ServedPeer: d.servedPeer,
-		Liveness: link.LivenessFast})
+		Liveness: link.LivenessFast, Datagrams: true})
 	if err != nil {
 		_ = ep.Close()
 		return nil, err
@@ -184,11 +185,12 @@ func (d *directServer) closeAfterSessions(q *quic.Conn, name string) {
 }
 
 // register makes s movable until it ends.
-func (d *directServer) register(c *pathswitch.Conn, key []byte) {
-	d.registerSession(&directSession{c: c, key: key})
+func (d *directServer) register(c *pathswitch.Conn, key []byte) *directSession {
+	return d.registerSession(&directSession{c: c, key: key})
 }
 
-func (d *directServer) registerSession(s *directSession) {
+func (d *directServer) registerSession(s *directSession) *directSession {
+	s.dg = &sessionDatagrams{c: s.c}
 	d.mu.Lock()
 	d.sessions[s] = struct{}{}
 	d.mu.Unlock()
@@ -198,6 +200,7 @@ func (d *directServer) registerSession(s *directSession) {
 		delete(d.sessions, s)
 		d.mu.Unlock()
 	}()
+	return s
 }
 
 // handshaking counts a framed session's TLS handshake until the returned
@@ -301,6 +304,9 @@ func (d *directServer) acceptDirect(peer string, _ []byte, s peerlink.Session) {
 	if _, err := s.Write(pathToken(sess.key, roleServer, o.Epoch, qk)); err != nil {
 		_ = s.Reset()
 		return
+	}
+	if q, ok := s.(*quiclink.Session); ok {
+		sess.dg.take(ps, q, nil) // its client's token checked (find): bound by both
 	}
 	if err := sess.c.Attach(o, PathDirect); err != nil {
 		_ = s.Reset()

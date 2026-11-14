@@ -26,20 +26,24 @@ type DatagramConn = dgram.Conn
 
 // DialDatagram opens a flow to target's udp service, on the Dialer's
 // association to target (opened by the first flow, as Dial opens a
-// session; one per target and Plain). Direct paths and Early do not apply
-// yet (lane UDP3).
+// session; one per target, Plain and Direct). With o.Direct its datagrams
+// ride the session's direct path while it has one (QUIC datagrams), else
+// its stream. Early does not apply.
 func (d *Dialer) DialDatagram(ctx context.Context, target string, o DialOptions) (*DatagramConn, error) {
 	t, err := ParseTarget(target)
 	if err != nil {
 		return nil, err
 	}
-	if o.Direct != DirectOff || o.Early {
-		return nil, usage("DialDatagram: direct paths and Early are not served for datagram services yet")
+	if o.Early {
+		return nil, usage("DialDatagram: Early is not served for datagram services")
 	}
 	t.datagram = true
 	key := target
 	if o.Plain {
 		key += " plain"
+	}
+	if o.Direct != DirectOff {
+		key += " direct=" + string(o.Direct)
 	}
 	d.mu.Lock()
 	a := d.assocs[key]
@@ -56,6 +60,9 @@ func (d *Dialer) DialDatagram(ctx context.Context, target string, o DialOptions)
 	// ponytail: two first dials of one target race to two associations,
 	// the loser's ends at its AssocIdle; a per-key once if that matters.
 	a = dgram.NewClient(c, dgram.Config{})
+	if c.ds != nil {
+		a.SetDirect(c.ds.Datagrams())
+	}
 	d.mu.Lock()
 	if d.assocs == nil {
 		d.assocs = map[string]*dgram.Client{}

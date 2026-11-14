@@ -44,7 +44,7 @@ func (c *Conn) orgSession(d *Dialer, ls net.Conn, t Target, org *orgid.Identity,
 				// The machine the session's certificate names: the one
 				// checked (a machine dial), or the relay's pick (a group dial).
 				cs := c.tc.ConnectionState()
-				if err := c.ds.Run(cs, agentID(t), cs.PeerCertificates[0].Subject.CommonName, t.Service, direct, c.onPath); err != nil {
+				if err := c.ds.Run(cs, agentID(t), cs.PeerCertificates[0].Subject.CommonName, t.session(), direct, c.onPath); err != nil {
 					c.onPath(agent.PathEvent{Path: agent.PathRelayed, Reason: "no_exporter"})
 				}
 			}

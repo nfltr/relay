@@ -73,12 +73,17 @@ type Stats struct {
 	Refused   uint64 // flows refused (R)
 	Live      int    // flows open now
 	Datagrams [2]uint64
+	// Direct counts the datagrams this side sent on the direct path;
+	// Spills those that did not fit in a packet there and went on the
+	// stream (direct.go).
+	Direct, Spills uint64
 }
 
 type counters struct {
 	sourceRefused, flowsFull, queueFull, tooLarge, budget, targetFull, closed atomic.Uint64
 	flows, refused                                                            atomic.Uint64
 	in, out                                                                   atomic.Uint64
+	direct, spills                                                            atomic.Uint64
 }
 
 func (c *counters) drops() Drops {
@@ -110,6 +115,7 @@ func (f *flow) touch() { f.last.Store(time.Now().UnixNano()) }
 type outFrame struct {
 	f  frame
 	fl *flow // a datagram's flow (its queue counters); nil for control
+	dg bool  // a datagram that may go direct (its flow open at the agent)
 }
 
 // assoc is one side of an association: its stream, its one sender (the
@@ -120,6 +126,7 @@ type assoc struct {
 	client bool
 	stream io.ReadWriteCloser
 	cnt    counters
+	direct Direct // the direct path (direct.go); a.mu
 
 	mu      sync.Mutex
 	out     []outFrame
@@ -153,7 +160,8 @@ func (a *assoc) enqueue(f frame, fl *flow) bool {
 		fl.queuedBytes += len(f.payload)
 		f.payload = append([]byte(nil), f.payload...)
 	}
-	a.out = append(a.out, outFrame{f, fl})
+	dg := f.typ == frameData && (!a.client || fl.state == stOpen)
+	a.out = append(a.out, outFrame{f, fl, dg})
 	select {
 	case a.wake <- struct{}{}:
 	default:
@@ -165,10 +173,10 @@ func (a *assoc) enqueue(f frame, fl *flow) bool {
 const flushAt = 64 << 10
 
 // send is the association's one sender: the only goroutine that waits on
-// the stream (its credit).
+// the stream (its credit) and on the direct path's send queue.
 func (a *assoc) send() {
 	var q []outFrame
-	var buf []byte
+	var buf, dbuf []byte
 	for {
 		select {
 		case <-a.wake:
@@ -183,12 +191,15 @@ func (a *assoc) send() {
 				o.fl.queuedBytes -= len(o.f.payload)
 			}
 		}
+		d := a.direct
 		a.mu.Unlock()
 		buf = buf[:0]
 		for i, o := range q {
-			buf = appendFrame(buf, o.f)
+			if !(o.dg && d != nil && a.sendDirect(d, &dbuf, o.f)) {
+				buf = appendFrame(buf, o.f)
+			}
 			q[i] = outFrame{}
-			if len(buf) >= flushAt || i == len(q)-1 {
+			if len(buf) >= flushAt || i == len(q)-1 && len(buf) > 0 {
 				if _, err := a.stream.Write(buf); err != nil {
 					a.end(err)
 					return
@@ -303,7 +314,7 @@ func (a *assoc) stats() Stats {
 	live := len(a.flows)
 	a.mu.Unlock()
 	return Stats{Drops: a.cnt.drops(), Flows: a.cnt.flows.Load(), Refused: a.cnt.refused.Load(), Live: live,
-		Datagrams: [2]uint64{a.cnt.in.Load(), a.cnt.out.Load()}}
+		Datagrams: [2]uint64{a.cnt.in.Load(), a.cnt.out.Load()}, Direct: a.cnt.direct.Load(), Spills: a.cnt.spills.Load()}
 }
 
 // Err is why the association ended (nil while it runs, io.EOF at the

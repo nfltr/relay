@@ -17,9 +17,7 @@ import (
 // module yet: id -> where the row comes from. Every bindings test and
 // client's TestEveryModelBindingHasARow exempt these ids, and each fails
 // once a pending id has a row, so the list cannot go stale.
-var Pending = map[string]string{
-	"dgram.tag": "cap_address.pv and e2ee_tcp.pv datagrams: design (nfltr docs/decisions/nf1-udp-2026-11-14.md, lane UDP3 adds the row with the direct datagram code)",
-}
+var Pending = map[string]string{}
 
 // Check compares the BIND ids model (a model's source) declares that id
 // matches (its first group), less the pending ones, with a test's rows. A
