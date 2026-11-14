@@ -138,12 +138,12 @@ func checkOrgService(s Service) error {
 	switch {
 	case s.Org == nil && len(s.AllowGroups) > 0:
 		return fmt.Errorf("service %q: allow groups need the organisation (Org)", s.Name)
-	case s.Org == nil && s.NF1 == nil && s.Kind == agentservices.TCP && s.E2EE == agentservices.E2EEOn:
+	case s.Org == nil && s.NF1 == nil && s.Kind.Sessions() && s.E2EE == agentservices.E2EEOn:
 		return fmt.Errorf("service %q: e2ee %q needs organisation mode (Org and at least one allow group) or a capability address (NF1)", s.Name, agentservices.E2EEOn)
 	case s.Org == nil:
 		return nil
-	case s.Kind != agentservices.TCP || s.E2EE != agentservices.E2EEOn:
-		return fmt.Errorf("service %q: organisation mode needs a tcp service with e2ee %q", s.Name, agentservices.E2EEOn)
+	case !s.Kind.Sessions() || s.E2EE != agentservices.E2EEOn:
+		return fmt.Errorf("service %q: organisation mode needs a tcp or udp service with e2ee %q", s.Name, agentservices.E2EEOn)
 	case len(s.AllowGroups) == 0:
 		return fmt.Errorf("service %q: organisation mode needs at least one allow group", s.Name)
 	}

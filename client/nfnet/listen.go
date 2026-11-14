@@ -75,7 +75,13 @@ type Listener struct {
 // CodeUsage), retrying network errors until ctx ends (CodeUnreachable).
 // After that the agent reconnects by itself until Close.
 func Listen(ctx context.Context, cfg Config, service string, o ListenOptions) (*Listener, error) {
+	return listen(ctx, cfg, service, o, agentservices.TCP)
+}
+
+// listen is Listen of a service of kind (tcp, udp).
+func listen(ctx context.Context, cfg Config, service string, o ListenOptions, kind agentservices.Kind) (*Listener, error) {
 	svc, err := listenService(cfg, service, o)
+	svc.Kind = kind
 	if err != nil {
 		return nil, err
 	}
@@ -209,9 +215,9 @@ func accepted(c agent.Connection, s agent.Service) error {
 		return usage("Listen: the relay accepted no services (a relay before service declarations): update the relay")
 	}
 	got, err := agentservices.Parse(vals[0])
-	d, ok := agentservices.Find(got, s.Name)
+	d, ok := agentservices.Find(got, agentservices.Decl{Name: s.Name, Kind: s.Kind}.Target())
 	switch {
-	case err != nil || !ok || d.Kind != agentservices.TCP:
+	case err != nil || !ok || d.Kind != s.Kind:
 		return usage(fmt.Sprintf("Listen: the relay did not accept service %s as declared (%q)", s.Name, vals[0]))
 	case d.E2EE != s.E2EE:
 		return usage(fmt.Sprintf("Listen: the relay accepted service %s as e2ee=%s, declared %s", s.Name, d.E2EE, s.E2EE))

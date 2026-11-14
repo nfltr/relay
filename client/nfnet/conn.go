@@ -14,6 +14,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -183,11 +184,20 @@ func (c *Conn) SetDeadline(t time.Time) error      { return c.s.SetDeadline(t) }
 func (c *Conn) SetReadDeadline(t time.Time) error  { return c.s.SetReadDeadline(t) }
 func (c *Conn) SetWriteDeadline(t time.Time) error { return c.s.SetWriteDeadline(t) }
 
-// Addr is a session end's address: the target as dialled.
-type Addr struct{ Target string }
+// Addr is a session end's address: the target as dialled. Flow names one
+// flow of a PacketListener (0: none).
+type Addr struct {
+	Target string
+	Flow   uint64
+}
 
-func (Addr) Network() string  { return "nfltr" }
-func (a Addr) String() string { return a.Target }
+func (Addr) Network() string { return "nfltr" }
+func (a Addr) String() string {
+	if a.Flow == 0 {
+		return a.Target
+	}
+	return a.Target + "#" + strconv.FormatUint(a.Flow, 10)
+}
 
 // LocalAddr is this end's (the session id); RemoteAddr the target dialled,
 // or for an accepted Conn the caller's machine (its name; "" when the

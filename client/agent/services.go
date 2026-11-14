@@ -32,8 +32,15 @@ import (
 // Service is one named service of an agent.
 type Service struct {
 	Name   string             // agentservices.ValidName
-	Kind   agentservices.Kind // HTTP: E2EE sessions; TCP: raw sessions
-	Target string             // HTTP: backend URL (http or https); TCP: host:port, or unix:/abs/path (a unix socket only this table dials)
+	Kind   agentservices.Kind // HTTP: E2EE sessions; TCP: raw sessions; UDP: datagram associations (client/dgram)
+	Target string             // HTTP: backend URL (http or https); TCP: host:port, or unix:/abs/path (a unix socket only this table dials); UDP: host:port
+	// A udp service has its name once more beside one stream service
+	// (http or tcp) of that name (dns over tcp and udp); its sessions are
+	// associations, each flow a socket of its own to Target (or, with
+	// Queue, the association itself, for the application to serve with
+	// dgram.Serve). E2EE, Org, AllowGroups, Group and NF1 as a tcp
+	// service's; Direct not yet (nfltr docs/decisions/nf1-udp-2026-11-14.md
+	// lane UDP3).
 	// E2EE of a TCP service: On, its sessions are TLS in organisation mode
 	// (Org, required; a plain session is refused); Off, plain bytes only;
 	// Default, either as the relay's policy resolves it, and a session
@@ -123,7 +130,7 @@ func (t *ServiceTable) OnSession(f func(Session)) { t.onSession = f }
 type tableService struct {
 	kind    agentservices.Kind
 	e2ee    agentservices.E2EE
-	network string   // TCP: "tcp" or "unix"
+	network string   // TCP: "tcp" or "unix"; UDP: "udp"
 	addr    string   // TCP: the address dialled
 	backend string   // HTTP: the backend URL
 	shares  []string // share codes whose policy wrap enforces
@@ -146,11 +153,15 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if !agentservices.ValidName(s.Name) {
 			return nil, fmt.Errorf("service %q: invalid name (a DNS label starting with a letter)", s.Name)
 		}
-		if t.byName[s.Name] != nil {
+		key := agentservices.Decl{Name: s.Name, Kind: s.Kind}.Target()
+		if t.byName[key] != nil {
 			return nil, fmt.Errorf("service %q: declared twice", s.Name)
 		}
 		if s.Name == DirectServiceName {
 			return nil, fmt.Errorf("service %q: the name is reserved for direct paths", s.Name)
+		}
+		if s.Direct != DirectOff && s.Kind == agentservices.UDP {
+			return nil, fmt.Errorf("service %q: direct paths of a udp service are not served yet", s.Name)
 		}
 		if s.Direct != DirectOff && (s.Org == nil && s.NF1 == nil || s.Direct != DirectOn && s.Direct != DirectPublic) {
 			return nil, fmt.Errorf("service %q: direct %q needs organisation mode or a capability address (want %q or %q)", s.Name, s.Direct, DirectOn, DirectPublic)
@@ -159,8 +170,8 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if s.Cert != nil {
 			e.cert = s.Cert.cfg
 		}
-		if s.E2EE != agentservices.E2EEDefault && (s.Kind != agentservices.TCP || (s.E2EE != agentservices.E2EEOn && s.E2EE != agentservices.E2EEOff)) {
-			return nil, fmt.Errorf("service %q: e2ee %q (want %q or %q on a tcp service)", s.Name, s.E2EE, agentservices.E2EEOn, agentservices.E2EEOff)
+		if s.E2EE != agentservices.E2EEDefault && (!s.Kind.Sessions() || (s.E2EE != agentservices.E2EEOn && s.E2EE != agentservices.E2EEOff)) {
+			return nil, fmt.Errorf("service %q: e2ee %q (want %q or %q on a tcp or udp service)", s.Name, s.E2EE, agentservices.E2EEOn, agentservices.E2EEOff)
 		}
 		if s.Cert != nil && s.Kind != agentservices.HTTP {
 			return nil, fmt.Errorf("service %q: a certificate of its own needs an http service (a tcp service's E2EE is the organisation's)", s.Name)
@@ -171,8 +182,15 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if err := checkPublish(s); err != nil {
 			return nil, err
 		}
-		if s.NF1 != nil && (s.Kind != agentservices.TCP || s.E2EE != agentservices.E2EEOn || s.Org != nil || s.Group != "" || len(s.AllowGroups) > 0) {
-			return nil, fmt.Errorf("service %q: a capability address (nf1) needs a tcp service with e2ee on and no organisation or group", s.Name)
+		if s.NF1 != nil && (!s.Kind.Sessions() || s.E2EE != agentservices.E2EEOn || s.Org != nil || s.Group != "" || len(s.AllowGroups) > 0) {
+			return nil, fmt.Errorf("service %q: a capability address (nf1) needs a tcp or udp service with e2ee on and no organisation or group", s.Name)
+		}
+		if s.NF1 != nil && s.Kind == agentservices.UDP {
+			l, err := s.NF1.WithDatagram()
+			if err != nil {
+				return nil, err
+			}
+			s.NF1 = l
 		}
 		e.org, e.groups, e.group, e.nf1 = s.Org, s.AllowGroups, s.Group, s.NF1
 		if s.NF1 != nil && s.Direct != DirectOff {
@@ -198,6 +216,16 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 			} else if _, port, err := net.SplitHostPort(s.Target); err != nil || port == "" {
 				return nil, fmt.Errorf("service %q: target %q is not host:port or unix:/path", s.Name, s.Target)
 			}
+		case agentservices.UDP:
+			e.network, e.addr = "udp", s.Target
+			if (s.Target == "") == (s.Queue == nil) {
+				return nil, fmt.Errorf("service %q: a udp service has a target or a queue, one of them", s.Name)
+			}
+			if s.Queue != nil {
+				e.network, e.addr, e.queue = networkQueue, "", s.Queue
+			} else if _, port, err := net.SplitHostPort(s.Target); err != nil || port == "" {
+				return nil, fmt.Errorf("service %q: target %q is not host:port", s.Name, s.Target)
+			}
 		case agentservices.HTTP:
 			if s.Queue != nil {
 				return nil, fmt.Errorf("service %q: a queue needs a tcp service", s.Name)
@@ -210,7 +238,7 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		default:
 			return nil, fmt.Errorf("service %q: unknown kind %q", s.Name, s.Kind)
 		}
-		t.byName[s.Name] = e
+		t.byName[key] = e
 		d := agentservices.Decl{Name: s.Name, Kind: s.Kind, E2EE: s.E2EE, Group: s.Group}
 		if s.NF1 != nil {
 			d.NF1 = s.NF1.Address().RID
@@ -344,7 +372,7 @@ func (t *ServiceTable) Declaration() string { return agentservices.Format(t.decl
 func (t *ServiceTable) Registrations() []string {
 	var out []string
 	for _, d := range t.decls {
-		if l := t.byName[d.Name].nf1; l != nil && l.RegistrationProof() != nil {
+		if l := t.byName[d.Target()].nf1; l != nil && l.RegistrationProof() != nil {
 			out = append(out, agentservices.FormatReg(d.NF1, l.RegistrationProof()))
 		}
 	}
@@ -358,7 +386,7 @@ func (t *ServiceTable) Refused() uint64 { return t.refused.Load() }
 func (t *ServiceTable) shareCodes() []string {
 	var codes []string
 	for _, d := range t.decls {
-		codes = append(codes, t.byName[d.Name].shares...)
+		codes = append(codes, t.byName[d.Target()].shares...)
 	}
 	return codes
 }
@@ -394,13 +422,13 @@ func (t *ServiceTable) resolve(target string, e2ee, terminatesE2EE, connect bool
 		return refuse(relayv1.ErrorReason_ERROR_REASON_UNKNOWN_SERVICE, "no such service")
 	case e2ee && !terminatesE2EE && e.cert == nil && e.org == nil && e.nf1 == nil:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "the agent does not terminate end-to-end TLS")
-	case e2ee && e.kind == agentservices.TCP && !connect:
+	case e2ee && e.kind.Sessions() && !connect:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "an end-to-end encrypted share session needs an http service")
-	case e2ee && e.kind == agentservices.TCP && e.org == nil && e.nf1 == nil:
+	case e2ee && e.kind.Sessions() && e.org == nil && e.nf1 == nil:
 		// Only organisation mode is end to end encrypted (E2EE Off, or a
 		// Default service the relay's policy made plain).
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "the service is not end-to-end encrypted (not in organisation mode)")
-	case !e2ee && e.kind != agentservices.TCP:
+	case !e2ee && !e.kind.Sessions():
 		return refuse(relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED, "a raw TCP session needs a tcp service")
 	case !e2ee && e.e2ee == agentservices.E2EEOn:
 		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED, "the service takes end-to-end encrypted sessions only")

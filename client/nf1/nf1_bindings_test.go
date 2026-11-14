@@ -68,6 +68,40 @@ var nf1Bindings = map[string]func(t *testing.T){
 		})
 		refusedBy(t, "a direct-path hint the record does not cover (cap_address.pv hint-unbound)", err, capaddr.ErrRendezvous)
 	},
+	// The dial's kind against the record's hints (u1 or none): a stream
+	// dial to a datagram service's honest answer, a datagram dial to a
+	// stream service's, and a u1 the record does not cover, each refused
+	// before TLS (cap_address.pv hint-unbound, its u1 variant).
+	"cap.kind": func(t *testing.T) {
+		l, _ := mint(t)
+		dg, err := l.WithDatagram()
+		if err != nil {
+			t.Fatal(err)
+		}
+		dd, err := dg.WithDirect()
+		if err != nil || string(dd.hints) != "d1,u1" || !dd.Datagram() || !dd.TakesDirect() {
+			t.Fatalf("hints %q %v", dd.hints, err)
+		}
+		accept := func(l *Listener) func(net.Conn) error {
+			return func(s net.Conn) error { _, err := l.Accept(context.Background(), s); return err }
+		}
+		_, err, _ = run(t, dg.Address(), accept(dg))
+		refusedBy(t, "a stream dial to a datagram service", err, ErrKind)
+		_, err, _ = run(t, dd.Address(), accept(dd))
+		refusedBy(t, "a stream dial to a datagram service with direct paths", err, ErrKind)
+		_, err, _ = runDatagram(t, l.Address(), accept(l))
+		refusedBy(t, "a datagram dial to a stream service", err, ErrKind)
+		_, err, _ = runDatagram(t, l.Address(), func(s net.Conn) error {
+			_, err := s.Write(appendAnswer(nil, l.spki, l.rec, []byte(HintDatagram)))
+			return err
+		})
+		refusedBy(t, "a u1 the record does not cover", err, capaddr.ErrRendezvous)
+		c, err, serr := runDatagram(t, dg.Address(), accept(dg))
+		if err != nil || serr != nil {
+			t.Fatalf("a datagram dial to a datagram service: %v %v", err, serr)
+		}
+		_ = c.Close()
+	},
 	// A proof over another exporter than this session's: the listener
 	// refuses it and sends no verdict.
 	"cap.secret": func(t *testing.T) {
@@ -110,6 +144,25 @@ var nf1Bindings = map[string]func(t *testing.T){
 		refusedBy(t, "client", err, capaddr.ErrProof)
 		refusedBy(t, "listener", serr, capaddr.ErrProof)
 	},
+}
+
+// runDatagram is run with a datagram dial.
+func runDatagram(t *testing.T, addr capaddr.Address, server func(net.Conn) error) (net.Conn, error, error) {
+	t.Helper()
+	c, s := net.Pipe()
+	serr := make(chan error, 1)
+	go func() {
+		err := server(s)
+		if err != nil {
+			_ = s.Close()
+		}
+		serr <- err
+	}()
+	conn, err := HandshakeDatagram(context.Background(), c, addr)
+	if err != nil {
+		_ = c.Close()
+	}
+	return conn, err, <-serr
 }
 
 func TestNF1ModelBindings(t *testing.T) {

@@ -44,6 +44,10 @@ type Options struct {
 	// every relay is untrusted); it keeps the rendezvous id from the
 	// network.
 	DialRelay func(ctx context.Context, relay string) (net.Conn, error)
+	// Datagram dials the address's datagram service (its answer must say
+	// it serves datagrams: ErrKind otherwise); the session's bytes are then
+	// an association's (client/dgram).
+	Datagram bool
 }
 
 // window is a client data connection's window (one session).
@@ -108,7 +112,11 @@ func Dial(ctx context.Context, addr capaddr.Address, opt Options) (net.Conn, err
 		return nil, err
 	}
 	w, bind := tlsend.Wrap(s)
-	c, err := Handshake(ctx, w, addr)
+	hs := Handshake
+	if opt.Datagram {
+		hs = HandshakeDatagram
+	}
+	c, err := hs(ctx, w, addr)
 	if err != nil {
 		_ = mux.Close()
 		return nil, err

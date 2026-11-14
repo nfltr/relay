@@ -49,6 +49,9 @@ func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, e
 		return nil, err
 	}
 	hints, err := nf1.ReadAnswer(ls, addr)
+	if err == nil {
+		err = nf1.CheckKind(hints, t.datagram) // the dial's kind (BIND:cap.kind)
+	}
 	if err != nil {
 		return fail(handshakeError(ctx, err))
 	}
@@ -234,6 +237,8 @@ func handshakeError(ctx context.Context, err error) error {
 	switch {
 	case errors.Is(err, capaddr.ErrPin), errors.Is(err, capaddr.ErrRendezvous), errors.Is(err, capaddr.ErrTLS), errors.Is(err, nf1.ErrAnswer):
 		return &Error{Code: CodeE2EEPinMismatch, Message: "the server is not this address's: " + err.Error(), Err: err}
+	case errors.Is(err, nf1.ErrKind):
+		return &Error{Code: CodeUsage, Message: "kind_mismatch: " + err.Error(), Err: err}
 	case errors.Is(err, capaddr.ErrProof):
 		return &Error{Code: CodeE2EEClientRefused, Message: "the server refused this address's secret (it serves another address now, or the address was replaced)", Err: err}
 	case ctx.Err() != nil:

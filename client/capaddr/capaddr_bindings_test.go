@@ -163,9 +163,10 @@ func TestCapAddressModelBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// nf1direct.*: client/agent's rows; cap.kind: client/nf1's (the
+	// dial's kind is the transport's: nf1.CheckKind)
 	rows := slices.Sorted(maps.Keys(capBindings))
-	// nf1direct.*: client/agent's rows
-	if err := modelbind.Check(src, regexp.MustCompile(`BIND:(cap\.[a-z0-9.]*[a-z0-9])`), rows); err != nil {
+	if err := modelbind.Check(src, regexp.MustCompile(`BIND:(cap\.[a-z0-9.]*[a-z0-9])`), append(rows, "cap.kind")); err != nil {
 		t.Fatalf("%s: %v", capBindModel, err)
 	}
 	h := newHonest(t)

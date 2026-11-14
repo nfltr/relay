@@ -46,7 +46,9 @@ func TestNewServiceTableValidates(t *testing.T) {
 		"tcp no port":    {{Name: "db", Kind: agentservices.TCP, Target: "localhost"}},
 		"http not a URL": {{Name: "web", Kind: agentservices.HTTP, Target: "localhost:3000"}},
 		"http ftp":       {{Name: "web", Kind: agentservices.HTTP, Target: "ftp://x/"}},
-		"unknown kind":   {{Name: "x", Kind: "udp", Target: "a:1"}},
+		"unknown kind":   {{Name: "x", Kind: "sctp", Target: "a:1"}},
+		"udp direct":     {{Name: "x", Kind: agentservices.UDP, Target: "a:1", Direct: DirectOn}},
+		"udp no port":    {{Name: "x", Kind: agentservices.UDP, Target: "a"}},
 		"unix relative":  {{Name: "db", Kind: agentservices.TCP, Target: "unix:db.sock"}},
 	} {
 		if _, err := NewServiceTable(svcs); err == nil {

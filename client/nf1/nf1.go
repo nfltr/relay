@@ -36,6 +36,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/nfltr/relay/client/capaddr"
@@ -47,9 +48,39 @@ import (
 // listener said so (cap_address.pv mutant hint-unbound).
 const HintDirect = "d1"
 
+// HintDatagram is the rendezvous hints' flag of a datagram service (kind
+// udp; nfltr docs/decisions/nf1-udp-2026-11-14.md section 3): the record
+// signs it, so a relay cannot make a stream client speak to a datagram
+// service or the reverse (BIND:cap.kind).
+const HintDatagram = "u1"
+
+// Hints are a comma-separated list of flags ("d1", "u1", "d1,u1"),
+// signed by the record.
+func hasHint(hints []byte, h string) bool {
+	for f := range strings.SplitSeq(string(hints), ",") {
+		if f == h {
+			return true
+		}
+	}
+	return false
+}
+
 // TakesDirect reports whether checked hints (CheckAnswer accepted them)
 // say the listener takes direct paths.
-func TakesDirect(hints []byte) bool { return string(hints) == HintDirect }
+func TakesDirect(hints []byte) bool { return hasHint(hints, HintDirect) }
+
+// ErrKind: the address serves the other kind (a datagram service to a
+// stream dial, or the reverse), as its signed record says.
+var ErrKind = errors.New("nf1: the address serves another kind than dialled (stream or datagram)")
+
+// CheckKind is the client's check of checked hints against its dial:
+// datagram for a datagram dial (BIND:cap.kind).
+func CheckKind(hints []byte, datagram bool) error {
+	if hasHint(hints, HintDatagram) != datagram {
+		return ErrKind
+	}
+	return nil
+}
 
 // Admitted is the server's verdict byte once Admit accepted the proof.
 const Admitted = 0x01
@@ -144,15 +175,33 @@ func (l *Listener) RegistrationProof() []byte { return l.reg }
 // WithDirect is a copy of l whose rendezvous answer says it takes direct
 // paths (HintDirect, signed): the services table makes it for a service
 // with a direct mode.
-func (l *Listener) WithDirect() (*Listener, error) {
-	rec, err := capaddr.SignRecord(l.key, l.addr.Relay, l.addr.RID, []byte(HintDirect))
+func (l *Listener) WithDirect() (*Listener, error) { return l.withHint(HintDirect) }
+
+// WithDatagram is a copy of l whose rendezvous answer says it serves
+// datagrams (HintDatagram, signed): the services table makes it for a udp
+// service.
+func (l *Listener) WithDatagram() (*Listener, error) { return l.withHint(HintDatagram) }
+
+// withHint adds flag h to l's signed hints, in the order d1, u1.
+func (l *Listener) withHint(h string) (*Listener, error) {
+	var flags []string
+	for _, f := range []string{HintDirect, HintDatagram} {
+		if f == h || hasHint(l.hints, f) {
+			flags = append(flags, f)
+		}
+	}
+	hints := []byte(strings.Join(flags, ","))
+	rec, err := capaddr.SignRecord(l.key, l.addr.Relay, l.addr.RID, hints)
 	if err != nil {
 		return nil, err
 	}
 	c := *l
-	c.rec, c.hints = rec, []byte(HintDirect)
+	c.rec, c.hints = rec, hints
 	return &c, nil
 }
+
+// Datagram reports whether l's answer says it serves datagrams.
+func (l *Listener) Datagram() bool { return hasHint(l.hints, HintDatagram) }
 
 // TakesDirect reports whether l's answer says it takes direct paths.
 func (l *Listener) TakesDirect() bool { return TakesDirect(l.hints) }
@@ -217,11 +266,11 @@ func (l *Listener) Admit(ctx context.Context, conn net.Conn) (*tls.Conn, error) 
 // Handshake runs the client's side of steps 1-4 on conn, a session the
 // relay opened toward addr: the TLS stream to the admitted service, or
 // capaddr.ErrPin, ErrRendezvous or ErrTLS (the server is not the address's:
-// exit 7), capaddr.ErrProof (no verdict: the secret refused, exit 10),
+// exit 7), ErrKind (the address serves datagrams), capaddr.ErrProof (no verdict: the secret refused, exit 10),
 // ErrAnswer or a connection error. conn is closed on an error.
 func Handshake(ctx context.Context, conn net.Conn, addr capaddr.Address) (net.Conn, error) {
 	defer bound(ctx, conn)()
-	tc, err := handshake(ctx, conn, addr)
+	tc, err := handshake(ctx, conn, addr, false)
 	if err != nil {
 		_ = conn.Close()
 		return nil, err
@@ -229,8 +278,24 @@ func Handshake(ctx context.Context, conn net.Conn, addr capaddr.Address) (net.Co
 	return tc, nil
 }
 
-func handshake(ctx context.Context, conn net.Conn, addr capaddr.Address) (net.Conn, error) {
-	if _, err := ReadAnswer(conn, addr); err != nil {
+// HandshakeDatagram is Handshake for a datagram dial: the answer must say
+// the address serves datagrams (ErrKind otherwise).
+func HandshakeDatagram(ctx context.Context, conn net.Conn, addr capaddr.Address) (net.Conn, error) {
+	defer bound(ctx, conn)()
+	tc, err := handshake(ctx, conn, addr, true)
+	if err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return tc, nil
+}
+
+func handshake(ctx context.Context, conn net.Conn, addr capaddr.Address, datagram bool) (net.Conn, error) {
+	hints, err := ReadAnswer(conn, addr)
+	if err != nil {
+		return nil, err
+	}
+	if err := CheckKind(hints, datagram); err != nil {
 		return nil, err
 	}
 	return ClientTLS(ctx, conn, addr)

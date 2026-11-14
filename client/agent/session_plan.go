@@ -18,6 +18,7 @@ import (
 	"github.com/nfltr/relay/client/nf1"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/agentservices"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
@@ -111,7 +112,8 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 			// On); the session is the organisation's TLS, never the
 			// tunnel's certificate (e2ee_tcp.pv).
 			p.kind, p.org, p.groups, p.e2ee = sessionE2EETCP, svc.org, svc.groups, nil
-			p.bind = serviceBind{agent: targets.agent, service: open.GetTargetAddr(), group: svc.group}
+			name, udp := agentservices.SplitTarget(open.GetTargetAddr())
+			p.bind = serviceBind{agent: targets.agent, service: name, group: svc.group, datagram: udp}
 			p.client = clientAddr(open.GetClientAddr())
 			if targets.services.direct != nil && targets.services.direct.modes[open.GetTargetAddr()] != DirectOff {
 				p.direct, p.relay = targets.services.direct, targets.relayQAD()
@@ -338,6 +340,9 @@ func targetDialer() *net.Dialer {
 func (p sessionPlan) dial(ctx context.Context) (net.Conn, relayv1.ErrorReason, error) {
 	if p.queue != nil {
 		return p.queue.enter(ctx, p.caller)
+	}
+	if p.network == "udp" {
+		return dialDatagram(ctx, p.target)
 	}
 	return dialTarget(ctx, p.network, p.target)
 }

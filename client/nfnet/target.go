@@ -46,6 +46,16 @@ type Target struct {
 	Service string
 	Group   string
 	Address capaddr.Address
+
+	datagram bool // a DialDatagram's: the service's udp kind
+}
+
+// session is the open's target_addr: the service, or its datagram kind.
+func (t Target) session() string {
+	if t.datagram {
+		return agentservices.DatagramTarget(t.Service)
+	}
+	return t.Service
 }
 
 // usageForms names the four forms in a usage error.

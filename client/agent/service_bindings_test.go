@@ -84,6 +84,34 @@ func (r svcRig) session(t *testing.T, target string, protos ...string) error {
 	return nil
 }
 
+// handshake is session's TLS handshake alone (a datagram session's bytes
+// are its association's frames).
+func (r svcRig) handshake(t *testing.T, target string, protos ...string) error {
+	t.Helper()
+	s, c := sessionPair(t)
+	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: target, E2Ee: true, Answer: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go r.l.accept("", h, s)
+	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
+		return fmt.Errorf("answer %v, %v", a, err)
+	}
+	tc := tls.Client(c, &tls.Config{MinVersion: tls.VersionTLS13, RootCAs: r.pool, ServerName: "web.org.internal", Certificates: []tls.Certificate{r.cli}, NextProtos: protos})
+	defer tc.Close() //nolint:errcheck
+	_ = tc.SetDeadline(time.Now().Add(10 * time.Second))
+	if err := tc.Handshake(); err != nil {
+		return err
+	}
+	// TLS 1.3: the agent's verdict on the client (its certificate, the
+	// protocol) arrives after the client's handshake; one read sees it.
+	_ = tc.SetReadDeadline(time.Now().Add(300 * time.Millisecond))
+	if _, err := tc.Read(make([]byte, 1)); err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
+		return err
+	}
+	return nil
+}
+
 // served requires err nil (what) and refused requires an error.
 func served(t *testing.T, what string, err error) {
 	t.Helper()
@@ -152,6 +180,37 @@ var serviceBindings = map[string]func(t *testing.T){
 		served(t, "pg@db", r.session(t, "pg", GroupALPN("pg", "db")))
 		r.org.cert = r.org.o.machine(t, "web", []string{"ops"}, time.Hour, false)
 		refused(t, "pg@db, the certificate renewed without db", r.session(t, "pg", GroupALPN("pg", "db")))
+	},
+	// The kind, in the protocol's prefix: web serves pg as a stream and as
+	// a datagram service, both under db. A session routed to the datagram
+	// pg serves only the datagram protocol, a stream one only the stream
+	// protocol (the relay routing a dial of one kind to the other); the
+	// client refuses a server that negotiated the other kind.
+	"org.kind": func(t *testing.T) {
+		o := newTestOrg(t)
+		org := o.agentOrg(o.machine(t, "web", []string{"db"}, time.Hour, false))
+		svc := func(kind agentservices.Kind, target string) Service {
+			return Service{Name: "pg", Kind: kind, Target: target, E2EE: agentservices.E2EEOn, Org: org, AllowGroups: []string{"db"}, Group: "db"}
+		}
+		table, err := NewServiceTable([]Service{svc(agentservices.TCP, echoTarget(t)), svc(agentservices.UDP, "127.0.0.1:9")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := svcRig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table, agent: "web"}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}},
+			org: org, pool: o.pool, cli: o.machine(t, "cli", []string{"db"}, time.Hour, false)}
+		dg := agentservices.DatagramTarget("pg")
+		served(t, "web/pg stream", r.session(t, "pg", MachineALPN("web", "pg")))
+		served(t, "web/pg datagram", r.handshake(t, dg, DatagramALPN(MachineALPN("web", "pg"))))
+		served(t, "pg@db datagram", r.handshake(t, dg, DatagramALPN(GroupALPN("pg", "db"))))
+		refused(t, "the stream web/pg routed to the datagram pg", r.handshake(t, dg, MachineALPN("web", "pg")))
+		refused(t, "the stream pg@db routed to the datagram pg", r.handshake(t, dg, GroupALPN("pg", "db")))
+		refused(t, "the datagram web/pg routed to the stream pg", r.handshake(t, "pg", DatagramALPN(MachineALPN("web", "pg"))))
+		refused(t, "the datagram pg@db routed to the stream pg", r.handshake(t, "pg", DatagramALPN(GroupALPN("pg", "db"))))
+		// A relay that rewrote the offer: the server negotiated the stream
+		// protocol (BindServiceTLS's VerifyConnection check).
+		if err := checkNegotiated(tls.ConnectionState{NegotiatedProtocol: MachineALPN("web", "pg")}, DatagramALPN(MachineALPN("web", "pg"))); !errors.Is(err, ErrServiceNotNegotiated) {
+			t.Fatalf("the datagram client took a server that negotiated the stream protocol (%v)", err)
+		}
 	},
 	// The publish: <service>@<group> is served only for the group the
 	// service is published under: not pg@db for a pg published under ops

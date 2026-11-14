@@ -15,6 +15,7 @@ import (
 
 	"github.com/nfltr/link"
 	"github.com/nfltr/relay/client/agent"
+	"github.com/nfltr/relay/client/dgram"
 	"github.com/nfltr/relay/client/orgid"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
@@ -34,6 +35,7 @@ type Dialer struct {
 
 	mu      sync.Mutex
 	closed  bool
+	assocs  map[string]*dgram.Client       // DialDatagram's, per target
 	direct  map[string]*agent.DirectClient // by QAD relay: "" the organisation's, else an nf1 address's relay
 	nf1Muxs map[*dataplane.Mux]struct{}    // each nf1 session's own data connection
 }
@@ -199,7 +201,7 @@ func agentID(t Target) string {
 // TLS of organisation mode with the machine t names (or any machine of its
 // group) on it.
 func (d *Dialer) open(ctx context.Context, t Target, org *orgid.Identity, o DialOptions, exclude []string) (*Conn, error) {
-	ls, err := d.openData(ctx, &pb.TCPData{AgentId: agentID(t), TargetAddr: t.Service, E2Ee: org != nil, Exclude: exclude})
+	ls, err := d.openData(ctx, &pb.TCPData{AgentId: agentID(t), TargetAddr: t.session(), E2Ee: org != nil, Exclude: exclude})
 	if err != nil {
 		return nil, err
 	}

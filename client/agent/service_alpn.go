@@ -28,8 +28,20 @@ import (
 // the handshake's transcript: a relay that changes either fails it. No
 // protocol, no session: a client that offers none is refused.
 
-// ServiceALPNPrefix starts every service protocol.
-const ServiceALPNPrefix = "nfltr-svc/"
+// ServiceALPNPrefix starts every stream service's protocol, and
+// DatagramALPNPrefix every datagram (udp) service's: the protocol carries
+// the kind, and the agent accepts only its service's (BIND:org.kind;
+// e2ee_tcp.pv mutant agent-ignores-kind).
+const (
+	ServiceALPNPrefix  = "nfltr-svc/"
+	DatagramALPNPrefix = "nfltr-dg/"
+)
+
+// DatagramALPN is proto (MachineALPN, GroupALPN) for a datagram service:
+// its prefix DatagramALPNPrefix.
+func DatagramALPN(proto string) string {
+	return DatagramALPNPrefix + strings.TrimPrefix(proto, ServiceALPNPrefix)
+}
 
 // MachineALPN is the protocol a client offers for a machine dial of
 // service on agent, as the client names it: "<agent>" or
@@ -88,9 +100,11 @@ func checkNegotiated(cs tls.ConnectionState, proto string) error {
 
 // serviceBind is what an agent's session of organisation mode accepts:
 // the agent's name, the service the session was routed to (the open's
-// target), and the group that service is published under ("": none).
+// target's name), the group that service is published under ("": none),
+// and its kind (datagram: udp).
 type serviceBind struct {
 	agent, service, group string
+	datagram              bool
 }
 
 // protos are the protocols the agent accepts for b with cert, its
@@ -103,6 +117,11 @@ func (b serviceBind) protos(cert *tls.Certificate) []string {
 	for _, g := range certGroups(cert) {
 		if g != "" && g == b.group {
 			p = append(p, GroupALPN(b.service, g))
+		}
+	}
+	if b.datagram {
+		for i := range p {
+			p[i] = DatagramALPN(p[i])
 		}
 	}
 	return p

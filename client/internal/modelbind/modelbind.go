@@ -19,8 +19,6 @@ import (
 // once a pending id has a row, so the list cannot go stale.
 var Pending = map[string]string{
 	"dgram.tag": "cap_address.pv and e2ee_tcp.pv datagrams: design (nfltr docs/decisions/nf1-udp-2026-11-14.md, lane UDP3 adds the row with the direct datagram code)",
-	"cap.kind":  "cap_address.pv the kind (u1): design (nfltr docs/decisions/nf1-udp-2026-11-14.md, lane UDP2 adds the row with the hints' kind)",
-	"org.kind":  "e2ee_tcp.pv the kind (ALPN nfltr-dg/): design (nfltr docs/decisions/nf1-udp-2026-11-14.md, lane UDP2 adds the row with the kind in service_alpn.go)",
 }
 
 // Check compares the BIND ids model (a model's source) declares that id

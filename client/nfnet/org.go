@@ -82,14 +82,19 @@ func (c *Conn) orgTLS(raw net.Conn, t Target, org *orgid.Identity, done <-chan s
 		cfg = org.GroupClientTLS(t.Group, admitted(func(certs []*x509.Certificate, now time.Time) (time.Time, error) {
 			return org.CheckServerGroup(certs, t.Group, now)
 		}))
-		agent.BindServiceTLS(cfg, agent.GroupALPN(t.Service, t.Group))
+		cfg.NextProtos = []string{agent.GroupALPN(t.Service, t.Group)}
 	} else {
 		name := orgServerName(t)
 		cfg = org.ClientTLS(name, admitted(func(certs []*x509.Certificate, now time.Time) (time.Time, error) {
 			return org.CheckServer(certs, name, now)
 		}))
-		agent.BindServiceTLS(cfg, agent.MachineALPN(agentID(t), t.Service))
+		cfg.NextProtos = []string{agent.MachineALPN(agentID(t), t.Service)}
 	}
+	proto := cfg.NextProtos[0]
+	if t.datagram {
+		proto = agent.DatagramALPN(proto) // BIND:org.kind
+	}
+	agent.BindServiceTLS(cfg, proto)
 	c.recordRefused(cfg)
 	return cfg
 }
