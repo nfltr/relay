@@ -295,12 +295,15 @@ func (a *agent) runWithReconnect(
 						case <-ctx.Done():
 						}
 						growth.waitIdle(ctx)
-					case ctx.Err() != nil && a.cfg.Drain > 0:
+					case ctx.Err() != nil:
 						// Stopped: the ConnectHTTP stream ended (the relay
 						// sends this agent nothing new); its TCP sessions
-						// run until they end or Drain passes.
+						// run until they end or Drain passes (none without
+						// a drain: tcpCtx is ctx), its direct paths' too,
+						// then those are reset (directServer.stop).
 						wctx, cancel := context.WithTimeout(tcpCtx, a.cfg.Drain)
 						growth.waitIdle(wctx)
+						targets.services.directServer().stop(wctx)
 						cancel()
 					}
 					return err

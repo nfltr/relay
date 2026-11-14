@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/netip"
 	"slices"
@@ -520,4 +521,42 @@ func startDirect(s net.Conn, d *directServer) (*pathswitch.Conn, net.Conn, error
 	}
 	c := pathswitch.Server(pathStream{Conn: s}, PathRelayed, cfg)
 	return c, newPSConn(c, s), nil
+}
+
+// stop ends the direct paths at the agent's stop (lane NF1FAULT). A
+// session on its direct path no longer holds the relayed stream the
+// agent's drain counts, so stop drains them itself: it waits until each
+// ended or ctx (the drain) ends, then resets each left (an ABORT on its
+// current path) and waits for them at most directCutGrace, so the peer
+// ends at once instead of re-attaching to an agent that is gone until its
+// detach bound (TestDirectStopDrainsThenResets). d nil: none.
+func (d *directServer) stop(ctx context.Context) {
+	if d == nil {
+		return
+	}
+	for _, s := range d.liveSessions() {
+		select {
+		case <-s.c.Done():
+		case <-ctx.Done():
+		}
+	}
+	left := d.liveSessions()
+	for _, s := range left {
+		s.c.Abort()
+	}
+	t := time.NewTimer(directCutGrace)
+	defer t.Stop()
+	for _, s := range left {
+		select {
+		case <-s.c.Done():
+		case <-t.C:
+			return
+		}
+	}
+}
+
+func (d *directServer) liveSessions() []*directSession {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return slices.Collect(maps.Keys(d.sessions))
 }

@@ -11,6 +11,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"sync"
@@ -214,4 +215,47 @@ func TestNF1DirectContinueDropsReplacedAddress(t *testing.T) {
 	r.run(t, ds2, tc2)
 	same.Continue(next)
 	echo(t, tc2, 64<<10, func() {})
+}
+
+// TestDirectStopDrainsThenResets (lane NF1FAULT, nfltr NAT lab
+// nf1-revoke-TERM): a session on its direct path no longer holds the
+// relayed stream the agent's drain counts, so a stopping agent must drain
+// its direct sessions itself: stop waits while one lives, and once its
+// drain ended resets each left (an ABORT on its path), so the peer ends at
+// once instead of re-attaching to an agent that is gone until its detach
+// bound (liveness + 30 s: measured 34 s in the lab).
+func TestDirectStopDrainsThenResets(t *testing.T) {
+	r := newNF1Rig(t, DirectOn)
+	ds, tc := r.handshake(t)
+	events := r.run(t, ds, tc)
+	if _, err := tc.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	waitPath(t, events, PathDirect)
+	drain, cancel := context.WithCancel(t.Context())
+	stopped := make(chan struct{})
+	go func() { r.l.targets.services.directServer().stop(drain); close(stopped) }()
+	select {
+	case <-stopped:
+		t.Fatal("stop returned while a direct session lived and the drain ran")
+	case <-time.After(300 * time.Millisecond):
+	}
+	start := time.Now()
+	cancel() // the drain ends
+	select {
+	case <-ds.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the client's session lives on after the agent's stop")
+	}
+	if d := time.Since(start); d > directCutGrace {
+		t.Errorf("the client's session ended %v after the stop, want within %v", d, directCutGrace)
+	}
+	if _, err := io.ReadAll(tc); err == nil {
+		t.Error("the stopped session read a clean end, want a reset")
+	}
+	select {
+	case <-stopped:
+	case <-time.After(directCutGrace + time.Second):
+		t.Fatal("stop did not return")
+	}
 }
