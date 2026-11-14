@@ -14,7 +14,9 @@ import (
 // pendingBindings are BIND ids of spec/proverif models whose rows are not
 // in this module yet: id -> where the row is (or why it waits). A model's
 // id with no row and no entry here fails TestEveryModelBindingHasARow.
-var pendingBindings = map[string]string{}
+var pendingBindings = map[string]string{
+	"dgram.tag": "cap_address.pv datagrams: design (nfltr docs/decisions/nf1-udp-2026-11-14.md, lane UDP3 adds the row with the direct datagram code)",
+}
 
 // TestEveryModelBindingHasARow: each BIND:<id> a model in spec/proverif
 // declares is a quoted row key in a *_bindings_test.go of this module

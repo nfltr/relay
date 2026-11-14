@@ -98,6 +98,13 @@
      nf1-agent-no-token        the agent binds a direct connection to a
                                session on the relay's word, no token
 
+   Datagrams (lane NF1UDP, nfltr docs/decisions/nf1-udp-2026-11-14.md):
+   once bound, the session's datagrams may ride the direct connection as
+   QUIC DATAGRAM frames under its keys, tagged with the attach. Queries
+   21-24; mutant:
+     dgram-tag-unbound         the agent hands a datagram to a session on any
+                               direct connection it accepted, bound or not
+
    Bindings (README "Bindings"): each has a refusal row in
    client/capaddr/capaddr_bindings_test.go:
      BIND:cap.pin         the answer's key and the TLS certificate's key, each against pinOf(sec, key)
@@ -106,7 +113,9 @@
      BIND:cap.rendezvous  the answer: signed under the pinned key, over the tag, the relay opened at, rid and hints
    and, for the direct phase (client/nf1 TestNF1DirectModelBindings, with
    the organisation's direct.token, direct.quic, direct.role rows):
-     BIND:nf1direct.pin   the direct connection's key against the pinned key *)
+     BIND:nf1direct.pin   the direct connection's key against the pinned key
+   and, for datagrams (pending: the code lane's row, client/model_bindings_guard_test.go):
+     BIND:dgram.tag       a frame's tag: a session attached on this connection, up *)
 
 free c: channel.
 
@@ -130,6 +139,8 @@ const relayR: bitstring.                      (* the relay the server registered
 const hintD: bitstring.                       (* hints "d1": the listener takes direct paths *)
 const labC, labS, labQ, ep1: bitstring.       (* the direct token's roles, the QUIC exporter's label, the attach epoch *)
 free dirData: bitstring [private].            (* what A1's client sends on a direct connection it took *)
+free dgData: bitstring [private].             (* a datagram A1's client sends on it (lane NF1UDP) *)
+const labD: bitstring.                        (* a datagram frame's label *)
 free rid1, rid2: bitstring.                   (* rendezvous ids: the relay learns them *)
 
 free skS: skey [private].                     (* the server's TLS key, A1's and A2's *)
@@ -167,6 +178,8 @@ event ClientQUIC(bitstring, pkey).                      (* session key, the key 
 event ClientDirectOffer(bitstring, bitstring).          (* session key, QUIC exporter: the client's token sent *)
 event ClientDirect(bitstring, bitstring, pkey).         (* session key, QUIC exporter, the direct key: taken *)
 event AgentDirect(bitstring, bitstring, bitstring).     (* rid of the acceptor, session key, QUIC exporter: bound *)
+event ClientDgram(bitstring, bitstring).                (* session key, datagram: sent on its direct connection *)
+event AgentDgram(bitstring, bitstring, bitstring).      (* rid, session key, datagram: handed to the session's flow *)
 
 (* The QUIC exporter, and the tokens (nf1-token-unbound: without it). *)
 letfun qexp(kd: bitstring, dn: bitstring, x: pkey) = h((labQ, kd, dn, x)).
@@ -188,7 +201,11 @@ let DirectClient(k: bitstring, rpk: pkey) =
   in(c, x: bitstring);
   let (=labS, =tok(k, qx, labS)) = sdec(x, kd) in (* NOT:nf1-direct-no-token *)
   event ClientDirect(k, qx, dpk);
-  out(c, senc(dirData, kd)).
+  out(c, senc(dirData, kd));
+  (* a datagram of the session on that connection: a QUIC DATAGRAM frame
+     under the connection's keys, its tag naming the attach (BIND:dgram.tag) *)
+  event ClientDgram(k, dgData);
+  out(c, senc((labD, dgData), kd)).
 
 (* rid's agent: a direct connection under its key, bound to its admitted
    session k only on that session's client token. *)
@@ -198,10 +215,14 @@ let DirectAgent(rid: bitstring, k: bitstring) =
   in(c, ekd: bitstring);
   let (kd: bitstring, =dn) = adec(ekd, skS) in
   let qx = qexp(kd, dn, pk(skS)) in
+  (in(c, y: bitstring); let (=labD, m: bitstring) = sdec(y, kd) in event AgentDgram(rid, k, m)) | ( (* ONLY:dgram-tag-unbound *)
   in(c, x: bitstring);
   let (=labC, =tok(k, qx, labC)) = sdec(x, kd) in (* NOT:nf1-agent-no-token *)
   event AgentDirect(rid, k, qx);
-  out(c, senc((labS, tok(k, qx, labS)), kd)).
+  out(c, senc((labS, tok(k, qx, labS)), kd)); (* NOT:dgram-tag-unbound *)
+  (* a datagram is handed to session k only on a connection bound to k *)
+  in(c, y: bitstring); let (=labD, m: bitstring) = sdec(y, kd) in event AgentDgram(rid, k, m). (* NOT:dgram-tag-unbound *)
+  out(c, senc((labS, tok(k, qx, labS)), kd))). (* ONLY:dgram-tag-unbound *)
 
 (* The server registers rid at relay R (1). *)
 let Register(R: bitstring, rid: bitstring, hints: bitstring) =
@@ -328,6 +349,21 @@ query k: bitstring, qx: bitstring; event(AgentDirect(rid1, k, qx)) ==> event(Cli
 query k: bitstring, qx: bitstring, x: pkey; event(ClientDirect(k, qx, x)).
 (* expect false *)
 query k: bitstring, qx: bitstring; event(AgentDirect(rid1, k, qx)).
+
+(* 21. a datagram A1's client sends on a direct connection reaches only
+   A1's server (lane NF1UDP) *)
+(* expect true *)
+query attacker(dgData).
+(* 22. A1's agent hands a datagram to session k only if k's own client sent
+   it, on a connection bound to k (mutant dgram-tag-unbound); not
+   injective: a replayed packet is QUIC's to discard (RFC 9000 12.3) *)
+(* expect true *)
+query k: bitstring, m: bitstring; event(AgentDgram(rid1, k, m)) ==> event(ClientDgram(k, m)).
+(* 23, 24. witnesses: the client sends a datagram direct; A1's agent hands one on *)
+(* expect false *)
+query k: bitstring, m: bitstring; event(ClientDgram(k, m)).
+(* expect false *)
+query k: bitstring, m: bitstring; event(AgentDgram(rid1, k, m)).
 
 process
   let s1 = secOf(sec1) in

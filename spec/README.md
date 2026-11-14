@@ -802,3 +802,79 @@ states, depth 28, about 2 s. `UDPFlowLive.cfg` (one source, two ids):
 depth 33, about 5 min. Every action taken in each (`-coverage 1`); the
 14 UDP mutants and witnesses about 20 s. Code map: none yet; the lane
 that builds `client/udpflow` adds it with a trace recorder.
+
+## DatagramAssoc.tla: datagram sessions between identities (design, no code yet)
+
+Lane NF1UDP (2026-11-14). The design is nfltr's
+`docs/decisions/nf1-udp-2026-11-14.md`: UDP between identities (an `nf1`
+address, an organisation machine) over one **association** per client
+listener and service: one end-to-end session (the same rendezvous, pinned
+TLS and admission as a stream session) whose stream carries control and
+datagrams, many flows inside it (a source address at the listener is a
+flow with an id the client picks, increasing and never reused; one
+connected socket per flow at the agent), and, once the association's
+stream is attached to the direct QUIC connection, datagrams as QUIC
+DATAGRAM frames tagged with the association and the flow. It refines
+`UDPFlow.tla` (one session per flow) and adds the second, lossy path,
+moves between the paths, revocation and the amplification bound.
+
+Invariants: `NoDeliverAfterClose`; `NoCrossFlow` (no datagram reaches a
+flow other than its own: another source's, another association's);
+`NoDeliverAfterRevoke` (nothing reaches the target once the association's
+right was revoked, on either path); `TableBounded` (each side's cap per
+association, set independently); `MemoryBound`; `NoHOL` (the listener's
+reader never waits on one flow); `NoReflection` (a source the listener
+does not admit is never written to); `AmpBound` (to each source at most
+`R` times what it sent plus `B`); properties `ClosedFinal` (ids never
+reused) and `AllFlowsEnd` (every flow ends at both sides; the
+environment's steps, `Bind`, `PathLoss`, `Revoke`, `Cut`, are not fair).
+
+Mutants, each caught: `DA:deliver-after-close` (`NoDeliverAfterClose`),
+`DA:reuse-id` (`ClosedFinal`; checked as `NoCrossFlow` on
+`DatagramAssocTwo.cfg` with the property taken out), `DA:tag-unchecked` (a frame's flow id
+looked up in the current association whatever its tag: `NoCrossFlow`, on
+`DatagramAssocMove.cfg`), `DA:direct-ignores-assoc` (the direct path
+does not check that the association is up, so a revocation reaches only
+the stream until the cleanup: `NoDeliverAfterRevoke`), `DA:no-client-cap`,
+`DA:no-agent-cap` (`TableBounded`, on `DatagramAssocTwo.cfg`),
+`DA:grow-queue` (`MemoryBound`), `DA:block-on-credit` (the reader waits
+for stream credit: `NoHOL`), `DA:no-source-check` (`NoReflection`),
+`DA:no-amp-cap` and `DA:per-flow-budget` (the budget kept per flow, so
+a source's new flow starts a new one: `AmpBound`), `DA:no-idle`
+(`AllFlowsEnd`, on `DatagramAssocLive.cfg`). Witnesses, each violated:
+`W_Direct`, `W_Moved` (a flow that went direct carries on relayed),
+`W_StaleTag` (an older association's frame reaches a newer one, and is
+dropped), `W_Revoked`, `W_Refused` (an open after the revocation),
+`W_AmpDrop`, `W_Reply`, `W_FlowRefused`.
+
+| action | design (no Go yet) |
+|---|---|
+| `AppSend(s)` | the application's datagram to the listener, or a spoofed one |
+| `AssocOpen` | the association's open (`nf1` rendezvous, TLS, proof; or the organisation open); refused after a revocation |
+| `Read(s)` | the listener's one reader: a drop for a source it does not admit, onto the source's flow (direct, or the stream on credit), a new flow (its open carries the datagram), or a counted drop |
+| `RecvC`, `RecvDgC(m)` | the client reads the stream (an open's answer, a reply, a close) or a frame; a reply is written within the source's budget |
+| `RecvA`, `RecvDgA(m)` | the agent reads the stream (an open: a flow and its socket, or a refusal past its cap; a datagram; a close) or a frame (only under a tag bound here, while the association is up) |
+| `ReplyA(k)` | the target's reply: direct when bound, else the stream on credit, else dropped |
+| `ExpireC(k)`, `ExpireA(k)` | the flow's idle timer, the agent's backstop |
+| `NoticeC`, `NoticeA`, `CleanupA` | a side reads its association's end; the agent marks it down, then closes its flows and drops its binding |
+| `Bind`, `PathLoss` | the stream attached on the direct connection (both tokens); the direct connection's death |
+| `Cut(who)` | the association ends: `session` (the stream reset, the direct connection kept), `client`, `agent` (the process) |
+| `Revoke` | the agent applies a revocation (address replaced, certificate revoked) |
+
+| assumption | source |
+|---|---|
+| The stream is ordered and credited and survives path moves | github.com/nfltr/link `spec/Link.tla`, `spec/DirectPath.tla` |
+| An association binds to a direct connection only on both ends' tokens | `spec/proverif/cap_address.pv` queries 17-18, `spec/proverif/e2ee_tcp.pv` 21-26 |
+| A QUIC frame is authenticated; a replayed packet is discarded | RFC 9000 section 12.3 (quic-go) |
+| A UDP write never waits | the design's zero-wait writes and per-association sender |
+
+`DatagramAssoc.cfg` (one admitted source sending two datagrams, one
+spoofed, two ids, two associations, the target answering twice per
+datagram, one association end, one path death): 95,088 distinct states,
+depth 31. `DatagramAssocMove.cfg` (one source, three datagrams):
+111,207 states. `DatagramAssocTwo.cfg` (two admitted sources, one
+association, the client's cap above the agent's): 11,778 states.
+`DatagramAssocLive.cfg` (`AllFlowsEnd`): 15,138 states. `-coverage 1`
+takes every action in each (but `PathLoss` in `DatagramAssocTwo.cfg`,
+which has none). Code map: none yet; the lane that builds the
+association adds it with a trace recorder.

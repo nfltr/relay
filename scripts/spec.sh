@@ -5,8 +5,8 @@
 # spec.sh check|mutants: the TLA+ models of spec/ (spec/README.md).
 #   check    TLC on spec/SignalConn.cfg, spec/A2ASession.cfg, spec/CallCredit.cfg,
 #            spec/CallCreditBoth.cfg, spec/CallCreditSenders.cfg,
-#            spec/UDPFlow.cfg and spec/UDPFlowLive.cfg: their
-#            invariants and liveness
+#            spec/UDPFlow.cfg, spec/UDPFlowLive.cfg and spec/DatagramAssoc*.cfg:
+#            their invariants and liveness
 #            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg,
 #            UDPFlowLarge.cfg).
 #   mutants  each bug put back must be caught.
@@ -286,12 +286,14 @@ fail=0
 cfg=
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive"
+	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	for c in $cfgs; do
 		m=${c%Large}
 		m=${m%Retry}
 		m=${m%Live}
+		m=${m%Two}
+		m=${m%Move}
 		echo "== $c.cfg"
 		st=0
 		tlc $c.cfg $m.tla >"$work/out" 2>&1 || st=$?
@@ -424,6 +426,35 @@ mutants)
 	cfg=UDPFlowLive
 	expect UDP:no-idle -e 's/Mutant = "none"/Mutant = "no-idle"/'
 	expect UDP:agent-only-close -e 's/Mutant = "none"/Mutant = "agent-only-close"/'
+	cfg=
+	model=DatagramAssoc
+	# Datagram sessions between identities (design, lane NF1UDP): each
+	# failure the association's flow lifecycle prevents, put in.
+	expect DA:deliver-after-close -e 's/Mutant = "none"/Mutant = "deliver-after-close"/'
+	expect DA:direct-ignores-assoc -e 's/Mutant = "none"/Mutant = "direct-ignores-assoc"/'
+	expect DA:grow-queue -e 's/Mutant = "none"/Mutant = "grow-queue"/'
+	expect DA:block-on-credit -e 's/Mutant = "none"/Mutant = "block-on-credit"/'
+	expect DA:no-source-check -e 's/Mutant = "none"/Mutant = "no-source-check"/'
+	expect DA:no-amp-cap -e 's/Mutant = "none"/Mutant = "no-amp-cap"/'
+	expect DA:per-flow-budget -e 's/Mutant = "none"/Mutant = "per-flow-budget"/'
+	expect witness:DA-Revoked -e 's/^    NoHOL$/    W_Revoked/'
+	expect witness:DA-Refused -e 's/^    NoHOL$/    W_Refused/'
+	expect witness:DA-AmpDrop -e 's/^    NoHOL$/    W_AmpDrop/'
+	expect witness:DA-Reply -e 's/^    NoHOL$/    W_Reply/'
+	cfg=DatagramAssocMove
+	expect DA:tag-unchecked -e 's/Mutant = "none"/Mutant = "tag-unchecked"/'
+	expect witness:DA-Direct -e 's/^    NoHOL$/    W_Direct/'
+	expect witness:DA-Moved -e 's/^    NoHOL$/    W_Moved/'
+	expect witness:DA-StaleTag -e 's/^    NoHOL$/    W_StaleTag/'
+	cfg=DatagramAssocTwo
+	# A reused id breaks ClosedFinal (an action property) first; with it
+	# taken out the same trace reaches NoCrossFlow.
+	expect DA:reuse-id -e 's/Mutant = "none"/Mutant = "reuse-id"/' -e '/^PROPERTIES$/d' -e '/ClosedFinal/d'
+	expect DA:no-agent-cap -e 's/Mutant = "none"/Mutant = "no-agent-cap"/'
+	expect DA:no-client-cap -e 's/Mutant = "none"/Mutant = "no-client-cap"/' -e 's/MaxFlowsC = 2/MaxFlowsC = 1/'
+	expect witness:DA-FlowRefused -e 's/^    NoHOL$/    W_FlowRefused/'
+	cfg=DatagramAssocLive
+	expect DA:no-idle -e 's/Mutant = "none"/Mutant = "no-idle"/'
 	cfg=
 	exit $fail
 	;;

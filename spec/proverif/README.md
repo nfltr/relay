@@ -608,6 +608,9 @@ key. TLS 1.3 as in `e2ee_tcp.pv`; the exporter is `h((k, ns, pk))`
 | 17 | a direct connection the client takes is bound, once, by A1's agent to the client's own session | T | `nf1-direct-no-token`, `direct-no-pin-check` with `nf1-token-unbound`, `server-any-secret`, `server-no-secret-check` |
 | 18 | A1's agent binds a direct connection only for the session's own client | T | `nf1-agent-no-token`, the secret-check mutants |
 | 19, 20 | witnesses: the client takes a direct connection; A1's agent binds one | F (reachable) | |
+| 21 | a datagram A1's client sends on a direct connection (a QUIC DATAGRAM frame) reaches only A1's server | T | as 15 |
+| 22 | A1's agent hands a datagram to session k only if k's own client sent it, on a connection bound to k (not injective: a replayed packet is QUIC's to discard) | T | `dgram-tag-unbound`, `nf1-agent-no-token`, the secret-check mutants |
+| 23, 24 | witnesses: the client sends a datagram direct; A1's agent hands one on | F (reachable) | |
 
 Direct paths (lane NF1DIRECT, nfltr `docs/decisions/nf1-direct-2026-11-14.md`):
 the record's `hints` carry one fact, `d1` (the listener takes direct
@@ -623,6 +626,17 @@ its handshake's key. Mutants: `hint-unbound` (hints taken from the frame,
 not the record: fails 7 only), `direct-no-pin-check` (16; with
 `nf1-token-unbound` 15-18), `nf1-token-unbound` (holds alone),
 `nf1-direct-no-token` (17), `nf1-agent-no-token` (18).
+
+Datagrams (lane NF1UDP, nfltr `docs/decisions/nf1-udp-2026-11-14.md`;
+design, no code yet): once a session is bound to a direct connection, its
+datagrams may ride that connection as QUIC DATAGRAM frames under the
+connection's keys, tagged with the attach (the attach stream's id); the
+agent hands a frame to a session only under a tag of a session attached
+on that connection (`BIND:dgram.tag`, its row pending the code lane).
+Mutant `dgram-tag-unbound` (the agent accepts a datagram on any direct
+connection it accepted, bound or not): fails 22 alone. The flows inside
+the session, the tag's lifetime across associations and the revocation
+are the relay's `spec/DatagramAssoc.tla`.
 
 `cap_address_link.pv` states 10 as an observational equivalence: two
 servers register `rid1` and `rid2`, the attacker reads both registrations,
