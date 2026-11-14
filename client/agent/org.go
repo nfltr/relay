@@ -23,7 +23,7 @@ import (
 // only end-to-end encrypted tcp mode: the agent ends its sessions' TLS
 // with this machine's certificate and admits a client only by its
 // certificate, checked by CheckClient. The SDK holds no policy of its
-// own; nfltr's orgpki is behind it (spec/proverif/e2ee_tcp.pv, the
+// own; client/orgid's Identity is one (spec/proverif/e2ee_tcp.pv, the
 // service's half).
 type Org interface {
 	// Certificate is this machine's certificate chain (its leaf, then its

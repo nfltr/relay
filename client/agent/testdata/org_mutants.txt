@@ -5,7 +5,7 @@
 # Models: spec/proverif/e2ee_tcp.pv (downgrade-any-client, the checks'
 # use) and nfltr spec/enrol/Enrol.tla (no-expiry-timer: NoExpiredSession;
 # no-cut-on-update: RevocationBound). The checks themselves (chain, name,
-# groups, CRL, NotAfter) are nfltr orgpki's, with its own mutants.
+# groups, CRL, NotAfter) are client/orgid's, with its own mutants.
 ignore-check | org.go | 			until, err := o.CheckClient(cs.PeerCertificates, groups, time.Now()) | 			until, err := time.Now().Add(time.Hour), error(nil) | TestOrgServiceAdmitsGroup
 downgrade-any-client | org.go | 		ClientAuth:             tls.RequireAnyClientCert, | 		ClientAuth:             tls.RequestClientCert, | TestOrgServiceAdmitsGroup
 downgrade-any-client | org.go | 			until, err := o.CheckClient(cs.PeerCertificates, groups, time.Now()) | 			if len(cs.PeerCertificates) == 0 { adm.until = time.Now().Add(time.Hour); return nil }; until, err := o.CheckClient(cs.PeerCertificates, groups, time.Now()) | TestOrgServiceAdmitsGroup

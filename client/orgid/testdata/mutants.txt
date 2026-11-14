@@ -1,0 +1,32 @@
+# Planted bugs of orgid (scripts/go-mutants.sh client/orgid/testdata/mutants.txt,
+# make test-go-mutants, in make ci): each line "<mutant> | <file> | <exact
+# line text> | <replacement> | <test>"; the lines of one mutant are applied
+# together and its test must then fail. The verifier's and the machine
+# identity's mutants of nfltr orgpki, orgmachine and orgenrol, moved with
+# their code. Models: nfltr spec/proverif/enrol.pv and spec/enrol/Enrol.tla
+# (no-expiry-timer: NoExpiredSession; no-cut-on-update, reload-skips-crl:
+# RevocationBound; push-only: TakesEffect; crl-no-wake-on-rotation:
+# MachinesFollowRotation), spec/proverif/e2ee_tcp.pv (the client's name and
+# check, the group). Not here: the issuer's (nfltr orgpki), keep-old-root
+# (the verifier holds one root: TakeRotation replaces it).
+no-chain-check | verify.go | 	return c.Verify(opts) | 	_ = opts; return [][]*x509.Certificate{{c, issuer, v.root}}, nil | TestForgedNameRefused
+no-name-check | verify.go | 		dnsName = MachineDNS(want.Name, v.orgID) | 		_ = 0 | TestForgedNameRefused
+no-name-check | verify.go | 	if want.Name != "" && leaf.Subject.CommonName != want.Name { | 	if false { | TestForgedNameRefused
+no-expiry-check | verify.go | 	opts := x509.VerifyOptions{Roots: roots, Intermediates: inter, DNSName: dnsName, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}} | 	opts := x509.VerifyOptions{Roots: roots, Intermediates: inter, DNSName: dnsName, CurrentTime: c.NotBefore, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}} | TestExpiredRefused
+no-crl-check | verify.go | 	if crl.revoked[leaf.SerialNumber.String()] { | 	if false { | TestRevokedRefused
+no-group-check | verify.go | 	if want.Group != "" && !slices.Contains(groups, want.Group) { | 	if false { | TestE2EETCPModelBindingsGroupDialClient
+leaf-group-outside-issuer | verify.go | 	if !subset(groups, iss.Subject.OrganizationalUnit) { | 	if false { | TestGroupOutsidePolicyRefused
+fail-open | verify.go | 	if !now.Before(crl.next) { | 	if false { | TestLapsedCRLRefused
+accept-older-crl | verify.go | 	if held := v.crls[fp]; held != nil && crl.Number.Cmp(held.number) <= 0 { | 	if held := v.crls[fp]; false && held != nil { | TestLapsedCRLRefused
+rotate-by-primary | verify.go | 	if err := c.CheckSignatureFrom(recovery); err != nil { | 	if err := c.CheckSignatureFrom(current); err != nil { | TestRotationOnlyByRecoveryKey
+replayed-rotation | verify.go | 	if !c.NotBefore.After(current.NotBefore) { | 	if false { | TestRotationOnlyByRecoveryKey
+client-no-name-check | identity.go | 	id, err := m.ver.Check(certs[0], certs[1], Peer{Name: name}, now) | 	id, err := m.ver.Check(certs[0], certs[1], Peer{}, now) | TestNamedMachineAndGroup
+client-skips-check | identity.go | 			return until, fmt.Errorf("the server is not machine %s of the organisation (a machine enrols under its name in the account and is dialled as <machine>.<agent>): %w", name, err) | 			_ = err | TestNamedMachineAndGroup
+group-dial-skips-check | identity.go | 			return until, fmt.Errorf("the server is not a machine of group %s: %w", group, err) | 			_ = err | TestGroupDialChecksTheGroup
+no-client-group-check | identity.go | 		id, cerr := m.ver.Check(certs[0], certs[1], Peer{Group: g}, now) | 		id, cerr := m.ver.Check(certs[0], certs[1], Peer{Group: g[:0]}, now) | TestNamedMachineAndGroup
+no-expiry-timer | identity.go | 	t := time.NewTimer(time.Until(until)) | 	t := time.NewTimer(time.Hour) | TestHoldEndsAtUntil
+no-cut-on-update | identity.go | 			u, cerr := check(time.Now()) | 			u, cerr := until, error(nil) | TestRevocationCutsHeldSession
+reload-skips-crl | identity.go | 		if err := m.ver.TakeCRL(crl, issuer, now); err != nil { | 		if false && m.ver.TakeCRL(crl, issuer, now) != nil { | TestRevocationCutsHeldSession
+take-crl-unchecked | identity.go | 	if err := m.ver.TakeCRL(crl, issuer, now); err != nil { | 	if err := error(nil); err != nil || issuer == nil { | TestTakeKeepsWhatTheVerifierTakes
+push-only | follow.go | 		if time.Since(fresh) >= every { | 		if fresh.IsZero() { | TestFollowTakesTheRevokePushAndBackstop
+crl-no-wake-on-rotation | follow.go | 			again = retry() // before apply: a rotation taken meanwhile closes it | 			_ = retry | TestFollowTakesTheNewIssuersCRLAtTheRotation

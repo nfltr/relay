@@ -30,8 +30,9 @@ import (
 )
 
 // DirectMachine is a client's organisation identity for direct paths:
-// its certificate, and the check of an agent machine's (nfltr's orgpki:
-// the chain to the root, the name the session asked for, NotAfter, CRL).
+// its certificate, and the check of an agent machine's (client/orgid's
+// Identity: the chain to the root, the name the session asked for,
+// NotAfter, CRL).
 type DirectMachine interface {
 	Certificate() (*tls.Certificate, error)
 	CheckServer(certs []*x509.Certificate, name string, now time.Time) (time.Time, error)

@@ -117,8 +117,9 @@
      BIND:direct.epoch    ... and the attach's epoch (tokC/tokS at ep1, tokR at ep2, ep3)
 
    Code (nfltr = github.com/nfltr/nfltr; the rest github.com/nfltr/relay):
-     nfltr internal/application/orgpki/verify.go Check   chain to the root, name, groups, CRL, NotAfter
-     client/agent/org.go Org.CheckClient                 the service's check (nfltr: orgpki behind it)
+     client/orgid/verify.go Verifier.Check               chain to the root, name, groups, CRL, NotAfter
+     client/orgid/identity.go ClientTLS, GroupClientTLS  the client's check of a machine by name, of a group dial by OU
+     client/agent/org.go Org.CheckClient                 the service's check (client/orgid Identity behind it)
      client/agent/org.go orgServerConfig                 RequireAnyClientCert + VerifyConnection, no other mode
      client/agent/org.go checkOrgService                 e2ee On needs Org and a group (services, the tunnel)
      client/agent/services.go resolve                    an org service takes no plain session; no other tcp service an E2EE one
