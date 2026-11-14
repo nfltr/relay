@@ -48,7 +48,8 @@ const (
 // sessions a CRL refuses) until ctx ends, a fresh read every FollowEvery:
 // a process that opens organisation sessions follows the CRL itself, so a
 // revoke reaches its sessions at the push, not at the next Reload of a
-// file another process writes.
+// file another process writes. It returns only after its last write is
+// done: a caller waits for it before removing m's directory.
 func Follow(ctx context.Context, mb Mailbox, m *Identity, logger *slog.Logger) {
 	followCRL(ctx, mb, m, FollowEvery, time.Now, logger)
 }
@@ -74,7 +75,8 @@ func followCRL(ctx context.Context, mb Mailbox, m *Identity, every time.Duration
 // failing: a pull failed by a dead connection (a NAT that changed the
 // port) redials at once, so a push lands near the mailbox client's ping
 // bound, not retryWait later (TestFollowPullsAgainAtOnceAfterAFailedPull).
-// It returns when ctx ends.
+// It returns once ctx ends and the message it was taking is taken (its
+// write done), never earlier (TestFollowReturnsAfterItsLastWrite).
 func follow(ctx context.Context, mb Mailbox, mailbox string, every time.Duration, apply func([]byte) error, retry func() <-chan struct{}, logger *slog.Logger) {
 	var cursor uint64
 	var fresh time.Time

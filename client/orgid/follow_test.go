@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -43,10 +44,10 @@ func (f *failingPulls) Pull(ctx context.Context, _ string, _ uint64, _ int, _ ti
 // mailbox client's ping bound. A second failure in a row waits retryWait:
 // no hot loop.
 func TestFollowPullsAgainAtOnceAfterAFailedPull(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	mb := &failingPulls{n: 2, calls: make(chan int, 8)}
-	go follow(ctx, mb, "org.x.crl", time.Hour, func([]byte) error { return nil }, nil, quiet())
+	goFollow(t, func(ctx context.Context) {
+		follow(ctx, mb, "org.x.crl", time.Hour, func([]byte) error { return nil }, nil, quiet())
+	})
 	<-mb.calls // the first pull, failed
 	select {
 	case <-mb.calls:
@@ -57,6 +58,60 @@ func TestFollowPullsAgainAtOnceAfterAFailedPull(t *testing.T) {
 	case <-mb.calls:
 		t.Fatal("a second failure in a row was pulled again at once")
 	case <-time.After(300 * time.Millisecond):
+	}
+}
+
+// goFollow runs f under the test's context, and the test's end waits for
+// f to return: t.Context ends just before the cleanups, and f's last write
+// (TakeCRL's crl.der) must finish before TempDir removes its directory.
+// Register it after the TempDir its follow writes into.
+func goFollow(t *testing.T, f func(ctx context.Context)) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		f(t.Context())
+	}()
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("follow did not return within 10s of its context's end")
+		}
+	})
+}
+
+// noFollowRunning fails the test while a follow of it still runs: a follow
+// the test did not wait for writes into a directory TempDir is removing.
+func noFollowRunning(t *testing.T) {
+	buf := make([]byte, 1<<20)
+	if strings.Contains(string(buf[:runtime.Stack(buf, true)]), "orgid.follow(") {
+		t.Error("a follow is still running at the test's end (start it with goFollow)")
+	}
+}
+
+// Follow returns only after the message it is taking is taken: a caller
+// that waits for Follow knows its last write is done.
+func TestFollowReturnsAfterItsLastWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	b := newBox()
+	b.push(t, CRLMessage{})
+	in, out, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		follow(ctx, b, "org.x.crl", time.Hour, func([]byte) error { close(in); <-out; return nil }, nil, quiet())
+	}()
+	<-in
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("follow returned while its apply was still writing")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(out)
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("follow did not return after its context ended")
 	}
 }
 
@@ -94,6 +149,10 @@ func (b *box) Pull(ctx context.Context, _ string, after uint64, _ int, wait time
 		}
 		select {
 		case <-ctx.Done():
+			// A real call ends a moment after its context: a test that
+			// does not wait for its follow still has it running at its
+			// end (noFollowRunning).
+			time.Sleep(50 * time.Millisecond)
 			return nil, "", ctx.Err()
 		case <-t.C:
 			return nil, "owner", nil
@@ -115,6 +174,7 @@ func newFollowRig(t *testing.T) *followRig {
 	now := time.Now()
 	r := &followRig{o: newTestOrg(t, now), box: newBox()}
 	d := t.TempDir()
+	t.Cleanup(func() { noFollowRunning(t) }) // before TempDir's removal
 	r.o.enrolDir(t, filepath.Join(d, "cli"), "cli", now, "db")
 	r.web = r.o.enrolDir(t, filepath.Join(d, "web"), "web", now, "web")
 	r.dir = filepath.Join(d, "cli")
@@ -142,7 +202,7 @@ func TestFollowTakesTheRevokePushAndBackstop(t *testing.T) {
 			if withhold {
 				every = 300 * time.Millisecond
 			}
-			go followCRL(t.Context(), r.box, r.cli, every, time.Now, quiet())
+			goFollow(t, func(ctx context.Context) { followCRL(ctx, r.box, r.cli, every, time.Now, quiet()) })
 			time.Sleep(200 * time.Millisecond) // the follow parks on its cursor
 			if err := r.checksWeb(); err != nil {
 				t.Fatalf("web before the revoke: %v", err)
@@ -183,7 +243,9 @@ func (w *signalWriter) Write(p []byte) (int, error) {
 func TestFollowTakesTheNewIssuersCRLAtTheRotation(t *testing.T) {
 	r := newFollowRig(t)
 	notTaken := &signalWriter{text: "message not taken", ch: make(chan struct{})}
-	go followCRL(t.Context(), r.box, r.cli, time.Hour, time.Now, slog.New(slog.NewTextHandler(notTaken, nil)))
+	goFollow(t, func(ctx context.Context) {
+		followCRL(ctx, r.box, r.cli, time.Hour, time.Now, slog.New(slog.NewTextHandler(notTaken, nil)))
+	})
 	cross := r.o.rotate(t, time.Now().Add(time.Minute))
 	renewed := mint(t, leafTemplate(t, r.o.orgID, "web", []string{"web"}, time.Now()), r.o.iss, newKey(t).Public(), r.o.issKey)
 	r.box.push(t, CRLMessage{CRL: r.o.crl(t, time.Now()), Issuer: r.o.iss.Raw})
