@@ -9,7 +9,7 @@
 // An address A = (R, rid, pin, sec) names one service of one server:
 //
 //	R    the relay host the server registered at
-//	rid  the rendezvous id, 16 random bytes
+//	rid  the rendezvous id: RIDOf(Nonce(sec), pk), bound to the server's key
 //	pin  Pin(sec, pk): the server's TLS key keyed by the secret
 //	sec  the secret, 32 random bytes, never all zeros
 //
@@ -23,7 +23,9 @@
 // pins (BIND:cap.pin), and sends Proof over this session's Exporter as its
 // first record (BIND:cap.secret); the server runs Admit with the secret of
 // the address the session was routed to before any service byte
-// (BIND:cap.service).
+// (BIND:cap.service). The server declares rid at R with RegistrationProof,
+// which R checks with CheckRegistration (BIND:cap.register), so only the
+// holder of the server key makes R serve rid.
 package capaddr
 
 import (
@@ -64,6 +66,9 @@ const (
 	tagPin        = "nf1-pin"
 	tagProof      = "nf1-proof"
 	tagRendezvous = "nf1-rdv"
+	tagNonce      = "nf1-n"
+	tagRID        = "nf1-rid"
+	tagRegister   = "nf1-reg"
 	ExporterLabel = "EXPORTER-nf1-proof"
 )
 
@@ -85,6 +90,7 @@ var (
 	ErrRendezvous = errors.New("nf1: rendezvous record not signed by the pinned key over this relay, rid and hints")
 	ErrTLS        = errors.New("nf1: TLS session refused")
 	ErrProof      = errors.New("nf1: proof refused")
+	ErrRegister   = errors.New("nf1: registration proof refused (rid not bound to this key, or not signed by it over this relay and rid)")
 )
 
 var (
@@ -100,17 +106,18 @@ type Address struct {
 	Secret [SecretSize]byte
 }
 
-// New draws rid and sec from crypto/rand for a server at relay whose TLS
-// public key is spki (DER SubjectPublicKeyInfo) and computes the pin.
+// New draws sec from crypto/rand for a server at relay whose TLS public
+// key is spki (DER SubjectPublicKeyInfo) and computes rid (RIDOf) and the
+// pin.
 func New(relay string, spki []byte) (Address, error) {
 	if err := checkRelay(relay); err != nil {
 		return Address{}, err
 	}
 	a := Address{Relay: relay}
-	_, _ = rand.Read(a.RID[:]) // crypto/rand.Read never fails (Go 1.24+)
 	for a.Secret == ([SecretSize]byte{}) {
-		_, _ = rand.Read(a.Secret[:])
+		_, _ = rand.Read(a.Secret[:]) // crypto/rand.Read never fails (Go 1.24+)
 	}
+	a.RID = RIDOf(Nonce(a.Secret), spki)
 	a.Pin = Pin(a.Secret, spki)
 	return a, nil
 }
@@ -315,4 +322,80 @@ func mac(sec [SecretSize]byte, tag string, data []byte) [32]byte {
 	var out [32]byte
 	m.Sum(out[:0])
 	return out
+}
+
+// Nonce is the rid's nonce n = HMAC-SHA256(sec, "nf1-n")[:16]: fresh per
+// address, public (the relay learns it from the registration proof), and
+// it reveals nothing of sec.
+func Nonce(sec [SecretSize]byte) [RIDSize]byte {
+	m := mac(sec, tagNonce, nil)
+	return [RIDSize]byte(m[:RIDSize])
+}
+
+// RIDOf is ridOf(n, pk) = SHA-256("nf1-rid" || n || spki)[:16]: the rid
+// bound to the server's key, so another key cannot claim it without a
+// second preimage.
+func RIDOf(n [RIDSize]byte, spki []byte) [RIDSize]byte {
+	h := sha256.New()
+	h.Write([]byte(tagRID))
+	h.Write(n[:])
+	h.Write(spki)
+	return [RIDSize]byte(h.Sum(nil)[:RIDSize])
+}
+
+// registerMessage is what a registration proof signs: "nf1-reg" | len(R) |
+// R | rid.
+func registerMessage(relay string, rid [RIDSize]byte) []byte {
+	b := make([]byte, 0, len(tagRegister)+2+len(relay)+RIDSize)
+	b = append(b, tagRegister...)
+	b = binary.BigEndian.AppendUint16(b, uint16(len(relay))) // #nosec G115 -- callers checkRelay: at most 255
+	b = append(b, relay...)
+	return append(b, rid[:]...)
+}
+
+// RegistrationProof is what the server sends R, and only R, with its
+// declaration of a.RID: n | len(spki) (2 bytes) | spki | Ed25519_sk("nf1-reg",
+// R, rid). It refuses (ErrRegister) an address whose rid is not RIDOf(n,
+// sk's key): one minted before rids were bound to keys, or another key's.
+func RegistrationProof(sk ed25519.PrivateKey, a Address) ([]byte, error) {
+	if err := checkRelay(a.Relay); err != nil {
+		return nil, err
+	}
+	spki, err := x509.MarshalPKIXPublicKey(sk.Public())
+	if err != nil {
+		return nil, err
+	}
+	n := Nonce(a.Secret)
+	if RIDOf(n, spki) != a.RID {
+		return nil, ErrRegister
+	}
+	b := make([]byte, 0, RIDSize+2+len(spki)+ed25519.SignatureSize)
+	b = append(b, n[:]...)
+	b = binary.BigEndian.AppendUint16(b, uint16(len(spki))) // #nosec G115 -- an Ed25519 SPKI is 44 bytes
+	b = append(b, spki...)
+	return append(b, ed25519.Sign(sk, registerMessage(a.Relay, a.RID))...), nil
+}
+
+// CheckRegistration is R's check of a declaration of rid at relay (R's own
+// host, the one its addresses name) (BIND:cap.register): rid = RIDOf(n,
+// spki) and the signature under spki over the tag, relay and rid. The
+// rendezvous record, which every opener gets, is under another tag and
+// never passes.
+func CheckRegistration(relay string, rid [RIDSize]byte, proof []byte) error {
+	if checkRelay(relay) != nil || len(proof) < RIDSize+2 {
+		return ErrRegister
+	}
+	n := [RIDSize]byte(proof[:RIDSize])
+	l := int(binary.BigEndian.Uint16(proof[RIDSize:]))
+	rest := proof[RIDSize+2:]
+	if len(rest) != l+ed25519.SignatureSize {
+		return ErrRegister
+	}
+	spki, sig := rest[:l], rest[l:]
+	k, err := x509.ParsePKIXPublicKey(spki)
+	pub, ok := k.(ed25519.PublicKey)
+	if err != nil || !ok || RIDOf(n, spki) != rid || !ed25519.Verify(pub, registerMessage(relay, rid), sig) {
+		return ErrRegister
+	}
+	return nil
 }

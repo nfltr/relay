@@ -10,6 +10,9 @@
   "record": "d0434de9f73226c709fbaeebb7ea56c4a7e6713cc69c5785d019cea1ec21c3df03a319967b357b1d149857dc0bbf0e1580eb24f1e79a5166ea3bb570b1eba607",
   "exporter": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f",
   "proof": "bc4fa1aa2ae8af9a65ef443973c4030579c9b8f992d2d8789b3845d0e6e30a45",
+  "reg_nonce": "2f8bea328cc5f2bf63eeec4088d1d2a2",
+  "reg_rid": "167fac4e6f1cc246afd58353f7cf5bb5",
+  "reg_proof": "2f8bea328cc5f2bf63eeec4088d1d2a2002c302a300506032b65700321002543b92ff1095511476adc8369db6ddc933665a11978dda1404ee1066ca9559d58d647dcd69935599e8fe4985799476ac58e461f199502dcd1f77066d5763640992cc10ddeeaaa3a5c29e476215360b0485f0890b0a10c98e6ec62e82a20ca06",
   "refused": [
     {
       "text": "nf1aeixezlamf4s4zlymfwxa3dffzrw63iaaebagbafaydqqcikbmga2dqpkfaixt6mlptselz4v4ki5mogdiwir4so2ylymkbkgvcg2ygiclgsaijcemsckjrhfausukzmfuxc6mbrgiztinjwg44dsor3hq6t4p7z4zsqo",

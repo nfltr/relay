@@ -116,6 +116,40 @@ var capBindings = map[string]func(t *testing.T, h honest){
 		p2 := Proof(h.a2.Secret, cexp2)
 		refused(t, "A2's proof at A1's acceptor", Admit(h.a1.Secret, sexp2, p2[:]), ErrProof)
 	},
+	// A declaration of rid at R: rid = ridOf(n, key) and a signature under
+	// key over the tag, R and rid. The holder of A1 (it knows n: it holds
+	// sec) declaring A1's rid under its own key, or with the record every
+	// opener gets, and the server's own proof for another relay or rid.
+	"cap.register": func(t *testing.T, h honest) {
+		a := h.a1
+		proof, err := RegistrationProof(h.sk, a)
+		if err != nil {
+			t.Fatal(err)
+		}
+		osk, ospki := newKey(t)
+		n := Nonce(a.Secret)
+		forge := func(spki, sig []byte) []byte {
+			b := append(append([]byte(nil), n[:]...), byte(len(spki)>>8), byte(len(spki)))
+			return append(append(b, spki...), sig...)
+		}
+		for what, p := range map[string][]byte{
+			"another key over A1's rid": forge(ospki, ed25519.Sign(osk, registerMessage(a.Relay, a.RID))),
+			"another key's signature":   forge(h.spki, ed25519.Sign(osk, registerMessage(a.Relay, a.RID))),
+			"the rendezvous record":     forge(h.spki, h.rec),
+			"a record with no hints":    forge(h.spki, mustSign(t, h.sk, a.Relay, a.RID, nil)), // an answer's record before direct paths
+			"another tag":               forge(h.spki, ed25519.Sign(h.sk, append([]byte("nf1-xxx"), registerMessage(a.Relay, a.RID)[len(tagRegister):]...))),
+			"no signature":              forge(h.spki, nil),
+			"truncated":                 proof[:len(proof)-1],
+			"empty":                     nil,
+		} {
+			refused(t, what, CheckRegistration(a.Relay, a.RID, p), ErrRegister)
+		}
+		refused(t, "the proof at another relay", CheckRegistration("other.example.com", a.RID, proof), ErrRegister)
+		refused(t, "the proof for A2's rid", CheckRegistration(a.Relay, h.a2.RID, proof), ErrRegister)
+		if _, err := RegistrationProof(osk, a); !errors.Is(err, ErrRegister) {
+			t.Errorf("a proof of A1 under another key: %v, want ErrRegister", err)
+		}
+	},
 }
 
 // TestCapAddressModelBindings runs every row after an honest exchange, and
@@ -149,6 +183,13 @@ func TestCapAddressModelBindings(t *testing.T) {
 		}
 		p := Proof(h.a1.Secret, cexp)
 		if err := Admit(h.a1.Secret, sexp, p[:]); err != nil {
+			t.Fatal(err)
+		}
+		reg, err := RegistrationProof(h.sk, h.a1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := CheckRegistration(h.a1.Relay, h.a1.RID, reg); err != nil {
 			t.Fatal(err)
 		}
 	})

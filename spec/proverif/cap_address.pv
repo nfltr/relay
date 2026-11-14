@@ -10,8 +10,8 @@
    no certificate of their own. The client knows only the address:
      A = (R, rid, pin, sec)
      R    the relay host the server registered at
-     rid  the rendezvous id: ridOf(n, pk) = H("nf1-rid", n, pk), n 16
-          random bytes the server keeps (public: the relay learns it), so
+     rid  the rendezvous id: ridOf(n, pk) = H("nf1-rid", n, pk), n =
+          nonceOf(sec) = H("nf1-n", sec) (public: the relay learns it), so
           rid is fresh per address and bound to the server's key (lane
           NF1RISKS; queries 1-24 hold for any public rid)
      sec  the secret: 32 random bytes, always present (the format has no
@@ -151,8 +151,7 @@ reduc forall m: bitstring, k: skey; getmsg(sign(m, k)) = m.
 fun h(bitstring): bitstring.
 
 const labPin, labRdv, labProof, labExp: bitstring.
-const labRid, labReg: bitstring.              (* the rid's and the registration proof's tags *)
-free n1: bitstring.                           (* A1's rid nonce: public *)
+const labRid, labReg, labN: bitstring.        (* the rid's, the registration proof's and the nonce's tags *)
 free cReg: channel [private].                 (* the server's TLS session to R *)
 const c2s, s2c, appData: bitstring.
 const answerPlain: bitstring.                 (* the relay's word: "this rid is plain" *)
@@ -206,6 +205,7 @@ event RegOwn(bitstring, pkey).                          (* R took the server's o
 event Hijacked(bitstring, pkey).                        (* R took a declaration of rid from anyone else *)
 
 letfun ridOf(nn: bitstring, x: pkey) = h((labRid, nn, x)).
+letfun nonceOf(s: bitstring) = h((labN, s)).
 letfun regOK(rs: bitstring, x: pkey, r: bitstring) = let (=labReg, =relayR, =r) = checksign(rs, x) in true else false. (* NOT:reg-is-rec *)
 letfun regOK(rs: bitstring, x: pkey, r: bitstring) = let (=labRdv, =relayR, =r, hs: bitstring) = checksign(rs, x) in true else false. (* ONLY:reg-is-rec *)
 
@@ -418,7 +418,9 @@ process
   ( Register(relayR, rid1, hintD) | Register(relayR, rid2, hintD) |
     (!Acceptor(rid1, s1, sec2, svcData1)) | (!Acceptor(rid2, sec2, s1, svcData2)) |
     (!Client(rid1, pin1, s1)) |
-    (let r1 = ridOf(n1, pk(skS)) in
+    (let n1 = nonceOf(s1) in
+     let r1 = ridOf(n1, pk(skS)) in
+       out(c, n1) |                                    (* every relay learns n *)
        Register(relayR, r1, hintD) |
        out(cReg, (r1, n1, pk(skS), sign((labReg, relayR, r1), skS))) | (* NOT:reg-is-rec *)
        out(cReg, (r1, n1, pk(skS), sign((labRdv, relayR, r1, hintD), skS))) | (* ONLY:reg-is-rec *)
