@@ -75,6 +75,7 @@ type Listener struct {
 	spki  []byte
 	rec   []byte
 	hints []byte
+	reg   []byte // capaddr.RegistrationProof; nil for an address minted before rids were bound to keys
 	cfg   *tls.Config
 }
 
@@ -113,6 +114,10 @@ func NewListener(addr capaddr.Address, key ed25519.PrivateKey) (*Listener, error
 	if err != nil {
 		return nil, err
 	}
+	reg, err := capaddr.RegistrationProof(key, addr)
+	if err != nil && !errors.Is(err, capaddr.ErrRegister) {
+		return nil, err
+	}
 	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "nf1"},
 		NotBefore: time.Unix(0, 0), NotAfter: time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)}
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
@@ -124,11 +129,17 @@ func NewListener(addr capaddr.Address, key ed25519.PrivateKey) (*Listener, error
 		Certificates:           []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
 		SessionTicketsDisabled: true, // every session shows the certificate (README environment assumptions)
 	}
-	return &Listener{addr: addr, key: key, spki: spki, rec: rec, cfg: cfg}, nil
+	return &Listener{addr: addr, key: key, spki: spki, rec: rec, reg: reg, cfg: cfg}, nil
 }
 
 // Address is the address the listener serves.
 func (l *Listener) Address() capaddr.Address { return l.addr }
+
+// RegistrationProof is what the agent sends its relay with the
+// declaration of the address's rid (agentservices.RegHeader), or nil for
+// an address whose rid is not bound to its key (minted before rids were:
+// a relay that requires the proof refuses it; serve a new address).
+func (l *Listener) RegistrationProof() []byte { return l.reg }
 
 // WithDirect is a copy of l whose rendezvous answer says it takes direct
 // paths (HintDirect, signed): the services table makes it for a service

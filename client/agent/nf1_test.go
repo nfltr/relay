@@ -10,6 +10,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/nfltr/relay/client/capaddr"
 	"github.com/nfltr/relay/client/nf1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentservices"
@@ -66,5 +67,38 @@ func TestNF1ServiceDeclaresAndServes(t *testing.T) {
 		if _, err := NewServiceTable([]Service{bad}); err == nil {
 			t.Errorf("NewServiceTable(%+v) accepted", bad)
 		}
+	}
+}
+
+// TestNF1ServiceRegistrations: each capability address is declared with
+// its registration proof, which the relay's check accepts for its rid and
+// relay; an address whose rid is not bound to its key (minted before
+// NF1RISKS) has none (nfltr docs/decisions/nf1-risks-2026-11-14.md).
+func TestNF1ServiceRegistrations(t *testing.T) {
+	l, key, err := nf1.Mint("relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := l.Address()
+	old.RID[0] ^= 1 // a random rid, as before NF1RISKS
+	unbound, err := nf1.NewListener(old, key)
+	if err != nil || unbound.RegistrationProof() != nil {
+		t.Fatalf("an unbound address: proof %x, %v", unbound.RegistrationProof(), err)
+	}
+	target := echoServer(t)
+	table, err := NewServiceTable([]Service{
+		{Name: "a", Kind: agentservices.TCP, E2EE: agentservices.E2EEOn, Target: target, NF1: l},
+		{Name: "b", Kind: agentservices.TCP, E2EE: agentservices.E2EEOn, Target: target, NF1: unbound},
+		{Name: "c", Kind: agentservices.TCP, Target: target},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	regs, err := agentservices.ParseReg(table.Registrations())
+	if err != nil || len(regs) != 1 {
+		t.Fatalf("registrations %v, %v: want one, for a", regs, err)
+	}
+	if err := capaddr.CheckRegistration("relay.example", l.Address().RID, regs[l.Address().RID]); err != nil {
+		t.Fatalf("a's proof: %v", err)
 	}
 }

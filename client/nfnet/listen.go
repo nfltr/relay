@@ -94,9 +94,12 @@ func Listen(ctx context.Context, cfg Config, service string, o ListenOptions) (*
 	if o.Address != nil {
 		l.address = o.Address.Address().String()
 	}
-	decl := table.Declaration()
+	md := []string{agentservices.Header, table.Declaration(), agentservices.ModesHeader, "1"}
+	for _, r := range table.Registrations() {
+		md = append(md, agentservices.RegHeader, r)
+	}
 	l.a = agent.New(acfg,
-		agent.WithMetadata(agentservices.Header, decl, agentservices.ModesHeader, "1"),
+		agent.WithMetadata(md...),
 		agent.WithConnected(func(c agent.Connection) (*agent.Tunnel, error) {
 			if err := accepted(c, svc); err != nil {
 				return nil, err
