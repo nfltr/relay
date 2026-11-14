@@ -66,5 +66,8 @@ func TestDialDatagramUsage(t *testing.T) {
 		if _, err := d.DialDatagram(t.Context(), "web/dns", o); CodeOf(err) != CodeUsage {
 			t.Fatalf("%+v: %v", o, err)
 		}
+		if _, err := d.DialAssociation(t.Context(), Target{Kind: AgentTarget, Agent: "web", Service: "dns"}, o, dgram.Config{}); CodeOf(err) != CodeUsage {
+			t.Fatalf("DialAssociation %+v: %v", o, err)
+		}
 	}
 }

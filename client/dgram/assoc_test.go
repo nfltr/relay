@@ -377,6 +377,41 @@ func TestDatagramAssocAmpBound(t *testing.T) {
 	}
 }
 
+// A Forwarder's Flow hook hears each flow's open and its close: the
+// association's end closes every flow with reason 0.
+func TestForwarderFlowEvents(t *testing.T) {
+	to, _ := echo(t, 1)
+	type ev struct {
+		src    netip.AddrPort
+		closed bool
+		why    Reason
+	}
+	evs := make(chan ev, 8)
+	fw := NewForwarder(ForwarderConfig{Flow: func(src netip.AddrPort, closed bool, why Reason) { evs <- ev{src, closed, why} }},
+		func(context.Context) (*Client, error) {
+			c1, c2 := net.Pipe()
+			s := NewServer(c2, Config{}, dialUDP(to))
+			t.Cleanup(func() { _ = s.Close() })
+			return NewClient(c1, Config{}), nil
+		},
+		func([]byte, netip.AddrPort) {})
+	src := netip.MustParseAddrPort("127.0.0.1:1000")
+	fw.Handle(context.Background(), src, []byte("q"))
+	fw.Handle(context.Background(), src, []byte("q")) // the same flow: no second open
+	if e := <-evs; e != (ev{src, false, 0}) {
+		t.Fatalf("first event %+v, want the open", e)
+	}
+	_ = fw.Close()
+	select {
+	case e := <-evs:
+		if e != (ev{src, true, 0}) {
+			t.Fatalf("event %+v, want the close at the association's end", e)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no close event")
+	}
+}
+
 // AllFlowsEnd: idle flows end at both sides, and the client's
 // association after AssocIdle with none.
 func TestDatagramAssocAllFlowsEnd(t *testing.T) {

@@ -22,6 +22,10 @@ type ForwarderConfig struct {
 	// does not reset it). Ratio 0: no budget (a loopback listen).
 	Ratio, Burst int
 	Window       time.Duration
+	// Flow, when set, is told of each flow: its open (closed false) and
+	// its close (closed true; why its Reason, 0 when the association
+	// ended). It is called without the forwarder's lock and must not wait.
+	Flow func(src netip.AddrPort, closed bool, why Reason)
 }
 
 // Forwarder is a datagram listener's client side: one flow per source
@@ -81,13 +85,16 @@ func (fw *Forwarder) Handle(ctx context.Context, src netip.AddrPort, p []byte) {
 		var mine *Flow
 		fl, err = c.Open(FlowOptions{Source: src.String(),
 			Deliver: func(p []byte) { fw.reply(src, p) },
-			Closed:  func(Reason) { fw.forget(src, &mine) }})
+			Closed:  func(why Reason) { fw.forget(src, &mine, why) }})
 		mine = fl
 		if err != nil {
 			traceReadDrop(src.String(), true)
 			return
 		}
 		fw.flows[src] = fl
+		if fw.cfg.Flow != nil {
+			fw.cfg.Flow(src, false, 0)
+		}
 	}
 	fl.Send(p)
 }
@@ -144,12 +151,15 @@ func (fw *Forwarder) budgetOf(addr netip.Addr) *budget {
 }
 
 // forget drops src's flow *fl, once closed (and not a later flow of src).
-func (fw *Forwarder) forget(src netip.AddrPort, fl **Flow) {
+func (fw *Forwarder) forget(src netip.AddrPort, fl **Flow, why Reason) {
 	fw.mu.Lock()
 	if fw.flows[src] == *fl {
 		delete(fw.flows, src)
 	}
 	fw.mu.Unlock()
+	if fw.cfg.Flow != nil {
+		fw.cfg.Flow(src, true, why)
+	}
 }
 
 // Stats are the current association's counters plus the forwarder's own

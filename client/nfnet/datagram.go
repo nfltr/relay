@@ -72,6 +72,22 @@ func (d *Dialer) DialDatagram(ctx context.Context, target string, o DialOptions)
 	return a.Dial(c.LocalAddr(), Addr{Target: target})
 }
 
+// DialAssociation opens a session to t's udp service and runs the client
+// side of an association on it, with cfg's bounds and timers: the many
+// flows of one listener (a dgram.Forwarder's dial). Direct paths and Early
+// do not apply yet (lane UDP3).
+func (d *Dialer) DialAssociation(ctx context.Context, t Target, o DialOptions, cfg dgram.Config) (*dgram.Client, error) {
+	if o.Direct != DirectOff || o.Early {
+		return nil, usage("DialAssociation: direct paths and Early are not served for datagram services yet")
+	}
+	t.datagram = true
+	c, err := d.DialTarget(ctx, t, o)
+	if err != nil {
+		return nil, err
+	}
+	return dgram.NewClient(c, cfg), nil
+}
+
 // PacketListener serves one udp service: every flow of every association
 // to it as one net.PacketConn. ReadFrom returns a datagram and the flow's
 // Addr{Target: the caller's machine, Flow: its number}; WriteTo(Addr)
