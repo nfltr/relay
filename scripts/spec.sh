@@ -538,6 +538,7 @@ mutants)
 	expect witness:DA-Direct -e 's/^    NoHOL$/    W_Direct/'
 	expect witness:DA-Moved -e 's/^    NoHOL$/    W_Moved/'
 	expect witness:DA-StaleTag -e 's/^    NoHOL$/    W_StaleTag/'
+	expect witness:DA-EarlyReply -e 's/^    NoHOL$/    W_EarlyReply/'
 	cfg=DatagramAssocTwo
 	# A reused id breaks ClosedFinal (an action property) first; with it
 	# taken out the same trace reaches NoCrossFlow.

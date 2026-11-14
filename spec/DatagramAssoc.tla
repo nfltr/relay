@@ -231,14 +231,14 @@ Read(s) ==
 \* A reply reaches flow k at the client (from the stream or a frame, its
 \* sender's source as a ghost); written to k's source within the source's
 \* amplification budget, else dropped.
-Reply(k, src, direct) ==
-    IF cst[k] = "open" \/ (Mutant = "deliver-after-close" /\ cst[k] = "closed")
+Reply(k, src, direct, opens) ==
+    IF cst[k] = "open" \/ opens \/ (Mutant = "deliver-after-close" /\ cst[k] = "closed")
     THEN LET s == csrc[k] IN
          IF Budget(s, k) \/ Mutant = "no-amp-cap"
          THEN /\ outb' = [outb EXCEPT ![s] = @ + 1]
               /\ fout' = [fout EXCEPT ![k] = @ + 1]
               /\ got' = TRUE
-              /\ late' = (late \/ cst[k] # "open")
+              /\ late' = (late \/ ~(cst[k] = "open" \/ opens))
               /\ cross' = (cross \/ src # s)
               /\ UNCHANGED ampDrop
          ELSE /\ ampDrop' = TRUE
@@ -258,21 +258,30 @@ RecvC ==
                  /\ cst' = IF cst[k] \in Live THEN [cst EXCEPT ![k] = "closed"] ELSE cst
                  /\ UNCHANGED <<outb, fout, got, late, cross, ampDrop>>
             [] m.k = "d" ->
-                 /\ Reply(k, m.src, FALSE)
+                 /\ Reply(k, m.src, FALSE, FALSE)
                  /\ UNCHANGED cst
     /\ UNCHANGED <<sent, sock, inb, fin, cep, cup, ccut, crefused, csrc, cbnd, aep,
                    aup, acut, adead, ast, asrc, aq, abnd, c2a, dg, revoked, cuts,
                    losses, blocked, lateRev, viaDirect, moved, staleTag>>
 
 \* The client takes a frame off the direct connection: handed on only when
-\* its tag is this association's, bound here, and the flow is open.
+\* its tag is this association's, bound here, and the flow is open. A frame
+\* for a flow still opening is its accept (lane UDP3): the agent sends one
+\* only on a flow it accepted, and it can overtake the accept on the
+\* stream; the flow opens and the reply goes on (the accept, when it
+\* comes, changes nothing).
 RecvDgC(m) ==
     /\ m \in dg /\ m.dir = "a2c"
     /\ dg' = dg \ {m}
-    /\ IF m.e = cep /\ m.e \in cbnd /\ cup
-       THEN Reply(<<m.e, m.f>>, m.src, TRUE)
-       ELSE UNCHANGED <<outb, fout, got, late, cross, ampDrop>>
-    /\ UNCHANGED <<sent, sock, inb, fin, cep, cup, ccut, crefused, cst, csrc, cbnd,
+    /\ LET k == <<m.e, m.f>> IN
+       IF m.e = cep /\ m.e \in cbnd /\ cup
+       THEN IF cst[k] = "opening"
+            THEN /\ cst' = [cst EXCEPT ![k] = "open"]
+                 /\ Reply(k, m.src, TRUE, TRUE)
+            ELSE /\ Reply(k, m.src, TRUE, FALSE)
+                 /\ UNCHANGED cst
+       ELSE UNCHANGED <<outb, fout, got, late, cross, ampDrop, cst>>
+    /\ UNCHANGED <<sent, sock, inb, fin, cep, cup, ccut, crefused, csrc, cbnd,
                    aep, aup, acut, adead, ast, asrc, aq, abnd, c2a, a2c, revoked,
                    cuts, losses, blocked, lateRev, viaDirect, moved, staleTag>>
 
@@ -542,4 +551,7 @@ W_Refused == ~crefused                        \* an open after the revocation re
 W_AmpDrop == ~ampDrop                         \* a reply dropped by the budget
 W_Reply == ~got
 W_FlowRefused == ~(\E i \in 1..Len(a2c) : a2c[i].k = "refuse")
+\* a direct reply opened a flow whose accept is still on the stream
+W_EarlyReply == ~(\E k \in Keys : k[1] = cep /\ cst[k] = "open"
+                   /\ \E i \in 1..Len(a2c) : a2c[i].k = "accept" /\ a2c[i].f = k[2])
 =============================================================================

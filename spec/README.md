@@ -845,14 +845,15 @@ a source's new flow starts a new one: `AmpBound`), `DA:no-idle`
 `W_Direct`, `W_Moved` (a flow that went direct carries on relayed),
 `W_StaleTag` (an older association's frame reaches a newer one, and is
 dropped), `W_Revoked`, `W_Refused` (an open after the revocation),
-`W_AmpDrop`, `W_Reply`, `W_FlowRefused`.
+`W_AmpDrop`, `W_Reply`, `W_FlowRefused`, `W_EarlyReply` (lane UDP3: a
+direct reply opened a flow whose accept is still on the stream).
 
 | action | design (no Go yet) |
 |---|---|
 | `AppSend(s)` | the application's datagram to the listener, or a spoofed one |
 | `AssocOpen` | the association's open (`nf1` rendezvous, TLS, proof; or the organisation open); refused after a revocation |
 | `Read(s)` | the listener's one reader: a drop for a source it does not admit, onto the source's flow (direct, or the stream on credit), a new flow (its open carries the datagram), or a counted drop |
-| `RecvC`, `RecvDgC(m)` | the client reads the stream (an open's answer, a reply, a close) or a frame; a reply is written within the source's budget |
+| `RecvC`, `RecvDgC(m)` | the client reads the stream (an open's answer, a reply, a close) or a frame; a reply is written within the source's budget; a frame for a flow still opening is its accept (it overtook the A on the stream) |
 | `RecvA`, `RecvDgA(m)` | the agent reads the stream (an open: a flow and its socket, or a refusal past its cap; a datagram; a close) or a frame (only under a tag bound here, while the association is up) |
 | `ReplyA(k)` | the target's reply: direct when bound, else the stream on credit, else dropped |
 | `ExpireC(k)`, `ExpireA(k)` | the flow's idle timer, the agent's backstop |
@@ -872,26 +873,39 @@ dropped), `W_Revoked`, `W_Refused` (an open after the revocation),
 
 `DatagramAssoc.cfg` (one admitted source sending two datagrams, one
 spoofed, two ids, two associations, the target answering twice per
-datagram, one association end, one path death): 95,088 distinct states,
+datagram, one association end, one path death): 114,432 distinct states,
 depth 31. `DatagramAssocMove.cfg` (one source, three datagrams):
-111,207 states. `DatagramAssocTwo.cfg` (two admitted sources, one
-association, the client's cap above the agent's): 11,778 states.
-`DatagramAssocLive.cfg` (`AllFlowsEnd`): 15,138 states. `-coverage 1`
+127,700 states. `DatagramAssocTwo.cfg` (two admitted sources, one
+association, the client's cap above the agent's): 12,684 states.
+`DatagramAssocLive.cfg` (`AllFlowsEnd`): 16,344 states (lane UDP3, with
+`RecvDgC`'s early accept). `-coverage 1`
 takes every action in each (but `PathLoss` in `DatagramAssocTwo.cfg`,
 which has none).
 
 ### Code map (DatagramAssoc.tla)
 
-Lane UDP2 (2026-11-14) built the relayed association, `client/dgram`.
-The direct path (`Bind`, `PathLoss`, `RecvDgC`, `RecvDgA`) is lane UDP3's;
-`Revoke` is the agent's end of the association (`Server.Close`, called by
-the session's revocation), `Cut` the stream's end.
+Lane UDP2 (2026-11-14) built the relayed association, `client/dgram`;
+lane UDP3 the direct path. `Revoke` is the agent's end of the
+association (the session's reset: the direct path's per-frame check, then
+`Server.Close` with the session's end), `Cut` the stream's end. The code's
+tag is finer than the model's: the model's is the association's epoch,
+the code's the attach stream's QUIC stream id (each re-attach a new one),
+so the code drops every frame the model drops and a few more (an older
+attach's of the same association): loss only. `Bind` is one step in the
+model; in the code each end binds on its own (the client at its move once
+the agent's token is checked, the agent at its attach): a frame sent
+before the peer bound is dropped there, which the model's drop of a frame
+under a tag not bound at the receiver covers. Spill (a datagram too large
+for a packet goes on the stream) is a choice between the two carriers the
+model has, no state of its own.
 
 | actions | code |
 |---|---|
 | `AssocOpen`, `Read` (admission, budget) | client/dgram/forward.go |
 | `Read` (flow table, queue), `RecvC`, `ExpireC`, `NoticeC` | client/dgram/client.go |
 | `RecvA`, `ReplyA`, `ExpireA`, `Revoke`, `CleanupA` | client/dgram/server.go |
+| `RecvDgC`, `RecvDgA` (the association's half), the direct branch of `Read` and `ReplyA`, spill | client/dgram/direct.go |
+| `RecvDgA` and `RecvDgC` (the tag and the session's state per frame), `Bind` | client/agent/direct_datagram.go |
 | the stream, its one sender, `Cut` | client/dgram/assoc.go |
 | framing | client/dgram/frame.go |
 | trace recorder | client/dgram/trace_on.go |
@@ -912,4 +926,9 @@ must be rejected (`spec/testdata/reject-datagramassoc-*`): a datagram
 delivered after the agent closed its flow, a flow accepted past the
 agent's cap, an open from a source not admitted. The byte budget
 (`AmpBound` in bytes) is the Go test's (`TestDatagramAssocAmpBound`): the
-model counts datagrams.
+model counts datagrams. The direct path's steps (`Bind`, `RecvDgC`, `RecvDgA`, the direct
+branches of `Read` and `ReplyA`) are not recorded yet: its Go tests are
+`client/agent`'s `TestDatagramDirectMovesAndFallsBack`,
+`TestDatagramRevokeOnDirect` and `TestDatagramModelBindings`, with the Go
+mutants `direct-ignores-assoc` and `tag-unchecked`
+(`client/agent/testdata/direct_dgram_mutants.txt`).
