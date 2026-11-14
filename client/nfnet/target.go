@@ -2,9 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package nfnet dials and serves sessions by identity through a relay (nfltr
-// docs/decisions/p2p-sdk-2026-11-14.md). This first slice holds the target
-// grammar (ParseTarget) and the typed errors of the connect sidecar's exit
-// table (Error, Code, CodeOf); Dial and Listen follow.
+// docs/decisions/p2p-sdk-2026-11-14.md): a Dialer opens sessions to the
+// targets of ParseTarget's grammar (an agent's service, a machine's, a
+// group's, an nf1 address) as Conns, plain or end-to-end encrypted in
+// organisation mode, relayed or on a direct path; its failures are typed
+// by the connect sidecar's exit table (Error, Code, CodeOf). Listen
+// follows.
 package nfnet
 
 import (

@@ -781,3 +781,13 @@ func (t *tokenCheck) Read(p []byte) (int, error) {
 	}
 	return t.pathStream.Read(p)
 }
+
+// Close ends the client's direct connections and its socket; sessions
+// still on a direct path fall back to the relay or end. Its owner closes
+// it once it opens no more sessions.
+func (d *DirectClient) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = d.node.Drain(ctx)
+	return d.ep.Close()
+}

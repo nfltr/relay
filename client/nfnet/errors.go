@@ -60,6 +60,10 @@ type Error struct {
 	// Err is the cause (nf1.ErrNotServed, capaddr.ErrPin, ...); errors.Is
 	// and errors.As see it through Unwrap.
 	Err error
+	// peer is the machine whose certificate the end-to-end check refused
+	// (CodeE2EEPinMismatch), "" when none was seen: a group dial excludes
+	// it from the next pick (retryGroup).
+	peer string
 }
 
 func (e *Error) Error() string {
