@@ -7,7 +7,7 @@ require (
 	github.com/nfltr/link v0.12.11
 	github.com/nfltr/link/peerlink/quiclink v0.5.18
 	github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261112202211-40e0a2570e52
-	github.com/nfltr/relay/proto v0.19.33-0.20261113192238-cc51742c6968
+	github.com/nfltr/relay/proto v0.19.33
 	github.com/pion/logging v0.2.4
 	github.com/pion/stun/v4 v4.0.1
 	github.com/pion/webrtc/v4 v4.2.22
