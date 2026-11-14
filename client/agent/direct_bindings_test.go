@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"regexp"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/nfltr/link/pathswitch"
 	"github.com/nfltr/quic-go"
+	"github.com/nfltr/relay/client/internal/modelbind"
 )
 
 const directBindModel = "../../spec/proverif/e2ee_tcp.pv"
@@ -163,20 +165,9 @@ func TestDirectModelBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var model []string
-	for _, m := range regexp.MustCompile(`BIND:(direct\.[a-z0-9.]+)`).FindAllSubmatch(src, -1) {
-		if id := string(m[1]); !slices.Contains(model, id) {
-			model = append(model, id)
-		}
-	}
-	var rows []string
-	for id := range directBindings {
-		rows = append(rows, id)
-	}
-	slices.Sort(model)
-	slices.Sort(rows)
-	if !slices.Equal(model, rows) {
-		t.Fatalf("%s BIND ids %v, rows %v: each binding of the model needs one row", directBindModel, model, rows)
+	rows := slices.Sorted(maps.Keys(directBindings))
+	if err := modelbind.Check(src, regexp.MustCompile(`BIND:(direct\.[a-z0-9.]+)`), rows); err != nil {
+		t.Fatalf("%s: %v", directBindModel, err)
 	}
 	for _, id := range rows {
 		t.Run(id, directBindings[id])

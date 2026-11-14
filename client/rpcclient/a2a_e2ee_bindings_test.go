@@ -12,10 +12,13 @@ package rpcclient
 import (
 	"bytes"
 	"crypto/rand"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
 	"testing"
+
+	"github.com/nfltr/relay/client/internal/modelbind"
 )
 
 const bindModel = "../../spec/proverif/a2a_machine.pv"
@@ -185,18 +188,9 @@ func TestA2AE2EEModelBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var model []string
-	for _, m := range regexp.MustCompile(`BIND:([a-z0-9.]+)`).FindAllSubmatch(src, -1) {
-		model = append(model, string(m[1]))
-	}
-	var rows []string
-	for id := range a2aBindings {
-		rows = append(rows, id)
-	}
-	slices.Sort(model)
-	slices.Sort(rows)
-	if !slices.Equal(model, rows) {
-		t.Fatalf("%s BIND ids %v, rows %v: each binding of the model needs one row", bindModel, model, rows)
+	rows := slices.Sorted(maps.Keys(a2aBindings))
+	if err := modelbind.Check(src, regexp.MustCompile(`BIND:([a-z0-9.]+)`), rows); err != nil {
+		t.Fatalf("%s: %v", bindModel, err)
 	}
 	for _, id := range rows {
 		t.Run(id, a2aBindings[id])

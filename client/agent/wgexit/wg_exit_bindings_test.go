@@ -14,14 +14,15 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net/netip"
 	"os"
 	"regexp"
 	"slices"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/internal/modelbind"
 	"github.com/nfltr/relay/client/wg"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/wgwire"
@@ -187,23 +188,13 @@ func TestWGExitModelBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var model, nfltr []string
-	for _, m := range regexp.MustCompile(`BIND:([a-z0-9.]+)`).FindAllSubmatch(src, -1) {
-		if id := string(m[1]); strings.HasPrefix(id, "nfltr.") {
-			nfltr = append(nfltr, id)
-		} else {
-			model = append(model, id)
-		}
+	rows := slices.Sorted(maps.Keys(wgBindings))
+	// every id but nfltr.*, whose rows are nfltr's
+	if err := modelbind.Check(src, regexp.MustCompile(`BIND:((?:[a-mo-z0-9]|n[a-eg-z0-9.]|nf[a-km-z0-9.])[a-z0-9.]*)`), rows); err != nil {
+		t.Fatalf("%s: %v", wgBindModel, err)
 	}
-	var rows []string
-	for id := range wgBindings {
-		rows = append(rows, id)
-	}
-	slices.Sort(model)
-	slices.Sort(rows)
-	slices.Sort(nfltr)
-	if !slices.Equal(model, rows) || !slices.Equal(nfltr, wgNfltrRows) {
-		t.Fatalf("%s BIND ids %v and %v, rows %v and nfltr's %v: each binding of the model needs one row", wgBindModel, model, nfltr, rows, wgNfltrRows)
+	if err := modelbind.Check(src, regexp.MustCompile(`BIND:(nfltr\.[a-z0-9.]+)`), wgNfltrRows); err != nil {
+		t.Fatalf("%s, nfltr's rows: %v", wgBindModel, err)
 	}
 	t.Run("honest", func(t *testing.T) {
 		home := pairedExit(t, wgBindKey, "home1", "m1.1")

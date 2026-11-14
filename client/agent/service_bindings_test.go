@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"regexp"
@@ -23,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/internal/modelbind"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 	"github.com/nfltr/relay/proto/wire/dataplane"
@@ -169,20 +171,9 @@ func TestServiceModelBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var model []string
-	for _, m := range regexp.MustCompile(`BIND:(org\.[a-z0-9.]+)`).FindAllSubmatch(src, -1) {
-		if id := string(m[1]); !slices.Contains(model, id) {
-			model = append(model, id)
-		}
-	}
-	var rows []string
-	for id := range serviceBindings {
-		rows = append(rows, id)
-	}
-	slices.Sort(model)
-	slices.Sort(rows)
-	if !slices.Equal(model, rows) {
-		t.Fatalf("%s BIND ids %v, rows %v: each binding of the model needs one row", directBindModel, model, rows)
+	rows := slices.Sorted(maps.Keys(serviceBindings))
+	if err := modelbind.Check(src, regexp.MustCompile(`BIND:(org\.[a-z0-9.]+)`), rows); err != nil {
+		t.Fatalf("%s: %v", directBindModel, err)
 	}
 	for _, id := range rows {
 		t.Run(id, serviceBindings[id])

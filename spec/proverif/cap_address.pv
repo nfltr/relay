@@ -125,7 +125,7 @@
    and, for the direct phase (client/nf1 TestNF1DirectModelBindings, with
    the organisation's direct.token, direct.quic, direct.role rows):
      BIND:nf1direct.pin   the direct connection's key against the pinned key
-   and, for datagrams (pending: the code lane's row, client/model_bindings_guard_test.go):
+   and, for datagrams (pending: the code lane's row, client/internal/modelbind Pending):
      BIND:dgram.tag       a frame's tag: a session attached on this connection, up
      BIND:cap.kind        the dial's kind against the record's hints (u1 or none) *)
 

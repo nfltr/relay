@@ -188,8 +188,11 @@ bindings test is missing would be checked by nothing:
 `client/model_bindings_guard_test.go` `TestEveryModelBindingHasARow` (in
 `make test`) fails when a model declares a `BIND` id that no
 `*_bindings_test.go` has as a quoted row key, or whose test `make
-spec-bindings` does not run, unless its `pendingBindings` lists the id with
-where its row is.
+spec-bindings` does not run, unless `client/internal/modelbind` `Pending`
+lists the id with where its row comes from. Each bindings test compares
+its model's ids with its rows through `modelbind.Check`, which exempts the
+pending ids, and every one of these tests fails once a pending id has a
+row, so the list cannot go stale.
 
 | model | test | rows |
 |---|---|---|
@@ -199,7 +202,7 @@ where its row is.
 | `wg_exit.pv` | `client/agent/wgexit/wg_exit_bindings_test.go` `TestWGExitModelBindings` | 3 here (psk binds the exit's name; each end's psk on the key the relay told it) + 3 in nfltr `cmd/nfltr/internal/wgcli/wg_exit_bindings_test.go` (the key id of the machine named, psk whatever `x-wg-paired` says, one key per machine) |
 | `cap_address.pv` | `client/capaddr/capaddr_bindings_test.go` `TestCapAddressModelBindings` | 4 of 4, one per `BIND:cap.*`, against the codec `client/capaddr` (real TLS 1.3 over a pipe): the answer's key and the TLS certificate's key of another server, and a plain answer with no key (`cap.pin`); the record over another relay, rid, tag or hints, under another key, or none (`cap.rendezvous`); the proof over another session's exporter, under another secret, without the exporter (`cap.secret`); A1's proof at A2's acceptor and A2's at A1's, one key (`cap.service`). Go mutants caught by hand: the answer's key unchecked, the certificate unchecked, the relay out of the record, the exporter out of the proof. `pin-unkeyed` is no binding: `TestRoundTrip` requires two addresses of one key to differ in pin; and 4 of 4 against the transport, `client/nf1/nf1_bindings_test.go` `TestNF1ModelBindings` (lane NF1RDV): a relay routing to another server or running TLS under another key (`cap.pin`), a record over another rid or with hints it does not cover (`cap.rendezvous`), a proof over another exporter (`cap.secret`, no verdict), A1's client at A2's listener (`cap.service`); Go mutants caught by hand: the answer unchecked, `VerifyConnection` dropped, `Admit` skipped; and 1 of 1 for the direct phase (lane NF1DIRECT), `client/agent/direct_nf1_bindings_test.go` `TestNF1DirectModelBindings`: a holder of another key answering the punch at the agent's candidate, for the session's own server name, is refused (`refused_cert`) and the session stays relayed with its bytes intact (`nf1direct.pin`; Go mutant `nf1-direct-no-pin` in `org_mutants.txt`); the tokens are `e2ee_tcp.pv`'s rows (`TestDirectModelBindings`), and the `d1` hint's binding is `cap.rendezvous` (a hint the record does not cover) |
 
-Pending, in `pendingBindings` until their code lands (nfltr
+Pending, in `modelbind.Pending` until their code lands (nfltr
 `docs/decisions/nf1-udp-2026-11-14.md`): `dgram.tag` (`cap_address.pv` and
 `e2ee_tcp.pv` datagrams, lane UDP3), `cap.kind` (the dial's kind against
 the record's `u1`) and `org.kind` (the ALPN's kind prefix `nfltr-dg/`),

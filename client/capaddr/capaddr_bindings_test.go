@@ -12,10 +12,13 @@ package capaddr
 import (
 	"crypto/ed25519"
 	"errors"
+	"maps"
 	"os"
 	"regexp"
 	"slices"
 	"testing"
+
+	"github.com/nfltr/relay/client/internal/modelbind"
 )
 
 const capBindModel = "../../spec/proverif/cap_address.pv"
@@ -125,18 +128,10 @@ func TestCapAddressModelBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var model, rows []string
-	for _, m := range regexp.MustCompile(`BIND:(cap\.[a-z0-9.]*[a-z0-9])`).FindAllSubmatch(src, -1) { // nf1direct.*: client/agent's rows
-		model = append(model, string(m[1]))
-	}
-	for id := range capBindings {
-		rows = append(rows, id)
-	}
-	slices.Sort(model)
-	model = slices.Compact(model)
-	slices.Sort(rows)
-	if !slices.Equal(model, rows) {
-		t.Fatalf("%s BIND ids %v, rows %v: each binding of the model needs one row", capBindModel, model, rows)
+	rows := slices.Sorted(maps.Keys(capBindings))
+	// nf1direct.*: client/agent's rows
+	if err := modelbind.Check(src, regexp.MustCompile(`BIND:(cap\.[a-z0-9.]*[a-z0-9])`), rows); err != nil {
+		t.Fatalf("%s: %v", capBindModel, err)
 	}
 	h := newHonest(t)
 	t.Run("honest", func(t *testing.T) {

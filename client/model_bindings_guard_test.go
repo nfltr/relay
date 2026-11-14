@@ -9,21 +9,14 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-)
 
-// pendingBindings are BIND ids of spec/proverif models whose rows are not
-// in this module yet: id -> where the row is (or why it waits). A model's
-// id with no row and no entry here fails TestEveryModelBindingHasARow.
-var pendingBindings = map[string]string{
-	"dgram.tag": "cap_address.pv and e2ee_tcp.pv datagrams: design (nfltr docs/decisions/nf1-udp-2026-11-14.md, lane UDP3 adds the row with the direct datagram code)",
-	"cap.kind":  "cap_address.pv the kind (u1): design (nfltr docs/decisions/nf1-udp-2026-11-14.md, lane UDP2 adds the row with the hints' kind)",
-	"org.kind":  "e2ee_tcp.pv the kind (ALPN nfltr-dg/): design (nfltr docs/decisions/nf1-udp-2026-11-14.md, lane UDP2 adds the row with the kind in service_alpn.go)",
-}
+	"github.com/nfltr/relay/client/internal/modelbind"
+)
 
 // TestEveryModelBindingHasARow: each BIND:<id> a model in spec/proverif
 // declares is a quoted row key in a *_bindings_test.go of this module
 // (nfltr.* ids included: the relay's row file lists them), whose package
-// `make spec-bindings` runs, or is in pendingBindings. Without it a model
+// `make spec-bindings` runs, or is in modelbind.Pending. Without it a model
 // whose bindings test is missing, or not run, is checked by nothing.
 func TestEveryModelBindingHasARow(t *testing.T) {
 	models, err := filepath.Glob("../spec/proverif/*.pv")
@@ -75,16 +68,16 @@ func TestEveryModelBindingHasARow(t *testing.T) {
 			}
 			declared[b] = true
 			covered := strings.Contains(rows.String(), `"`+b+`"`)
-			if _, pending := pendingBindings[b]; !covered && !pending {
-				t.Errorf("%s declares BIND:%s and no bindings test has its row (add one, or list it in pendingBindings)", filepath.Base(m), b)
+			if _, pending := modelbind.Pending[b]; !covered && !pending {
+				t.Errorf("%s declares BIND:%s and no bindings test has its row (add one, or list it in modelbind.Pending)", filepath.Base(m), b)
 			} else if covered && pending {
-				t.Errorf("BIND:%s has a row: drop it from pendingBindings", b)
+				t.Errorf("BIND:%s has a row: drop it from modelbind.Pending", b)
 			}
 		}
 	}
-	for b := range pendingBindings {
+	for b := range modelbind.Pending {
 		if !declared[b] {
-			t.Errorf("pendingBindings lists %s, which no model declares", b)
+			t.Errorf("modelbind.Pending lists %s, which no model declares", b)
 		}
 	}
 }

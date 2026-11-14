@@ -10,6 +10,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"regexp"
@@ -17,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/internal/modelbind"
 	"github.com/nfltr/relay/client/nf1"
 )
 
@@ -66,19 +68,9 @@ func TestNF1DirectModelBindings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var model, rows []string
-	for _, m := range regexp.MustCompile(`BIND:(nf1direct\.[a-z0-9.]+)`).FindAllSubmatch(src, -1) {
-		if id := string(m[1]); !slices.Contains(model, id) {
-			model = append(model, id)
-		}
-	}
-	for id := range nf1DirectBindings {
-		rows = append(rows, id)
-	}
-	slices.Sort(model)
-	slices.Sort(rows)
-	if !slices.Equal(model, rows) {
-		t.Fatalf("cap_address.pv BIND ids %v, rows %v: each binding of the model needs one row", model, rows)
+	rows := slices.Sorted(maps.Keys(nf1DirectBindings))
+	if err := modelbind.Check(src, regexp.MustCompile(`BIND:(nf1direct\.[a-z0-9.]+)`), rows); err != nil {
+		t.Fatalf("cap_address.pv: %v", err)
 	}
 	for _, id := range rows {
 		t.Run(id, nf1DirectBindings[id])
