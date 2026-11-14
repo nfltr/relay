@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -234,7 +235,8 @@ type Event struct {
 	Target, Session   string
 	E2EE              bool
 	Instance, Path    string
-	Reason            string // a path event's: why it is relayed ("" when direct)
+	Reason            string         // a path event's: why it is relayed ("" when direct)
+	Peer              netip.AddrPort // a direct path event's: the peer's address (zero when relayed)
 	BytesIn, BytesOut int64
 	Err               *Error
 }
@@ -252,7 +254,9 @@ func (c *Conn) emit(e Event) {
 }
 
 // onPath reports a direct path's move as a path event.
-func (c *Conn) onPath(p agent.PathEvent) { c.emit(Event{Kind: "path", Path: p.Path, Reason: p.Reason}) }
+func (c *Conn) onPath(p agent.PathEvent) {
+	c.emit(Event{Kind: "path", Path: p.Path, Reason: p.Reason, Peer: p.Peer})
+}
 
 // fail types a read's or write's error: a deadline and our own Close come
 // back unchanged, the rest is the session's failure (the first is kept

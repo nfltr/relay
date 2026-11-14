@@ -8,11 +8,13 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nfltr/link"
+	"github.com/nfltr/relay/client/agent"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
@@ -477,5 +479,18 @@ func TestEvents(t *testing.T) {
 	}
 	if failed.Kind != "error" || failed.Err == nil || failed.Err.Code != CodeRefused {
 		t.Errorf("error %+v", failed)
+	}
+}
+
+// TestPathEventNamesThePeer: a direct path event carries the peer's
+// address the direct client saw (nfltr's path events, the NAT lab's
+// group-dial row).
+func TestPathEventNamesThePeer(t *testing.T) {
+	var got Event
+	c := &Conn{events: func(e Event) { got = e }}
+	peer := netip.MustParseAddrPort("203.0.113.7:41641")
+	c.onPath(agent.PathEvent{Path: agent.PathDirect, Peer: peer})
+	if got.Kind != "path" || got.Path != agent.PathDirect || got.Peer != peer {
+		t.Fatalf("event %+v, want a direct path event naming %s", got, peer)
 	}
 }
