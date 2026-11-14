@@ -76,10 +76,6 @@ type Service struct {
 	// Target: its sessions wait there for Accept, which answers them
 	// (SessionQueue). One of Target and Queue.
 	Queue *SessionQueue
-	// Public declares the service public (agentservices.Decl.Public): the
-	// relay may route anonymous visitors of a public TCP endpoint to it, as
-	// plain bytes. A tcp service with E2EE Off only.
-	Public bool
 }
 
 // ServiceTable is the services an agent serves under its identity: the
@@ -178,9 +174,6 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if s.NF1 != nil && (s.Kind != agentservices.TCP || s.E2EE != agentservices.E2EEOn || s.Org != nil || s.Group != "" || len(s.AllowGroups) > 0) {
 			return nil, fmt.Errorf("service %q: a capability address (nf1) needs a tcp service with e2ee on and no organisation or group", s.Name)
 		}
-		if s.Public && (s.Kind != agentservices.TCP || s.E2EE != agentservices.E2EEOff) {
-			return nil, fmt.Errorf("service %q: a public service needs a tcp service with e2ee off (its visitors' bytes are plain at the relay)", s.Name)
-		}
 		e.org, e.groups, e.group, e.nf1 = s.Org, s.AllowGroups, s.Group, s.NF1
 		if s.NF1 != nil && s.Direct != DirectOff {
 			l, err := s.NF1.WithDirect()
@@ -218,7 +211,7 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 			return nil, fmt.Errorf("service %q: unknown kind %q", s.Name, s.Kind)
 		}
 		t.byName[s.Name] = e
-		d := agentservices.Decl{Name: s.Name, Kind: s.Kind, E2EE: s.E2EE, Group: s.Group, Public: s.Public}
+		d := agentservices.Decl{Name: s.Name, Kind: s.Kind, E2EE: s.E2EE, Group: s.Group}
 		if s.NF1 != nil {
 			d.NF1 = s.NF1.Address().RID
 		}

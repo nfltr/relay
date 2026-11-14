@@ -97,13 +97,6 @@ type Decl struct {
 	// group or direct attribute, each rid once per declaration (";nf1=" and
 	// 32 lowercase hex digits; nfltr docs/decisions/nf1-rendezvous-2026-11-13.md).
 	NF1 [RIDSize]byte
-	// Public: the service also takes anonymous visitors on a public TCP
-	// port of the relay, the relay copying its plain bytes (";public", the
-	// entry's only attribute, on a tcp+plain service only; nfltr
-	// docs/decisions/public-tcp-endpoints-2026-11-13.md). The machine's
-	// half of the endpoint's double opt-in: the relay routes a public port
-	// only to a live agent whose declaration says so.
-	Public bool
 }
 
 // RIDSize is the size of a capability address's rendezvous id
@@ -131,9 +124,6 @@ func (d Decl) value() string {
 	}
 	if d.NF1 != ([RIDSize]byte{}) {
 		v += ";nf1=" + hex.EncodeToString(d.NF1[:])
-	}
-	if d.Public {
-		v += ";" + publicAttr
 	}
 	return v
 }
@@ -237,18 +227,8 @@ func Parse(v string) ([]Decl, error) {
 	return out, nil
 }
 
-// publicAttr is a public service's attribute.
-const publicAttr = "public"
-
 // parseAttrs reads the entry's attributes after its first ';' into d.
 func (d *Decl) parseAttrs(attrs string) error {
-	if d.Kind == TCP && d.E2EE == E2EEOff {
-		if attrs != publicAttr {
-			return fmt.Errorf("service %q: invalid attributes %q (a tcp+plain service takes only ;public)", d.Name, attrs)
-		}
-		d.Public = true
-		return nil
-	}
 	if d.Kind != TCP || d.E2EE != E2EEOn {
 		return fmt.Errorf("service %q: group, direct and nf1 need a tcp+e2ee service", d.Name)
 	}
