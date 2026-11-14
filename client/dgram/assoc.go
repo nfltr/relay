@@ -77,8 +77,8 @@ type Stats struct {
 
 type counters struct {
 	sourceRefused, flowsFull, queueFull, tooLarge, budget, targetFull, closed atomic.Uint64
-	flows, refused                                                           atomic.Uint64
-	in, out                                                                  atomic.Uint64
+	flows, refused                                                            atomic.Uint64
+	in, out                                                                   atomic.Uint64
 }
 
 func (c *counters) drops() Drops {
@@ -125,7 +125,7 @@ type assoc struct {
 	out     []outFrame
 	flows   map[uint64]*flow
 	fresh   map[*flow]struct{} // the client's flows not yet opened (no id)
-	high    uint64 // the client's last id; the agent's highest seen
+	high    uint64             // the client's last id; the agent's highest seen
 	idleAt  time.Time
 	err     error
 	wake    chan struct{}
