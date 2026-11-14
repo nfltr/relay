@@ -51,7 +51,54 @@ const (
 	// TCP services take the owner's tcp-connect sessions, which name the
 	// service in place of a port.
 	TCP Kind = "tcp"
+	// UDP services take datagram associations (nfltr
+	// docs/decisions/nf1-udp-2026-11-14.md): sessions as a tcp service's,
+	// which name the service as DatagramTarget, their bytes the framing of
+	// relay client/dgram.
+	UDP Kind = "udp"
 )
+
+// Sessions reports whether k's services take sessions of bytes (tcp, udp),
+// with an E2EE mode of their own.
+func (k Kind) Sessions() bool { return k == TCP || k == UDP }
+
+// A service name may be declared once per kind class: once as a stream
+// service (http or tcp) and once as a udp one, so one agent serves dns as
+// both tcp and udp. A session names which by its target (an open's
+// target_addr): the name for the stream service, DatagramTarget for the
+// udp one. The suffix is no service name, so a relay or agent that knows
+// no udp services refuses such a target instead of routing it to the
+// stream service.
+
+// datagramSuffix ends a udp service's session target.
+const datagramSuffix = "+" + string(UDP)
+
+// DatagramTarget is the session target of the udp service name.
+func DatagramTarget(name string) string { return name + datagramSuffix }
+
+// SplitTarget is the service name a session target names and whether it is
+// the udp service of that name.
+func SplitTarget(target string) (name string, udp bool) {
+	if n, ok := strings.CutSuffix(target, datagramSuffix); ok {
+		return n, true
+	}
+	return target, false
+}
+
+// ValidTarget reports whether target names a service: ValidName, or
+// DatagramTarget of one.
+func ValidTarget(target string) bool {
+	n, _ := SplitTarget(target)
+	return ValidName(n)
+}
+
+// Target is the session target of d's service.
+func (d Decl) Target() string {
+	if d.Kind == UDP {
+		return DatagramTarget(d.Name)
+	}
+	return d.Name
+}
 
 // E2EE is a tcp service's end-to-end encryption: whether its sessions are
 // TLS the agent terminates with its organisation machine certificate (mutual
@@ -83,10 +130,10 @@ const (
 	DirectPublic Direct = "public"
 )
 
-// Decl is one declared service. E2EE applies to tcp services only; Group
-// (the organisation group the service is published under, dialled as
-// <service>@<group>) and Direct to tcp+e2ee services only, the ones in
-// organisation mode.
+// Decl is one declared service. E2EE applies to tcp and udp services only;
+// Group (the organisation group the service is published under, dialled as
+// <service>@<group>) and Direct to tcp+e2ee and udp+e2ee services only, the
+// ones in organisation mode.
 type Decl struct {
 	Name   string
 	Kind   Kind
@@ -94,8 +141,8 @@ type Decl struct {
 	Group  string
 	Direct Direct
 	// NF1 is the rendezvous id of the capability address (nf1...) the
-	// service is served under, zero for none: a tcp+e2ee service with no
-	// group or direct attribute, each rid once per declaration (";nf1=" and
+	// service is served under, zero for none: a tcp+e2ee or udp+e2ee
+	// service with no group or direct attribute, each rid once per declaration (";nf1=" and
 	// 32 lowercase hex digits; nfltr docs/decisions/nf1-rendezvous-2026-11-13.md).
 	NF1 [RIDSize]byte
 }
@@ -105,7 +152,7 @@ type Decl struct {
 const RIDSize = 16
 
 // kindValue is the declaration's kind as written: "http", "tcp",
-// "tcp+e2ee" or "tcp+plain".
+// "tcp+e2ee", "tcp+plain", "udp", "udp+e2ee" or "udp+plain".
 func (d Decl) kindValue() string {
 	if d.E2EE == E2EEDefault {
 		return string(d.Kind)
@@ -182,8 +229,10 @@ func Format(decls []Decl) string {
 
 // Parse reads a declaration. Every entry must be name=kind, then at most
 // one ";group=G" (G a ValidLabel) and one ";direct=on|public", in that
-// order and on a tcp+e2ee service only, with a valid name, a known kind and
-// no repeated name; anything else is an error and declares nothing.
+// order, or ";nf1=<rid>" alone, on a tcp+e2ee or udp+e2ee service only,
+// with a valid name, a known kind and no name twice as a stream service
+// (http, tcp) or twice as a udp one; anything else is an error and
+// declares nothing.
 func Parse(v string) ([]Decl, error) {
 	if v == "" {
 		return nil, errors.New("empty service declaration")
@@ -201,17 +250,17 @@ func Parse(v string) ([]Decl, error) {
 			return nil, fmt.Errorf("invalid service entry %q (want name=kind, name a DNS label starting with a letter)", entry)
 		}
 		kind, e2ee, plus := strings.Cut(kind, "+")
-		if k := Kind(kind); k != HTTP && k != TCP {
-			return nil, fmt.Errorf("service %q: unknown kind %q (want http or tcp)", name, kind)
+		if k := Kind(kind); k != HTTP && !k.Sessions() {
+			return nil, fmt.Errorf("service %q: unknown kind %q (want http, tcp or udp)", name, kind)
 		}
-		if e := E2EE(e2ee); plus && (Kind(kind) != TCP || (e != E2EEOn && e != E2EEOff)) {
-			return nil, fmt.Errorf("service %q: unknown kind %q (want tcp+e2ee or tcp+plain)", name, kind+"+"+e2ee)
+		if e := E2EE(e2ee); plus && (!Kind(kind).Sessions() || (e != E2EEOn && e != E2EEOff)) {
+			return nil, fmt.Errorf("service %q: unknown kind %q (want tcp or udp, +e2ee or +plain)", name, kind+"+"+e2ee)
 		}
-		if seen[name] {
+		d := Decl{Name: name, Kind: Kind(kind), E2EE: E2EE(e2ee)}
+		if seen[d.Target()] {
 			return nil, fmt.Errorf("service %q declared twice", name)
 		}
-		seen[name] = true
-		d := Decl{Name: name, Kind: Kind(kind), E2EE: E2EE(e2ee)}
+		seen[d.Target()] = true
 		if hasAttrs {
 			if err := d.parseAttrs(attrs); err != nil {
 				return nil, err
@@ -230,8 +279,8 @@ func Parse(v string) ([]Decl, error) {
 
 // parseAttrs reads the entry's attributes after its first ';' into d.
 func (d *Decl) parseAttrs(attrs string) error {
-	if d.Kind != TCP || d.E2EE != E2EEOn {
-		return fmt.Errorf("service %q: group, direct and nf1 need a tcp+e2ee service", d.Name)
+	if !d.Kind.Sessions() || d.E2EE != E2EEOn {
+		return fmt.Errorf("service %q: group, direct and nf1 need a tcp+e2ee or udp+e2ee service", d.Name)
 	}
 	if v, ok := strings.CutPrefix(attrs, "nf1="); ok {
 		return d.parseNF1(v)
@@ -280,24 +329,23 @@ func FindNF1(decls []Decl, rid [RIDSize]byte) (Decl, bool) {
 	return Decl{}, false
 }
 
-// Find returns the declaration of the service named name.
-func Find(decls []Decl, name string) (Decl, bool) {
+// Find returns the declaration of the service a session target names
+// (SplitTarget): the udp service of the name for a DatagramTarget, else
+// its stream service (http or tcp).
+func Find(decls []Decl, target string) (Decl, bool) {
 	for _, d := range decls {
-		if d.Name == name {
+		if d.Target() == target {
 			return d, true
 		}
 	}
 	return Decl{}, false
 }
 
-// Lookup returns the kind of the service named name, "" when none is.
-func Lookup(decls []Decl, name string) Kind {
-	for _, d := range decls {
-		if d.Name == name {
-			return d.Kind
-		}
-	}
-	return ""
+// Lookup returns the kind of the service target names (Find), "" when
+// none is.
+func Lookup(decls []Decl, target string) Kind {
+	d, _ := Find(decls, target)
+	return d.Kind
 }
 
 // RegHeader is the ConnectHTTP request metadata, beside Header, carrying

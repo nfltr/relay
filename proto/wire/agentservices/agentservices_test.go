@@ -25,7 +25,7 @@ func TestParse(t *testing.T) {
 		t.Fatal("Lookup")
 	}
 	bad := []string{
-		"", "web", "web=", "=http", "web=udp", "Web=http", "1db=tcp", "db-=tcp",
+		"", "web", "web=", "=http", "web=udpx", "Web=http", "1db=tcp", "db-=tcp",
 		"web=http,web=tcp", "web=http,", ",web=http", "a b=http", "web=http=x",
 		"localhost:5432=tcp", "../db=tcp", strings.Repeat("a", 64) + "=tcp",
 		strings.Repeat("a=tcp,", MaxServices) + "b=tcp",
@@ -82,7 +82,7 @@ func TestValidLabelAndHealth(t *testing.T) {
 }
 
 func FuzzParse(f *testing.F) {
-	for _, s := range []string{"web=http,db=tcp", "a=tcp", "", "x=y", "web=http,web=http", "v=tcp+e2ee,p=tcp+plain", "w=http+e2ee", "x=tcp+", "pg=tcp+e2ee;group=db;direct=on", "q=tcp+e2ee;direct=public"} {
+	for _, s := range []string{"web=http,db=tcp", "a=tcp", "", "x=y", "web=http,web=http", "v=tcp+e2ee,p=tcp+plain", "w=http+e2ee", "x=tcp+", "pg=tcp+e2ee;group=db;direct=on", "q=tcp+e2ee;direct=public", "dns=udp,dns=tcp", "v=udp+e2ee;nf1=01020300000000000000000000000000"} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
@@ -94,8 +94,8 @@ func FuzzParse(f *testing.F) {
 			t.Fatalf("Parse(%q) = %d services", s, len(decls))
 		}
 		for _, d := range decls {
-			if !ValidName(d.Name) || (d.Kind != HTTP && d.Kind != TCP) || (d.E2EE != E2EEDefault && (d.Kind != TCP || (d.E2EE != E2EEOn && d.E2EE != E2EEOff))) ||
-				((d.Group != "" || d.Direct != DirectOff) && (d.Kind != TCP || d.E2EE != E2EEOn)) || (d.Group != "" && !ValidLabel(d.Group)) ||
+			if !ValidName(d.Name) || (d.Kind != HTTP && !d.Kind.Sessions()) || (d.E2EE != E2EEDefault && (!d.Kind.Sessions() || (d.E2EE != E2EEOn && d.E2EE != E2EEOff))) ||
+				((d.Group != "" || d.Direct != DirectOff || d.NF1 != [RIDSize]byte{}) && (!d.Kind.Sessions() || d.E2EE != E2EEOn)) || (d.Group != "" && !ValidLabel(d.Group)) ||
 				(d.Direct != DirectOff && d.Direct != DirectOn && d.Direct != DirectPublic) {
 				t.Fatalf("Parse(%q) accepted %+v", s, d)
 			}
@@ -185,5 +185,40 @@ func TestParseReg(t *testing.T) {
 		if _, err := ParseReg(vals); err == nil {
 			t.Errorf("%s: accepted", what)
 		}
+	}
+}
+
+// TestParseUDP: the kinds udp, udp+e2ee and udp+plain, the attributes on
+// udp+e2ee, and a name once per kind class (stream, udp), each found by
+// its session target (nfltr docs/decisions/nf1-udp-2026-11-14.md section 2).
+func TestParseUDP(t *testing.T) {
+	rid := [RIDSize]byte{9}
+	good := []Decl{{Name: "dns", Kind: TCP}, {Name: "dns", Kind: UDP}, {Name: "wg", Kind: UDP, E2EE: E2EEOff},
+		{Name: "game", Kind: UDP, E2EE: E2EEOn, Group: "lan", Direct: DirectOn}, {Name: "voice", Kind: UDP, E2EE: E2EEOn, NF1: rid},
+		{Name: "web", Kind: HTTP}}
+	v := Format(good)
+	if v != "dns=tcp,dns=udp,wg=udp+plain,game=udp+e2ee;group=lan;direct=on,voice=udp+e2ee;nf1=09000000000000000000000000000000,web=http" {
+		t.Fatalf("Format = %q", v)
+	}
+	got, err := Parse(v)
+	if err != nil || !slices.Equal(got, good) {
+		t.Fatalf("Parse(%q) = %v, %v", v, got, err)
+	}
+	for target, want := range map[string]Kind{"dns": TCP, "dns+udp": UDP, "wg+udp": UDP, "wg": "", "web": HTTP, "web+udp": "", "voice+udp": UDP} {
+		if k := Lookup(got, target); k != want {
+			t.Errorf("Lookup(%q) = %q, want %q", target, k, want)
+		}
+	}
+	if d, ok := FindNF1(got, rid); !ok || d.Target() != "voice+udp" {
+		t.Fatalf("FindNF1 = %+v, %v", d, ok)
+	}
+	for _, s := range []string{"dns=udp,dns=udp+plain", "dns=tcp,dns=http", "dns=udp;group=g", "dns=udp+plain;direct=on",
+		"dns=udp+tls", "dns=udp+e2ee;nf1=00000000000000000000000000000000", "dns+udp=udp"} {
+		if d, err := Parse(s); err == nil {
+			t.Errorf("Parse(%q) = %v, want an error", s, d)
+		}
+	}
+	if n, udp := SplitTarget("dns+udp"); n != "dns" || !udp || !ValidTarget("dns+udp") || ValidTarget("dns+tcp") || ValidTarget("+udp") || DatagramTarget("dns") != "dns+udp" {
+		t.Fatal("targets")
 	}
 }
