@@ -25,6 +25,7 @@ TARGETS=(
 	"client ./mailboxclient FuzzDecodeError"
 	"client ./rpcclient FuzzA2AE2EE0RTTAccept"
 	"client ./capaddr FuzzParse"
+	"client ./nfnet FuzzParseTarget"
 )
 failed=0
 for t in "${TARGETS[@]}"; do

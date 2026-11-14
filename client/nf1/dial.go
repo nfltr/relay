@@ -69,7 +69,8 @@ func dialRelay(ctx context.Context, relay string) (net.Conn, error) {
 
 // Dial opens a session to addr's service: at addr.Relay only, over an
 // anonymous data connection, through the rendezvous, pinned TLS and the
-// proof (Handshake). The conn's Close ends the data connection too.
+// proof (Handshake). The conn's Close ends the data connection too; it
+// has CloseWrite, the TLS session's half close.
 func Dial(ctx context.Context, addr capaddr.Address, opt Options) (net.Conn, error) {
 	dial := opt.DialRelay
 	if dial == nil {
@@ -109,7 +110,7 @@ func Dial(ctx context.Context, addr capaddr.Address, opt Options) (net.Conn, err
 		_ = mux.Close()
 		return nil, err
 	}
-	return &conn{Conn: c, mux: mux}, nil
+	return &conn{Conn: c.(*tls.Conn), mux: mux}, nil
 }
 
 // answerErr is the relay's answer to the open as Dial's error.
@@ -134,9 +135,11 @@ func answerErr(err error) error {
 	return fmt.Errorf("%w: %s: %s", ErrRefused, reason, a.Msg)
 }
 
-// conn is a dialled session; Close ends its data connection.
+// conn is a dialled session; Close ends its data connection. The
+// embedded TLS connection's CloseWrite is the session's half close
+// (close_notify: the server reads EOF, its bytes still arrive).
 type conn struct {
-	net.Conn
+	*tls.Conn
 	mux *dataplane.Mux
 }
 
