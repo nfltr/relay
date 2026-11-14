@@ -3,4 +3,5 @@
 # fail>. scripts/go-mutants.sh; make test-go-mutants.
 answer-at-enqueue | queue.go | 	if err := q.wait(ctx, e); err != nil { | 	if err := error(nil); err != nil { | TestQueueAnswersAtAccept
 unbounded-backlog | queue.go | 	case len(q.pending) >= q.backlog: | 	case false: | TestQueueBacklogRefuses
-early-close-is-clean | queue.go | 		if !clean { | 		if !clean && false { | TestQueueAgentEndCloseIsReset
+close-is-reset | queue.go | 	c.end(nil) | 	c.end(link.ErrReset) | TestQueueClientCloseKeepsTheTail
+reset-is-close | queue.go | 		_ = v.Reset() | 		_ = v.Close() | TestQueueFrameSessions

@@ -28,7 +28,6 @@ import (
 func TestQueueConnIsANetConn(t *testing.T) {
 	nettest.TestConn(t, func() (c1, c2 net.Conn, stop func(), err error) {
 		user, agentEnd := newQueuePipe()
-		agentEnd.resetOnClose = false // nettest closes either end cleanly
 		return user, agentEnd, func() { _ = user.Close(); _ = agentEnd.Close() }, nil
 	})
 }
@@ -230,21 +229,37 @@ func TestQueueOrgRevocationCutsAccepted(t *testing.T) {
 	}
 }
 
-// A QueueConn's agent end resets its peer when closed before both
-// directions ended (a target's failure paths: a refused handshake), and
-// ends it cleanly after.
-func TestQueueAgentEndCloseIsReset(t *testing.T) {
-	user, agentEnd := newQueuePipe()
-	_ = agentEnd.Close()
-	if _, err := user.Read(make([]byte, 1)); !errors.Is(err, link.ErrReset) {
-		t.Fatalf("agent end closed early: %v; want link.ErrReset", err)
+// A client that closes its session whole (no half close first) ends the
+// accepted conn's reads cleanly after the client's last bytes, as a TCP
+// target's FIN would: never a reset that drops them. A failure before the
+// session was used resets it (dropTarget). Mutant close-is-reset
+// (testdata/queue_mutants.txt).
+func TestQueueClientCloseKeepsTheTail(t *testing.T) {
+	q := NewSessionQueue(0)
+	tab, err := NewServiceTable([]Service{{Name: "svc", Kind: agentservices.TCP, Queue: q}})
+	if err != nil {
+		t.Fatal(err)
 	}
-	user, agentEnd = newQueuePipe()
-	_ = agentEnd.CloseWrite()
-	_ = user.CloseWrite()
-	_ = agentEnd.Close()
-	if _, err := user.Read(make([]byte, 1)); err != io.EOF {
-		t.Fatalf("agent end closed after both ends: %v; want io.EOF", err)
+	st := newChanStream(t, 8, 8)
+	go func() {
+		_ = serveTCPStream(t.Context(), st, sessionTargets{services: tab}, nil, nil, slog.New(slog.DiscardHandler), &tcpStreamGrowth{}, nil)
+	}()
+	st.in <- &pb.TCPData{SessionId: "s1", Open: true, TargetAddr: "svc", Answer: true}
+	got, err := q.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-st.out // the answer
+	st.in <- &pb.TCPData{SessionId: "s1", Data: []byte("tail")}
+	st.in <- &pb.TCPData{SessionId: "s1", Close: true}
+	if b, err := io.ReadAll(got); err != nil || string(b) != "tail" {
+		t.Fatalf("after the client's close: read %q, %v; want the tail, then io.EOF", b, err)
+	}
+
+	user, agentEnd := newQueuePipe()
+	dropTarget(agentEnd)
+	if _, err := user.Read(make([]byte, 1)); !errors.Is(err, link.ErrReset) {
+		t.Fatalf("dropped: %v; want link.ErrReset", err)
 	}
 }
 

@@ -189,11 +189,7 @@ type QueueConn struct {
 	rd, wd pipeDeadline
 	once   sync.Once
 	done   chan struct{}
-	// resetOnClose: the agent's end, whose Close is a reset unless both
-	// directions ended (a target's failure paths close it: its owner must
-	// not take that for a clean end).
-	resetOnClose bool
-	caller       Session
+	caller Session
 }
 
 // pipeDir is one direction of a QueueConn pair.
@@ -217,7 +213,7 @@ func (d *pipeDir) changed() {
 func newQueuePipe() (user, agentEnd *QueueConn) {
 	a, b := newPipeDir(), newPipeDir()
 	user = &QueueConn{r: a, w: b, rd: makePipeDeadline(), wd: makePipeDeadline(), done: make(chan struct{})}
-	agentEnd = &QueueConn{r: b, w: a, rd: makePipeDeadline(), wd: makePipeDeadline(), done: make(chan struct{}), resetOnClose: true}
+	agentEnd = &QueueConn{r: b, w: a, rd: makePipeDeadline(), wd: makePipeDeadline(), done: make(chan struct{})}
 	return user, agentEnd
 }
 
@@ -322,19 +318,10 @@ func (c *QueueConn) CloseWrite() error {
 }
 
 // Close ends both directions: the peer reads io.EOF after this end's
-// bytes and its writes fail. The agent's end resets instead unless both
-// directions had ended.
+// bytes (as a TCP target's FIN: a session its client closed whole keeps
+// its tail) and its writes fail. A failure is Reset (dropTarget,
+// resetTarget).
 func (c *QueueConn) Close() error {
-	if c.resetOnClose {
-		c.r.mu.Lock()
-		c.w.mu.Lock()
-		clean := c.r.eof && c.w.eof
-		c.w.mu.Unlock()
-		c.r.mu.Unlock()
-		if !clean {
-			return c.Reset()
-		}
-	}
 	c.end(nil)
 	return nil
 }
@@ -428,4 +415,31 @@ func isClosedChan(c <-chan struct{}) bool {
 	default:
 		return false
 	}
+}
+
+// dropTarget ends a target its session never used (a refused answer or
+// handshake, a cut admission): a queued session's is reset, so its
+// Accept's conn never reads a clean, empty session; any other is closed.
+func dropTarget(c net.Conn) {
+	if q, ok := c.(*QueueConn); ok {
+		_ = q.Reset()
+		return
+	}
+	_ = c.Close()
+}
+
+// resetTarget ends a session's target as failed where it can tell one:
+// an RST on a TCP conn, Reset on a queued session's (its Accept's conn
+// reads link.ErrReset); false, c untouched, for any other conn.
+func resetTarget(c net.Conn) bool {
+	switch v := c.(type) {
+	case *net.TCPConn:
+		_ = v.SetLinger(0)
+		_ = v.Close()
+	case *QueueConn:
+		_ = v.Reset()
+	default:
+		return false
+	}
+	return true
 }

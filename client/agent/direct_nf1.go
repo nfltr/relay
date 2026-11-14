@@ -109,13 +109,13 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 		tc := admitNF1(ctx, l, newPSConn(c, s), logger)
 		if tc == nil {
 			c.Abort()
-			_ = target.Close()
+			dropTarget(target)
 			return
 		}
 		key, err := sessionKey(tc.ConnectionState())
 		if err != nil {
 			_ = tc.Close()
-			_ = target.Close()
+			dropTarget(target)
 			return
 		}
 		d.registerSession(&directSession{c: c, key: key, nf1: l, sni: nf1SNI(key)})
@@ -158,7 +158,7 @@ func admitNF1(ctx context.Context, l *nf1.Listener, conn net.Conn, logger *slog.
 // closed unused.
 func join(tc *tls.Conn, target net.Conn) {
 	if tc == nil {
-		_ = target.Close()
+		dropTarget(target)
 		return
 	}
 	_ = peerlink.Join(tc, target)

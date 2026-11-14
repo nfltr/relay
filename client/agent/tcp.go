@@ -421,10 +421,9 @@ func (t *tcpTunnel) pump(id string, q *bytequeue.Queue, conn net.Conn) {
 	t.mu.Lock()
 	if t.sessions[id] == q {
 		t.aborts[id] = func(reset bool) {
-			if tc, isTCP := conn.(*net.TCPConn); reset && isTCP {
-				_ = tc.SetLinger(0) // an RST
+			if !reset || !resetTarget(conn) {
+				_ = conn.Close()
 			}
-			_ = conn.Close()
 		}
 	}
 	t.mu.Unlock()
@@ -439,9 +438,7 @@ func (t *tcpTunnel) pump(id string, q *bytequeue.Queue, conn net.Conn) {
 				half, lost := t.peerHalf[q], t.lost[q]
 				delete(t.lost, q)
 				t.mu.Unlock()
-				if tc, isTCP := conn.(*net.TCPConn); lost && isTCP {
-					_ = tc.SetLinger(0) // an RST
-					_ = conn.Close()
+				if lost && resetTarget(conn) {
 					return
 				}
 				if cw, isTCP := conn.(interface{ CloseWrite() error }); half && isTCP {
@@ -498,8 +495,8 @@ func (t *tcpTunnel) pump(id string, q *bytequeue.Queue, conn net.Conn) {
 				acked := he.acked
 				delete(t.lost, q) // the writer is done: nothing reads it
 				t.mu.Unlock()
-				if tc, isTCP := conn.(*net.TCPConn); !acked && isTCP {
-					_ = tc.SetLinger(0) // an RST
+				if !acked {
+					resetTarget(conn)
 				}
 			}
 			break
@@ -854,7 +851,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 						return
 					}
 					if answer && t.answerOpen(id, q) != nil {
-						_ = conn.Close()
+						dropTarget(conn)
 						return
 					}
 					if p.kind == sessionE2EETCP {

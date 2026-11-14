@@ -174,12 +174,12 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	if p.direct != nil {
 		first, peeked, err := peekFirst(s, e2eeHeaderTimeout)
 		if err != nil {
-			_ = target.Close()
+			dropTarget(target)
 			_ = s.Close()
 			return
 		}
 		if first == directControlMark {
-			_ = target.Close()
+			dropTarget(target)
 			p.direct.controlSession(s, p.org, p.groups, p.bind, p.relay, logger) // s: the mark read
 			return
 		}
@@ -187,7 +187,7 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	}
 	ps, s, err := startDirect(s, p.direct)
 	if err != nil {
-		_ = target.Close()
+		dropTarget(target)
 		return
 	}
 	handshook := func() {}
@@ -200,7 +200,7 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	cfg, err := orgServerConfig(p.org, p.groups, p.bind, &adm, logger)
 	if err != nil {
 		logger.Warn("e2ee tcp: this machine's certificate", "error", err)
-		_ = target.Close()
+		dropTarget(target)
 		_ = s.Close()
 		return
 	}
@@ -208,7 +208,7 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	_ = tc.SetDeadline(time.Now().Add(e2eeHeaderTimeout))
 	if err := tc.Handshake(); err != nil {
 		logger.Debug("e2ee tcp: handshake failed", "error", err)
-		_ = target.Close()
+		dropTarget(target)
 		_ = s.Close()
 		return
 	}
@@ -226,7 +226,7 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 		func() {
 			logger.Info("e2ee tcp: organisation admission ended, session cut")
 			_ = tc.Reset()
-			_ = target.Close()
+			dropTarget(target)
 		}, done)
 	_ = peerlink.Join(tc, target)
 }
@@ -241,7 +241,7 @@ func serveNF1(ctx context.Context, s, target net.Conn, p sessionPlan, logger *sl
 	cancel()
 	if err != nil {
 		logger.Debug("nf1: session refused", "error", err)
-		_ = target.Close()
+		dropTarget(target)
 		return
 	}
 	_ = peerlink.Join(tc, target)

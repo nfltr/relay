@@ -262,7 +262,7 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 			return
 		}
 		if a.accept() != nil {
-			_ = target.Close()
+			dropTarget(target)
 			_ = s.Close()
 			return
 		}
