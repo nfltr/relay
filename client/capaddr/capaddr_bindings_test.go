@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/nfltr/relay/client/internal/modelbind"
+	"github.com/nfltr/relay/proto/wire/agentservices"
 )
 
 const capBindModel = "../../spec/proverif/cap_address.pv"
@@ -136,11 +137,11 @@ var capBindings = map[string]func(t *testing.T, h honest){
 			return append(append(b, spki...), sig...)
 		}
 		for what, p := range map[string][]byte{
-			"another key over A1's rid": forge(ospki, ed25519.Sign(osk, registerMessage(a.Relay, a.RID))),
-			"another key's signature":   forge(h.spki, ed25519.Sign(osk, registerMessage(a.Relay, a.RID))),
+			"another key over A1's rid": forge(ospki, ed25519.Sign(osk, agentservices.RegisterMessage(a.Relay, a.RID))),
+			"another key's signature":   forge(h.spki, ed25519.Sign(osk, agentservices.RegisterMessage(a.Relay, a.RID))),
 			"the rendezvous record":     forge(h.spki, h.rec),
 			"a record with no hints":    forge(h.spki, mustSign(t, h.sk, a.Relay, a.RID, nil)), // an answer's record before direct paths
-			"another tag":               forge(h.spki, ed25519.Sign(h.sk, append([]byte("nf1-xxx"), registerMessage(a.Relay, a.RID)[len(tagRegister):]...))),
+			"another tag":               forge(h.spki, ed25519.Sign(h.sk, append([]byte("nf1-xxx"), agentservices.RegisterMessage(a.Relay, a.RID)[len("nf1-reg"):]...))),
 			"no signature":              forge(h.spki, nil),
 			"truncated":                 proof[:len(proof)-1],
 			"empty":                     nil,

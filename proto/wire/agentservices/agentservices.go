@@ -304,7 +304,7 @@ func Lookup(decls []Decl, name string) Kind {
 // the registration proof of each capability address the declaration names
 // (relay client/capaddr.RegistrationProof): one value per nf1 rid,
 // FormatReg's. The relay checks each against its declaration
-// (capaddr.CheckRegistration) and drops it: it is never part of a Decl, a
+// (CheckRegistration, register.go) and drops it: it is never part of a Decl, a
 // record, the echo or a log (nfltr docs/decisions/nf1-risks-2026-11-14.md).
 const RegHeader = "x-nfltr-nf1-reg"
 

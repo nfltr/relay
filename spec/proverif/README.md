@@ -700,8 +700,11 @@ two agents declare). Now `rid = ridOf(n, pk)` and the declaration carries
 the proof `(n, pk, Sign_sk("nf1-reg", R, rid))`, which the server sends
 only to R inside its agent session (never in an answer) and R does not
 store; R takes the declaration only if both check (`BIND:cap.register`:
-the codec `capaddr.RegistrationProof`, `CheckRegistration`; the relay's
-check and the agent's header are lanes NF1REG and NF1ROUTE). The model gives R's check its own process,
+the codec `capaddr.RegistrationProof`, `CheckRegistration`, whose
+message bytes and check are `proto/wire/agentservices` `RegisterMessage`,
+`RIDOf`, `CheckRegistration`, the code the relay links (it never links
+`client/`); the relay's check and the agent's header are lanes NF1REG and
+NF1ROUTE). The model gives R's check its own process,
 fed by the server's private channel and by the attacker. `n` is public
 (the relay learns it), so `rid` stays public as before: queries 1-24 and
 `cap_address_link.pv` are unchanged, and so are the kind's 25-26. Mutants: `rid-unbound` (R does not

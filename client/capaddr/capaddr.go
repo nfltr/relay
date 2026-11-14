@@ -43,6 +43,8 @@ import (
 	"hash/crc32"
 	"net/url"
 	"strings"
+
+	"github.com/nfltr/relay/proto/wire/agentservices"
 )
 
 // Prefix starts every address's text form.
@@ -57,7 +59,7 @@ const (
 	PinSize    = 32
 	SecretSize = 32
 	ProofSize  = 32
-	maxRelay   = 255
+	maxRelay   = agentservices.MaxRelayHost
 )
 
 // The model's domain-separation tags (labPin, labProof, labRdv) and the
@@ -67,8 +69,6 @@ const (
 	tagProof      = "nf1-proof"
 	tagRendezvous = "nf1-rdv"
 	tagNonce      = "nf1-n"
-	tagRID        = "nf1-rid"
-	tagRegister   = "nf1-reg"
 	ExporterLabel = "EXPORTER-nf1-proof"
 )
 
@@ -90,7 +90,7 @@ var (
 	ErrRendezvous = errors.New("nf1: rendezvous record not signed by the pinned key over this relay, rid and hints")
 	ErrTLS        = errors.New("nf1: TLS session refused")
 	ErrProof      = errors.New("nf1: proof refused")
-	ErrRegister   = errors.New("nf1: registration proof refused (rid not bound to this key, or not signed by it over this relay and rid)")
+	ErrRegister   = agentservices.ErrRegister
 )
 
 var (
@@ -334,24 +334,8 @@ func Nonce(sec [SecretSize]byte) [RIDSize]byte {
 
 // RIDOf is ridOf(n, pk) = SHA-256("nf1-rid" || n || spki)[:16]: the rid
 // bound to the server's key, so another key cannot claim it without a
-// second preimage.
-func RIDOf(n [RIDSize]byte, spki []byte) [RIDSize]byte {
-	h := sha256.New()
-	h.Write([]byte(tagRID))
-	h.Write(n[:])
-	h.Write(spki)
-	return [RIDSize]byte(h.Sum(nil)[:RIDSize])
-}
-
-// registerMessage is what a registration proof signs: "nf1-reg" | len(R) |
-// R | rid.
-func registerMessage(relay string, rid [RIDSize]byte) []byte {
-	b := make([]byte, 0, len(tagRegister)+2+len(relay)+RIDSize)
-	b = append(b, tagRegister...)
-	b = binary.BigEndian.AppendUint16(b, uint16(len(relay))) // #nosec G115 -- callers checkRelay: at most 255
-	b = append(b, relay...)
-	return append(b, rid[:]...)
-}
+// second preimage (agentservices.RIDOf, which the relay links).
+func RIDOf(n [RIDSize]byte, spki []byte) [RIDSize]byte { return agentservices.RIDOf(n, spki) }
 
 // RegistrationProof is what the server sends R, and only R, with its
 // declaration of a.RID: n | len(spki) (2 bytes) | spki | Ed25519_sk("nf1-reg",
@@ -373,29 +357,18 @@ func RegistrationProof(sk ed25519.PrivateKey, a Address) ([]byte, error) {
 	b = append(b, n[:]...)
 	b = binary.BigEndian.AppendUint16(b, uint16(len(spki))) // #nosec G115 -- an Ed25519 SPKI is 44 bytes
 	b = append(b, spki...)
-	return append(b, ed25519.Sign(sk, registerMessage(a.Relay, a.RID))...), nil
+	return append(b, ed25519.Sign(sk, agentservices.RegisterMessage(a.Relay, a.RID))...), nil
 }
 
 // CheckRegistration is R's check of a declaration of rid at relay (R's own
 // host, the one its addresses name) (BIND:cap.register): rid = RIDOf(n,
-// spki) and the signature under spki over the tag, relay and rid. The
-// rendezvous record, which every opener gets, is under another tag and
-// never passes.
+// spki) and the signature under spki over the tag, relay and rid
+// (agentservices.CheckRegistration, which the relay links, for a relay
+// host an address may name). The rendezvous record, which every opener
+// gets, is under another tag and never passes.
 func CheckRegistration(relay string, rid [RIDSize]byte, proof []byte) error {
-	if checkRelay(relay) != nil || len(proof) < RIDSize+2 {
+	if checkRelay(relay) != nil {
 		return ErrRegister
 	}
-	n := [RIDSize]byte(proof[:RIDSize])
-	l := int(binary.BigEndian.Uint16(proof[RIDSize:]))
-	rest := proof[RIDSize+2:]
-	if len(rest) != l+ed25519.SignatureSize {
-		return ErrRegister
-	}
-	spki, sig := rest[:l], rest[l:]
-	k, err := x509.ParsePKIXPublicKey(spki)
-	pub, ok := k.(ed25519.PublicKey)
-	if err != nil || !ok || RIDOf(n, spki) != rid || !ed25519.Verify(pub, registerMessage(relay, rid), sig) {
-		return ErrRegister
-	}
-	return nil
+	return agentservices.CheckRegistration(relay, rid, proof)
 }
