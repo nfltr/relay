@@ -14,8 +14,8 @@
    the next logged step needs it. Recording stops at the association's
    end. Bounds the run does not have are lifted: stream credit, reply
    queues, the target's replies per datagram and the amplification
-   budget are the trace's length (the byte budget is the Go tests'). The
-   agent's flow cap is the client's unless AMax is given. Accepted when
+   budget are the trace's length (the byte budget is the Go tests'); the
+   flow caps are the run's (its Serve and AssocOpen lines). Accepted when
    TLC reaches the trace's end: TraceNotDone is then violated
    (scripts/spec.sh traces). *)
 EXTENDS Json, DatagramAssoc, TLC
@@ -29,8 +29,9 @@ TraceAdm == {Reads[i].s : i \in {j \in 1..Len(Reads) : Reads[j].adm}}
 TraceLen == Len(Log) + 1
 TraceIds == 1..(LET fs == {Log[i].f : i \in {j \in 1..Len(Log) : "f" \in DOMAIN Log[j]}}
                 IN IF fs = {} THEN 1 ELSE CHOOSE m \in fs : \A x \in fs : x <= m) + 1
-TraceMaxFlows == LET o == SelectSeq(Log, LAMBDA e : e.ev = "AssocOpen") IN
-                 IF o = <<>> THEN 1 ELSE o[1].n
+Cap(ev) == LET o == SelectSeq(Log, LAMBDA e : e.ev = ev) IN IF o = <<>> THEN 1 ELSE o[1].n
+TraceMaxFlowsC == Cap("AssocOpen")
+TraceMaxFlowsA == Cap("Serve")
 \* Every source sends as many datagrams as the trace reads from it.
 TraceSends(s) == Cardinality({i \in 1..Len(Reads) : Reads[i].s = s})
 TraceBusy == CHOOSE s \in TraceSrcs : TRUE
@@ -48,7 +49,8 @@ ReadOut ==
 HeadIs(ch) == ch # <<>> /\ Head(ch).k = E.k /\ Head(ch).f = E.f
 
 Step ==
-    CASE E.ev = "AssocOpen" -> AssocOpen
+    CASE E.ev = "Serve" -> UNCHANGED vars
+      [] E.ev = "AssocOpen" -> AssocOpen
       [] E.ev = "Read" -> Read(E.s) /\ ReadOut
       [] E.ev = "RecvC" -> /\ HeadIs(a2c)
                            /\ E.k = "d" => ((E.out = "deliver") = (cst[<<cep, E.f>>] = "open"))

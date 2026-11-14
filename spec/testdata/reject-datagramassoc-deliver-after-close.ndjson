@@ -1,0 +1,7 @@
+{"ev":"Serve","n":2}
+{"ev":"AssocOpen","n":2}
+{"ev":"Read","s":"127.0.0.1:1001","adm":true,"f":1,"op":"open"}
+{"ev":"RecvA","k":"open","f":1,"out":"accept"}
+{"ev":"ExpireA","f":1}
+{"ev":"Read","s":"127.0.0.1:1001","adm":true,"f":1,"op":"d"}
+{"ev":"RecvA","k":"d","f":1,"out":"deliver"}

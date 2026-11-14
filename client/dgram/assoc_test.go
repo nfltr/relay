@@ -531,3 +531,37 @@ func FuzzReadFrame(f *testing.F) {
 		}
 	})
 }
+
+// TestDatagramAssocTrace is the run scripts/spec.sh traces records
+// (-tags relaytrace) and checks against spec/TraceDatagramAssoc.tla: a
+// listener with two admitted sources and one refused, replies, the
+// agent's flow cap refusing a third source, and a flow's idle close.
+func TestDatagramAssocTrace(t *testing.T) {
+	to, _ := echo(t, 2)
+	var mu sync.Mutex
+	got := map[netip.AddrPort]int{}
+	var srv *Server
+	fw := NewForwarder(ForwarderConfig{Allow: netip.MustParsePrefix("127.0.0.0/8").Contains},
+		func(context.Context) (*Client, error) {
+			c1, c2 := net.Pipe()
+			srv = NewServer(c2, Config{MaxFlows: 2, Idle: time.Hour}, dialUDP(to))
+			return NewClient(c1, Config{MaxFlows: 3, Idle: 200 * time.Millisecond}), nil
+		},
+		func(p []byte, to netip.AddrPort) { mu.Lock(); got[to]++; mu.Unlock() })
+	defer func() { _ = fw.Close(); <-srv.Done() }()
+	a, b, c := netip.MustParseAddrPort("127.0.0.1:1001"), netip.MustParseAddrPort("127.0.0.1:1002"), netip.MustParseAddrPort("127.0.0.1:1003")
+	ctx := context.Background()
+	replies := func(s netip.AddrPort) int { mu.Lock(); defer mu.Unlock(); return got[s] }
+	fw.Handle(ctx, a, []byte("a1"))
+	waitFor(t, "a's replies", func() bool { return replies(a) == 2 })
+	fw.Handle(ctx, netip.MustParseAddrPort("192.0.2.9:53"), []byte("spoofed"))
+	fw.Handle(ctx, b, []byte("b1"))
+	fw.Handle(ctx, a, []byte("a2"))
+	waitFor(t, "replies", func() bool { return replies(a) == 4 && replies(b) == 2 })
+	fw.Handle(ctx, c, []byte("c1")) // past the agent's cap: refused
+	waitFor(t, "the refusal", func() bool { return srv.Stats().Refused == 1 })
+	waitFor(t, "idle closes", func() bool { return srv.Stats().Live == 0 })
+	if replies(c) != 0 {
+		t.Fatal("a refused flow got a reply")
+	}
+}

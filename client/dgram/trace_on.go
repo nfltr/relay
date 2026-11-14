@@ -52,6 +52,7 @@ func trace(line string) {
 	}
 }
 
+func traceServe(maxFlows int) { trace(fmt.Sprintf(`{"ev":"Serve","n":%d}`, maxFlows)) }
 func traceOpen(maxFlows int) { trace(fmt.Sprintf(`{"ev":"AssocOpen","n":%d}`, maxFlows)) }
 func traceRead(src string, f uint64, op string) {
 	trace(fmt.Sprintf(`{"ev":"Read","s":%q,"adm":true,"f":%d,"op":%q}`, src, f, op))

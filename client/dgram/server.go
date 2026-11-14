@@ -36,6 +36,7 @@ func Serve(ctx context.Context, stream io.ReadWriteCloser, cfg Config, dial Dial
 // background (Serve's); Done and Close are its end.
 func NewServer(stream io.ReadWriteCloser, cfg Config, dial Dial) *Server {
 	s := &Server{a: newAssoc(stream, cfg, false)}
+	traceServe(s.a.cfg.MaxFlows)
 	go s.a.send()
 	go s.a.read(func(f frame) error { return s.handle(f, dial) })
 	go s.a.sweep(func(f *flow) { s.closeFlow(f, ReasonBackstop) })

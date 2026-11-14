@@ -5,6 +5,7 @@
 
 package dgram
 
+func traceServe(int)                    {}
 func traceOpen(int)                     {}
 func traceRead(string, uint64, string)  {}
 func traceReadDrop(string, bool)        {}

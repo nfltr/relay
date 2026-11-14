@@ -24,6 +24,12 @@
 #   cctraces FILE...  each call and direction of each recorded CallCredit
 #            trace (client/rpcclient -tags relaytrace) checked against
 #            spec/TraceCallCredit.tla.
+#   dgtraces  client/dgram's traced association tests (DG_TRACE_TESTS,
+#            default TestDatagramAssocTrace, DG_TRACE_COUNT runs, default 3),
+#            each run in its own process with -tags relaytrace, its trace
+#            checked against spec/TraceDatagramAssoc.tla; each
+#            spec/testdata/reject-datagramassoc-* fixture rejected (in make
+#            ci; traces runs it too).
 #   astraces  client/rpcclient's A2A E2EE session tests (AS_TRACE_TESTS,
 #            default the retry, restart, forged-unknown, warm, revoke and
 #            rotation ones; traces runs every TestA2AE2EE), each in its own
@@ -282,6 +288,92 @@ asrun() {
 	return $fail
 }
 
+# dgtrace FILE: TLC on a recorded DatagramAssoc trace
+# (spec/TraceDatagramAssoc.tla); 0 when accepted. Its TLC output: FILE.out.
+dgtrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Srcs <- TraceSrcs
+    Adm <- TraceAdm
+    Busy <- TraceBusy
+    N <- TraceLen
+    Sends <- TraceSends
+    Ids <- TraceIds
+    MaxEp = 1
+    MaxFlowsC <- TraceMaxFlowsC
+    MaxFlows <- TraceMaxFlowsA
+    W <- TraceLen
+    Q <- TraceLen
+    Amp <- TraceLen
+    R = 1
+    B <- TraceLen
+    MaxCuts = 0
+    MaxLoss = 0
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    NoDeliverAfterClose
+    NoCrossFlow
+    TableBounded
+    NoHOL
+    NoReflection
+    TraceNotDone
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceDatagramAssoc.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
+# dgrun TESTS COUNT: the fixtures, then client/dgram's tests TESTS, each run
+# COUNT times in its own process (one association per trace) with the
+# recorder; every trace checked.
+dgrun() {
+	dggo=$(grep -ohE 'ev":"[A-Za-z]+' client/dgram/trace_on.go | sed 's/ev":"//' | sort -u)
+	for e in $(grep -oE 'E\.ev = "[A-Za-z]+"' spec/TraceDatagramAssoc.tla | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u); do
+		echo "$dggo" | grep -qx "$e" || { echo "spec/TraceDatagramAssoc.tla: event $e is recorded by no trace line of client/dgram"; return 1; }
+	done
+	for f in spec/testdata/reject-datagramassoc-*.ndjson; do
+		cp "$f" "$work/"
+		if dgtrace "$work/$(basename "$f")"; then
+			echo "$f: accepted, want rejected"
+			return 1
+		fi
+		grep -q 'distinct states found' "$work/$(basename "$f").out" || { echo "$f: TLC failed:"; tail -20 "$work/$(basename "$f").out"; return 1; }
+		echo "$f: rejected"
+	done
+	(cd client && go test -c -tags relaytrace -o "$work/dgram.test" ./dgram/) || return 1
+	nt=0
+	for t in $("$work/dgram.test" -test.list "$1"); do
+		i=0
+		while [ $i -lt "$2" ]; do
+			i=$((i + 1))
+			d=$work/dgtraces/$t.$i
+			mkdir -p "$d"
+			(cd client/dgram && RELAYTRACE=$d "$work/dgram.test" -test.run "^$t\$" -test.count 1) >"$work/dgtest.out" 2>&1 || {
+				cat "$work/dgtest.out"
+				return 1
+			}
+			for f in "$d"/datagramassoc-*.ndjson; do
+				[ -s "$f" ] || continue
+				nt=$((nt + 1))
+				if dgtrace "$f"; then
+					echo "trace $t.$i: $(wc -l <"$f" | tr -d ' ') lines: accepted"
+				else
+					echo "trace $t.$i: REJECTED"
+					grep -E 'Error|unknown event' "$f.out" | head -5
+					fail=1
+				fi
+			done
+		done
+	done
+	echo "$nt traces"
+	[ "$nt" -gt 0 ] || fail=1
+	return $fail
+}
+
 fail=0
 cfg=
 case ${1:-} in
@@ -473,6 +565,10 @@ cltraces)
 	# late frame reaches the target.
 	clrun "${CL_TRACE_TESTS:-^TestStuckHandlerDoesNotHoldTheReceiveLoop$}" "${CL_TRACE_COUNT:-3}"
 	;;
+dgtraces)
+	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || fail=1
+	exit $fail
+	;;
 astraces)
 	# The per-push slice: the session tests of the retry, the restart, the
 	# forged unknown, the warm, the revoke, the rotation and the restart
@@ -534,6 +630,7 @@ traces)
 	done
 	clrun "${CL_TRACE_TESTS:-.}" 1
 	asrun "${AS_TRACE_TESTS:-^TestA2AE2EE}" || exit 1
+	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || exit 1
 	for f in spec/testdata/reject-*.ndjson; do
 		case $f in *reject-callcredit-* | *reject-calllifecycle-*) continue ;; esac
 		cp "$f" "$work/"
@@ -581,7 +678,7 @@ traces)
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
 	;;
 *)
-	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|cctraces FILE..." >&2
+	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|cctraces FILE..." >&2
 	exit 2
 	;;
 esac

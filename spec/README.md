@@ -803,7 +803,7 @@ depth 33, about 5 min. Every action taken in each (`-coverage 1`); the
 14 UDP mutants and witnesses about 20 s. Code map: none yet; the lane
 that builds `client/udpflow` adds it with a trace recorder.
 
-## DatagramAssoc.tla: datagram sessions between identities (design, no code yet)
+## DatagramAssoc.tla: datagram sessions between identities
 
 Lane NF1UDP (2026-11-14). The design is nfltr's
 `docs/decisions/nf1-udp-2026-11-14.md`: UDP between identities (an `nf1`
@@ -878,5 +878,38 @@ depth 31. `DatagramAssocMove.cfg` (one source, three datagrams):
 association, the client's cap above the agent's): 11,778 states.
 `DatagramAssocLive.cfg` (`AllFlowsEnd`): 15,138 states. `-coverage 1`
 takes every action in each (but `PathLoss` in `DatagramAssocTwo.cfg`,
-which has none). Code map: none yet; the lane that builds the
-association adds it with a trace recorder.
+which has none).
+
+### Code map (DatagramAssoc.tla)
+
+Lane UDP2 (2026-11-14) built the relayed association, `client/dgram`.
+The direct path (`Bind`, `PathLoss`, `RecvDgC`, `RecvDgA`) is lane UDP3's;
+`Revoke` is the agent's end of the association (`Server.Close`, called by
+the session's revocation), `Cut` the stream's end.
+
+| actions | code |
+|---|---|
+| `AssocOpen`, `Read` (admission, budget) | client/dgram/forward.go |
+| `Read` (flow table, queue), `RecvC`, `ExpireC`, `NoticeC` | client/dgram/client.go |
+| `RecvA`, `ReplyA`, `ExpireA`, `Revoke`, `CleanupA` | client/dgram/server.go |
+| the stream, its one sender, `Cut` | client/dgram/assoc.go |
+| framing | client/dgram/frame.go |
+| trace recorder | client/dgram/trace_on.go |
+
+### DatagramAssoc traces
+
+`make spec-dgtraces` (in `make ci`; `make spec-traces` runs it too): the
+traced test of `client/dgram` (`TestDatagramAssocTrace`: a listener with
+two admitted sources and one refused, the target's replies, a third flow
+past the agent's cap refused, idle closes), three runs each in its own
+process with `-tags relaytrace`, each trace checked by
+`TraceDatagramAssoc.tla` against `DatagramAssoc` with one association:
+every line a step of the model, a datagram's delivery or drop the
+model's, under `TypeOK`, `NoDeliverAfterClose`, `NoCrossFlow`,
+`TableBounded`, `NoHOL` and `NoReflection`. The application's sends are
+TLC's; recording stops at the association's end. Three hand-made traces
+must be rejected (`spec/testdata/reject-datagramassoc-*`): a datagram
+delivered after the agent closed its flow, a flow accepted past the
+agent's cap, an open from a source not admitted. The byte budget
+(`AmpBound` in bytes) is the Go test's (`TestDatagramAssocAmpBound`): the
+model counts datagrams.
