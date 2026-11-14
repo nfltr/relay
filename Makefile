@@ -144,11 +144,13 @@ spec-bindings:
 
 # test-go-mutants (in make ci, about a minute): every planted bug of a Go
 # mutant list (client/agent/testdata/org_mutants.txt: the agent's
-# organisation mode; client/orgid/testdata/mutants.txt: the organisation
+# organisation mode; client/agent/testdata/queue_mutants.txt: its session
+# queue; client/orgid/testdata/mutants.txt: the organisation
 # checks) makes its test fail (scripts/go-mutants.sh).
 .PHONY: test-go-mutants
 test-go-mutants:
 	./scripts/go-mutants.sh client/agent/testdata/org_mutants.txt
+	./scripts/go-mutants.sh client/agent/testdata/queue_mutants.txt
 	./scripts/go-mutants.sh client/orgid/testdata/mutants.txt
 
 # Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept

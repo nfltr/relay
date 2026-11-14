@@ -72,6 +72,10 @@ type Service struct {
 	// docs/decisions/nf1-rendezvous-2026-11-13.md); the relay finds the
 	// service by the address's rendezvous id, declared with it.
 	NF1 *nf1.Listener
+	// Queue is a tcp service's target in this process, instead of
+	// Target: its sessions wait there for Accept, which answers them
+	// (SessionQueue). One of Target and Queue.
+	Queue *SessionQueue
 	// Public declares the service public (agentservices.Decl.Public): the
 	// relay may route anonymous visitors of a public TCP endpoint to it, as
 	// plain bytes. A tcp service with E2EE Off only.
@@ -133,6 +137,7 @@ type tableService struct {
 	groups  []string       // Service.AllowGroups
 	group   string         // Service.Group: published under it
 	nf1     *nf1.Listener  // Service.NF1: served under a capability address
+	queue   *SessionQueue  // Service.Queue: the target in this process
 }
 
 // NewServiceTable validates services and returns their table.
@@ -187,7 +192,12 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		switch s.Kind {
 		case agentservices.TCP:
 			e.network, e.addr = "tcp", s.Target
-			if path, ok := strings.CutPrefix(s.Target, "unix:"); ok {
+			if (s.Target == "") == (s.Queue == nil) {
+				return nil, fmt.Errorf("service %q: a tcp service has a target or a queue, one of them", s.Name)
+			}
+			if s.Queue != nil {
+				e.network, e.addr, e.queue = networkQueue, "", s.Queue
+			} else if path, ok := strings.CutPrefix(s.Target, "unix:"); ok {
 				if !filepath.IsAbs(path) {
 					return nil, fmt.Errorf("service %q: target %q: a unix socket path must be absolute", s.Name, s.Target)
 				}
@@ -196,6 +206,9 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 				return nil, fmt.Errorf("service %q: target %q is not host:port or unix:/path", s.Name, s.Target)
 			}
 		case agentservices.HTTP:
+			if s.Queue != nil {
+				return nil, fmt.Errorf("service %q: a queue needs a tcp service", s.Name)
+			}
 			u, err := url.Parse(s.Target)
 			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 				return nil, fmt.Errorf("service %q: target %q is not an http(s) URL", s.Name, s.Target)
@@ -306,6 +319,9 @@ func (t *ServiceTable) directServer() *directServer {
 // networkDirect: the reserved service's sessions are served in process.
 const networkDirect = "direct"
 
+// networkQueue: a service's sessions go to its SessionQueue.
+const networkQueue = "queue"
+
 // RequireSharePolicy makes every E2EE request to service satisfy the
 // credential policy of its share code, as E2EESetup.RequireSharePolicy does
 // for a single-service agent, for that service only: another service's
@@ -324,6 +340,10 @@ func (t *ServiceTable) RequireSharePolicy(service, code string, p SharePolicy) e
 	e.shares = append(e.shares, code)
 	return nil
 }
+
+// Declaration is the table's services as an agent declares them to its
+// relay (agentservices.Header): the direct-path service included.
+func (t *ServiceTable) Declaration() string { return agentservices.Format(t.decls) }
 
 // Refused is how many sessions the table has refused.
 // allow:wrapper — the counter is the table's own.

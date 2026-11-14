@@ -1,0 +1,6 @@
+# Mutants of the agent's session queue (Service.Queue: queue.go). Each
+# line: <mutant> | <file> | <exact line> | <replacement> | <test that must
+# fail>. scripts/go-mutants.sh; make test-go-mutants.
+answer-at-enqueue | queue.go | 	if err := q.wait(ctx, e); err != nil { | 	if err := error(nil); err != nil { | TestQueueAnswersAtAccept
+unbounded-backlog | queue.go | 	case len(q.pending) >= q.backlog: | 	case false: | TestQueueBacklogRefuses
+early-close-is-clean | queue.go | 		if !clean { | 		if !clean && false { | TestQueueAgentEndCloseIsReset

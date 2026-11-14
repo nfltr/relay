@@ -125,9 +125,11 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 }
 
 // dialNF1Target dials p's target for session s; nil (s reset) when it
-// cannot be reached.
+// cannot be reached. A queued service's session enters its queue here,
+// after its answer (the address's direct paths answer first): a full
+// backlog resets it.
 func dialNF1Target(ctx context.Context, p sessionPlan, s net.Conn, logger *slog.Logger) net.Conn {
-	target, _, err := dialTarget(ctx, p.network, p.target)
+	target, _, err := p.dial(ctx)
 	if err != nil {
 		logger.Warn("nf1: dial target failed", "target", p.target, "error", err)
 		_ = pathStream{Conn: s}.Reset()

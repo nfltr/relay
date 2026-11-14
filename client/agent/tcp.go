@@ -841,7 +841,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 				go serveNF1Direct(ctx, newSessionConn(t, id, q), p, logger)
 			default:
 				go func() {
-					conn, reason, dialErr := dialTarget(ctx, p.network, p.target)
+					conn, reason, dialErr := p.dial(ctx)
 					if dialErr != nil {
 						logger.Warn("tcp tunnel: dial target failed",
 							"session", id, "target", p.target, "error", dialErr)

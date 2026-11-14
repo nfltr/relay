@@ -48,6 +48,8 @@ type sessionPlan struct {
 	direct          *directServer  // ... the table's direct paths (nil: none); a sessionDirect's server
 	relay           *qadTarget     // ... a sessionDirect's, or a direct service's: the QAD of the relay its tunnel is on (nil: none offered)
 	nf1             *nf1.Listener  // a sessionNF1's
+	queue           *SessionQueue  // the target in this process (Service.Queue); nil: dial target
+	caller          *pb.CallerIdentity
 }
 
 // ErrE2EENoFixedTarget: Config.TCPE2EEOnly without Config.TCPForwardAddr.
@@ -78,7 +80,7 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 		}
 		return sessionPlan{kind: sessionHTTP}, nil
 	}
-	p := sessionPlan{target: open.GetTargetAddr(), backend: targets.defaultBackend, e2ee: e2ee}
+	p := sessionPlan{target: open.GetTargetAddr(), backend: targets.defaultBackend, e2ee: e2ee, caller: open.GetCaller()}
 	var svcWrap func(http.Handler) http.Handler
 	if targets.services != nil {
 		// The table is the only set of targets: a session that names
@@ -87,7 +89,7 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 		if err != nil {
 			return sessionPlan{}, err
 		}
-		p.network, p.target, p.backend, svcWrap = svc.network, svc.addr, svc.backend, svc.wrap
+		p.network, p.target, p.backend, svcWrap, p.queue = svc.network, svc.addr, svc.backend, svc.wrap, svc.queue
 		if svc.network == networkDirect {
 			p.kind, p.org, p.groups, p.direct = sessionDirect, svc.org, svc.groups, targets.services.direct
 			p.relay = targets.relayQAD()
@@ -250,7 +252,7 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 		}
 		serveNF1Direct(l.ctx, s, p, l.logger)
 	default:
-		target, reason, err := dialTarget(l.ctx, p.network, p.target)
+		target, reason, err := p.dial(l.ctx)
 		if err != nil {
 			if traceOn && l.ctx.Err() != nil {
 				traceARefused(l, ts) // no context to serve it in (finding 42)
@@ -329,6 +331,15 @@ var targetKeepAlive = net.KeepAliveConfig{Enable: true, Idle: 10 * time.Second, 
 // targetDialer dials a session's target.
 func targetDialer() *net.Dialer {
 	return &net.Dialer{Timeout: targetDialTimeout, KeepAliveConfig: targetKeepAlive}
+}
+
+// dial reaches the session's target: its service's queue (Accept takes
+// it), else a dial of its address.
+func (p sessionPlan) dial(ctx context.Context) (net.Conn, relayv1.ErrorReason, error) {
+	if p.queue != nil {
+		return p.queue.enter(ctx, p.caller)
+	}
+	return dialTarget(ctx, p.network, p.target)
 }
 
 // dialTarget dials a session's target over network ("" is tcp; unix only
