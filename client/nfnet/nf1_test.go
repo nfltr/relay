@@ -174,3 +174,33 @@ func TestDirectStatsCountNF1Sessions(t *testing.T) {
 		t.Fatalf("stats %+v, %v: an nf1 relay's direct paths are not counted", st, ok)
 	}
 }
+
+// A refused nf1 dial closes its session, on every refusal after the open
+// (here the kind's, nf1.ErrKind, both ways): built with -tags linkdebug
+// (make test-linkdebug) a session left for the GC is a link debug report,
+// which fails this package (leakcheck).
+func TestNF1RefusalClosesSession(t *testing.T) {
+	l, _, err := nf1.Mint("relay.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dg, err := l.WithDatagram()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name     string
+		l        *nf1.Listener
+		datagram bool
+	}{{"a stream dial to a datagram address", dg, false}, {"a datagram dial to a stream address", l, true}} {
+		cfg, _, _ := nf1Relay(t, tc.l)
+		d := dialer(t, cfg)
+		c, err := dial(t, d, Target{Kind: AddressTarget, Address: tc.l.Address(), datagram: tc.datagram}, DialOptions{})
+		if !errors.Is(err, nf1.ErrKind) {
+			if c != nil {
+				_ = c.Close()
+			}
+			t.Fatalf("%s: %v, want nf1.ErrKind", tc.name, err)
+		}
+	}
+}

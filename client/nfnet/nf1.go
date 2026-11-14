@@ -43,8 +43,12 @@ func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, e
 		return nil, err
 	}
 	stop := context.AfterFunc(ctx, func() { _ = mux.Close() })
+	// Every refusal after the open (the answer, the kind, the handshake)
+	// closes the session itself, not only its data connection: a session
+	// left to the GC is a leak (link debug mode, TestNF1RefusalClosesSession).
 	fail := func(err error) (*Conn, error) {
 		stop()
+		_ = ls.Close()
 		d.dropMux(mux)
 		return nil, err
 	}
