@@ -260,6 +260,9 @@ type vectors struct {
 	Record   string `json:"record"`
 	Exporter string `json:"exporter"`
 	Proof    string `json:"proof"`
+	RegNonce string `json:"reg_nonce"`
+	RegRID   string `json:"reg_rid"`
+	RegProof string `json:"reg_proof"`
 	Refused  []struct {
 		Text  string `json:"text"`
 		Error string `json:"error"`
@@ -279,6 +282,16 @@ func computeVectors(t *testing.T) vectors {
 		Record:   hex.EncodeToString(mustSign(t, sk, a.Relay, a.RID, hints)),
 		Exporter: hex.EncodeToString(exp), Proof: hex.EncodeToString(p[:]),
 	}
+	// The registration of the address New mints from the same secret and
+	// key: rid = RIDOf(Nonce(sec), spki).
+	n := Nonce(a.Secret)
+	ra := a
+	ra.RID = RIDOf(n, spki)
+	reg, err := RegistrationProof(sk, ra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.RegNonce, v.RegRID, v.RegProof = hex.EncodeToString(n[:]), hex.EncodeToString(ra.RID[:]), hex.EncodeToString(reg)
 	body := payload(t)
 	s := v.Address
 	sub := byte('a')
