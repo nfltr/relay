@@ -171,17 +171,17 @@ e2ee_tcp dgram-tag-unbound TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTFFFTF
 # the exporter in the proof prevents (client-no-pin-check alone: 2, 3, 6
 # hold). cap_address_link is query 10 as an equivalence; ProVerif reads a
 # broken diff-equivalence as ? (its log has the derivation).
-cap_address - TTTTTTTTTTFFFFTTTTFFTTFFTF
-cap_address client-no-pin-check FTTFFTTTTTFFFFFFFTFFFTFFTF
-cap_address rendezvous-any-key FTTFFTFFTTFFFFFFFTFFFTFFFF
-cap_address relay-substitutes-relay TTTTTTTFTTFFFFTTTTFFTTFFTF
-cap_address server-no-secret-check TFFFTFTTTTFFFFTTFFFFTFFFTF
-cap_address address-secret-optional TFFTTFTTTFFFFFTTTFFFTFFFTF
-cap_address server-any-secret TFFFTFTTTTFFFFTTFFFFTFFFTF
-cap_address pin-unkeyed TTTTTTTTTFFFFFTTTTFFTTFFTF
-cap_address downgrade-plain FTTTTTTTFTFFFFTTTTFFTTFFTF
-cap_address proof-unbound TTTTTTTTTTFFFFTTTTFFTTFFTF
-cap_address client-no-pin-check,proof-unbound FFFFFFTTTTFFFFFFFFFFFFFFTF
+cap_address - TTTTTTTTTTFFFFTTTTFFTTFFTFTF
+cap_address client-no-pin-check FTTFFTTTTTFFFFFFFTFFFTFFTFTF
+cap_address rendezvous-any-key FTTFFTFFTTFFFFFFFTFFFTFFFFTF
+cap_address relay-substitutes-relay TTTTTTTFTTFFFFTTTTFFTTFFTFTF
+cap_address server-no-secret-check TFFFTFTTTTFFFFTTFFFFTFFFTFTF
+cap_address address-secret-optional TFFTTFTTTFFFFFTTTFFFTFFFTFTF
+cap_address server-any-secret TFFFTFTTTTFFFFTTFFFFTFFFTFTF
+cap_address pin-unkeyed TTTTTTTTTFFFFFTTTTFFTTFFTFTF
+cap_address downgrade-plain FTTTTTTTFTFFFFTTTTFFTTFFTFTF
+cap_address proof-unbound TTTTTTTTTTFFFFTTTTFFTTFFTFTF
+cap_address client-no-pin-check,proof-unbound FFFFFFTTTTFFFFFFFFFFFFFFTFTF
 # Direct paths (lane NF1DIRECT, queries 15-20): a hint the record does not
 # cover fails only 7 and the kind's 25 (the client frames or not; the direct queries hold:
 # a forged hint is a refusal or a relayed session, never a wrong peer); the
@@ -191,17 +191,23 @@ cap_address client-no-pin-check,proof-unbound FFFFFFTTTTFFFFFFFFFFFFFFTF
 # queries 21-24): secret on the direct connection wherever 15 holds;
 # handed to a session only on a connection bound to it (22) wherever 18
 # holds, and failed alone by dgram-tag-unbound.
-cap_address hint-unbound TTTTTTFTTTFFFFTTTTFFTTFFFF
-cap_address direct-no-pin-check TTTTTTTTTTFFFFTFTTFFTTFFTF
-cap_address nf1-token-unbound TTTTTTTTTTFFFFTTTTFFTTFFTF
-cap_address nf1-direct-no-token TTTTTTTTTTFFFFTTFTFFTTFFTF
-cap_address nf1-agent-no-token TTTTTTTTTTFFFFTTTFFFTFFFTF
-cap_address dgram-tag-unbound TTTTTTTTTTFFFFTTTTFFTFFFTF
-cap_address direct-no-pin-check,nf1-token-unbound TTTTTTTTTTFFFFFFFFFFFFFFTF
+cap_address hint-unbound TTTTTTFTTTFFFFTTTTFFTTFFFFTF
+cap_address direct-no-pin-check TTTTTTTTTTFFFFTFTTFFTTFFTFTF
+cap_address nf1-token-unbound TTTTTTTTTTFFFFTTTTFFTTFFTFTF
+cap_address nf1-direct-no-token TTTTTTTTTTFFFFTTFTFFTTFFTFTF
+cap_address nf1-agent-no-token TTTTTTTTTTFFFFTTTFFFTFFFTFTF
+cap_address dgram-tag-unbound TTTTTTTTTTFFFFTTTTFFTFFFTFTF
+cap_address direct-no-pin-check,nf1-token-unbound TTTTTTTTTTFFFFFFFFFFFFFFTFTF
 # The kind (lane UDP1, queries 25-26): a client takes an answer only for
 # the kind the record carries; the kind unchecked, or taken from the answer
 # frame, fails 25 alone (hint-unbound and rendezvous-any-key fail it too).
-cap_address client-no-kind-check TTTTTTTTTTFFFFTTTTFFTTFFFF
-cap_address hint-unbound-u1 TTTTTTTTTTFFFFTTTTFFTTFFFF
+cap_address client-no-kind-check TTTTTTTTTTFFFFTTTTFFTTFFFFTF
+cap_address hint-unbound-u1 TTTTTTTTTTFFFFTTTTFFTTFFFFTF
+# Registration (lane NF1RISKS, queries 27, 28): a declaration of A1's rid
+# from anyone but the server is taken once R skips the rid's binding to the
+# key, takes the rendezvous record as the proof, or skips the signature.
+cap_address rid-unbound TTTTTTTTTTFFFFTTTTFFTTFFTFFF
+cap_address reg-is-rec TTTTTTTTTTFFFFTTTTFFTTFFTFFF
+cap_address reg-unsigned TTTTTTTTTTFFFFTTTTFFTTFFTFFF
 cap_address_link - T
 cap_address_link pin-unkeyed ?
