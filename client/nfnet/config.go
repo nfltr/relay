@@ -6,6 +6,7 @@ package nfnet
 import (
 	"context"
 	"crypto/tls"
+	"log/slog"
 	"net"
 
 	"github.com/nfltr/relay/client/agent"
@@ -20,10 +21,13 @@ type Config struct {
 	// data connections carry every session but an nf1 address's (the
 	// address names its relay).
 	Relay string
-	// AgentRelay is the relay's agent-link (gRPC) address: direct paths ask
-	// its QUIC port (the same number) for this machine's public address;
-	// "": Relay.
+	// AgentRelay is the relay's agent-link (gRPC) address: Listen's agent
+	// connects there, and direct paths ask its QUIC port (the same number)
+	// for this machine's public address; "": Relay.
 	AgentRelay string
+	// Agent is Listen's agent name (a DNS label): its sessions' targets
+	// are <agent>/<service>. Required by Listen, unused by Dial.
+	Agent string
 	// APIKey authenticates to the relay; ClientCert instead presents an
 	// account machine certificate, read per handshake (a renewal swaps it).
 	// One of them, never both (NewDialer refuses both).
@@ -40,9 +44,13 @@ type Config struct {
 	// Plaintext: the relay is a loopback dev relay without TLS. Refused
 	// with ClientCert.
 	Plaintext bool
-	// DialRelay connects to a relay's address (host:port); nil: TCP,
-	// through the proxy HTTPS_PROXY and NO_PROXY name for it.
+	// DialRelay connects to a relay's address (host:port) for Dial; nil:
+	// TCP, through the proxy HTTPS_PROXY and NO_PROXY name for it. Listen's
+	// agent dials its relay itself.
 	DialRelay func(ctx context.Context, addr string) (net.Conn, error)
+	// Logger gets Listen's agent's logs (connections, refused sessions);
+	// nil: none.
+	Logger *slog.Logger
 	// Events gets each session's events (open, path, close, error), on the
 	// goroutine that caused them: it must not block.
 	Events func(Event)

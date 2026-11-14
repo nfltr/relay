@@ -50,6 +50,9 @@ type Conn struct {
 	trace   string
 	events  func(Event)
 	answer  chan error // Early: the open's outcome; nil: answered before Dial returned
+	e2ee    bool       // an accepted session the agent ended end-to-end TLS for
+	caller  *Caller    // an accepted session's caller, as the relay named it
+	remote  string     // an accepted session's RemoteAddr: the caller's machine
 	closers []func()   // what ends with the Conn: an nf1 session's data connection, a one-shot Dialer
 
 	in, out  atomic.Int64
@@ -160,7 +163,7 @@ func (c *Conn) end() {
 }
 
 // Done is closed once the session has ended: the peer ended it whole, or
-// both sides half-closed.
+// both sides half-closed; an accepted Conn's at its Close or Reset.
 func (c *Conn) Done() <-chan struct{} { return c.done }
 
 // SetDeadline, SetReadDeadline and SetWriteDeadline are the session's: a
@@ -175,9 +178,16 @@ type Addr struct{ Target string }
 func (Addr) Network() string  { return "nfltr" }
 func (a Addr) String() string { return a.Target }
 
-// LocalAddr is this end's (the session id); RemoteAddr the target dialled.
-func (c *Conn) LocalAddr() net.Addr  { return Addr{Target: c.id} }
-func (c *Conn) RemoteAddr() net.Addr { return Addr{Target: c.target.String()} }
+// LocalAddr is this end's (the session id); RemoteAddr the target dialled,
+// or for an accepted Conn the caller's machine (its name; "" when the
+// relay named none).
+func (c *Conn) LocalAddr() net.Addr { return Addr{Target: c.id} }
+func (c *Conn) RemoteAddr() net.Addr {
+	if c.caller != nil {
+		return Addr{Target: c.remote}
+	}
+	return Addr{Target: c.target.String()}
+}
 
 // Info describes a session.
 type Info struct {
@@ -185,13 +195,14 @@ type Info struct {
 	Session  string // "s-7f3a91c2", the events' id
 	Trace    string // the relays' trace id
 	E2EE     bool
-	Instance string // the machine the server's certificate names (a group dial: the relay's pick)
-	Path     string // "relayed" | "direct"
+	Instance string  // the machine the server's certificate names (a group dial: the relay's pick)
+	Path     string  // "relayed" | "direct"
+	Caller   *Caller // an accepted session's caller, as the relay authenticated it; nil for a dial
 }
 
 // Info is the session's description now (Path follows its moves).
 func (c *Conn) Info() Info {
-	i := Info{Target: c.target.String(), Session: c.id, Trace: c.trace, E2EE: c.tc != nil, Path: agent.PathRelayed}
+	i := Info{Target: c.target.String(), Session: c.id, Trace: c.trace, E2EE: c.tc != nil || c.e2ee, Path: agent.PathRelayed, Caller: c.caller}
 	if c.tc != nil && c.target.Kind != AddressTarget {
 		if certs := c.tc.ConnectionState().PeerCertificates; len(certs) > 0 {
 			i.Instance = certs[0].Subject.CommonName
