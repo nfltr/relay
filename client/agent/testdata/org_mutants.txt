@@ -35,6 +35,9 @@ no-protocol-accepted | org.go | 			if cs.NegotiatedProtocol == "" { | 			if fals
 agent-no-publish-check | service_alpn.go | 		if g != "" && g == b.group { | 		if g != "" { | TestServiceModelBindings
 agent-no-ou-check | service_alpn.go | 	for _, g := range certGroups(cert) { | 	for _, g := range []string{b.group} { | TestServiceModelBindings
 publish-not-in-cert | service_alpn.go | 	if !slices.Contains(certGroups(cert), s.Group) { | 	if !slices.Contains(certGroups(cert), s.Group) && false { | TestServiceModelBindings
+# The kind in the protocol's prefix (BIND:org.kind; e2ee_tcp.pv mutant
+# agent-ignores-kind): every service offers both kinds' protocols.
+agent-ignores-kind | service_alpn.go | 	if b.datagram { | 	for i, n := 0, len(p); i < n; i++ { p = append(p, DatagramALPN(p[i])) }; if false { | TestServiceModelBindings
 # Direct paths under a group dial (e2ee_tcp.pv 36; nfltr
 # docs/decisions/service-discovery-2026-11-12.md "Direct paths under a
 # group dial"): the first exchange's check of the session's machine, its

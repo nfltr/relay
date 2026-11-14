@@ -1,0 +1,7 @@
+# Planted bugs of the nf1 transport (scripts/go-mutants.sh
+# client/nf1/testdata/mutants.txt, make test-go-mutants, in make ci): each
+# line "<mutant> | <file> | <exact line text> | <replacement> | <test>".
+# Model: spec/proverif/cap_address.pv (BIND:cap.kind, hint-unbound's u1
+# variant): a client acts on u1 only for a datagram dial, so a relay cannot
+# make a stream client speak to a datagram service or the reverse.
+kind-unchecked | nf1.go | 	if hasHint(hints, HintDatagram) != datagram { | 	if false { | TestNF1ModelBindings

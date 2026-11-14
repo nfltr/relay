@@ -151,12 +151,14 @@ spec-bindings:
 # mutant list (client/agent/testdata/org_mutants.txt: the agent's
 # organisation mode; client/agent/testdata/queue_mutants.txt: its session
 # queue; client/orgid/testdata/mutants.txt: the organisation
-# checks) makes its test fail (scripts/go-mutants.sh).
+# checks; client/nf1/testdata/mutants.txt: the nf1 transport) makes its
+# test fail (scripts/go-mutants.sh).
 .PHONY: test-go-mutants
 test-go-mutants:
 	./scripts/go-mutants.sh client/agent/testdata/org_mutants.txt
 	./scripts/go-mutants.sh client/agent/testdata/queue_mutants.txt
 	./scripts/go-mutants.sh client/orgid/testdata/mutants.txt
+	./scripts/go-mutants.sh client/nf1/testdata/mutants.txt
 
 # Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
 # identical; its test is nfltr's scripts/check_spec_drift_test.sh): every

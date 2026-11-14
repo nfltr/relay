@@ -72,10 +72,15 @@ func TestNF1ServiceDeclaresAndServes(t *testing.T) {
 
 // TestNF1ServiceRegistrations: each capability address is declared with
 // its registration proof, which the relay's check accepts for its rid and
-// relay; an address whose rid is not bound to its key (minted before
-// NF1RISKS) has none (nfltr docs/decisions/nf1-risks-2026-11-14.md).
+// relay, a udp service's as a tcp one's; an address whose rid is not bound
+// to its key (minted before NF1RISKS) has none (nfltr
+// docs/decisions/nf1-risks-2026-11-14.md, nf1-udp-2026-11-14.md).
 func TestNF1ServiceRegistrations(t *testing.T) {
 	l, key, err := nf1.Mint("relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lu, _, err := nf1.Mint("relay.example")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,15 +95,19 @@ func TestNF1ServiceRegistrations(t *testing.T) {
 		{Name: "a", Kind: agentservices.TCP, E2EE: agentservices.E2EEOn, Target: target, NF1: l},
 		{Name: "b", Kind: agentservices.TCP, E2EE: agentservices.E2EEOn, Target: target, NF1: unbound},
 		{Name: "c", Kind: agentservices.TCP, Target: target},
+		{Name: "a", Kind: agentservices.UDP, E2EE: agentservices.E2EEOn, Target: "127.0.0.1:53", NF1: lu},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	regs, err := agentservices.ParseReg(table.Registrations())
-	if err != nil || len(regs) != 1 {
-		t.Fatalf("registrations %v, %v: want one, for a", regs, err)
+	if err != nil || len(regs) != 2 {
+		t.Fatalf("registrations %v, %v: want two, for a's tcp and udp services", regs, err)
 	}
 	if err := capaddr.CheckRegistration("relay.example", l.Address().RID, regs[l.Address().RID]); err != nil {
 		t.Fatalf("a's proof: %v", err)
+	}
+	if err := capaddr.CheckRegistration("relay.example", lu.Address().RID, regs[lu.Address().RID]); err != nil {
+		t.Fatalf("a's udp proof: %v", err)
 	}
 }
