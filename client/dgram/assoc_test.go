@@ -484,10 +484,14 @@ func TestDatagramAssocDNSFlows(t *testing.T) {
 func TestDatagramConnIsANetConn(t *testing.T) {
 	nettest.TestConn(t, func() (c1, c2 net.Conn, stop func(), err error) {
 		targets := make(chan net.Conn, 1)
-		cfg := Config{QueueLen: 1 << 12, QueueBytes: 64 << 20}
+		// Datagrams, not a stream: nettest's tests write without pause and
+		// then need one marker through, which a full queue drops. Queues
+		// above what its 100 ms spins write keep the marker.
+		const q = 1 << 18
+		cfg := Config{QueueLen: q, QueueBytes: 1 << 30}
 		cs1, cs2 := net.Pipe()
 		s := NewServer(cs2, cfg, func() (net.Conn, error) {
-			a, b := Pipe(1<<12, addr("agent"), addr("target"))
+			a, b := Pipe(q, addr("agent"), addr("target"))
 			targets <- b
 			return a, nil
 		})
