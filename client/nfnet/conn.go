@@ -55,6 +55,7 @@ type Conn struct {
 	remote  string     // an accepted session's RemoteAddr: the caller's machine
 	closers []func()   // what ends with the Conn: an nf1 session's data connection, a one-shot Dialer
 
+	readMu   sync.Mutex // a link session reads one at a time: net.Conn's concurrent Reads take turns
 	in, out  atomic.Int64
 	failure  atomic.Pointer[Error]
 	endOnce  sync.Once
@@ -101,7 +102,16 @@ func (c *Conn) Answered(ctx context.Context) error {
 // Read reads the peer's bytes: io.EOF at its half close, a typed *Error at
 // a cut or refusal, os.ErrDeadlineExceeded past a read deadline.
 func (c *Conn) Read(p []byte) (int, error) {
+	c.readMu.Lock()
 	n, err := c.s.Read(p)
+	if n == 0 && err == io.EOF {
+		// ponytail: link v0.12.11's Session.Read can return io.EOF on a live
+		// session when a SetReadDeadline clears a passed deadline as that
+		// deadline wakes the Read; a second Read tells (a real end is EOF
+		// again at once). Drop once link's Read reports the wakeup itself.
+		n, err = c.s.Read(p)
+	}
+	c.readMu.Unlock()
 	c.in.Add(int64(n))
 	if err != nil {
 		err = c.early(err)

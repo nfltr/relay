@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/nfltr/relay/client/agent"
 	"github.com/nfltr/relay/client/nf1"
@@ -173,7 +174,11 @@ func agentConfig(cfg Config) (agent.Config, error) {
 	}
 	a := agent.Config{ServerAddr: addr, AgentID: cfg.Agent, APIKey: cfg.APIKey, TCPTunnel: true, Routes: []agent.Route{},
 		Retries: 1 << 30, // until Listen's ctx ends, or a final refusal
-		Logger:  logger}
+		// Close refuses the sessions waiting and resets the accepted: the
+		// agent's connection carries those answers before it ends
+		// (TestListenerAnswersAtAccept), within this bound.
+		Drain:  listenDrain,
+		Logger: logger}
 	if cfg.Plaintext {
 		return a, nil
 	}
@@ -188,6 +193,10 @@ func agentConfig(cfg Config) (agent.Config, error) {
 	a.TLS, a.TLSConfig = true, t
 	return a, nil
 }
+
+// listenDrain bounds how long Close waits for its refusals and resets to
+// leave on the agent's connection.
+const listenDrain = 5 * time.Second
 
 // accepted checks the relay accepted the service as declared: its mode
 // as asked, never one the relay chose (ORGCUT).
