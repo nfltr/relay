@@ -42,6 +42,14 @@ func Server(raw net.Conn, cfg *tls.Config) *Conn {
 	return &Conn{tls.Server(r, cfg), r}
 }
 
+// Wrap prepares raw for a TLS connection the caller makes on the returned
+// conn (tls.Client(w, cfg), or a handshake helper that does): bind then
+// makes that connection a Conn whose end is checked as Client's is.
+func Wrap(raw net.Conn) (w net.Conn, bind func(*tls.Conn) *Conn) {
+	r := &rawEnd{Conn: raw}
+	return r, func(tc *tls.Conn) *Conn { return &Conn{tc, r} }
+}
+
 // Reset ends the connection as failed: no close_notify; the transport is
 // reset (its Reset, an RST on a *net.TCPConn) or else closed, which the
 // peer's Conn reads as ErrTruncated. peerlink.Join calls it to pass on

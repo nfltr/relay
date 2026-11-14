@@ -13,6 +13,7 @@ import (
 
 	"github.com/nfltr/link"
 	"github.com/nfltr/relay/client/capaddr"
+	"github.com/nfltr/relay/client/tlsend"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/dataplane"
@@ -70,7 +71,8 @@ func dialRelay(ctx context.Context, relay string) (net.Conn, error) {
 // Dial opens a session to addr's service: at addr.Relay only, over an
 // anonymous data connection, through the rendezvous, pinned TLS and the
 // proof (Handshake). The conn's Close ends the data connection too; it
-// has CloseWrite, the TLS session's half close.
+// has CloseWrite, the TLS session's half close, and Reset; a relay's cut
+// reads as tlsend.ErrTruncated, never io.EOF.
 func Dial(ctx context.Context, addr capaddr.Address, opt Options) (net.Conn, error) {
 	dial := opt.DialRelay
 	if dial == nil {
@@ -105,12 +107,13 @@ func Dial(ctx context.Context, addr capaddr.Address, opt Options) (net.Conn, err
 		_ = mux.Close()
 		return nil, err
 	}
-	c, err := Handshake(ctx, s, addr)
+	w, bind := tlsend.Wrap(s)
+	c, err := Handshake(ctx, w, addr)
 	if err != nil {
 		_ = mux.Close()
 		return nil, err
 	}
-	return &conn{Conn: c.(*tls.Conn), mux: mux}, nil
+	return &conn{Conn: bind(c.(*tls.Conn)), mux: mux}, nil
 }
 
 // answerErr is the relay's answer to the open as Dial's error.
@@ -137,14 +140,23 @@ func answerErr(err error) error {
 
 // conn is a dialled session; Close ends its data connection. The
 // embedded TLS connection's CloseWrite is the session's half close
-// (close_notify: the server reads EOF, its bytes still arrive).
+// (close_notify: the server reads EOF, its bytes still arrive); its Read
+// returns tlsend.ErrTruncated, never io.EOF, when the session ends
+// without the server's close_notify (a relay's cut); Reset ends it as
+// failed (no close_notify).
 type conn struct {
-	*tls.Conn
+	*tlsend.Conn
 	mux *dataplane.Mux
 }
 
 func (c *conn) Close() error {
 	err := c.Conn.Close()
+	_ = c.mux.Close()
+	return err
+}
+
+func (c *conn) Reset() error {
+	err := c.Conn.Reset()
 	_ = c.mux.Close()
 	return err
 }
