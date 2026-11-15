@@ -748,9 +748,12 @@ func TestEnrolUnderANameTheAccountHasNotIsRefused(t *testing.T) {
 func TestFollowCRLTakesTheRevokePush(t *testing.T) {
 	f := newFleet(t)
 	ctx, cancel := context.WithCancel(f.ctx)
-	defer cancel()
-	go followCRL(ctx, f.relay, f.m, time.Hour, f.clk.Now, quiet()) // the push alone
-	time.Sleep(200 * time.Millisecond)                             // the follow parks on its cursor
+	done := make(chan struct{})
+	// The push alone; joined, so its CRL write ends before TempDir
+	// removes the machine directory.
+	go func() { defer close(done); followCRL(ctx, f.relay, f.m, time.Hour, f.clk.Now, quiet()) }()
+	defer func() { cancel(); <-done }()
+	time.Sleep(200 * time.Millisecond) // the follow parks on its cursor
 	cur, _ := f.m.Current()
 	changed := f.m.Changed()
 	if _, err := orgissuer.RevokeMachines(f.org.dir, []string{"m-web-1"}, f.clk.Now()); err != nil {
