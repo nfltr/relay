@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay/client/dgram"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentservices"
@@ -75,5 +76,65 @@ func TestDatagramServiceSession(t *testing.T) {
 	}
 	if st := cl.Stats(); st.Flows != 3 || st.Refused != 0 {
 		t.Fatalf("stats %+v", st)
+	}
+}
+
+// A revocation of a udp service's session names itself (lane UDPFIX): the
+// agent's cut (an organisation admission ended, an address replaced)
+// tells each open flow why before the session ends, so the client's
+// flow_close says "revoked", not "reset"; any other target is left to
+// the reset.
+func TestRevokeDatagramsTellsFlows(t *testing.T) {
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			_, _ = pc.WriteTo(buf[:n], from)
+		}
+	}()
+	target, _, err := dialDatagram(t.Context(), pc.LocalAddr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, c := net.Pipe()
+	go func() { _ = peerlink.Join(s, target) }()
+	cl := dgram.NewClient(c, dgram.Config{})
+	defer cl.Close() //nolint:errcheck
+	f, err := cl.Dial(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = f.SetDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 16)
+	if _, err := f.Write([]byte("q")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	if !revokeDatagrams(target) {
+		t.Fatal("a udp service's target was not revoked")
+	}
+	if _, err := f.Read(buf); err == nil || f.Reason() != dgram.ReasonRevoked {
+		t.Fatalf("after the revocation: read %v, reason %v; want an end, ReasonRevoked", err, f.Reason())
+	}
+	select {
+	case <-cl.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the session did not end after the revocation")
+	}
+	a, b := net.Pipe()
+	defer a.Close() //nolint:errcheck
+	defer b.Close() //nolint:errcheck
+	if revokeDatagrams(a) {
+		t.Fatal("a stream target taken for a udp service's")
 	}
 }

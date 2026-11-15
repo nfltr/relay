@@ -32,6 +32,7 @@ import (
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/relay/client/capaddr"
+	"github.com/nfltr/relay/client/dgram"
 	"github.com/nfltr/relay/client/nf1"
 )
 
@@ -199,6 +200,13 @@ func (d *directServer) dropAddressesNotIn(t *ServiceTable) {
 	defer d.mu.Unlock()
 	for s := range d.sessions {
 		if s.nf1 != nil && !served[s.nf1.Address().RID] {
+			if srv := s.revoke.Load(); srv != nil {
+				go func() { // its flows told why, then the session ends cleanly; reset if held on
+					srv.CloseWith(dgram.ReasonRevoked)
+					time.AfterFunc(directCutGrace, s.c.Abort)
+				}()
+				continue
+			}
 			s.c.Abort()
 		}
 	}

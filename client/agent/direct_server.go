@@ -19,6 +19,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nfltr/link"
@@ -26,6 +27,7 @@ import (
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/quic-go"
+	"github.com/nfltr/relay/client/dgram"
 	"github.com/nfltr/relay/client/nf1"
 	"github.com/nfltr/relay/client/tlsend"
 )
@@ -64,6 +66,9 @@ type directSession struct {
 	peer string        // the direct connection it last moved to (servedPeer's name); d.mu
 	nf1  *nf1.Listener // a capability address's session: its listener (nil: organisation mode)
 	sni  string        // ... the server name its direct connection asks for (nf1SNI)
+	// revoke is a udp service's association on the session (setDirect):
+	// a revocation tells its flows why before the session ends.
+	revoke atomic.Pointer[dgram.Server]
 }
 
 // newDirectServer starts the listener on a new endpoint.

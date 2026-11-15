@@ -225,6 +225,12 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 		func(now time.Time) (time.Time, error) { return p.org.CheckClient(adm.certs, p.groups, now) },
 		func() {
 			logger.Info("e2ee tcp: organisation admission ended, session cut")
+			if revokeDatagrams(target) {
+				// its flows told why on the session, which then ends
+				// cleanly; reset if the client holds it on.
+				time.AfterFunc(directCutGrace, func() { _ = tc.Reset(); dropTarget(target) })
+				return
+			}
 			_ = tc.Reset()
 			dropTarget(target)
 		}, done)

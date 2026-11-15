@@ -50,6 +50,7 @@ const (
 	ReasonFull        Reason = 4 // past the agent's max_flows
 	ReasonUnreachable Reason = 5 // the target could not be dialled
 	ReasonClosed      Reason = 6 // its side closed it (Flow.Close)
+	ReasonRevoked     Reason = 7 // the agent revoked the association's right (Server.CloseWith)
 )
 
 // ErrProtocol: the peer sent a malformed frame or one for an id never

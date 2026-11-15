@@ -36,10 +36,24 @@ type datagramTarget struct {
 	srv *dgram.Server
 }
 
+// revokeDatagrams ends target's association for a revocation when target
+// is a udp service's session end: nothing reaches its target from now on,
+// each open flow's client is told why (dgram.ReasonRevoked: flow_close
+// "revoked", not "reset", lane UDPFIX) on the session, and the session
+// ends cleanly after it. False, target untouched, for any other target.
+func revokeDatagrams(target net.Conn) bool {
+	t, ok := target.(datagramTarget)
+	if ok {
+		t.srv.CloseWith(dgram.ReasonRevoked)
+	}
+	return ok
+}
+
 // setDirect gives target's association (a udp service's) the direct
 // datagrams of its session s; any other target, or none, is left as it is.
 func setDirect(target net.Conn, s *directSession) {
 	if t, ok := target.(datagramTarget); ok && s != nil {
 		t.srv.SetDirect(s.dg)
+		s.revoke.Store(t.srv)
 	}
 }

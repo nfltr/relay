@@ -30,6 +30,7 @@ type Conn struct {
 	rdlWake  chan struct{} // closed when rdl changes
 	wdl      time.Time
 	closeErr error
+	why      Reason // why the flow ended from its side (Reason)
 }
 
 func newConn(queue int, local, remote net.Addr, drops *counters) *Conn {
@@ -47,21 +48,31 @@ func (c *Conn) put(p []byte) {
 	}
 }
 
-// end ends c from its flow's side (no more datagrams).
-func (c *Conn) end() {
+// end ends c from its flow's side (no more datagrams), for why.
+func (c *Conn) end(why Reason) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.closed {
-		c.closed = true
+		c.closed, c.why = true, why
 		close(c.done)
 	}
+}
+
+// Reason is why the flow ended from the agent's side (the reason of its C
+// or R: ReasonRevoked when the agent revoked the association's right); 0
+// while it runs, after its own Close, or when the association ended
+// without one (a reset).
+func (c *Conn) Reason() Reason {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.why
 }
 
 // Dial opens a flow of the association as a Conn (local, remote: its
 // addresses).
 func (cl *Client) Dial(local, remote net.Addr) (*Conn, error) {
 	var c *Conn
-	fl, err := cl.Open(FlowOptions{Deliver: func(p []byte) { c.put(p) }, Closed: func(Reason) { c.end() }})
+	fl, err := cl.Open(FlowOptions{Deliver: func(p []byte) { c.put(p) }, Closed: func(why Reason) { c.end(why) }})
 	if err != nil {
 		return nil, err
 	}
@@ -78,7 +89,7 @@ func Pipe(queue int, a, b net.Addr) (*Conn, *Conn) {
 	x, y := newConn(queue, a, b, &cnt), newConn(queue, b, a, &cnt)
 	x.send = func(p []byte) bool { y.put(p); return true }
 	y.send = func(p []byte) bool { x.put(p); return true }
-	x.stop, y.stop = y.end, x.end
+	x.stop, y.stop = func() { y.end(ReasonClosed) }, func() { x.end(ReasonClosed) }
 	return x, y
 }
 

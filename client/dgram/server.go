@@ -56,6 +56,13 @@ func (s *Server) Close() error {
 	return nil
 }
 
+// CloseWith is Close that tells the client why each open flow ended (its
+// Closed gets why): ReasonRevoked for a revocation, ReasonClosed for the
+// service's stop. Nothing reaches a target after it returns either.
+func (s *Server) CloseWith(why Reason) {
+	s.a.endWith(net.ErrClosed, why)
+}
+
 func (s *Server) handle(fr frame, dial Dial) error {
 	a := s.a
 	a.mu.Lock()

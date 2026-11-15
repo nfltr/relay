@@ -467,6 +467,51 @@ func TestDatagramAssocNoDeliverAfterRevoke(t *testing.T) {
 	}
 }
 
+// A revocation names itself (lane UDPFIX): CloseWith(ReasonRevoked) tells
+// each open flow's client why (its Closed gets ReasonRevoked, a Conn's
+// Reason says it), nothing reaches the target after it returns, and a
+// plain Close still reads as the association's end (0).
+func TestDatagramAssocRevokeNamesItself(t *testing.T) {
+	to, got := echo(t, 1)
+	c, s := pair(t, Config{}, Config{}, dialUDP(to))
+	f, in, cl := recvFlow(c)
+	conn, err := c.Dial(addr("l"), addr("r"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Send([]byte("a"))
+	recv(t, in)
+	if _, err := conn.Write([]byte("b")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Read(make([]byte, 8)); err != nil {
+		t.Fatal(err)
+	}
+	s.CloseWith(ReasonRevoked)
+	for range 10 {
+		f.Send([]byte("after"))
+	}
+	if r := <-cl; r != ReasonRevoked {
+		t.Fatalf("flow closed %v, want ReasonRevoked", r)
+	}
+	if _, err := conn.Read(make([]byte, 8)); err == nil || conn.Reason() != ReasonRevoked {
+		t.Fatalf("conn read %v, reason %v; want an end, ReasonRevoked", err, conn.Reason())
+	}
+	<-c.Done()
+	if got.Load() != 2 {
+		t.Fatalf("target got %d after the revocation", got.Load()-2)
+	}
+
+	c2, s2 := pair(t, Config{}, Config{}, dialUDP(to))
+	f2, in2, cl2 := recvFlow(c2)
+	f2.Send([]byte("a"))
+	recv(t, in2)
+	_ = s2.Close()
+	if r := <-cl2; r != 0 {
+		t.Fatalf("after a plain Close the flow closed %v, want 0", r)
+	}
+}
+
 // 10,000 DNS-style flows (a new source port per query) on one
 // association, one open: each a query, its answer, its close.
 func TestDatagramAssocDNSFlows(t *testing.T) {

@@ -137,12 +137,13 @@ type assoc struct {
 	err     error
 	wake    chan struct{}
 	done    chan struct{}
+	sent    chan struct{} // closed when the sender returned
 	endOnce sync.Once
 }
 
 func newAssoc(stream io.ReadWriteCloser, cfg Config, client bool) *assoc {
 	return &assoc{cfg: cfg.withDefaults(client), client: client, stream: stream, flows: map[uint64]*flow{}, fresh: map[*flow]struct{}{},
-		wake: make(chan struct{}, 1), done: make(chan struct{}), idleAt: time.Now()}
+		wake: make(chan struct{}, 1), done: make(chan struct{}), sent: make(chan struct{}), idleAt: time.Now()}
 }
 
 // enqueue puts f on the stream's FIFO (a.mu held); a datagram of fl only
@@ -175,6 +176,7 @@ const flushAt = 64 << 10
 // send is the association's one sender: the only goroutine that waits on
 // the stream (its credit) and on the direct path's send queue.
 func (a *assoc) send() {
+	defer close(a.sent)
 	var q []outFrame
 	var buf, dbuf []byte
 	for {
@@ -276,7 +278,16 @@ func (a *assoc) remove(fl *flow) {
 
 // end ends the association once: the stream closed, every flow closed
 // (the agent's sockets with them).
-func (a *assoc) end(err error) {
+func (a *assoc) end(err error) { a.endWith(err, 0) }
+
+// tailGrace bounds how long an end with a reason waits for the stream to
+// take its closes.
+const tailGrace = time.Second
+
+// endWith is end; why non-zero first tells the peer of each flow open at
+// this side why it closed (a C frame each on the stream, after the frames
+// the sender already wrote, within tailGrace), its targets already closed.
+func (a *assoc) endWith(err error, why Reason) {
 	a.endOnce.Do(func() {
 		traceEnd()
 		a.mu.Lock()
@@ -297,6 +308,15 @@ func (a *assoc) end(err error) {
 		a.out = nil
 		a.mu.Unlock()
 		close(a.done)
+		if why != 0 && len(fs) > 0 {
+			var tail []byte
+			for _, f := range fs {
+				if f.id != 0 {
+					tail = appendFrame(tail, frame{typ: frameClose, id: f.id, reason: why})
+				}
+			}
+			a.writeTail(tail)
+		}
 		_ = a.stream.Close()
 		for _, f := range fs {
 			if f.conn != nil {
@@ -307,6 +327,24 @@ func (a *assoc) end(err error) {
 			}
 		}
 	})
+}
+
+// writeTail writes b once the sender returned, both within tailGrace (a
+// stream with no credit is closed without it).
+func (a *assoc) writeTail(b []byte) {
+	t := time.NewTimer(tailGrace)
+	defer t.Stop()
+	select {
+	case <-a.sent:
+	case <-t.C:
+		return
+	}
+	wrote := make(chan struct{})
+	go func() { _, _ = a.stream.Write(b); close(wrote) }()
+	select {
+	case <-wrote:
+	case <-t.C:
+	}
 }
 
 func (a *assoc) stats() Stats {

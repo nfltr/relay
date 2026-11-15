@@ -274,7 +274,7 @@ func (a *agent) runWithReconnect(
 			defer a.live.Add(-1) // before done closes: Connected is current when Done is
 			defer release()
 			defer endTCP()
-			cycle <- superviseConnectionCycle(
+			err := superviseConnectionCycle(
 				cycleCtx,
 				conn,
 				func() error {
@@ -310,6 +310,20 @@ func (a *agent) runWithReconnect(
 				},
 				auxiliary,
 			)
+			if ctx.Err() != nil {
+				// Stopped: without a drain the cycle returned at the stop,
+				// not waiting for its primary, which resets the direct
+				// sessions (directServer.stop) and may not have run yet;
+				// the process can exit as soon as Connect returns, and a
+				// direct session (a udp association's on QUIC datagrams)
+				// whose ABORT never went out lived on at its client until
+				// the detach bound (lane UDPFIX, NAT lab
+				// nf1-udp-revoke-TERM). Reset them before this cycle
+				// ends: with a drain the primary did, and this returns at
+				// once. Guard TestStopResetsDirectSessionsBeforeClose.
+				targets.services.directServer().stop(ctx)
+			}
+			cycle <- err
 		}(conn, stream, acc.done, release)
 
 		var streamErr error
