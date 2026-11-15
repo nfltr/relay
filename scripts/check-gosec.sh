@@ -50,7 +50,8 @@ else
         (cd "${ROOT}/${mod}" && "${bin}" -quiet -exclude-generated -exclude-dir=vendor \
             -exclude-dir=testdata -fmt=json -out="${part}" ./...) || [[ $? == 1 ]]
     done
-    python3 -c 'import json,sys; print(json.dumps({"Issues": [i for f in sys.argv[1:] for i in (json.load(open(f)).get("Issues") or [])]}))' "${parts[@]}" >"${out}"
+    # gosec -quiet writes nothing for a module with no finding (org).
+    python3 -c 'import json,os,sys; print(json.dumps({"Issues": [i for f in sys.argv[1:] if os.path.getsize(f) for i in (json.load(open(f)).get("Issues") or [])]}))' "${parts[@]}" >"${out}"
     rm -f "${parts[@]}"
     [[ -z "${GOSEC_REPORT:-}" ]] || cp "${out}" "${GOSEC_REPORT}"
 fi
