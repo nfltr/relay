@@ -3,7 +3,7 @@ module github.com/nfltr/relay/org
 go 1.27.2
 
 require (
-	github.com/nfltr/relay/client v0.22.0
+	github.com/nfltr/relay/client v0.22.1
 	github.com/stripe/krl v0.0.0-20250403164848-fcf8101b2f53
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
