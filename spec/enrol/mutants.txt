@@ -29,3 +29,12 @@ reissue-revoked NoIssueAfterRevoke Join.cfg
 reissue-after-renewal NoRetiredKeyRevived Join.cfg
 pin-root-only RefusedOnlyForCause Join.cfg
 any-root JoinRootsAreOwners Join.cfg
+# RevokePush.tla (a revoke's events and backstops, RevokePush.cfg):
+# poll-only is the code before 2026-11-16 (the issuer published a CRL
+# another process wrote at its next round, serveWait).
+poll-only EventBound RevokePush.cfg
+clear-wake-after-publish EventBound RevokePush.cfg
+no-serve-backstop BackstopBound RevokePush.cfg
+no-follow-backstop BackstopBound RevokePush.cfg
+admit-after-crl NoAdmitAfterLearn RevokePush.cfg
+no-cut NoAdmitAfterLearn RevokePush.cfg

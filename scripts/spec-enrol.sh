@@ -5,7 +5,8 @@
 # organisation certificates' lifecycle: renewal, revocation, root rotation
 # (spec/enrol/README.md).
 #   check     TLC on spec/enrol/Enrol.cfg: every invariant; Join.cfg: the
-#             join by token (Join.tla).
+#             join by token (Join.tla); RevokePush.cfg: a revoke's events
+#             and backstops (RevokePush.tla).
 #   live      TLC on spec/enrol/EnrolLive.cfg: the temporal properties;
 #             EnrolLoss.cfg: everything with the relay losing messages.
 #   mutants   each line of spec/enrol/mutants.txt must be caught (a line
@@ -31,10 +32,12 @@ trap 'rm -rf "$work"' EXIT
 dir=spec/enrol
 temporal="TakesEffect MachinesFollowRotation"
 witnesses="WitnessRenewed WitnessRevokeSeen WitnessFailClosed WitnessForgedSession WitnessRotated WitnessSessionAfterRotation WitnessRetried@EnrolLoss.cfg
-WitnessRetriedJoin@Join.cfg WitnessReissued@Join.cfg WitnessJoinedAfterLoss@Join.cfg WitnessJoinedAfterRotation@Join.cfg WitnessRefusedOther@Join.cfg WitnessRefusedEvil@Join.cfg"
+WitnessRetriedJoin@Join.cfg WitnessReissued@Join.cfg WitnessJoinedAfterLoss@Join.cfg WitnessJoinedAfterRotation@Join.cfg WitnessRefusedOther@Join.cfg WitnessRefusedEvil@Join.cfg
+WitnessCutByPush@RevokePush.cfg WitnessServeBackstop@RevokePush.cfg WitnessFollowBackstop@RevokePush.cfg WitnessHeldAfterRevoke@RevokePush.cfg"
 
-# modof CFG: the module a config checks (Join*.cfg: Join.tla).
-modof() { case ${1:-} in Join*) echo Join ;; *) echo Enrol ;; esac; }
+# modof CFG: the module a config checks (Join*.cfg: Join.tla,
+# RevokePush*.cfg: RevokePush.tla).
+modof() { case ${1:-} in Join*) echo Join ;; RevokePush*) echo RevokePush ;; *) echo Enrol ;; esac; }
 
 tlc() {
 	cfg_=$1
@@ -115,6 +118,12 @@ coverage() {
 		echo "coverage: a Join.tla action is never taken"
 		return 1
 	fi
+	tlc RevokePush.cfg -coverage 1 >"$work/cov.out" 2>&1 || { tail -20 "$work/cov.out"; return 1; }
+	grep -E '^<[A-Z][A-Za-z]+(\(.*\))? line' "$work/cov.out"
+	if grep -E '^<[A-Z][A-Za-z]+(\(.*\))? line' "$work/cov.out" | grep -qE ': 0:|: 0$'; then
+		echo "coverage: a RevokePush.tla action is never taken"
+		return 1
+	fi
 }
 
 # trace F: accepted when every line was read with no violation.
@@ -176,12 +185,12 @@ traces() {
 }
 
 case ${1:-} in
-check) run Enrol.cfg && run Join.cfg ;;
+check) run Enrol.cfg && run Join.cfg && run RevokePush.cfg ;;
 live) run EnrolLive.cfg && run EnrolLoss.cfg ;;
 mutants) mutants ;;
 witnesses) witnesses ;;
 coverage) coverage ;;
-ci) run Enrol.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && mutants && witnesses && fixtures ;;
+ci) run Enrol.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && run RevokePush.cfg && mutants && witnesses && fixtures ;;
 fixtures) fixtures ;;
 traces) traces ;;
 trace) trace "$2" ;;

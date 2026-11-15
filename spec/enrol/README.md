@@ -102,6 +102,56 @@ run's answer and the next run, the first run's answer (under the old
 root) fails the chain check until the relay drops it (an hour); the model
 lets the join skip it (a liveness gap, no safety one).
 
+## `RevokePush.tla`
+
+How fast a revoke reaches the revoked machine's peers, and what bounds it
+when an event is lost (2026-11-16, lane ORGREVPUSH; before, the issuer
+published a CRL another process wrote only at its next round,
+`serveWait` 10 s, most of the measured ~9 s cut). `nfltr org revoke`
+writes the CRL into the issuer's directory; the file-change notice of
+that write ends the issuer service's round, which reads the directory and
+publishes the CRL; the append wakes every peer's parked long-poll (the
+push), and each peer cuts its sessions of the machine. Every step is an
+event, modelled as happening before time passes (the network's latency).
+Each may be lost; each has a backstop: the service's round (`ServeWait`),
+the peer's fresh read (`FollowEvery`). A relay withholding the backstop
+reads too is `Enrol.tla`'s `RevocationBound` (NextUpdate, fail closed).
+One revoked machine; its peers (a client and an agent: both ends, either
+path, `DirectPath.tla`'s reset) are the verifiers.
+
+| property | means | mutant that breaks it |
+|---|---|---|
+| EventBound | with no notice and no push lost, every session of the machine ends before time passes | `poll-only` (no notice: the code before 2026-11-16), `clear-wake-after-publish` (a notice that comes during a maintain is dropped with the round's end) |
+| BackstopBound | with any losses, every session ends within ServeWait + FollowEvery | `no-serve-backstop` (a lost notice, no round), `no-follow-backstop` (a lost push, no fresh read) |
+| NoAdmitAfterLearn | a peer that took the CRL holds no session of the machine: none admitted after, the held one cut | `admit-after-crl`, `no-cut` |
+
+Witnesses: `WitnessCutByPush`, `WitnessServeBackstop` (a lost notice,
+published by the round), `WitnessFollowBackstop` (a lost push, cut by the
+fresh read), `WitnessHeldAfterRevoke` (the bound's window: admitted after
+the revoke, before the peer learned it).
+
+| Action | code |
+|---|---|
+| Revoke | `orgissuer.RevokeMachines` (and nfltr's `org revoke`, any writer of `crl.der` or `audit.jsonl`): the write is the notice (`orgenrol.watchDir`, fsnotify on the issuer directory) |
+| LoseWake | no watcher (`watchDir` failed: no inotify or kqueue left), a missed event |
+| Read | `orgenrol.Service.Run`: the notice cancels the round's long-poll (one buffered value: taken before the next `maintain` reads) |
+| Publish | `service.maintain`: the CRL appended under its replace key |
+| Deliver, LosePush | the relay's mailbox wakes the parked pull (`follow`, `orgid.Follow`), or loses it |
+| FreshRead | `follow`'s read from 0 every `FollowEvery` |
+| Admit, Take | the peer's TLS check and `Hold` / `holdAdmission` on its CRL change |
+| Tick | time passes once nothing is in flight and no backstop is overdue |
+
+`RevokePush.cfg`: two peers, MaxTime 6, ServeWait 2, FollowEvery 2, two
+losses (50100 states, seconds); in `ci`, `check`, `coverage`.
+
+Library (owner's library-first rule): the notice is
+`github.com/fsnotify/fsnotify` v1.9.0 (BSD-3-Clause, inotify, kqueue,
+ReadDirectoryChangesW; its one dependency `golang.org/x/sys` is in the
+module already; nfltr links it already). Looked at: the revoke command
+signalling the issuer over a socket of its own (every writer would have
+to call it: a rotation, the account-revocation tie-in, nfltr's own
+copies), and a stat poll (a poll). The watcher covers every writer.
+
 ## Running
 
 `scripts/spec-enrol.sh ci` (`make spec-enrol-ci`, in `make ci`):
@@ -165,5 +215,7 @@ orgid.
 | Enrol.tla | org/orgissuer/store.go |
 | Join.tla | org/orgpki/issuer.go |
 | Join.tla | org/orgenrol/machine.go |
+| RevokePush.tla | org/orgenrol/issuer.go |
+| RevokePush.tla | org/orgenrol/orgenrol.go |
 | TraceEnrol.tla | org/orgpki/trace_on.go |
 | TraceEnrol.tla | client/orgid/trace_on.go |
