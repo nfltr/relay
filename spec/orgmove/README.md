@@ -138,7 +138,7 @@ fence naming their key (ImportFenced: import-unfenced,
 fence-names-no-recipient), CRL Numbers that only grow (CRLMonotone).
 `scripts/spec-orgmove.sh traces` (`make spec-orgmove-traces`) runs every
 test of orgpki, orgissuer and orgenrol that way and checks each
-trace (66 traces, 387 lines: 320 act, 27 fence, 18 import, 22 send), then
+trace (55 traces, 313 lines: 260 act, 22 fence, 14 import, 17 send), then
 the fixtures `traces/<Invariant>-*.ndjson`, each of which its invariant
 must reject (also in `ci`).
 

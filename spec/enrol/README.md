@@ -88,7 +88,7 @@ rules give from what the lines before it established; a wrong outcome a
 model mutant names is reported by that mutant's property. `scripts/spec-enrol.sh
 traces` (`make spec-enrol-traces`) runs every test of orgpki, orgmachine and
 orgenrol (the mailbox round trips, the push and the backstop, the rotation)
-that way and checks each trace (26 traces, 170 lines); with the Go mutant
+that way and checks each trace (52 traces, 348 lines); with the Go mutant
 `renew-revoked` applied (and orgid's `fail-open`, `accept-older-crl` and
 `no-expiry-check`), the trace check rejects the recorded traces by that mutant's
 property. `traces/<Invariant>-*.ndjson` are fixtures each rejected by its
