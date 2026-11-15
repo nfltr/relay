@@ -131,7 +131,20 @@ type Webhook struct {
 	ID                                                            string
 	Mailbox                                                       string
 	IngressPath                                                   string
+	Recipient                                                     Recipient
 	DroppedRate, DroppedMailboxFull, RejectedTooLarge, Duplicates uint64
+}
+
+// Recipient is the key a webhook's accepted bodies are sealed to before the
+// relay stores them (github.com/nfltr/relay/proto/wire/hookwire): the
+// creator's key id and an uncompressed P-256 public key.
+type Recipient struct {
+	KeyID     string
+	PublicKey []byte
+}
+
+func (r Recipient) wire() *mailboxv1.WebhookRecipient {
+	return &mailboxv1.WebhookRecipient{KeyId: r.KeyID, PublicKey: r.PublicKey}
 }
 
 // Webhook auth schemes.
@@ -247,9 +260,9 @@ func (c Client) Ack(ctx context.Context, mailbox string, through uint64) error {
 	return c.call(ctx, http.MethodPost, mailboxPath(mailbox, "/messages:ack"), &mailboxv1.AckMessagesRequest{Mailbox: mailbox, ThroughSeq: through}, &mailboxv1.AckMessagesResponse{})
 }
 
-// CreateWebhook makes a webhook delivering into mailbox; the secret is
-// returned once.
-func (c Client) CreateWebhook(ctx context.Context, mailbox, auth string, maxEventsPerMinute, maxBodyBytes int) (Webhook, string, error) {
+// CreateWebhook makes a webhook delivering into mailbox, its bodies sealed
+// to recipient; the secret is returned once.
+func (c Client) CreateWebhook(ctx context.Context, mailbox, auth string, maxEventsPerMinute, maxBodyBytes int, recipient Recipient) (Webhook, string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	var wireAuth mailboxv1.WebhookAuth
@@ -261,7 +274,7 @@ func (c Client) CreateWebhook(ctx context.Context, mailbox, auth string, maxEven
 	default:
 		return Webhook{}, "", fmt.Errorf("auth must be %q or %q", AuthBearer, AuthGitHub)
 	}
-	in := &mailboxv1.CreateWebhookRequest{Mailbox: mailbox, Auth: wireAuth,
+	in := &mailboxv1.CreateWebhookRequest{Mailbox: mailbox, Auth: wireAuth, Recipient: recipient.wire(),
 		Limits: &mailboxv1.WebhookLimits{MaxEventsPerMinute: uint32(max(maxEventsPerMinute, 0)), MaxBodyBytes: uint32(max(maxBodyBytes, 0))}}
 	var out mailboxv1.CreateWebhookResponse
 	if err := c.call(ctx, http.MethodPost, "/api/v1/webhooks", in, &out); err != nil {
@@ -270,9 +283,22 @@ func (c Client) CreateWebhook(ctx context.Context, mailbox, auth string, maxEven
 	return webhookFromWire(out.GetWebhook()), out.GetSecret(), nil
 }
 
+// UpdateWebhookRecipient seals the webhook's later bodies to recipient.
+func (c Client) UpdateWebhookRecipient(ctx context.Context, id string, recipient Recipient) (Webhook, error) {
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var out mailboxv1.UpdateWebhookRecipientResponse
+	if err := c.call(ctx, http.MethodPut, "/api/v1/webhooks/"+url.PathEscape(id)+"/recipient",
+		&mailboxv1.UpdateWebhookRecipientRequest{WebhookId: id, Recipient: recipient.wire()}, &out); err != nil {
+		return Webhook{}, err
+	}
+	return webhookFromWire(out.GetWebhook()), nil
+}
+
 func webhookFromWire(w *mailboxv1.Webhook) Webhook {
 	c := w.GetCounters()
-	return Webhook{ID: w.GetWebhookId(), Mailbox: w.GetMailbox(), IngressPath: w.GetIngressPath(), DroppedRate: c.GetDroppedRateLimited(),
+	r := w.GetRecipient()
+	return Webhook{ID: w.GetWebhookId(), Mailbox: w.GetMailbox(), IngressPath: w.GetIngressPath(), Recipient: Recipient{KeyID: r.GetKeyId(), PublicKey: r.GetPublicKey()}, DroppedRate: c.GetDroppedRateLimited(),
 		DroppedMailboxFull: c.GetDroppedMailboxFull(), RejectedTooLarge: c.GetRejectedTooLarge(), Duplicates: c.GetDuplicates()}
 }
 

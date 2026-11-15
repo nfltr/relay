@@ -6,9 +6,11 @@ package mailboxclient
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
@@ -73,5 +75,29 @@ func TestShareDeclaresEveryCall(t *testing.T) {
 	}
 	if want := []string{"member", "member", "", ""}; !slices.Equal(got, want) {
 		t.Fatalf("declarations %q, want %q", got, want)
+	}
+}
+
+// A webhook's recipient travels on create and on update, and comes back.
+func TestWebhookRecipient(t *testing.T) {
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = append(got, r.Method+" "+r.URL.Path+" "+strings.ReplaceAll(string(body), " ", ""))
+		_, _ = w.Write([]byte(`{"webhook":{"webhookId":"wh-1","recipient":{"keyId":"k2","publicKey":"AQI="}}}`))
+	}))
+	defer srv.Close()
+	c := Client{ProxyURL: srv.URL, HTTP: srv.Client()}
+	r := Recipient{KeyID: "k1", PublicKey: []byte{1, 2}}
+	if _, _, err := c.CreateWebhook(t.Context(), "hub.h.hooks", AuthBearer, 0, 0, r); err != nil {
+		t.Fatal(err)
+	}
+	w, err := c.UpdateWebhookRecipient(t.Context(), "wh-1", Recipient{KeyID: "k2", PublicKey: []byte{1, 2}})
+	if err != nil || w.Recipient.KeyID != "k2" || !slices.Equal(w.Recipient.PublicKey, []byte{1, 2}) {
+		t.Fatalf("%+v %v", w, err)
+	}
+	if len(got) != 2 || !strings.Contains(got[0], `"recipient":{"keyId":"k1","publicKey":"AQI="}`) ||
+		!strings.HasPrefix(got[1], "PUT /api/v1/webhooks/wh-1/recipient ") || !strings.Contains(got[1], `"keyId":"k2"`) {
+		t.Fatalf("requests %q", got)
 	}
 }

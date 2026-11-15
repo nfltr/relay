@@ -1122,6 +1122,68 @@ func (x *GetPushKeyResponse) GetVapidPublicKey() string {
 	return ""
 }
 
+// WebhookRecipient is the public key the relay seals each accepted body to
+// before storing it (HPKE base mode, RFC 9180: DHKEM(P-256), HKDF-SHA256,
+// AES-256-GCM; info "nfltr-hook-v1", owner, mailbox, webhook id and key id,
+// each followed by a NUL). The stored payload is one byte len(key_id),
+// key_id, the encapsulated key, the ciphertext; the plaintext is a 2-byte
+// big-endian length and the content type, a 4-byte one and the body, then
+// zero bytes up to the next 1024-byte multiple. The envelope's content_type
+// is "": it is inside the seal.
+type WebhookRecipient struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The creator's name for the key (1-64 bytes printable ASCII).
+	KeyId string `protobuf:"bytes,1,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
+	// An uncompressed P-256 point (65 bytes).
+	PublicKey     []byte `protobuf:"bytes,2,opt,name=public_key,json=publicKey,proto3" json:"public_key,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WebhookRecipient) Reset() {
+	*x = WebhookRecipient{}
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WebhookRecipient) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WebhookRecipient) ProtoMessage() {}
+
+func (x *WebhookRecipient) ProtoReflect() protoreflect.Message {
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WebhookRecipient.ProtoReflect.Descriptor instead.
+func (*WebhookRecipient) Descriptor() ([]byte, []int) {
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *WebhookRecipient) GetKeyId() string {
+	if x != nil {
+		return x.KeyId
+	}
+	return ""
+}
+
+func (x *WebhookRecipient) GetPublicKey() []byte {
+	if x != nil {
+		return x.PublicKey
+	}
+	return nil
+}
+
 // WebhookLimits are the creator's limits; 0 is the ceiling.
 type WebhookLimits struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1135,7 +1197,7 @@ type WebhookLimits struct {
 
 func (x *WebhookLimits) Reset() {
 	*x = WebhookLimits{}
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[16]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1147,7 +1209,7 @@ func (x *WebhookLimits) String() string {
 func (*WebhookLimits) ProtoMessage() {}
 
 func (x *WebhookLimits) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[16]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1160,7 +1222,7 @@ func (x *WebhookLimits) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WebhookLimits.ProtoReflect.Descriptor instead.
 func (*WebhookLimits) Descriptor() ([]byte, []int) {
-	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{16}
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *WebhookLimits) GetMaxEventsPerMinute() uint32 {
@@ -1194,7 +1256,7 @@ type WebhookCounters struct {
 
 func (x *WebhookCounters) Reset() {
 	*x = WebhookCounters{}
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[17]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1206,7 +1268,7 @@ func (x *WebhookCounters) String() string {
 func (*WebhookCounters) ProtoMessage() {}
 
 func (x *WebhookCounters) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[17]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1219,7 +1281,7 @@ func (x *WebhookCounters) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WebhookCounters.ProtoReflect.Descriptor instead.
 func (*WebhookCounters) Descriptor() ([]byte, []int) {
-	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{17}
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *WebhookCounters) GetDroppedRateLimited() uint64 {
@@ -1266,14 +1328,16 @@ type Webhook struct {
 	// Refusals so far.
 	Counters *WebhookCounters `protobuf:"bytes,6,opt,name=counters,proto3" json:"counters,omitempty"`
 	// The ingress path on this relay.
-	IngressPath   string `protobuf:"bytes,7,opt,name=ingress_path,json=ingressPath,proto3" json:"ingress_path,omitempty"`
+	IngressPath string `protobuf:"bytes,7,opt,name=ingress_path,json=ingressPath,proto3" json:"ingress_path,omitempty"`
+	// The key bodies are sealed to now.
+	Recipient     *WebhookRecipient `protobuf:"bytes,8,opt,name=recipient,proto3" json:"recipient,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Webhook) Reset() {
 	*x = Webhook{}
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[18]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1285,7 +1349,7 @@ func (x *Webhook) String() string {
 func (*Webhook) ProtoMessage() {}
 
 func (x *Webhook) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[18]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1298,7 +1362,7 @@ func (x *Webhook) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Webhook.ProtoReflect.Descriptor instead.
 func (*Webhook) Descriptor() ([]byte, []int) {
-	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{18}
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *Webhook) GetWebhookId() string {
@@ -1350,6 +1414,13 @@ func (x *Webhook) GetIngressPath() string {
 	return ""
 }
 
+func (x *Webhook) GetRecipient() *WebhookRecipient {
+	if x != nil {
+		return x.Recipient
+	}
+	return nil
+}
+
 // CreateWebhookRequest names the mailbox and auth.
 type CreateWebhookRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1358,14 +1429,16 @@ type CreateWebhookRequest struct {
 	// How POSTs authenticate.
 	Auth WebhookAuth `protobuf:"varint,2,opt,name=auth,proto3,enum=nfltr.mailbox.v1.WebhookAuth" json:"auth,omitempty"`
 	// Optional lower limits.
-	Limits        *WebhookLimits `protobuf:"bytes,3,opt,name=limits,proto3" json:"limits,omitempty"`
+	Limits *WebhookLimits `protobuf:"bytes,3,opt,name=limits,proto3" json:"limits,omitempty"`
+	// Required: the key accepted bodies are sealed to.
+	Recipient     *WebhookRecipient `protobuf:"bytes,4,opt,name=recipient,proto3" json:"recipient,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateWebhookRequest) Reset() {
 	*x = CreateWebhookRequest{}
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[19]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1377,7 +1450,7 @@ func (x *CreateWebhookRequest) String() string {
 func (*CreateWebhookRequest) ProtoMessage() {}
 
 func (x *CreateWebhookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[19]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1390,7 +1463,7 @@ func (x *CreateWebhookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateWebhookRequest.ProtoReflect.Descriptor instead.
 func (*CreateWebhookRequest) Descriptor() ([]byte, []int) {
-	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{19}
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *CreateWebhookRequest) GetMailbox() string {
@@ -1414,6 +1487,13 @@ func (x *CreateWebhookRequest) GetLimits() *WebhookLimits {
 	return nil
 }
 
+func (x *CreateWebhookRequest) GetRecipient() *WebhookRecipient {
+	if x != nil {
+		return x.Recipient
+	}
+	return nil
+}
+
 // CreateWebhookResponse carries the secret, shown once.
 type CreateWebhookResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1427,7 +1507,7 @@ type CreateWebhookResponse struct {
 
 func (x *CreateWebhookResponse) Reset() {
 	*x = CreateWebhookResponse{}
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[20]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1439,7 +1519,7 @@ func (x *CreateWebhookResponse) String() string {
 func (*CreateWebhookResponse) ProtoMessage() {}
 
 func (x *CreateWebhookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[20]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1452,7 +1532,7 @@ func (x *CreateWebhookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateWebhookResponse.ProtoReflect.Descriptor instead.
 func (*CreateWebhookResponse) Descriptor() ([]byte, []int) {
-	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{20}
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CreateWebhookResponse) GetWebhook() *Webhook {
@@ -1480,7 +1560,7 @@ type ListWebhooksRequest struct {
 
 func (x *ListWebhooksRequest) Reset() {
 	*x = ListWebhooksRequest{}
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[21]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1492,7 +1572,7 @@ func (x *ListWebhooksRequest) String() string {
 func (*ListWebhooksRequest) ProtoMessage() {}
 
 func (x *ListWebhooksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[21]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1505,7 +1585,7 @@ func (x *ListWebhooksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWebhooksRequest.ProtoReflect.Descriptor instead.
 func (*ListWebhooksRequest) Descriptor() ([]byte, []int) {
-	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{21}
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListWebhooksRequest) GetMailbox() string {
@@ -1526,7 +1606,7 @@ type ListWebhooksResponse struct {
 
 func (x *ListWebhooksResponse) Reset() {
 	*x = ListWebhooksResponse{}
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[22]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1538,7 +1618,7 @@ func (x *ListWebhooksResponse) String() string {
 func (*ListWebhooksResponse) ProtoMessage() {}
 
 func (x *ListWebhooksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[22]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1551,7 +1631,7 @@ func (x *ListWebhooksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWebhooksResponse.ProtoReflect.Descriptor instead.
 func (*ListWebhooksResponse) Descriptor() ([]byte, []int) {
-	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{22}
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListWebhooksResponse) GetWebhooks() []*Webhook {
@@ -1572,7 +1652,7 @@ type DeleteWebhookRequest struct {
 
 func (x *DeleteWebhookRequest) Reset() {
 	*x = DeleteWebhookRequest{}
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[23]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1584,7 +1664,7 @@ func (x *DeleteWebhookRequest) String() string {
 func (*DeleteWebhookRequest) ProtoMessage() {}
 
 func (x *DeleteWebhookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[23]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1597,7 +1677,7 @@ func (x *DeleteWebhookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteWebhookRequest.ProtoReflect.Descriptor instead.
 func (*DeleteWebhookRequest) Descriptor() ([]byte, []int) {
-	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{23}
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *DeleteWebhookRequest) GetWebhookId() string {
@@ -1605,6 +1685,107 @@ func (x *DeleteWebhookRequest) GetWebhookId() string {
 		return x.WebhookId
 	}
 	return ""
+}
+
+// UpdateWebhookRecipientRequest names the webhook and its new key.
+type UpdateWebhookRecipientRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The webhook id.
+	WebhookId string `protobuf:"bytes,1,opt,name=webhook_id,json=webhookId,proto3" json:"webhook_id,omitempty"`
+	// The key later bodies are sealed to.
+	Recipient     *WebhookRecipient `protobuf:"bytes,2,opt,name=recipient,proto3" json:"recipient,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateWebhookRecipientRequest) Reset() {
+	*x = UpdateWebhookRecipientRequest{}
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateWebhookRecipientRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateWebhookRecipientRequest) ProtoMessage() {}
+
+func (x *UpdateWebhookRecipientRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateWebhookRecipientRequest.ProtoReflect.Descriptor instead.
+func (*UpdateWebhookRecipientRequest) Descriptor() ([]byte, []int) {
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *UpdateWebhookRecipientRequest) GetWebhookId() string {
+	if x != nil {
+		return x.WebhookId
+	}
+	return ""
+}
+
+func (x *UpdateWebhookRecipientRequest) GetRecipient() *WebhookRecipient {
+	if x != nil {
+		return x.Recipient
+	}
+	return nil
+}
+
+// UpdateWebhookRecipientResponse is the webhook as updated.
+type UpdateWebhookRecipientResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The webhook.
+	Webhook       *Webhook `protobuf:"bytes,1,opt,name=webhook,proto3" json:"webhook,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UpdateWebhookRecipientResponse) Reset() {
+	*x = UpdateWebhookRecipientResponse{}
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UpdateWebhookRecipientResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UpdateWebhookRecipientResponse) ProtoMessage() {}
+
+func (x *UpdateWebhookRecipientResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UpdateWebhookRecipientResponse.ProtoReflect.Descriptor instead.
+func (*UpdateWebhookRecipientResponse) Descriptor() ([]byte, []int) {
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *UpdateWebhookRecipientResponse) GetWebhook() *Webhook {
+	if x != nil {
+		return x.Webhook
+	}
+	return nil
 }
 
 // DeleteWebhookResponse counts the discarded deliveries.
@@ -1618,7 +1799,7 @@ type DeleteWebhookResponse struct {
 
 func (x *DeleteWebhookResponse) Reset() {
 	*x = DeleteWebhookResponse{}
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[24]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1630,7 +1811,7 @@ func (x *DeleteWebhookResponse) String() string {
 func (*DeleteWebhookResponse) ProtoMessage() {}
 
 func (x *DeleteWebhookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[24]
+	mi := &file_nfltr_mailbox_v1_mailbox_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1643,7 +1824,7 @@ func (x *DeleteWebhookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteWebhookResponse.ProtoReflect.Descriptor instead.
 func (*DeleteWebhookResponse) Descriptor() ([]byte, []int) {
-	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{24}
+	return file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *DeleteWebhookResponse) GetDiscarded() uint32 {
@@ -1726,7 +1907,11 @@ const file_nfltr_mailbox_v1_mailbox_proto_rawDesc = "" +
 	"\x1eDeletePushSubscriptionResponse\"\x13\n" +
 	"\x11GetPushKeyRequest\">\n" +
 	"\x12GetPushKeyResponse\x12(\n" +
-	"\x10vapid_public_key\x18\x01 \x01(\tR\x0evapidPublicKey\"h\n" +
+	"\x10vapid_public_key\x18\x01 \x01(\tR\x0evapidPublicKey\"H\n" +
+	"\x10WebhookRecipient\x12\x15\n" +
+	"\x06key_id\x18\x01 \x01(\tR\x05keyId\x12\x1d\n" +
+	"\n" +
+	"public_key\x18\x02 \x01(\fR\tpublicKey\"h\n" +
 	"\rWebhookLimits\x121\n" +
 	"\x15max_events_per_minute\x18\x01 \x01(\rR\x12maxEventsPerMinute\x12$\n" +
 	"\x0emax_body_bytes\x18\x02 \x01(\rR\fmaxBodyBytes\"\xc3\x01\n" +
@@ -1736,7 +1921,7 @@ const file_nfltr_mailbox_v1_mailbox_proto_rawDesc = "" +
 	"\x12rejected_too_large\x18\x03 \x01(\x04R\x10rejectedTooLarge\x12\x1e\n" +
 	"\n" +
 	"duplicates\x18\x04 \x01(\x04R\n" +
-	"duplicates\"\xcb\x02\n" +
+	"duplicates\"\x8d\x03\n" +
 	"\aWebhook\x12\x1d\n" +
 	"\n" +
 	"webhook_id\x18\x01 \x01(\tR\twebhookId\x12\x18\n" +
@@ -1746,11 +1931,13 @@ const file_nfltr_mailbox_v1_mailbox_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12=\n" +
 	"\bcounters\x18\x06 \x01(\v2!.nfltr.mailbox.v1.WebhookCountersR\bcounters\x12!\n" +
-	"\fingress_path\x18\a \x01(\tR\vingressPath\"\x9c\x01\n" +
+	"\fingress_path\x18\a \x01(\tR\vingressPath\x12@\n" +
+	"\trecipient\x18\b \x01(\v2\".nfltr.mailbox.v1.WebhookRecipientR\trecipient\"\xde\x01\n" +
 	"\x14CreateWebhookRequest\x12\x18\n" +
 	"\amailbox\x18\x01 \x01(\tR\amailbox\x121\n" +
 	"\x04auth\x18\x02 \x01(\x0e2\x1d.nfltr.mailbox.v1.WebhookAuthR\x04auth\x127\n" +
-	"\x06limits\x18\x03 \x01(\v2\x1f.nfltr.mailbox.v1.WebhookLimitsR\x06limits\"d\n" +
+	"\x06limits\x18\x03 \x01(\v2\x1f.nfltr.mailbox.v1.WebhookLimitsR\x06limits\x12@\n" +
+	"\trecipient\x18\x04 \x01(\v2\".nfltr.mailbox.v1.WebhookRecipientR\trecipient\"d\n" +
 	"\x15CreateWebhookResponse\x123\n" +
 	"\awebhook\x18\x01 \x01(\v2\x19.nfltr.mailbox.v1.WebhookR\awebhook\x12\x16\n" +
 	"\x06secret\x18\x02 \x01(\tR\x06secret\"/\n" +
@@ -1760,7 +1947,13 @@ const file_nfltr_mailbox_v1_mailbox_proto_rawDesc = "" +
 	"\bwebhooks\x18\x01 \x03(\v2\x19.nfltr.mailbox.v1.WebhookR\bwebhooks\"5\n" +
 	"\x14DeleteWebhookRequest\x12\x1d\n" +
 	"\n" +
-	"webhook_id\x18\x01 \x01(\tR\twebhookId\"5\n" +
+	"webhook_id\x18\x01 \x01(\tR\twebhookId\"\x80\x01\n" +
+	"\x1dUpdateWebhookRecipientRequest\x12\x1d\n" +
+	"\n" +
+	"webhook_id\x18\x01 \x01(\tR\twebhookId\x12@\n" +
+	"\trecipient\x18\x02 \x01(\v2\".nfltr.mailbox.v1.WebhookRecipientR\trecipient\"U\n" +
+	"\x1eUpdateWebhookRecipientResponse\x123\n" +
+	"\awebhook\x18\x01 \x01(\v2\x19.nfltr.mailbox.v1.WebhookR\awebhook\"5\n" +
 	"\x15DeleteWebhookResponse\x12\x1c\n" +
 	"\tdiscarded\x18\x01 \x01(\rR\tdiscarded*\x94\x01\n" +
 	"\n" +
@@ -1782,11 +1975,12 @@ const file_nfltr_mailbox_v1_mailbox_proto_rawDesc = "" +
 	"\x16CreatePushSubscription\x12/.nfltr.mailbox.v1.CreatePushSubscriptionRequest\x1a0.nfltr.mailbox.v1.CreatePushSubscriptionResponse\"9\x82\xd3\xe4\x93\x023:\x01*\"./api/v1/mailboxes/{mailbox}/push-subscriptions\x12\xc0\x01\n" +
 	"\x16DeletePushSubscription\x12/.nfltr.mailbox.v1.DeletePushSubscriptionRequest\x1a0.nfltr.mailbox.v1.DeletePushSubscriptionResponse\"C\x82\xd3\xe4\x93\x02=*;/api/v1/mailboxes/{mailbox}/push-subscriptions/{subscriber}\x12q\n" +
 	"\n" +
-	"GetPushKey\x12#.nfltr.mailbox.v1.GetPushKeyRequest\x1a$.nfltr.mailbox.v1.GetPushKeyResponse\"\x18\x82\xd3\xe4\x93\x02\x12\x12\x10/api/v1/push-key2\x92\x03\n" +
+	"GetPushKey\x12#.nfltr.mailbox.v1.GetPushKeyRequest\x1a$.nfltr.mailbox.v1.GetPushKeyResponse\"\x18\x82\xd3\xe4\x93\x02\x12\x12\x10/api/v1/push-key2\xc4\x04\n" +
 	"\x0eWebhookService\x12}\n" +
 	"\rCreateWebhook\x12&.nfltr.mailbox.v1.CreateWebhookRequest\x1a'.nfltr.mailbox.v1.CreateWebhookResponse\"\x1b\x82\xd3\xe4\x93\x02\x15:\x01*\"\x10/api/v1/webhooks\x12w\n" +
 	"\fListWebhooks\x12%.nfltr.mailbox.v1.ListWebhooksRequest\x1a&.nfltr.mailbox.v1.ListWebhooksResponse\"\x18\x82\xd3\xe4\x93\x02\x12\x12\x10/api/v1/webhooks\x12\x87\x01\n" +
-	"\rDeleteWebhook\x12&.nfltr.mailbox.v1.DeleteWebhookRequest\x1a'.nfltr.mailbox.v1.DeleteWebhookResponse\"%\x82\xd3\xe4\x93\x02\x1f*\x1d/api/v1/webhooks/{webhook_id}B\xbf\x01\n" +
+	"\rDeleteWebhook\x12&.nfltr.mailbox.v1.DeleteWebhookRequest\x1a'.nfltr.mailbox.v1.DeleteWebhookResponse\"%\x82\xd3\xe4\x93\x02\x1f*\x1d/api/v1/webhooks/{webhook_id}\x12\xaf\x01\n" +
+	"\x16UpdateWebhookRecipient\x12/.nfltr.mailbox.v1.UpdateWebhookRecipientRequest\x1a0.nfltr.mailbox.v1.UpdateWebhookRecipientResponse\"2\x82\xd3\xe4\x93\x02,:\x01*\x1a'/api/v1/webhooks/{webhook_id}/recipientB\xbf\x01\n" +
 	"\x14com.nfltr.mailbox.v1B\fMailboxProtoP\x01Z7github.com/nfltr/relay/proto/nfltr/mailbox/v1;mailboxv1\xa2\x02\x03NMX\xaa\x02\x10Nfltr.Mailbox.V1\xca\x02\x10Nfltr\\Mailbox\\V1\xe2\x02\x1cNfltr\\Mailbox\\V1\\GPBMetadata\xea\x02\x12Nfltr::Mailbox::V1b\x06proto3"
 
 var (
@@ -1802,7 +1996,7 @@ func file_nfltr_mailbox_v1_mailbox_proto_rawDescGZIP() []byte {
 }
 
 var file_nfltr_mailbox_v1_mailbox_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_nfltr_mailbox_v1_mailbox_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_nfltr_mailbox_v1_mailbox_proto_msgTypes = make([]protoimpl.MessageInfo, 28)
 var file_nfltr_mailbox_v1_mailbox_proto_goTypes = []any{
 	(SenderKind)(0),                        // 0: nfltr.mailbox.v1.SenderKind
 	(WebhookAuth)(0),                       // 1: nfltr.mailbox.v1.WebhookAuth
@@ -1822,59 +2016,68 @@ var file_nfltr_mailbox_v1_mailbox_proto_goTypes = []any{
 	(*DeletePushSubscriptionResponse)(nil), // 15: nfltr.mailbox.v1.DeletePushSubscriptionResponse
 	(*GetPushKeyRequest)(nil),              // 16: nfltr.mailbox.v1.GetPushKeyRequest
 	(*GetPushKeyResponse)(nil),             // 17: nfltr.mailbox.v1.GetPushKeyResponse
-	(*WebhookLimits)(nil),                  // 18: nfltr.mailbox.v1.WebhookLimits
-	(*WebhookCounters)(nil),                // 19: nfltr.mailbox.v1.WebhookCounters
-	(*Webhook)(nil),                        // 20: nfltr.mailbox.v1.Webhook
-	(*CreateWebhookRequest)(nil),           // 21: nfltr.mailbox.v1.CreateWebhookRequest
-	(*CreateWebhookResponse)(nil),          // 22: nfltr.mailbox.v1.CreateWebhookResponse
-	(*ListWebhooksRequest)(nil),            // 23: nfltr.mailbox.v1.ListWebhooksRequest
-	(*ListWebhooksResponse)(nil),           // 24: nfltr.mailbox.v1.ListWebhooksResponse
-	(*DeleteWebhookRequest)(nil),           // 25: nfltr.mailbox.v1.DeleteWebhookRequest
-	(*DeleteWebhookResponse)(nil),          // 26: nfltr.mailbox.v1.DeleteWebhookResponse
-	(*timestamppb.Timestamp)(nil),          // 27: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),            // 28: google.protobuf.Duration
+	(*WebhookRecipient)(nil),               // 18: nfltr.mailbox.v1.WebhookRecipient
+	(*WebhookLimits)(nil),                  // 19: nfltr.mailbox.v1.WebhookLimits
+	(*WebhookCounters)(nil),                // 20: nfltr.mailbox.v1.WebhookCounters
+	(*Webhook)(nil),                        // 21: nfltr.mailbox.v1.Webhook
+	(*CreateWebhookRequest)(nil),           // 22: nfltr.mailbox.v1.CreateWebhookRequest
+	(*CreateWebhookResponse)(nil),          // 23: nfltr.mailbox.v1.CreateWebhookResponse
+	(*ListWebhooksRequest)(nil),            // 24: nfltr.mailbox.v1.ListWebhooksRequest
+	(*ListWebhooksResponse)(nil),           // 25: nfltr.mailbox.v1.ListWebhooksResponse
+	(*DeleteWebhookRequest)(nil),           // 26: nfltr.mailbox.v1.DeleteWebhookRequest
+	(*UpdateWebhookRecipientRequest)(nil),  // 27: nfltr.mailbox.v1.UpdateWebhookRecipientRequest
+	(*UpdateWebhookRecipientResponse)(nil), // 28: nfltr.mailbox.v1.UpdateWebhookRecipientResponse
+	(*DeleteWebhookResponse)(nil),          // 29: nfltr.mailbox.v1.DeleteWebhookResponse
+	(*timestamppb.Timestamp)(nil),          // 30: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),            // 31: google.protobuf.Duration
 }
 var file_nfltr_mailbox_v1_mailbox_proto_depIdxs = []int32{
 	0,  // 0: nfltr.mailbox.v1.Envelope.sender_kind:type_name -> nfltr.mailbox.v1.SenderKind
-	27, // 1: nfltr.mailbox.v1.Envelope.appended_at:type_name -> google.protobuf.Timestamp
-	27, // 2: nfltr.mailbox.v1.Envelope.expires_at:type_name -> google.protobuf.Timestamp
-	28, // 3: nfltr.mailbox.v1.AppendMessageRequest.ttl:type_name -> google.protobuf.Duration
-	28, // 4: nfltr.mailbox.v1.PullMessagesRequest.wait:type_name -> google.protobuf.Duration
+	30, // 1: nfltr.mailbox.v1.Envelope.appended_at:type_name -> google.protobuf.Timestamp
+	30, // 2: nfltr.mailbox.v1.Envelope.expires_at:type_name -> google.protobuf.Timestamp
+	31, // 3: nfltr.mailbox.v1.AppendMessageRequest.ttl:type_name -> google.protobuf.Duration
+	31, // 4: nfltr.mailbox.v1.PullMessagesRequest.wait:type_name -> google.protobuf.Duration
 	2,  // 5: nfltr.mailbox.v1.PullMessagesResponse.envelopes:type_name -> nfltr.mailbox.v1.Envelope
 	10, // 6: nfltr.mailbox.v1.ListMailboxesResponse.mailboxes:type_name -> nfltr.mailbox.v1.MailboxInfo
 	1,  // 7: nfltr.mailbox.v1.Webhook.auth:type_name -> nfltr.mailbox.v1.WebhookAuth
-	18, // 8: nfltr.mailbox.v1.Webhook.limits:type_name -> nfltr.mailbox.v1.WebhookLimits
-	27, // 9: nfltr.mailbox.v1.Webhook.created_at:type_name -> google.protobuf.Timestamp
-	19, // 10: nfltr.mailbox.v1.Webhook.counters:type_name -> nfltr.mailbox.v1.WebhookCounters
-	1,  // 11: nfltr.mailbox.v1.CreateWebhookRequest.auth:type_name -> nfltr.mailbox.v1.WebhookAuth
-	18, // 12: nfltr.mailbox.v1.CreateWebhookRequest.limits:type_name -> nfltr.mailbox.v1.WebhookLimits
-	20, // 13: nfltr.mailbox.v1.CreateWebhookResponse.webhook:type_name -> nfltr.mailbox.v1.Webhook
-	20, // 14: nfltr.mailbox.v1.ListWebhooksResponse.webhooks:type_name -> nfltr.mailbox.v1.Webhook
-	3,  // 15: nfltr.mailbox.v1.MailboxService.AppendMessage:input_type -> nfltr.mailbox.v1.AppendMessageRequest
-	5,  // 16: nfltr.mailbox.v1.MailboxService.PullMessages:input_type -> nfltr.mailbox.v1.PullMessagesRequest
-	7,  // 17: nfltr.mailbox.v1.MailboxService.AckMessages:input_type -> nfltr.mailbox.v1.AckMessagesRequest
-	9,  // 18: nfltr.mailbox.v1.MailboxService.ListMailboxes:input_type -> nfltr.mailbox.v1.ListMailboxesRequest
-	12, // 19: nfltr.mailbox.v1.MailboxService.CreatePushSubscription:input_type -> nfltr.mailbox.v1.CreatePushSubscriptionRequest
-	14, // 20: nfltr.mailbox.v1.MailboxService.DeletePushSubscription:input_type -> nfltr.mailbox.v1.DeletePushSubscriptionRequest
-	16, // 21: nfltr.mailbox.v1.MailboxService.GetPushKey:input_type -> nfltr.mailbox.v1.GetPushKeyRequest
-	21, // 22: nfltr.mailbox.v1.WebhookService.CreateWebhook:input_type -> nfltr.mailbox.v1.CreateWebhookRequest
-	23, // 23: nfltr.mailbox.v1.WebhookService.ListWebhooks:input_type -> nfltr.mailbox.v1.ListWebhooksRequest
-	25, // 24: nfltr.mailbox.v1.WebhookService.DeleteWebhook:input_type -> nfltr.mailbox.v1.DeleteWebhookRequest
-	4,  // 25: nfltr.mailbox.v1.MailboxService.AppendMessage:output_type -> nfltr.mailbox.v1.AppendMessageResponse
-	6,  // 26: nfltr.mailbox.v1.MailboxService.PullMessages:output_type -> nfltr.mailbox.v1.PullMessagesResponse
-	8,  // 27: nfltr.mailbox.v1.MailboxService.AckMessages:output_type -> nfltr.mailbox.v1.AckMessagesResponse
-	11, // 28: nfltr.mailbox.v1.MailboxService.ListMailboxes:output_type -> nfltr.mailbox.v1.ListMailboxesResponse
-	13, // 29: nfltr.mailbox.v1.MailboxService.CreatePushSubscription:output_type -> nfltr.mailbox.v1.CreatePushSubscriptionResponse
-	15, // 30: nfltr.mailbox.v1.MailboxService.DeletePushSubscription:output_type -> nfltr.mailbox.v1.DeletePushSubscriptionResponse
-	17, // 31: nfltr.mailbox.v1.MailboxService.GetPushKey:output_type -> nfltr.mailbox.v1.GetPushKeyResponse
-	22, // 32: nfltr.mailbox.v1.WebhookService.CreateWebhook:output_type -> nfltr.mailbox.v1.CreateWebhookResponse
-	24, // 33: nfltr.mailbox.v1.WebhookService.ListWebhooks:output_type -> nfltr.mailbox.v1.ListWebhooksResponse
-	26, // 34: nfltr.mailbox.v1.WebhookService.DeleteWebhook:output_type -> nfltr.mailbox.v1.DeleteWebhookResponse
-	25, // [25:35] is the sub-list for method output_type
-	15, // [15:25] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	19, // 8: nfltr.mailbox.v1.Webhook.limits:type_name -> nfltr.mailbox.v1.WebhookLimits
+	30, // 9: nfltr.mailbox.v1.Webhook.created_at:type_name -> google.protobuf.Timestamp
+	20, // 10: nfltr.mailbox.v1.Webhook.counters:type_name -> nfltr.mailbox.v1.WebhookCounters
+	18, // 11: nfltr.mailbox.v1.Webhook.recipient:type_name -> nfltr.mailbox.v1.WebhookRecipient
+	1,  // 12: nfltr.mailbox.v1.CreateWebhookRequest.auth:type_name -> nfltr.mailbox.v1.WebhookAuth
+	19, // 13: nfltr.mailbox.v1.CreateWebhookRequest.limits:type_name -> nfltr.mailbox.v1.WebhookLimits
+	18, // 14: nfltr.mailbox.v1.CreateWebhookRequest.recipient:type_name -> nfltr.mailbox.v1.WebhookRecipient
+	21, // 15: nfltr.mailbox.v1.CreateWebhookResponse.webhook:type_name -> nfltr.mailbox.v1.Webhook
+	21, // 16: nfltr.mailbox.v1.ListWebhooksResponse.webhooks:type_name -> nfltr.mailbox.v1.Webhook
+	18, // 17: nfltr.mailbox.v1.UpdateWebhookRecipientRequest.recipient:type_name -> nfltr.mailbox.v1.WebhookRecipient
+	21, // 18: nfltr.mailbox.v1.UpdateWebhookRecipientResponse.webhook:type_name -> nfltr.mailbox.v1.Webhook
+	3,  // 19: nfltr.mailbox.v1.MailboxService.AppendMessage:input_type -> nfltr.mailbox.v1.AppendMessageRequest
+	5,  // 20: nfltr.mailbox.v1.MailboxService.PullMessages:input_type -> nfltr.mailbox.v1.PullMessagesRequest
+	7,  // 21: nfltr.mailbox.v1.MailboxService.AckMessages:input_type -> nfltr.mailbox.v1.AckMessagesRequest
+	9,  // 22: nfltr.mailbox.v1.MailboxService.ListMailboxes:input_type -> nfltr.mailbox.v1.ListMailboxesRequest
+	12, // 23: nfltr.mailbox.v1.MailboxService.CreatePushSubscription:input_type -> nfltr.mailbox.v1.CreatePushSubscriptionRequest
+	14, // 24: nfltr.mailbox.v1.MailboxService.DeletePushSubscription:input_type -> nfltr.mailbox.v1.DeletePushSubscriptionRequest
+	16, // 25: nfltr.mailbox.v1.MailboxService.GetPushKey:input_type -> nfltr.mailbox.v1.GetPushKeyRequest
+	22, // 26: nfltr.mailbox.v1.WebhookService.CreateWebhook:input_type -> nfltr.mailbox.v1.CreateWebhookRequest
+	24, // 27: nfltr.mailbox.v1.WebhookService.ListWebhooks:input_type -> nfltr.mailbox.v1.ListWebhooksRequest
+	26, // 28: nfltr.mailbox.v1.WebhookService.DeleteWebhook:input_type -> nfltr.mailbox.v1.DeleteWebhookRequest
+	27, // 29: nfltr.mailbox.v1.WebhookService.UpdateWebhookRecipient:input_type -> nfltr.mailbox.v1.UpdateWebhookRecipientRequest
+	4,  // 30: nfltr.mailbox.v1.MailboxService.AppendMessage:output_type -> nfltr.mailbox.v1.AppendMessageResponse
+	6,  // 31: nfltr.mailbox.v1.MailboxService.PullMessages:output_type -> nfltr.mailbox.v1.PullMessagesResponse
+	8,  // 32: nfltr.mailbox.v1.MailboxService.AckMessages:output_type -> nfltr.mailbox.v1.AckMessagesResponse
+	11, // 33: nfltr.mailbox.v1.MailboxService.ListMailboxes:output_type -> nfltr.mailbox.v1.ListMailboxesResponse
+	13, // 34: nfltr.mailbox.v1.MailboxService.CreatePushSubscription:output_type -> nfltr.mailbox.v1.CreatePushSubscriptionResponse
+	15, // 35: nfltr.mailbox.v1.MailboxService.DeletePushSubscription:output_type -> nfltr.mailbox.v1.DeletePushSubscriptionResponse
+	17, // 36: nfltr.mailbox.v1.MailboxService.GetPushKey:output_type -> nfltr.mailbox.v1.GetPushKeyResponse
+	23, // 37: nfltr.mailbox.v1.WebhookService.CreateWebhook:output_type -> nfltr.mailbox.v1.CreateWebhookResponse
+	25, // 38: nfltr.mailbox.v1.WebhookService.ListWebhooks:output_type -> nfltr.mailbox.v1.ListWebhooksResponse
+	29, // 39: nfltr.mailbox.v1.WebhookService.DeleteWebhook:output_type -> nfltr.mailbox.v1.DeleteWebhookResponse
+	28, // 40: nfltr.mailbox.v1.WebhookService.UpdateWebhookRecipient:output_type -> nfltr.mailbox.v1.UpdateWebhookRecipientResponse
+	30, // [30:41] is the sub-list for method output_type
+	19, // [19:30] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_nfltr_mailbox_v1_mailbox_proto_init() }
@@ -1888,7 +2091,7 @@ func file_nfltr_mailbox_v1_mailbox_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_nfltr_mailbox_v1_mailbox_proto_rawDesc), len(file_nfltr_mailbox_v1_mailbox_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   25,
+			NumMessages:   28,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

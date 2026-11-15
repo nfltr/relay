@@ -395,9 +395,10 @@ var MailboxService_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	WebhookService_CreateWebhook_FullMethodName = "/nfltr.mailbox.v1.WebhookService/CreateWebhook"
-	WebhookService_ListWebhooks_FullMethodName  = "/nfltr.mailbox.v1.WebhookService/ListWebhooks"
-	WebhookService_DeleteWebhook_FullMethodName = "/nfltr.mailbox.v1.WebhookService/DeleteWebhook"
+	WebhookService_CreateWebhook_FullMethodName          = "/nfltr.mailbox.v1.WebhookService/CreateWebhook"
+	WebhookService_ListWebhooks_FullMethodName           = "/nfltr.mailbox.v1.WebhookService/ListWebhooks"
+	WebhookService_DeleteWebhook_FullMethodName          = "/nfltr.mailbox.v1.WebhookService/DeleteWebhook"
+	WebhookService_UpdateWebhookRecipient_FullMethodName = "/nfltr.mailbox.v1.WebhookService/UpdateWebhookRecipient"
 )
 
 // WebhookServiceClient is the client API for WebhookService service.
@@ -406,7 +407,8 @@ const (
 //
 // WebhookService: inbound endpoints a caller outside the relay (CI, an
 // alerting webhook, GitHub) POSTs to; the relay authenticates each POST with
-// the webhook's secret and appends its body to the webhook's mailbox
+// the webhook's secret, seals its body to the webhook's recipient and
+// appends it to the webhook's mailbox
 // (sender_kind WEBHOOK, sender = webhook id, idempotency key = the
 // X-GitHub-Delivery or Idempotency-Key header). Ingress is plain HTTP:
 // POST /api/v1/webhooks/{webhook_id}/deliveries.
@@ -418,6 +420,9 @@ type WebhookServiceClient interface {
 	// DeleteWebhook deletes a webhook and its unacknowledged deliveries; its
 	// POSTs are refused at once.
 	DeleteWebhook(ctx context.Context, in *DeleteWebhookRequest, opts ...grpc.CallOption) (*DeleteWebhookResponse, error)
+	// UpdateWebhookRecipient replaces the key later bodies are sealed to (the
+	// creator's key rotation); rows already stored keep theirs.
+	UpdateWebhookRecipient(ctx context.Context, in *UpdateWebhookRecipientRequest, opts ...grpc.CallOption) (*UpdateWebhookRecipientResponse, error)
 }
 
 type webhookServiceClient struct {
@@ -458,13 +463,24 @@ func (c *webhookServiceClient) DeleteWebhook(ctx context.Context, in *DeleteWebh
 	return out, nil
 }
 
+func (c *webhookServiceClient) UpdateWebhookRecipient(ctx context.Context, in *UpdateWebhookRecipientRequest, opts ...grpc.CallOption) (*UpdateWebhookRecipientResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateWebhookRecipientResponse)
+	err := c.cc.Invoke(ctx, WebhookService_UpdateWebhookRecipient_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WebhookServiceServer is the server API for WebhookService service.
 // All implementations should embed UnimplementedWebhookServiceServer
 // for forward compatibility.
 //
 // WebhookService: inbound endpoints a caller outside the relay (CI, an
 // alerting webhook, GitHub) POSTs to; the relay authenticates each POST with
-// the webhook's secret and appends its body to the webhook's mailbox
+// the webhook's secret, seals its body to the webhook's recipient and
+// appends it to the webhook's mailbox
 // (sender_kind WEBHOOK, sender = webhook id, idempotency key = the
 // X-GitHub-Delivery or Idempotency-Key header). Ingress is plain HTTP:
 // POST /api/v1/webhooks/{webhook_id}/deliveries.
@@ -476,6 +492,9 @@ type WebhookServiceServer interface {
 	// DeleteWebhook deletes a webhook and its unacknowledged deliveries; its
 	// POSTs are refused at once.
 	DeleteWebhook(context.Context, *DeleteWebhookRequest) (*DeleteWebhookResponse, error)
+	// UpdateWebhookRecipient replaces the key later bodies are sealed to (the
+	// creator's key rotation); rows already stored keep theirs.
+	UpdateWebhookRecipient(context.Context, *UpdateWebhookRecipientRequest) (*UpdateWebhookRecipientResponse, error)
 }
 
 // UnimplementedWebhookServiceServer should be embedded to have
@@ -493,6 +512,9 @@ func (UnimplementedWebhookServiceServer) ListWebhooks(context.Context, *ListWebh
 }
 func (UnimplementedWebhookServiceServer) DeleteWebhook(context.Context, *DeleteWebhookRequest) (*DeleteWebhookResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method DeleteWebhook not implemented")
+}
+func (UnimplementedWebhookServiceServer) UpdateWebhookRecipient(context.Context, *UpdateWebhookRecipientRequest) (*UpdateWebhookRecipientResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method UpdateWebhookRecipient not implemented")
 }
 func (UnimplementedWebhookServiceServer) testEmbeddedByValue() {}
 
@@ -568,6 +590,24 @@ func _WebhookService_DeleteWebhook_Handler(srv interface{}, ctx context.Context,
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WebhookService_UpdateWebhookRecipient_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateWebhookRecipientRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WebhookServiceServer).UpdateWebhookRecipient(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WebhookService_UpdateWebhookRecipient_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WebhookServiceServer).UpdateWebhookRecipient(ctx, req.(*UpdateWebhookRecipientRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WebhookService_ServiceDesc is the grpc.ServiceDesc for WebhookService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -586,6 +626,10 @@ var WebhookService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteWebhook",
 			Handler:    _WebhookService_DeleteWebhook_Handler,
+		},
+		{
+			MethodName: "UpdateWebhookRecipient",
+			Handler:    _WebhookService_UpdateWebhookRecipient_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
