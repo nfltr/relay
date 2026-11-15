@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/orgissuer"
 	"github.com/nfltr/relay/org/orgpki"
-	"github.com/nfltr/relay/client/orgid"
 )
 
 // An outage (2026-11-14): the relay refused the issuer's CRL publish while the issuer's own CRL

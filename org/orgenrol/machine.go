@@ -15,9 +15,9 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/orgmachine"
 	"github.com/nfltr/relay/org/orgpki"
-	"github.com/nfltr/relay/client/orgid"
 )
 
 // Pins are a machine's first-use values: the organisation root's and its

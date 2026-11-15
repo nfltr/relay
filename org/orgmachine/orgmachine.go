@@ -30,9 +30,9 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/internal/orgfiles"
 	"github.com/nfltr/relay/org/orgpki"
-	"github.com/nfltr/relay/client/orgid"
 )
 
 // The files of a machine's directory: orgid's (orgid.Load reads the same

@@ -26,9 +26,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/internal/orgfiles"
 	"github.com/nfltr/relay/org/orgpki"
-	"github.com/nfltr/relay/client/orgid"
 )
 
 // The move's files: the receive key (in nfltr's config directory, beside

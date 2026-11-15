@@ -13,9 +13,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/internal/orgfiles"
 	"github.com/nfltr/relay/org/orgpki"
-	"github.com/nfltr/relay/client/orgid"
 )
 
 // What members read, as against what the issuer holds: the relay may

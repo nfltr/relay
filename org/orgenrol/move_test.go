@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/orgissuer"
 	"github.com/nfltr/relay/org/orgpki"
-	"github.com/nfltr/relay/client/orgid"
 )
 
 // Moving the issuer (spec/orgmove/OrgMove.tla): the fleet's side.

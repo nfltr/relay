@@ -20,8 +20,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nfltr/relay/org/orgpki"
 	"github.com/nfltr/relay/client/orgid"
+	"github.com/nfltr/relay/org/orgpki"
 )
 
 // Moving the organisation (spec/orgmove/OrgMove.tla and its README's

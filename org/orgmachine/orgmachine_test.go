@@ -19,10 +19,10 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/orgmachine"
 	"github.com/nfltr/relay/org/orgmachine/orgmachinetest"
 	"github.com/nfltr/relay/org/orgpki"
-	"github.com/nfltr/relay/client/orgid"
 )
 
 // Each test names the property of relay spec/proverif/e2ee_tcp_org.pv or
