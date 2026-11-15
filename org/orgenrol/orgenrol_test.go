@@ -13,14 +13,17 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -305,8 +308,9 @@ func TestJoinOpensTheSealedA2AKey(t *testing.T) {
 
 // The relay fails the first post of the enrolment's answer: the issuer
 // reads the request again and posts the answer it decided (its spool),
-// so the single-use token's enrolment still completes (mutant no-spool:
-// deciding again refuses the spent token).
+// so the enrolment completes with the A2A key it sealed (mutant no-spool:
+// deciding again answers the token again, with no A2A key: one is sealed
+// for a machine id once).
 func TestEnrolAnsweredOnceAcrossARetry(t *testing.T) {
 	var once sync.Once
 	f := newFleetWith(t, func(f *fleet) {
@@ -574,17 +578,51 @@ func TestNewMachineJoinsAfterRotation(t *testing.T) {
 	if j.Cert.Subject.CommonName != "web-late" {
 		t.Fatalf("enrolled as %q", j.Cert.Subject.CommonName)
 	}
-	// The first root's pin no longer joins: the machine takes only the
-	// root it was given.
-	if _, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "old"), f.org.pins, f.org.token(t, "web-old", f.clk.Now()), time.Second, f.clk.Now); err == nil {
-		t.Fatal("joined pinned on the rotated-out root")
+	// Pinned on the first root, a join takes the new one too: the pinned
+	// recovery key certifies it, as a running machine takes a rotation
+	// (Join.tla Trusts, mutant pin-root-only).
+	j, err = Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "old"), f.org.pins, f.org.token(t, "web-old", f.clk.Now()), 5*time.Second, f.clk.Now)
+	check(t, err)
+	if j.Cert.Subject.CommonName != "web-old" {
+		t.Fatalf("enrolled as %q", j.Cert.Subject.CommonName)
 	}
 }
 
-// A token's second redemption, by another machine, is refused with its
-// cause named: the token was redeemed already (the relay's idempotency
-// key on the request), not only that the answer's certificate is for
-// another key.
+// A join pinned on the first root refuses a root another recovery key
+// certifies, also one the relay pairs with the pinned recovery
+// certificate (Join.tla JoinRootsAreOwners, mutant any-root).
+func TestJoinRefusesARootOfAnotherRecoveryKey(t *testing.T) {
+	f := newFleet(t)
+	_, otherRec, err := ed25519.GenerateKey(rand.Reader)
+	check(t, err)
+	otherRecCert, err := orgpki.NewRecovery(otherRec, f.org.id, f.clk.Now())
+	check(t, err)
+	nk, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	check(t, err)
+	evil, err := orgpki.CrossSign(otherRecCert, otherRec, nk.Public(), f.org.id, f.clk.Now().Add(time.Second))
+	check(t, err)
+	var rm orgpki.RootMessage
+	f.relay.mu.Lock()
+	roots := f.relay.boxes[orgpki.RootMailbox(f.org.id)]
+	check(t, json.Unmarshal(roots[len(roots)-1].Payload, &rm))
+	f.relay.mu.Unlock()
+	for name, rec := range map[string][]byte{"its own recovery": otherRecCert.Raw, "the pinned recovery": rm.Recovery} {
+		// The relay replaces the root message (the service publishes it
+		// again only when its root changes, or a day on).
+		msg, err := json.Marshal(orgpki.RootMessage{Root: evil.Raw, Recovery: rec})
+		check(t, err)
+		_, err = f.relay.Append(f.ctx, orgpki.RootMailbox(f.org.id), msg, mailboxclient.AppendOptions{ReplaceKey: "current"})
+		check(t, err)
+		_, err = Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "evil"), f.org.pins, f.org.token(t, "web-evil-"+strconv.Itoa(len(name)), f.clk.Now()), time.Second, f.clk.Now)
+		if err == nil || !strings.Contains(err.Error(), "pinned") {
+			t.Fatalf("a root of another recovery key with %s: %v, want refused", name, err)
+		}
+	}
+}
+
+// A token's second redemption, by another machine (another key), is
+// refused with its cause named: the token was redeemed (Join.tla
+// RefusedOnlyForCause: another key, a cause).
 func TestReplayedTokenNamesTheCause(t *testing.T) {
 	f := newFleet(t)
 	tok := f.org.token(t, "web-2", f.clk.Now())
@@ -592,34 +630,63 @@ func TestReplayedTokenNamesTheCause(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "b"), f.org.pins, tok, 5*time.Second, f.clk.Now)
-	if err == nil || !strings.Contains(err.Error(), "the token was redeemed already") {
+	if err == nil || !strings.Contains(err.Error(), "the token was redeemed") {
 		t.Fatalf("replayed token: %v", err)
 	}
 }
 
-// noDuplicate is a relay machine other than the first redeemer's: the
-// mailbox's idempotency is per machine, so the replay's append is not
-// reported as a duplicate (seen on a relay with one key per machine).
-type noDuplicate struct{ Mailbox }
-
-func (m noDuplicate) Append(ctx context.Context, mailbox string, payload []byte, o mailboxclient.AppendOptions) (mailboxclient.Appended, error) {
-	a, err := m.Mailbox.Append(ctx, mailbox, payload, o)
-	a.Duplicate = false
-	return a, err
-}
-
-// A token replayed from another relay machine names the cause too: the
-// answer under the token's id is for another key, so the token was
-// redeemed by another request.
-func TestReplayedTokenFromAnotherMachineNamesTheCause(t *testing.T) {
+// A join whose answer comes after it gave up (the issuer answered late:
+// its lock held), run again with the token, joins with the key it kept,
+// taking the first answer, the sealed A2A key with it (Join.tla, mutant
+// new-key-per-join); one whose answer the relay lost, run again, is
+// answered again for that key (mutant burn-name).
+func TestJoinRunAgainAfterALateOrLostAnswer(t *testing.T) {
 	f := newFleet(t)
-	tok := f.org.token(t, "web-3", f.clk.Now())
-	if _, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "a"), f.org.pins, tok, 5*time.Second, f.clk.Now); err != nil {
-		t.Fatal(err)
-	}
-	_, err := Join(f.ctx, noDuplicate{f.relay}, filepath.Join(t.TempDir(), "b"), f.org.pins, tok, 5*time.Second, f.clk.Now)
-	if err == nil || !strings.Contains(err.Error(), "the token was redeemed already") {
-		t.Fatalf("replayed token from another machine: %v", err)
+	for _, lost := range []bool{false, true} {
+		name := map[bool]string{false: "web-late", true: "web-lost"}[lost]
+		tok := f.org.token(t, name, f.clk.Now())
+		dir := filepath.Join(t.TempDir(), name)
+		var dropped atomic.Bool
+		answers := orgpki.AnswersMailbox(f.org.id)
+		f.relay.mu.Lock()
+		if lost {
+			f.relay.drop = func(box string, _ []byte) bool { return box == answers && dropped.CompareAndSwap(false, true) }
+		} else {
+			f.relay.late = func(box string) time.Duration {
+				if box == answers {
+					return 1500 * time.Millisecond
+				}
+				return 0
+			}
+		}
+		f.relay.mu.Unlock()
+		if _, err := Join(f.ctx, f.relay, dir, f.org.pins, tok, time.Second, f.clk.Now); err == nil {
+			t.Fatalf("%s: joined with its answer withheld", name)
+		}
+		f.relay.mu.Lock()
+		f.relay.late, f.relay.drop = nil, nil
+		f.relay.mu.Unlock()
+		kept, err := os.ReadFile(filepath.Join(dir, JoinKeyFile))
+		check(t, err)
+		j, err := Join(f.ctx, f.relay, dir, f.org.pins, tok, 5*time.Second, f.clk.Now)
+		if err != nil {
+			t.Fatalf("%s: run again: %v", name, err)
+		}
+		m, err := orgmachine.Open(dir)
+		check(t, err)
+		c, key := m.Current()
+		b, _ := pem.Decode(kept)
+		k, err := x509.ParsePKCS8PrivateKey(b.Bytes)
+		check(t, err)
+		if c.Subject.CommonName != name || !key.Equal(k) || j.Cert.SerialNumber.Cmp(c.SerialNumber) != 0 {
+			t.Fatalf("%s: enrolled as %q, key kept %v", name, c.Subject.CommonName, key.Equal(k))
+		}
+		if _, err := os.Stat(filepath.Join(dir, JoinKeyFile)); !os.IsNotExist(err) {
+			t.Fatalf("%s: the join key is left after the join: %v", name, err)
+		}
+		if !lost && j.KeyID != "m-"+name+".1" {
+			t.Fatalf("%s: the first answer's A2A key not taken: %q", name, j.KeyID)
+		}
 	}
 }
 

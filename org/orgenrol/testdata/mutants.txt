@@ -10,3 +10,12 @@ crl-no-wake-on-rotation | orgenrol.go | 			again = retry() // before apply: a ro
 # Moving the issuer (spec/orgmove/OrgMove.tla serve-after-fence): the
 # service of a fenced directory stops.
 serve-after-fence | issuer.go | 		if errors.Is(err, orgpki.ErrMoved) { | 		if false { | TestServiceStopsAtTheFence
+# The join by token (spec/enrol/Join.tla): run again, it asks with the key
+# it kept (new-key-per-join), under a request id of its own run
+# (same-request-id: the relay's day-long idempotency drops the request),
+# and takes a root the pinned recovery key certifies (pin-root-only), only
+# that one (any-root).
+new-key-per-join | machine.go | 	key, first, err := joinKey(dir, er.TokenID, req.ID) | 	key, first, err := joinKey(filepath.Join(dir, randomID()), er.TokenID, req.ID) | TestJoinRunAgainAfterALateOrLostAnswer
+same-request-id | machine.go | 	req := orgpki.Request{ID: randomID()} | 	req := orgpki.Request{ID: er.TokenID} | TestJoinRunAgainAfterALateOrLostAnswer
+pin-root-only | machine.go | 	if orgid.Fingerprint(root) != pins.Root && orgid.Fingerprint(rec) == pins.Recovery { | 	if false { | TestNewMachineJoinsAfterRotation
+any-root | machine.go | 	if err := root.CheckSignatureFrom(recovery); err != nil { | 	if err := root.CheckSignatureFrom(recovery); false && err != nil { | TestJoinRefusesARootOfAnotherRecoveryKey

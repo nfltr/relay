@@ -194,7 +194,11 @@ func TestTokenRedeemedOnceAcrossTheMove(t *testing.T) {
 	if _, err := n.Enrol(req, t0); err != nil {
 		t.Fatalf("the moved issuer: %v", err)
 	}
-	if _, err := n.Enrol(req, t0); !errors.Is(err, ErrRefused) {
-		t.Fatalf("second redemption: %v", err)
+	other, err := NewEnrolRequest(tok, csr(t, newKey(t), "web-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.Enrol(other, t0); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a redemption for another key: %v", err)
 	}
 }

@@ -268,6 +268,66 @@ func TestReusedTokenRefused(t *testing.T) {
 	}
 }
 
+// Join.tla Issue: a token asked again for the key it enrolled (its answer
+// was lost, or came after the join gave up) is answered again with a new
+// certificate of that key; another key, a renewal since, or a revoke is
+// refused. Mutants burn-name, reissue-any-key, reissue-after-renewal,
+// reissue-revoked.
+func TestTokenAnsweredAgainForItsKey(t *testing.T) {
+	o := newOrg(t)
+	enrolled := func(name string) (string, ed25519.PrivateKey, *x509.Certificate) {
+		tok, err := o.iss.MakeToken(name, []string{"web"}, "", time.Hour, t0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		k := newKey(t)
+		req, _ := NewEnrolRequest(tok, csr(t, k, name))
+		der, err := o.iss.Enrol(req, t0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tok, k, parse(t, der)
+	}
+	again := func(tok string, k ed25519.PrivateKey, at time.Time) ([]byte, error) {
+		req, _ := NewEnrolRequest(tok, csr(t, k, "x"))
+		return o.iss.Enrol(req, at)
+	}
+
+	tok, k, first := enrolled("web-1")
+	der, err := again(tok, k, t0.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("the token asked again for its key: %v", err)
+	}
+	c := parse(t, der)
+	if !c.PublicKey.(ed25519.PublicKey).Equal(k.Public()) || c.Subject.CommonName != "web-1" || c.SerialNumber.Cmp(first.SerialNumber) == 0 {
+		t.Fatalf("answered again: %q serial %v, want a new certificate of the same key for web-1", c.Subject.CommonName, c.SerialNumber)
+	}
+	_, err = again(tok, newKey(t), t0.Add(time.Minute))
+	refused(t, "the token for another key", err)
+
+	// A renewal since ends the token's answers: one to a new key retired
+	// the token's, and one keeping the key is the name's newest
+	// certificate, no longer the token's.
+	if _, err := o.iss.Renew(NewRenewRequest(der, k, csr(t, k, "web-1")), t0.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = again(tok, k, t0.Add(3*time.Minute))
+	refused(t, "the token's key after a renewal", err)
+
+	// A revoked name.
+	tok2, k2, _ := enrolled("web-2")
+	if err := o.iss.Revoke("web-2", t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	_, err = again(tok2, k2, t0.Add(2*time.Minute))
+	refused(t, "the token of a revoked name", err)
+
+	// An expired token is refused for its own key too.
+	tok3, k3, _ := enrolled("web-3")
+	_, err = again(tok3, k3, t0.Add(time.Hour))
+	refused(t, "an expired token for its key", err)
+}
+
 // A token names its organisation (TokenOrgID: the id of its mailboxes,
 // kept across a rotation), and a token of the v1 format, which did not, is
 // refused with the cause named.

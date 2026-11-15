@@ -28,6 +28,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/nfltr/relay/client/mailboxclient"
@@ -60,26 +61,23 @@ const (
 	answerTTL = time.Hour
 )
 
-// exchange posts req and waits up to wait for its answer (by id: a relay
-// can relabel an answer, which the caller's check of the certificate
-// refuses). A refusal is an error carrying the issuer's reason. posted
-// is whether a request with req's id was posted before (the relay's
-// idempotency key: Appended.Duplicate), so its answer may be for another
-// key.
-func exchange(ctx context.Context, mb Mailbox, orgID string, req orgpki.Request, wait time.Duration) (a orgpki.Answer, posted bool, err error) {
+// exchange posts req and waits up to wait for its answer, or one to an
+// earlier request of the same key (also), by id: a relay can relabel an
+// answer, which the caller's check of the certificate refuses. A refusal
+// is an error carrying the issuer's reason.
+func exchange(ctx context.Context, mb Mailbox, orgID string, req orgpki.Request, wait time.Duration, also ...string) (orgpki.Answer, error) {
 	payload, err := json.Marshal(req)
 	if err != nil {
-		return orgpki.Answer{}, false, err
+		return orgpki.Answer{}, err
 	}
-	ap, err := mb.Append(ctx, orgpki.EnrolMailbox(orgID), payload, mailboxclient.AppendOptions{IdempotencyKey: req.ID, ContentType: "application/json", TTL: answerTTL})
-	if err != nil {
-		return orgpki.Answer{}, false, fmt.Errorf("post the request: %w", err)
+	if _, err := mb.Append(ctx, orgpki.EnrolMailbox(orgID), payload, mailboxclient.AppendOptions{IdempotencyKey: req.ID, ContentType: "application/json", TTL: answerTTL}); err != nil {
+		return orgpki.Answer{}, fmt.Errorf("post the request: %w", err)
 	}
-	a, err = answerOf(ctx, mb, orgID, req.ID, wait)
-	return a, ap.Duplicate, err
+	return answerOf(ctx, mb, orgID, append([]string{req.ID}, also...), wait)
 }
 
-func answerOf(ctx context.Context, mb Mailbox, orgID, id string, wait time.Duration) (orgpki.Answer, error) {
+// answerOf is the first answer the relay holds to any request of ids.
+func answerOf(ctx context.Context, mb Mailbox, orgID string, ids []string, wait time.Duration) (orgpki.Answer, error) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	var cursor uint64
@@ -94,7 +92,7 @@ func answerOf(ctx context.Context, mb Mailbox, orgID, id string, wait time.Durat
 		for _, e := range envs {
 			cursor = e.Seq
 			var a orgpki.Answer
-			if json.Unmarshal(e.Payload, &a) != nil || a.ID != id {
+			if json.Unmarshal(e.Payload, &a) != nil || !slices.Contains(ids, a.ID) {
 				continue
 			}
 			if a.Refused != "" {

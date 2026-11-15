@@ -10,12 +10,16 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/nfltr/relay/client/orgid"
+	"github.com/nfltr/relay/org/internal/orgfiles"
 	"github.com/nfltr/relay/org/orgmachine"
 	"github.com/nfltr/relay/org/orgpki"
 )
@@ -31,8 +35,50 @@ func newKeyCSR() (ed25519.PrivateKey, []byte, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "nfltr org machine"}}, key)
+	csr, err := csrOf(key)
 	return key, csr, err
+}
+
+func csrOf(key ed25519.PrivateKey) ([]byte, error) {
+	return x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "nfltr org machine"}}, key)
+}
+
+// JoinKeyFile is the key a join made for its token, in the machine's
+// directory until the join installs its answer: a join run again with the
+// token (its answer was lost, or came after it gave up) asks with the same
+// key, which the issuer answers again (spec/enrol/Join.tla Start, mutant
+// new-key-per-join). The token's id is the PEM block's Token header.
+const JoinKeyFile = "join.key"
+
+// joinKey is the key kept in dir for tokenID and the id of the first
+// request made for it (the PEM block's Request header), or a new key kept
+// there with id, the first.
+func joinKey(dir, tokenID, id string) (ed25519.PrivateKey, string, error) {
+	f := filepath.Join(dir, JoinKeyFile)
+	data, err := os.ReadFile(f) // #nosec G304 -- this machine's own directory
+	if err != nil && !os.IsNotExist(err) {
+		return nil, "", err
+	}
+	if b, _ := pem.Decode(data); b != nil && b.Headers["Token"] == tokenID {
+		k, err := x509.ParsePKCS8PrivateKey(b.Bytes)
+		key, ok := k.(ed25519.PrivateKey)
+		if err != nil || !ok {
+			return nil, "", fmt.Errorf("%s: not an Ed25519 key", f)
+		}
+		return key, b.Headers["Request"], nil
+	}
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, "", err
+	}
+	pk, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil { // nosemgrep: incorrect-default-permission -- a directory needs x; 0o700 is owner-only
+		return nil, "", err
+	}
+	return key, id, orgfiles.Write(f, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Headers: map[string]string{"Token": tokenID, "Request": id}, Bytes: pk}), 0o600)
 }
 
 // Joined is an enrolment's outcome: the certificate, and the machine
@@ -44,12 +90,15 @@ type Joined struct {
 }
 
 // Join enrols this machine into dir (orgmachine's layout) with token: the
-// root and recovery from the relay, checked against pins; the issuer's
-// CRL; a new key, its CSR bound to the token, the issuer's answer checked
-// (for that key, under the pinned root), and the machine key it seals opened
-// (orgpki.OpenMachineKey). It waits up to wait in all. The mailboxes are
-// the token's organisation's (orgpki.TokenOrgID): after a rotation the
-// root's fingerprint no longer derives their id.
+// root and recovery from the relay, checked against pins (a root the
+// pinned recovery key certifies too: a rotation since); the issuer's CRL;
+// the token's key (JoinKeyFile: a new one the first time), its CSR bound
+// to the token, the issuer's answer checked (for that key, under that
+// root), and the machine key it seals opened (orgpki.OpenMachineKey). It
+// waits up to wait in all; run again with the token, it asks again with
+// the same key. The mailboxes are the token's organisation's
+// (orgpki.TokenOrgID): after a rotation the root's fingerprint no longer
+// derives their id.
 func Join(ctx context.Context, mb Mailbox, dir string, pins Pins, token string, wait time.Duration, now func() time.Time) (Joined, error) {
 	orgID, err := orgpki.TokenOrgID(token)
 	if err != nil {
@@ -61,43 +110,49 @@ func Join(ctx context.Context, mb Mailbox, dir string, pins Pins, token string, 
 	if err != nil {
 		return Joined{}, err
 	}
-	key, csr, err := newKeyCSR()
+	er, err := orgpki.NewEnrolRequest(token, nil) // its TokenID
 	if err != nil {
 		return Joined{}, err
 	}
-	er, err := orgpki.NewEnrolRequest(token, csr)
+	// The request's id is this run's: the relay keeps a sender's
+	// idempotency key a day, longer than the answer, so a run after an
+	// earlier one's answer is gone must still reach the issuer. The first
+	// run's answer, while the relay holds it, is taken too: it carries the
+	// sealed A2A key, which an answer again may not (Join.tla Install).
+	req := orgpki.Request{ID: randomID()}
+	key, first, err := joinKey(dir, er.TokenID, req.ID)
 	if err != nil {
 		return Joined{}, err
 	}
-	// One request (one key) for the token: it is redeemed once, so asking
-	// again re-reads the answer to the same request.
-	// replayed: the first post found the token's request posted already,
-	// by another machine or an earlier join (its answer is for that key).
+	csr, err := csrOf(key)
+	if err != nil {
+		return Joined{}, err
+	}
+	er, err = orgpki.NewEnrolRequest(token, csr)
+	if err != nil {
+		return Joined{}, err
+	}
+	req.Enrol = &er
 	var a orgpki.Answer
-	replayed, first := false, true
 	for {
-		var posted bool
-		a, posted, err = exchange(ctx, mb, orgID, orgpki.Request{ID: er.TokenID, Enrol: &er}, min(AnswerWait, wait))
-		replayed, first = replayed || (first && posted), false
+		a, err = exchange(ctx, mb, orgID, req, min(AnswerWait, wait), first)
 		if err == nil || ctx.Err() != nil || a.Refused != "" {
 			break
 		}
+	}
+	if a.Refused != "" {
+		_ = os.Remove(filepath.Join(dir, JoinKeyFile)) // refused: the token answers this key no more
 	}
 	if err != nil {
 		return Joined{}, err
 	}
 	if err := orgmachine.Checked(ver, a.Cert, a.Issuer, a.HostCert, key, "", now()); err != nil {
-		// The answer under the token's id is for another key: another
-		// request redeemed the token. A replay from another relay machine
-		// is not reported as a duplicate (idempotency is per machine).
-		if replayed || errors.Is(err, orgmachine.ErrNotForKey) {
-			return Joined{}, fmt.Errorf("the token was redeemed already: a request for it was posted before this join (another machine, or an earlier join of this one), and a token enrols one machine once; ask the organisation's owner for a new token (nfltr org token) (%w)", err)
-		}
 		return Joined{}, fmt.Errorf("the answer: %w", err)
 	}
 	if err := orgmachine.WriteFiles(dir, orgmachine.Enrolment{Root: rm.Root, Recovery: rm.Recovery, Cert: a.Cert, Issuer: a.Issuer, HostCert: a.HostCert, CRL: cm.CRL, Key: key}); err != nil {
 		return Joined{}, err
 	}
+	_ = os.Remove(filepath.Join(dir, JoinKeyFile)) // installed: the machine's key now
 	var j Joined
 	if j.Cert, err = x509.ParseCertificate(a.Cert); err != nil || a.MachineKey == nil {
 		return j, err
@@ -142,7 +197,18 @@ func trust(ctx context.Context, mb Mailbox, orgID string, pins Pins, wait time.D
 	if err != nil {
 		return nil, nil, rm, cm, err
 	}
-	ver, err := orgid.NewVerifier(root, rec, pins.Root, pins.Recovery)
+	rootPin := pins.Root
+	if orgid.Fingerprint(root) != pins.Root && orgid.Fingerprint(rec) == pins.Recovery {
+		// A rotation since the pins were made: the pinned recovery key
+		// certifies the new root, as a running machine takes a rotation
+		// (orgid TakeRotation; spec/enrol/Join.tla Trusts, mutant
+		// pin-root-only; enrol.pv RotClient).
+		if err := rotatedRoot(root, rec, orgID); err != nil {
+			return nil, nil, rm, cm, fmt.Errorf("the organisation's root is not the pinned one, nor certified by the pinned recovery key: %w", err)
+		}
+		rootPin = orgid.Fingerprint(root)
+	}
+	ver, err := orgid.NewVerifier(root, rec, rootPin, pins.Recovery)
 	if err != nil {
 		return nil, nil, rm, cm, err
 	}
@@ -163,6 +229,23 @@ func trust(ctx context.Context, mb Mailbox, orgID string, pins Pins, wait time.D
 		return nil, nil, rm, cm, fmt.Errorf("the issuer's CRL: %w", err)
 	}
 	return ver, root, rm, cm, nil
+}
+
+// rotatedRoot checks a root the relay gives in place of the pinned one: a
+// CA root of organisation orgID signed by the recovery key (orgid's
+// rotation check, but for the order: a join holds no earlier root to be
+// newer than).
+func rotatedRoot(root, recovery *x509.Certificate, orgID string) error {
+	if err := root.CheckSignatureFrom(recovery); err != nil {
+		return fmt.Errorf("not signed by the recovery key: %w", err)
+	}
+	if id, err := orgid.OrgIDOfRoot(root); err != nil || id != orgID {
+		return fmt.Errorf("not a root of %s", orgID)
+	}
+	if !root.IsCA || !root.BasicConstraintsValid {
+		return errors.New("not a CA")
+	}
+	return nil
 }
 
 // followCRL takes the organisation's CRL pushes into m (its Changed cuts
@@ -277,7 +360,7 @@ func (k Keeper) renew(ctx context.Context) error {
 		return err
 	}
 	rr := orgpki.NewRenewRequest(cur.Raw, curKey, csr)
-	a, _, err := exchange(ctx, k.Mailbox, m.OrgID(), orgpki.Request{ID: randomID(), Renew: &rr}, k.AnswerWait)
+	a, err := exchange(ctx, k.Mailbox, m.OrgID(), orgpki.Request{ID: randomID(), Renew: &rr}, k.AnswerWait)
 	if err != nil {
 		return err
 	}

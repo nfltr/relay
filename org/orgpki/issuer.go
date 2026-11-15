@@ -376,8 +376,13 @@ func parseCSR(der []byte) (*x509.CertificateRequest, error) {
 	return csr, nil
 }
 
-// Enrol redeems a token once: the certificate carries the token's name,
-// groups and machine id, never the request's.
+// Enrol redeems a token: the certificate carries the token's name, groups
+// and machine id, never the request's. A token certifies one key: asked
+// again for the key it enrolled (its answer was lost, or came after the
+// join gave up), it is answered again with a new certificate of that key,
+// while the name is not revoked and was not renewed since; any other key
+// is refused (spec/enrol/Join.tla Issue, mutants burn-name,
+// reissue-any-key, reissue-revoked, reissue-after-renewal).
 func (i *Issuer) Enrol(req EnrolRequest, now time.Time) ([]byte, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -393,16 +398,21 @@ func (i *Issuer) Enrol(req EnrolRequest, now time.Time) ([]byte, error) {
 	if !now.Before(t.expires) {
 		return nil, i.refuse(refusal, "the token expired")
 	}
-	// A token is for a name not enrolled, so its first redemption is its
-	// only one (enrol.pv 5, 6).
-	if i.names[t.name] != nil {
-		return nil, i.refuse(refusal, t.name+" is enrolled already (the token was redeemed, or another token's was)")
-	}
 	cr, err := parseCSR(req.CSR)
 	if err != nil {
 		return nil, i.refuse(refusal, "CSR: "+err.Error())
 	}
-	return i.issue(ActIssued, t.name, t.groups, t.machineID, cr.PublicKey.(ed25519.PublicKey), req.TokenID, "", now)
+	pub := cr.PublicKey.(ed25519.PublicKey)
+	// A token is for a name not enrolled, so after its first redemption
+	// it answers only the key it enrolled (enrol.pv 5, 6).
+	if n := i.names[t.name]; n != nil {
+		last := i.certs[n.serials[len(n.serials)-1]]
+		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) {
+			traceLine(map[string]any{"ev": "refuse", "o": i.orgID, "n": t.name, "from": "", "tok": req.TokenID, "k": orgid.KeyFingerprint(pub), "why": "enrolled", "t": now.Unix()})
+			return nil, i.refuse(refusal, t.name+" is enrolled already (the token was redeemed, or another token's was)")
+		}
+	}
+	return i.issue(ActIssued, t.name, t.groups, t.machineID, pub, req.TokenID, "", now)
 }
 
 // Renew re-certifies a machine under the current issuer for a new key. It
@@ -469,7 +479,7 @@ func (i *Issuer) issue(act, name string, groups []string, machineID string, pub 
 	if err := i.commit(e); err != nil {
 		return nil, err
 	}
-	traceLine(map[string]any{"ev": "issue", "o": i.orgID, "n": name, "s": e.Serial, "from": from, "exp": t.NotAfter.Unix(), "t": now.Unix()})
+	traceLine(map[string]any{"ev": "issue", "o": i.orgID, "n": name, "s": e.Serial, "from": from, "tok": token, "k": e.Key, "exp": t.NotAfter.Unix(), "t": now.Unix()})
 	return der, nil
 }
 
