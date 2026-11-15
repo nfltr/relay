@@ -30,7 +30,9 @@ import (
 // direct paths when the listener's signed answer says it takes them
 // (nf1-direct). Its errors are the rendezvous decision's section 6. An nf1
 // dial waits for its answer (Early does not apply: the handshake needs
-// it) and is always end-to-end encrypted.
+// it) and is always end-to-end encrypted. Without direct paths its
+// ClientHello goes with the open, the answers taken before TLS reads
+// (nf1.AnswerConn: one round trip through the relay and the agent less).
 
 // dialNF1 opens one session to t's address.
 func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, error) {
@@ -38,7 +40,8 @@ func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, e
 		return nil, usage("an nf1 address is always end-to-end encrypted: Plain does not apply")
 	}
 	addr := t.Address
-	ls, mux, err := d.nf1Open(ctx, addr)
+	early := o.Direct == DirectOff // direct paths frame the session by the answer's hints
+	ls, mux, err := d.nf1Open(ctx, addr, !early)
 	if err != nil {
 		return nil, err
 	}
@@ -52,17 +55,24 @@ func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, e
 		d.dropMux(mux)
 		return nil, err
 	}
-	hints, err := nf1.ReadAnswer(ls, addr)
-	if err == nil {
-		err = nf1.CheckKind(hints, t.datagram) // the dial's kind (BIND:cap.kind)
-	}
-	if err != nil {
-		return fail(handshakeError(ctx, err))
+	raw, done := net.Conn(ls), ls.Done()
+	var ac *nf1.AnswerConn
+	var hints []byte
+	if early {
+		ac = nf1.EarlyAnswer(ls, addr, t.datagram, func() error { return answered(ctx, ls) }) // its kind check is BIND:cap.kind
+		raw = ac
+	} else {
+		hints, err = nf1.ReadAnswer(ls, addr)
+		if err == nil {
+			err = nf1.CheckKind(hints, t.datagram) // the dial's kind (BIND:cap.kind)
+		}
+		if err != nil {
+			return fail(handshakeError(ctx, err))
+		}
 	}
 	c := d.newConn(t, traceOf(ls))
 	c.closers = append(c.closers, func() { d.dropMux(mux) })
-	raw, done := net.Conn(ls), ls.Done()
-	if o.Direct != DirectOff {
+	if !early {
 		if !nf1.TakesDirect(hints) {
 			c.onPath(agent.PathEvent{Path: agent.PathRelayed, Reason: agent.ReasonOff})
 		} else if dc, err := d.nf1Direct(addr); err != nil {
@@ -74,6 +84,9 @@ func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, e
 	}
 	w, bind := tlsend.Wrap(raw)
 	tc, err := nf1.ClientTLS(ctx, w, addr)
+	if err != nil && ac != nil && ac.Err() != nil {
+		err = ac.Err() // the answers' refusal, not the handshake it ended
+	}
 	if err != nil {
 		return fail(handshakeError(ctx, err))
 	}
@@ -93,7 +106,9 @@ func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, e
 
 // nf1Open opens a session to the address on a data connection of its own,
 // answered by the relay; the Dialer owns the connection until dropMux.
-func (d *Dialer) nf1Open(ctx context.Context, addr capaddr.Address) (*dataplane.Session, *dataplane.Mux, error) {
+// With wait false the relay's answer is not awaited (the caller's
+// nf1.AnswerConn takes it).
+func (d *Dialer) nf1Open(ctx context.Context, addr capaddr.Address, wait bool) (*dataplane.Session, *dataplane.Mux, error) {
 	mux, err := d.nf1Upgrade(ctx, addr)
 	if err != nil {
 		return nil, nil, err
@@ -108,7 +123,7 @@ func (d *Dialer) nf1Open(ctx context.Context, addr capaddr.Address) (*dataplane.
 	d.mu.Unlock()
 	go func() { _ = mux.Serve(nil) }()
 	ls, err := mux.Open(&pb.TCPData{Nf1Rid: addr.RID[:], E2Ee: true, Answer: true})
-	if err == nil {
+	if err == nil && wait {
 		err = answered(ctx, ls)
 		if e, ok := errors.AsType[*Error](err); ok && e.Reason == relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE.String() {
 			e.Code, e.Message = CodeRefused, "the relay does not allow end-to-end encrypted sessions: "+e.Message
@@ -133,7 +148,7 @@ func (d *Dialer) dropMux(m *dataplane.Mux) {
 // session whose Close ends its data connection.
 func (d *Dialer) nf1Relayed(addr capaddr.Address) func(context.Context) (net.Conn, error) {
 	return func(ctx context.Context) (net.Conn, error) {
-		ls, mux, err := d.nf1Open(ctx, addr)
+		ls, mux, err := d.nf1Open(ctx, addr, true)
 		if err != nil {
 			return nil, err
 		}
@@ -238,6 +253,9 @@ func (d *Dialer) nf1Upgrade(ctx context.Context, addr capaddr.Address) (*datapla
 // handshakeError is the *Error of the rendezvous answer's or nf1.ClientTLS's
 // error.
 func handshakeError(ctx context.Context, err error) error {
+	if e, ok := errors.AsType[*Error](err); ok { // the relay's answer, already typed
+		return e
+	}
 	switch {
 	case errors.Is(err, capaddr.ErrPin), errors.Is(err, capaddr.ErrRendezvous), errors.Is(err, capaddr.ErrTLS), errors.Is(err, nf1.ErrAnswer):
 		return &Error{Code: CodeE2EEPinMismatch, Message: "the server is not this address's: " + err.Error(), Err: err}

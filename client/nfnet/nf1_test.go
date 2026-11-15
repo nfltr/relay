@@ -5,16 +5,20 @@ package nfnet
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"io"
 	"net"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nfltr/relay/client/capaddr"
 	"github.com/nfltr/relay/client/nf1"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
@@ -24,6 +28,14 @@ import (
 // handed to l; the admitted conn arrives on srv, the relay's end of the
 // session on raw (a test cuts it there).
 func nf1Relay(t *testing.T, l *nf1.Listener) (Config, <-chan net.Conn, <-chan *dataplane.Session) {
+	t.Helper()
+	return nf1RelayGated(t, l, nil)
+}
+
+// nf1RelayGated is nf1Relay that hands a session to l only once the
+// client's ClientHello came (hello set; nil: at once), within 3 s: hello
+// says whether it came before.
+func nf1RelayGated(t *testing.T, l *nf1.Listener, hello chan<- bool) (Config, <-chan net.Conn, <-chan *dataplane.Session) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -39,6 +51,10 @@ func nf1Relay(t *testing.T, l *nf1.Listener) (Config, <-chan net.Conn, <-chan *d
 			return
 		}
 		defer nc.Close() //nolint:errcheck
+		sniff := &helloSniff{Conn: nc}
+		if hello != nil {
+			nc = sniff
+		}
 		if _, err := http.ReadRequest(bufio.NewReader(nc)); err != nil {
 			return
 		}
@@ -49,6 +65,13 @@ func nf1Relay(t *testing.T, l *nf1.Listener) (Config, <-chan net.Conn, <-chan *d
 		_ = mux.Serve(func(_ *pb.TCPData, s *dataplane.Session) {
 			if s.Accept() != nil {
 				return
+			}
+			if hello != nil {
+				came := false
+				for deadline := time.Now().Add(3 * time.Second); !came && time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+					came = sniff.seen.Load()
+				}
+				hello <- came
 			}
 			c, err := l.Accept(context.Background(), s)
 			if err != nil {
@@ -202,5 +225,102 @@ func TestNF1RefusalClosesSession(t *testing.T) {
 			}
 			t.Fatalf("%s: %v, want nf1.ErrKind", tc.name, err)
 		}
+	}
+}
+
+// helloSniff is the relay's end of a plaintext data connection: seen once
+// a TLS ClientHello's record (handshake, version 0x0301, type 1) passed it.
+type helloSniff struct {
+	net.Conn
+	mu   sync.Mutex
+	buf  []byte
+	seen atomic.Bool
+}
+
+func (c *helloSniff) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	c.mu.Lock()
+	c.buf = append(c.buf, p[:n]...)
+	if i := bytes.Index(c.buf, []byte{0x16, 0x03, 0x01}); i >= 0 && len(c.buf) > i+5 && c.buf[i+5] == 0x01 {
+		c.seen.Store(true)
+	}
+	c.mu.Unlock()
+	return n, err
+}
+
+// The ClientHello goes with the open, before the agent's answer (nfltr
+// docs/decisions/nf1-ttfb-2026-11-15.md): the relay stand-in hands the
+// session to the listener only once the client's ClientHello passed it. A
+// client that waits for the answer first never sends it (the dial fails
+// with no answer): the open's round trip through the relay and the agent
+// is back.
+func TestNF1ClientHelloGoesWithOpen(t *testing.T) {
+	l, _, err := nf1.Mint("relay.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sawHello := make(chan bool, 1)
+	cfg, srvc, _ := nf1RelayGated(t, l, sawHello)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := dialer(t, cfg).DialTarget(ctx, Target{Kind: AddressTarget, Address: l.Address()}, DialOptions{})
+	if c != nil {
+		defer c.Close() //nolint:errcheck
+	}
+	if !<-sawHello {
+		t.Fatal("no ClientHello before the agent's answer: the client waits for the answer before it starts TLS")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := <-srvc
+	defer srv.Close() //nolint:errcheck
+	echoAndHalfCloseWith(t, c, srv)
+}
+
+// A refused open keeps the relay's reason (exit 4 refused, not 6 reset):
+// the ClientHello sent with the open fails at its write, before TLS reads
+// the refusal (nf1.AnswerConn.Err; found by the connect conformance suite's
+// per-address cap, lane NF1TTFB).
+func TestNF1RefusedOpenKeepsItsReason(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	t.Cleanup(func() { _ = ln.Close(); <-done })
+	go func() {
+		defer close(done)
+		nc, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer nc.Close() //nolint:errcheck
+		if _, err := http.ReadRequest(bufio.NewReader(nc)); err != nil {
+			return
+		}
+		mux, err := dataplane.Accept(context.Background(), nc, dataWindow, "allow")
+		if err != nil {
+			return
+		}
+		_ = mux.Serve(func(_ *pb.TCPData, s *dataplane.Session) {
+			_ = s.AbortWith(dataplane.Refusal(relayv1.ErrorReason_ERROR_REASON_LIMIT_EXCEEDED, "over the relay's limit"))
+		})
+	}()
+	cfg := Config{Plaintext: true, DialRelay: func(ctx context.Context, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", ln.Addr().String())
+	}}
+	l, _, err := nf1.Mint("relay.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	c, err := dialer(t, cfg).DialTarget(ctx, Target{Kind: AddressTarget, Address: l.Address()}, DialOptions{})
+	if c != nil {
+		_ = c.Close()
+	}
+	if CodeOf(err) != CodeRefused {
+		t.Fatalf("dial: %v (%s), want refused", err, CodeOf(err))
 	}
 }

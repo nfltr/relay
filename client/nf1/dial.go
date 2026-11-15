@@ -106,22 +106,22 @@ func Dial(ctx context.Context, addr capaddr.Address, opt Options) (net.Conn, err
 		_ = mux.Close()
 		return nil, answerErr(err)
 	}
-	if err := answerErr(s.Answered(ctx)); err != nil {
+	// The ClientHello goes with the open; the answers are taken before TLS
+	// reads (AnswerConn).
+	ac := EarlyAnswer(s, addr, opt.Datagram, func() error { return answerErr(s.Answered(ctx)) })
+	w, bind := tlsend.Wrap(ac)
+	done = bound(ctx, w)
+	c, err := ClientTLS(ctx, w, addr)
+	done()
+	if err != nil && ac.Err() != nil {
+		err = ac.Err()
+	}
+	if err != nil {
 		_ = s.Close()
 		_ = mux.Close()
 		return nil, err
 	}
-	w, bind := tlsend.Wrap(s)
-	hs := Handshake
-	if opt.Datagram {
-		hs = HandshakeDatagram
-	}
-	c, err := hs(ctx, w, addr)
-	if err != nil {
-		_ = mux.Close()
-		return nil, err
-	}
-	return &conn{Conn: bind(c.(*tls.Conn)), mux: mux}, nil
+	return &conn{Conn: bind(c), mux: mux}, nil
 }
 
 // answerErr is the relay's answer to the open as Dial's error.

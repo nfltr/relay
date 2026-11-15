@@ -39,8 +39,12 @@
      3. RENDEZVOUS answer, R -> client: (pk, rec). The client requires
         pinOf(sec, pk) = pin (BIND:cap.pin) and rec a signature under that
         pk over ("nf1-rdv", the relay it opened at, its rid, hints)
-        (BIND:cap.rendezvous); only then does it use hints or open TLS. An
-        answer "plain" is refused.
+        (BIND:cap.rendezvous); only then does it use hints or take any
+        byte of the server's TLS. An answer "plain" is refused. Its
+        ClientHello (no secret, no answer in it; not modeled, as TLS 1.3 is
+        not re-proven) may go with the OPEN, before the answer (lane
+        NF1TTFB, client/nf1 AnswerConn): the client's first secret-bearing
+        message, below, still follows the answer's checks.
      4. TLS 1.3 through the relay's stream: the server's certificate must
         carry exactly pk (BIND:cap.pin); the client presents none.
      5. PROOF, the client's first record inside TLS:
