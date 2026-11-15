@@ -15,7 +15,8 @@ import (
 
 // TestEveryModelBindingHasARow: each BIND:<id> a model in spec/proverif
 // declares is a quoted row key in a *_bindings_test.go of this module
-// (nfltr.* ids included: the relay's row file lists them), whose package
+// (nfltr.* ids included: the relay's row file lists them), or in a test
+// file of the org module holding a Test...ModelBindings, whose package
 // `make spec-bindings` runs, or is in modelbind.Pending. Without it a model
 // whose bindings test is missing, or not run, is checked by nothing.
 func TestEveryModelBindingHasARow(t *testing.T) {
@@ -27,32 +28,48 @@ func TestEveryModelBindingHasARow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var run string // the spec-bindings recipe line
+	run := map[string]string{} // module -> its spec-bindings recipe line
 	for _, l := range strings.Split(string(mk), "\n") {
 		if strings.Contains(l, "-run 'ModelBindings'") {
-			run = l
+			for _, m := range []string{"client", "org"} {
+				if strings.HasPrefix(strings.TrimSpace(l), "cd "+m+" ") {
+					run[m] = l
+				}
+			}
 		}
 	}
+	bindingsTest := regexp.MustCompile(`func Test\w*ModelBindings\w*\(`)
 	var rows strings.Builder
-	err = filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || !strings.HasSuffix(path, "_bindings_test.go") {
-			return err
-		}
-		b, err := os.ReadFile(path)
+	for _, m := range []string{"client", "org"} {
+		root := "../" + m
+		err = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			named := strings.HasSuffix(path, "_bindings_test.go")
+			if m == "client" && !named {
+				return nil
+			}
+			b, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if !bindingsTest.Match(b) {
+				if named {
+					t.Errorf("%s has no Test...ModelBindings: make spec-bindings does not run it", path)
+				}
+				return nil
+			}
+			rel, _ := filepath.Rel(root, path)
+			if dir := "./" + filepath.ToSlash(filepath.Dir(rel)) + "/"; !strings.Contains(run[m], " "+dir) {
+				t.Errorf("%s: make spec-bindings does not test %s in %s", path, dir, m)
+			}
+			rows.Write(b)
+			return nil
+		})
 		if err != nil {
-			return err
+			t.Fatal(err)
 		}
-		if !regexp.MustCompile(`func Test\w*ModelBindings\w*\(`).Match(b) {
-			t.Errorf("%s has no Test...ModelBindings: make spec-bindings does not run it", path)
-		}
-		if dir := "./" + filepath.ToSlash(filepath.Dir(path)) + "/"; !strings.Contains(run, " "+dir) {
-			t.Errorf("%s: make spec-bindings does not test %s", path, dir)
-		}
-		rows.Write(b)
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	declared := map[string]bool{}
 	id := regexp.MustCompile(`BIND:([a-z0-9][a-z0-9.]*[a-z0-9])`)
