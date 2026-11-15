@@ -88,7 +88,7 @@ func Seal(pub *ecdh.PublicKey, b Binding, contentType string, body []byte) ([]by
 	if err != nil {
 		return nil, err
 	}
-	return append(append([]byte{byte(len(b.KeyID))}, b.KeyID...), sealed...), nil
+	return append(append([]byte{byte(len(b.KeyID))}, b.KeyID...), sealed...), nil // #nosec G115 -- ValidKeyID bounds the id to MaxKeyID bytes
 }
 
 // KeyID is the recipient key id a row names (which private key opens it).
@@ -125,8 +125,8 @@ func Open(priv *ecdh.PrivateKey, b Binding, row []byte) (contentType string, bod
 		return "", nil, ErrMalformed
 	}
 	nb := uint64(binary.BigEndian.Uint32(plain[2+ct:]))
-	if uint64(len(plain)-6-ct) < nb {
+	if uint64(len(plain)-6-ct) < nb { // #nosec G115 -- not negative: checked just above
 		return "", nil, ErrMalformed
 	}
-	return string(plain[2 : 2+ct]), plain[6+ct : 6+ct+int(nb)], nil
+	return string(plain[2 : 2+ct]), plain[6+ct : 6+ct+int(nb)], nil // #nosec G115 -- nb is at most len(plain): checked just above
 }
