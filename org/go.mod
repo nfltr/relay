@@ -3,6 +3,7 @@ module github.com/nfltr/relay/org
 go 1.27.2
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/nfltr/relay/client v0.22.1
 	github.com/stripe/krl v0.0.0-20250403164848-fcf8101b2f53
 	golang.org/x/crypto v0.57.0
@@ -10,7 +11,6 @@ require (
 )
 
 require (
-	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/nfltr/relay/proto v0.20.0 // indirect
 	golang.org/x/net v0.60.0 // indirect

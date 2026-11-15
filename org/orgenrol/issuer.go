@@ -262,6 +262,7 @@ func watchDir(dir string, logger *slog.Logger) (wake <-chan struct{}, stop func(
 					return
 				}
 				if n := filepath.Base(e.Name); n == orgissuer.CRLFile || n == orgissuer.LogFile {
+					traceNotice(dir)
 					notify()
 				}
 			case _, ok := <-w.Errors:
@@ -461,6 +462,7 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 			}
 		}
 		root, rec, crl, issuer = iss.Root().Raw, iss.Recovery().Raw, der, iss.Cert().Raw
+		traceRead(s.Dir, der) // under the lock (RevokePush.tla Read)
 		return nil
 	})
 	if err != nil {
@@ -479,6 +481,7 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 		if err := s.publish(ctx, orgid.CRLMailbox(s.org), orgid.CRLMessage{CRL: crl, Issuer: issuer}); err != nil {
 			return fmt.Errorf("CRL: %w", err)
 		}
+		tracePublish(s.Dir, crl)
 		s.pubCRL, s.pubCRLIssuer = crl, issuer
 	}
 	return nil

@@ -19,7 +19,8 @@
 #   traces    the tests of org/orgpki, orgmachine and orgenrol built -tags
 #             enroltrace, each test's trace checked by TraceEnrol.tla, then
 #             the fixtures (make spec-enrol-traces).
-#   trace F   one recorded trace file.
+#   trace F   one recorded trace file; ptrace F one RevokePush trace
+#             (<pid>.revokepush, TraceRevokePush.tla).
 # TLC_WORKERS (default 2) caps TLC's threads, TLC_HEAP (default 1g) its
 # heap. Java and tla2tools.jar come from scripts/fetch-tla.sh.
 set -eu
@@ -143,11 +144,30 @@ trace() {
 	return 1
 }
 
+# ptrace F: a RevokePush trace (<pid>.revokepush), checked by
+# TraceRevokePush.tla.
+ptrace() {
+	t=$work/$(basename "$1")
+	cat "$1" >"$t"
+	[ -s "$t" ] || { echo "$1: no lines"; return 0; }
+	printf 'CONSTANTS\n    TraceFile = "%s"\nINIT Init\nNEXT Next\nINVARIANTS\n    Known\n    ReadSeesNotice\n    PublishesRead\n    TraceDone\n' "$t" >"$t.cfg"
+	(cd $dir && "$java" -cp "$jar" tlc2.TLC -workers 1 -noGenerateSpecTE -deadlock \
+		-metadir "$t.states" -config "$t.cfg" TraceRevokePush.tla) >"$t.out" 2>&1 || true
+	if grep -q '^Error: Invariant TraceDone is violated' "$t.out"; then
+		echo "$(basename "$1"): $(wc -l <"$t" | tr -d ' ') lines: accepted"
+		return 0
+	fi
+	grep -m1 '^Error' "$t.out" || tail -20 "$t.out"
+	echo "$(basename "$1"): $(wc -l <"$t" | tr -d ' ') lines: REJECTED"
+	return 1
+}
+
 fixtures() {
 	: >"$work/ffails"
-	for f in $dir/traces/*.ndjson; do
+	for f in $dir/traces/*.ndjson $dir/traces/*.revokepush; do
+		case $f in *.revokepush) chk=ptrace ;; *) chk=trace ;; esac
 		want=$(basename "$f" | cut -d- -f1)
-		if trace "$f" >"$work/m.out"; then
+		if $chk "$f" >"$work/m.out"; then
 			echo "$(basename "$f"): NOT rejected"
 			echo x >>"$work/ffails"
 		elif grep -q "^Error: Invariant $want is violated" "$work/m.out"; then
@@ -178,6 +198,13 @@ traces() {
 		n=$((n + 1))
 		trace "$f" >"$work/t.out" || { echo "$f"; cat "$work/t.out"; echo x >>"$work/fails"; }
 	done
+	np=0
+	for f in "$work"/unit/*/*.revokepush; do
+		[ -f "$f" ] || continue
+		np=$((np + 1))
+		ptrace "$f" >"$work/t.out" || { echo "$f"; cat "$work/t.out"; echo x >>"$work/fails"; }
+	done
+	echo "$np RevokePush traces"
 	echo "events: $(cat "$work"/unit/*/*.ndjson 2>/dev/null | sed -E 's/.*"ev":"([a-z]+)".*/\1/' | sort | uniq -c | tr -s ' ' | tr '\n' ' ')"
 	echo "$n traces, $(wc -l <"$work/fails" | tr -d ' ') failed"
 	fixtures || echo x >>"$work/fails"
@@ -194,5 +221,6 @@ ci) run Enrol.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && r
 fixtures) fixtures ;;
 traces) traces ;;
 trace) trace "$2" ;;
+ptrace) ptrace "$2" ;;
 *) sed -n '4,20p' "$0" >&2; exit 2 ;;
 esac

@@ -25,3 +25,6 @@ published-any-time | published.go | 	if _, err := iss.Verify(x509.VerifyOptions{
 published-any-root | published.go | 	roots.AddCert(root) | 	roots.AddCert(iss) | TestPublishedCRLRefusesAnIssuerMembersRefuse
 crl-due-ignored | issuer.go | 		if der == nil || iss.CRLDue() || next.Sub(now) <= orgpki.CRLLife/3 || !signedBy(der, iss.Cert()) { | 		if der == nil || next.Sub(now) <= orgpki.CRLLife/3 || !signedBy(der, iss.Cert()) { | TestServiceSignsACRLAfterTheRenewal
 root-stops-with-crl | issuer.go | 				crlErr = fmt.Errorf("CRL: %w", err) | 				return err | TestServiceSignsNoCRLPastTheIssuerCertificate
+# A revoke's notice (spec/enrol/RevokePush.tla poll-only: EventBound): the
+# issuer publishes a CRL another process wrote at its notice, not its round.
+poll-only | issuer.go | 	wake, stopWatch := watchDir(c.Dir, logger) | 	wake, stopWatch := (<-chan struct{})(nil), func() {} | TestRevokePublishedAtItsNotice

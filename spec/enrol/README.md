@@ -192,6 +192,17 @@ named invariant (`fixtures`, in `ci`). `scripts/check-spec-actions.sh`
 fails when a line kind TraceEnrol reads is no longer written by orgpki or
 orgid.
 
+The issuer service's RevokePush.tla steps are recorded the same way by
+`org/orgenrol` (`trace_on.go`: `<pid>.revokepush` beside the other lines):
+`notice` (a file-change notice, with the CRL then in the directory),
+`read` (maintain's CRL, logged under the directory's lock), `publish`.
+`TraceRevokePush.tla` requires a read after a notice to read that write
+or a newer one (`ReadSeesNotice`: the notice is logged after its write,
+the read under the lock) and the CRL published to be the one the round
+read (`PublishesRead`); a line of another kind is `Known`'s. `traces`
+checks every recorded one; `traces/<Invariant>-*.revokepush` are the
+fixtures each rejected by its invariant.
+
 ## Environment assumptions
 
 | assumption | relied on by | source |
@@ -219,3 +230,4 @@ orgid.
 | RevokePush.tla | org/orgenrol/orgenrol.go |
 | TraceEnrol.tla | org/orgpki/trace_on.go |
 | TraceEnrol.tla | client/orgid/trace_on.go |
+| TraceRevokePush.tla | org/orgenrol/trace_on.go |
