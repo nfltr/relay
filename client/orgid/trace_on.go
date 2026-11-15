@@ -14,7 +14,7 @@ import (
 )
 
 // Trace mode (go test -tags enroltrace, ENROLTRACE=<dir>) appends one JSON
-// line per step to <dir>/<pid>.ndjson; nfltr's scripts/spec-enrol.sh
+// line per step to <dir>/<pid>.ndjson; scripts/spec-enrol.sh
 // traces checks it with spec/enrol/TraceEnrol.tla. A verifier writes under
 // its lock, so its lines are in its order.
 var traceMu sync.Mutex

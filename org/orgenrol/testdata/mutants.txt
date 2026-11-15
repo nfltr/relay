@@ -1,0 +1,12 @@
+# Planted bugs of orgenrol (scripts/go-mutants.sh org/orgenrol/testdata/mutants.txt,
+# make test-go-mutants), in the format of
+# orgpki's testdata/mutants.txt. Model: spec/enrol/Enrol.tla (no-retry:
+# MachinesFollowRotation; push-only: TakesEffect; stale-answer:
+# MachineHoldsItsKey, through orgmachine.Checked).
+no-retry | machine.go | 			sleepCtx(ctx, k.RetryWait) | 			return | TestRenewAsksAgainAfterALoss
+push-only | orgenrol.go | 		if time.Since(fresh) >= every { | 		if fresh.IsZero() { | TestRevokePushAndBackstop
+no-spool | issuer.go | 	if os.IsNotExist(err) { | 	if true { | TestEnrolAnsweredOnceAcrossARetry
+crl-no-wake-on-rotation | orgenrol.go | 			again = retry() // before apply: a rotation taken meanwhile closes it | 			_ = retry | TestRotationMovesTheMachine
+# Moving the issuer (spec/orgmove/OrgMove.tla serve-after-fence): the
+# service of a fenced directory stops.
+serve-after-fence | issuer.go | 		if errors.Is(err, orgpki.ErrMoved) { | 		if false { | TestServiceStopsAtTheFence

@@ -1,0 +1,42 @@
+# Planted bugs of orgpki (scripts/go-mutants.sh org/orgpki/testdata/mutants.txt, make test-go-mutants):
+# each line "<mutant> | <file> | <exact line text> | <replacement> | <test>". Lines of one
+# mutant are applied together; the test must then fail. Models:
+# spec/proverif/enrol.pv and spec/enrol/Enrol.tla; orgpki_test.go names the
+# property each test enforces. Not here: the verifier's (no-chain-check,
+# no-name-check, no-expiry-check, no-crl-check, no-group-check,
+# leaf-group-outside-issuer, fail-open, accept-older-crl, rotate-by-primary,
+# replayed-rotation: the relay client's orgid, which the issuer's rotation
+# check uses too, plants them in its own testdata/mutants.txt), and the
+# session-level mutants no-expiry-timer and no-cut-on-update (the
+# verifier's callers, orgmachine).
+no-name-constraint | profile.go | 		PermittedDNSDomainsCritical: true, PermittedDNSDomains: []string{orgid.Domain(orgID)}, |  | TestForgedNameRefused
+renew-expired | issuer.go | 	if !now.Before(rec.notAfter) { | 	if false { | TestExpiredRefused
+revoke-current-only | issuer.go | 		for _, sn := range n.serials { | 		for _, sn := range n.serials[len(n.serials)-1:] { | TestRevokedRefused
+renew-revoked | issuer.go | 	if n.revoked { | 	if false { | TestRevokedRefused
+reusable-token | issuer.go | 	if i.names[t.name] != nil { | 	if false { | TestReusedTokenRefused
+token-in-request | issuer.go | 	if !hmac.Equal(req.MAC, enrolMAC(i.tokenSecret(req.TokenID), req.CSR)) { | 	if false { | TestTokenForAnotherNameRefused
+name-from-request | issuer.go | 	return i.issue(ActIssued, t.name, t.groups, t.machineID, cr.PublicKey.(ed25519.PublicKey), req.TokenID, "", now) | 	return i.issue(ActIssued, cr.Subject.CommonName, t.groups, t.machineID, cr.PublicKey.(ed25519.PublicKey), req.TokenID, "", now) | TestTokenForAnotherNameRefused
+token-outlives-ttl | issuer.go | 	if !now.Before(t.expires) { | 	if false { | TestTokenForAnotherNameRefused
+token-group-outside-policy | issuer.go | 	if policy := i.Groups(); !subset(groups, policy) { | 	if policy := i.Groups(); false && !subset(groups, policy) { | TestGroupOutsidePolicyRefused
+renew-forged | issuer.go | 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) { | 	if _ = sum; rec == nil { | TestRotationOnlyByRecoveryKey
+audit-unchained | audit.go | 		if e.Prev != head { | 		if false { | TestAuditLogChain
+# The enrolment answer's K_m (spec/proverif/a2a_keytransfer.pv):
+seal-to-request-key | machinekey.go | 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) || rec.token == "" || rec.token != tokenID { | 	if _, _ = rec, sum; false { | TestSealOnlyToCertifiedKey
+seal-other-key-id | machinekey.go | 	if err := machineKeyID(c, keyID); err != nil { | 	if err := error(nil); err != nil { | TestSealOnlyToCertifiedKey
+unsigned-key | machinekey.go | 	if ipub, ok := ic.PublicKey.(ed25519.PublicKey); !ok || !ed25519.Verify(ipub, machineKeyMessage(tokenID, cert, k), k.Sig) { | 	if false { | TestA2AKeyTransferModelBindings
+any-token | machinekey.go | 	return slices.Concat(machineKeyInfo(cert, k.KeyID), []byte("\x00"+tokenID+"\x00"), k.Sealed) | 	return slices.Concat(machineKeyInfo(cert, k.KeyID), []byte("\x00\x00"), k.Sealed) | TestA2AKeyTransferModelBindings
+hostcert-not-from-log | hostcert.go | 	case rec == nil || rec.digest != hex.EncodeToString(sum[:]): | 	case rec == nil && len(sum) > 0: | TestHostCertForAnotherNameRefused
+hostcert-revoked | hostcert.go | 	case i.names[rec.name].revoked: | 	case false: | TestHostCertRevokedOrExpiredRefused
+hostcert-any-signer | hostcert.go | 	if !checker.IsHostAuthority(c.SignatureKey, "") { | 	if false { | TestCheckHostCertRefusesOtherSignerOrKey
+hostcert-any-key | hostcert.go | 	case !slices.Equal(c.Key.Marshal(), pub.Marshal()): | 	case pub == nil: | TestCheckHostCertRefusesOtherSignerOrKey
+hostcert-extra-principal | hostcert.go | 	case !slices.Equal(c.ValidPrincipals, leaf.DNSNames): | 	case false: | TestCheckHostCertRefusesExtraPrincipal
+# Moving the issuer (spec/orgmove/OrgMove.tla): the fence's
+# refusal and the import's check (Arrive) (move.go, audit.go).
+serve-after-fence | move.go | 	if i.movedTo == "" || e.Act == ActArrived { | 	if true { | TestFencedIssuerRefusesEveryAct
+fence-names-no-recipient | move.go | 	if key != i.movedTo { | 	if false { | TestFencedIssuerRefusesEveryAct
+act-after-fence-verifies | audit.go | 		if (fence != "" || e.Act == ActArrived) && (e.Act != ActArrived || fence == "" || e.Key != fence) { | 		if false { | TestFencedIssuerRefusesEveryAct
+import-unfenced | move.go | 	if i.movedTo == "" { | 	if false { | TestMoveImportRefusesAnUnfencedCopy
+# The remote issuer renewal (renew.go; spec/proverif/orgmove.pv, its BIND:renew.* rows).
+renew-answer-unbound | renew.go | 	if pub, ok := issuerKey(c); !ok || !pub.Equal(i.key.Public()) { | 	if pub, ok := issuerKey(c); !ok || pub == nil { | TestIssuerRenewalModelBindings
+renew-answer-unbound | renew.go | 	if !i.heads[a.Head] { | 	if false { | TestIssuerRenewalModelBindings
+renew-unsigned-request | renew.go | 	case !ed25519.Verify(pub, renewalMessage(req), req.Sig): | 	case false: | TestIssuerRenewalModelBindings

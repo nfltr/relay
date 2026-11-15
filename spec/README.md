@@ -6,6 +6,10 @@ about 10 s together; `make spec-traces` checks recorded runs). Java and `tla2too
 belongs to is nfltr's `docs/decisions/formal-specs-tla-2026-11-02.md`
 (item 10).
 
+The organisation issuer's models (`org/`) are in their own directories:
+`spec/enrol/` (certificates' lifecycle) and `spec/orgmove/` (moving the
+issuer), `make spec-enrol-ci spec-orgmove-ci` (both in `make ci`).
+
 ## SignalConn.tla: a call's signaling over the relay and the direct path
 
 `client/p2p` `SignalConn` (`sigconn.go`) carries a call's signaling frames

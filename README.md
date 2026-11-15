@@ -8,8 +8,8 @@ protocol it speaks. The hosted relay runs at **nfltr.xyz**
 CLI is built on these modules.
 
 It is for Go developers who write agents, clients and tools for an nfltr
-relay. **Status:** both modules are pre-1.0 and versioned on their own
-(the newest `proto/vX.Y.Z` and `client/vX.Y.Z` on the
+relay. **Status:** the modules are pre-1.0 and versioned on their own
+(the newest `proto/vX.Y.Z`, `client/vX.Y.Z` and `org/vX.Y.Z` on the
 [tags page](https://github.com/nfltr/relay/tags)). **In the nfltr stack:**
 [nfltr/link](https://github.com/nfltr/link) (the multiplexing layer, its
 `peerlink` carries the agent link) → this repository (SDK and protocol) →
@@ -22,9 +22,10 @@ which uses the SDK). **Docs:** this file, [CONTRIBUTING.md](CONTRIBUTING.md),
 |---|---|---|
 | [`proto/`](proto) | `github.com/nfltr/relay/proto` | the v1 protos (`nfltr.relay.v1`, `nfltr.blob.v1`, `nfltr.mailbox.v1`, `nfltr.presence.v1`) with their generated Go, `pb` (the agent wire: the `rpcserver.Dispatcher` gRPC service agents and clients connect over), and `wire/*`: the hand-written codecs both ends speak (agent-wire metadata, data plane, WebSocket frames, blob headers, WireGuard endpoint protocol) |
 | [`client/`](client) | `github.com/nfltr/relay/client` | the SDK: `agent` (expose a local HTTP service through the relay; `agent/wgexit` makes it a WireGuard exit, so only programs that import it link wireguard-go and gvisor), `rpcclient` (agent-to-agent calls), `grpcclient` (dialing, mTLS), `p2p`, `relayblob`, `mailboxclient`, `presenceclient`, `wg`, `relayoutage`, `relaytrust`, `machinecert` (a machine's key, CSR and certificate renewal), `orgid` (an organisation machine's identity: the checks of a peer's certificate, name, groups and the issuer's CRL, and following the CRL) |
+| [`org/`](org) | `github.com/nfltr/relay/org` | an organisation's own certificate authority for its machines, which runs on the owner's machine, never on the relay (the relay only carries its mailboxes): `orgpki` (the x509 profile, single-use tokens, enrolment, renewal, revocation, CRLs, the hash-chained audit log, root rotation, SSH host certificates, moving the issuer), `orgissuer` (the issuer's directory), `orgmachine` (an enrolled machine's directory), `orgenrol` (enrolment and renewal over the relay's mailboxes). Its models: `spec/enrol/`, `spec/orgmove/`, `spec/proverif/enrol.pv` and `orgmove.pv`. What it issues `client/orgid` checks |
 
-The modules are versioned on their own: tags `proto/vX.Y.Z` and
-`client/vX.Y.Z`.
+The modules are versioned on their own: tags `proto/vX.Y.Z`,
+`client/vX.Y.Z` and `org/vX.Y.Z`.
 
 ## Quick start: expose a local service
 

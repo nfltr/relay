@@ -1,7 +1,7 @@
 # Copyright 2026 nfltr
 # SPDX-License-Identifier: Apache-2.0
 
-MODULES := proto client
+MODULES := proto client org
 
 .PHONY: build vet test test-race fuzz-short proto-gen proto-report check-gosec check-semgrep check-no-legacy-name tidy
 build:
@@ -85,14 +85,14 @@ hooks:
 # proto (stdlib only) and runs from the repository root over both modules.
 .PHONY: check-testknobs stress-race
 check-testknobs:
-	@d=$$(mktemp -d) && (cd proto && GOWORK=off go build -o $$d/testknobs ./internal/tools/testknobs) && $$d/testknobs -allow scripts/testknobs-allow.txt client proto; rc=$$?; rm -rf $$d; exit $$rc
+	@d=$$(mktemp -d) && (cd proto && GOWORK=off go build -o $$d/testknobs ./internal/tools/testknobs) && $$d/testknobs -allow scripts/testknobs-allow.txt client proto org; rc=$$?; rm -rf $$d; exit $$rc
 
 # link's debug mode (-tags linkdebug): vet with the tag, and the tests of the
 # packages that import link with the tag (no -race: scripts/test-linkdebug.sh);
 # fails on any "link debug:" report (leakcheck).
 .PHONY: test-linkdebug
 test-linkdebug:
-	./scripts/test-linkdebug.sh client proto
+	./scripts/test-linkdebug.sh client proto org
 
 # test-race, then test-linkdebug beside fuzz-short (the CI step).
 .PHONY: test-ci
@@ -104,7 +104,7 @@ test-ci:
 # does not list (each entry with a reason) and on a stale entry.
 .PHONY: check-linkvet
 check-linkvet:
-	./scripts/check-linkvet.sh ./client/... ./proto/...
+	./scripts/check-linkvet.sh ./client/... ./proto/... ./org/...
 
 # stress-race PKGS='./client/agent ./proto/wire/chunking' [COUNT=50]: the
 # packages' tests repeated under the race detector (paths from the repository
@@ -146,6 +146,7 @@ spec-proverif:
 # test fails when a model's ids and its rows differ (in make ci).
 spec-bindings:
 	cd client && go test -count=1 -run 'ModelBindings' ./rpcclient/ ./agent/ ./agent/wgexit/ ./capaddr/ ./nf1/ ./orgid/ ./nfnet/
+	cd org && go test -count=1 -run 'ModelBindings' ./orgpki/ ./orgissuer/
 
 # test-go-mutants (in make ci, about a minute): every planted bug of a Go
 # mutant list (client/agent/testdata/org_mutants.txt: the agent's
@@ -153,7 +154,9 @@ spec-bindings:
 # queue; client/orgid/testdata/mutants.txt: the organisation
 # checks; client/nf1/testdata/mutants.txt: the nf1 transport;
 # client/agent/testdata/direct_dgram_mutants.txt: the direct path's
-# datagrams) makes its test fail (scripts/go-mutants.sh).
+# datagrams; org/*/testdata/mutants.txt: the organisation issuer, its
+# machine and issuer stores and enrolment) makes its test fail
+# (scripts/go-mutants.sh).
 .PHONY: test-go-mutants
 test-go-mutants:
 	./scripts/go-mutants.sh client/agent/testdata/org_mutants.txt
@@ -161,6 +164,35 @@ test-go-mutants:
 	./scripts/go-mutants.sh client/orgid/testdata/mutants.txt
 	./scripts/go-mutants.sh client/nf1/testdata/mutants.txt
 	./scripts/go-mutants.sh client/agent/testdata/direct_dgram_mutants.txt
+	./scripts/go-mutants.sh org/orgpki/testdata/mutants.txt
+	./scripts/go-mutants.sh org/orgmachine/testdata/mutants.txt
+	./scripts/go-mutants.sh org/orgenrol/testdata/mutants.txt
+	./scripts/go-mutants.sh org/orgissuer/testdata/mutants.txt
+
+# spec-enrol-ci (in make ci, a few minutes): the organisation certificates'
+# lifecycle (renewal over the relay's mailboxes, revocation, root rotation;
+# spec/enrol/README.md): the invariants, the liveness properties, every
+# mutant, the witnesses and the trace fixtures; spec-enrol-traces: the tests
+# of org/orgpki, orgmachine and orgenrol built -tags enroltrace, each trace
+# checked by spec/enrol/TraceEnrol.tla.
+.PHONY: spec-enrol-ci spec-enrol-traces spec-orgmove-ci spec-orgmove-traces spec-orgmove-repeat
+spec-enrol-ci:
+	./scripts/spec-enrol.sh ci
+spec-enrol-traces:
+	./scripts/spec-enrol.sh traces
+
+# spec-orgmove-ci (in make ci, about a minute): moving an organisation's
+# issuer to another machine (spec/orgmove/README.md): the invariants,
+# MoveCompletes, every mutant, the witnesses and -coverage 1;
+# spec-orgmove-traces: the tests of org/orgpki, orgissuer and orgenrol built
+# -tags enroltrace against spec/orgmove/TraceOrgMove.tla;
+# spec-orgmove-repeat: two moves in a row (about a minute, not in make ci).
+spec-orgmove-ci:
+	./scripts/spec-orgmove.sh ci
+spec-orgmove-traces:
+	./scripts/spec-orgmove.sh traces
+spec-orgmove-repeat:
+	./scripts/spec-orgmove.sh repeat
 
 # Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
 # identical; its test is nfltr's scripts/check_spec_drift_test.sh): every

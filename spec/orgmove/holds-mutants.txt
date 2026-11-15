@@ -1,0 +1,12 @@
+# <mutant> <property> [<cfg>]: TLC on OrgHolds.cfg's constants (or <cfg>'s)
+# with that Mutant must report <property> violated (scripts/spec-orgmove.sh
+# holds); MoveCompletes runs under LiveSpec, HolderKeeps is an action
+# property.
+old-keeps-writing OldCannotWrite
+old-keeps-writing MoveCompletes OrgHoldsLive.cfg
+release-without-fence OldCannotWrite
+release-without-fence MoveCompletes OrgHoldsLive.cfg
+handover-to-anyone HolderKeeps
+refuse-own-tombstone MoveCompletes OrgHoldsLive.cfg
+refuse-finished-tombstone MoveCompletes OrgHoldsLive.cfg
+finish-early FinishAfterPublish

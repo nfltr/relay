@@ -3,7 +3,7 @@
 
 // Package orgid is the read side of an organisation's own certificate
 // authority for its machines (nfltr docs/decisions/org-enrolment-2026-11-09.md;
-// models spec/proverif/e2ee_tcp.pv and nfltr spec/proverif/enrol.pv,
+// models spec/proverif/e2ee_tcp.pv and spec/proverif/enrol.pv,
 // spec/enrol/Enrol.tla): the checks every client and service runs on an
 // organisation peer (Verifier: the chain to the organisation's root, the
 // issuer's name constraints, NotAfter, the machine name, the groups and

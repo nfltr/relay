@@ -4,5 +4,6 @@ toolchain go1.27.4
 
 use (
 	./client
+	./org
 	./proto
 )

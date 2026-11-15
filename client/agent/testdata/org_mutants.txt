@@ -3,7 +3,7 @@
 # each line "<mutant> | <file> | <exact line text> | <replacement> | <test>";
 # the lines of one mutant are applied together and its test must then fail.
 # Models: spec/proverif/e2ee_tcp.pv (downgrade-any-client, the checks'
-# use) and nfltr spec/enrol/Enrol.tla (no-expiry-timer: NoExpiredSession;
+# use) and spec/enrol/Enrol.tla (no-expiry-timer: NoExpiredSession;
 # no-cut-on-update: RevocationBound). The checks themselves (chain, name,
 # groups, CRL, NotAfter) are client/orgid's, with its own mutants.
 ignore-check | org.go | 			until, err := o.CheckClient(cs.PeerCertificates, groups, time.Now()) | 			until, err := time.Now().Add(time.Hour), error(nil) | TestOrgServiceAdmitsGroup

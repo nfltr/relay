@@ -1,0 +1,591 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+package orgpki
+
+import (
+	"crypto"
+	"crypto/ed25519"
+	"crypto/hkdf"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"math/big"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/nfltr/relay/client/orgid"
+)
+
+// ErrRefused wraps every refusal of the issuer (a token, an enrolment, a
+// renewal); the log holds a refused entry for it.
+var ErrRefused = errors.New("refused")
+
+// A token is tokenPrefix<org id>.<token id>.<secret>: the org id (public)
+// names the organisation's mailboxes, which keep the first root's id
+// across a rotation, so a machine pinned on the current root finds them.
+// v1 tokens (nfltr until v2.1.57) carried no org id.
+const (
+	tokenPrefix   = "nfltr-org-token-v2." // #nosec G101 -- the token format prefix, not a credential
+	tokenPrefixV1 = "nfltr-org-token-v1." // #nosec G101 -- the old format's prefix, refused by name
+)
+
+// Sink stores one log line durably before the issuer acts on it (the
+// caller's append-only file).
+type Sink func(line []byte) error
+
+// EnrolRequest is a machine's first request: its CSR, the token's id and
+// HMAC(token, CSR). The relay that carries it never sees the token and
+// cannot attach another key to it (enrol.pv query 5, mutant
+// token-in-request).
+type EnrolRequest struct {
+	TokenID string `json:"token_id"`
+	CSR     []byte `json:"csr"`
+	MAC     []byte `json:"mac"`
+}
+
+// RenewRequest is a renewal: the current certificate, a CSR for a new key,
+// and the current key's signature over that CSR.
+type RenewRequest struct {
+	Cert []byte `json:"cert"`
+	CSR  []byte `json:"csr"`
+	Sig  []byte `json:"sig"`
+}
+
+type tokenRec struct {
+	name      string
+	groups    []string
+	machineID string
+	expires   time.Time
+}
+
+type certRec struct {
+	name, key, digest string
+	token             string // the token an enrolment redeemed; "" for a renewal
+	notAfter          time.Time
+}
+
+type nameRec struct {
+	groups    []string
+	machineID string
+	revoked   bool
+	serials   []string // in issue order
+}
+
+// Issuer is the organisation's automated signer: every act takes its one
+// lock, is written to the log (Sink) and only then takes effect.
+type Issuer struct {
+	mu        sync.Mutex
+	orgID     string
+	root      *x509.Certificate
+	recovery  *x509.Certificate
+	rootLabel string
+	rootKind  string
+	cert      *x509.Certificate
+	key       ed25519.PrivateKey
+	tokenKey  []byte
+	tokens    map[string]*tokenRec
+	names     map[string]*nameRec
+	certs     map[string]*certRec // by serial (hex)
+	crlNumber int64
+	crlNext   time.Time
+	movedTo   string // the receive key the log's last fence names (move.go)
+	head      string
+	heads     map[string]bool // every head the log had: a remote renewal checkpoints one (renew.go)
+	sink      Sink
+}
+
+// The kinds of root primary. An organisation has one, recorded in its init
+// line and kept by every rotation.
+const (
+	RootSecureEnclave = "secure-enclave" // the owner's Mac, Touch ID per signature
+	RootFile          = "file"           // a passphrase-encrypted file, the passphrase per signature
+)
+
+// Genesis is a new organisation's first two log lines: the root and the
+// recovery's certificates (and the root's kind and label), then the
+// issuer's.
+func Genesis(root, recovery *x509.Certificate, rootLabel, rootKind string, issuer *x509.Certificate, now time.Time) ([][]byte, error) {
+	l1, err := encode(Entry{Time: now, Act: ActInit, Cert: root.Raw, Recovery: recovery.Raw, KeyLabel: rootLabel, RootKind: rootKind}, "")
+	if err != nil {
+		return nil, err
+	}
+	l2, err := encode(Entry{Time: now, Act: ActIssuer, Cert: issuer.Raw}, lineHash(l1))
+	if err != nil {
+		return nil, err
+	}
+	return [][]byte{l1, l2}, nil
+}
+
+// Open replays a verified log into an issuer holding key, the private key
+// of the log's current issuer certificate.
+func Open(lines [][]byte, key ed25519.PrivateKey, sink Sink) (*Issuer, error) {
+	entries, head, err := VerifyLog(lines)
+	if err != nil {
+		return nil, err
+	}
+	i := &Issuer{tokens: map[string]*tokenRec{}, names: map[string]*nameRec{}, certs: map[string]*certRec{}, heads: map[string]bool{}, sink: sink}
+	for _, l := range lines {
+		i.heads[lineHash(l)] = true
+	}
+	for _, e := range entries {
+		if err := i.apply(e); err != nil {
+			return nil, err
+		}
+	}
+	i.head = head
+	if i.cert == nil {
+		return nil, errors.New("the log names no issuer under the current root")
+	}
+	if err := i.useKey(key); err != nil {
+		return nil, err
+	}
+	return i, nil
+}
+
+func (i *Issuer) useKey(key ed25519.PrivateKey) error {
+	if pub, ok := i.cert.PublicKey.(ed25519.PublicKey); !ok || !pub.Equal(key.Public()) {
+		return errors.New("the issuer key is not the one the log's issuer certificate names")
+	}
+	tk, err := hkdf.Key(sha256.New, key.Seed(), nil, "nfltr-org-token-key-v1", 32)
+	if err != nil {
+		return err
+	}
+	i.key, i.tokenKey = key, tk
+	return nil
+}
+
+func (i *Issuer) apply(e Entry) error {
+	switch e.Act {
+	case ActInit:
+		root, err := x509.ParseCertificate(e.Cert)
+		if err != nil {
+			return err
+		}
+		if i.recovery, err = x509.ParseCertificate(e.Recovery); err != nil {
+			return err
+		}
+		i.root, i.rootLabel, i.rootKind = root, e.KeyLabel, e.RootKind
+		i.orgID, err = orgid.OrgIDOfRoot(root)
+		return err
+	case ActRotated:
+		root, err := x509.ParseCertificate(e.Cert)
+		i.root, i.rootLabel, i.cert = root, e.KeyLabel, nil
+		return err
+	case ActIssuer:
+		c, err := x509.ParseCertificate(e.Cert)
+		i.cert = c
+		return err
+	case ActToken:
+		i.tokens[e.Token] = &tokenRec{name: e.Name, groups: e.Groups, machineID: e.MachineID, expires: e.NotAfter}
+	case ActIssued, ActRenewed:
+		n := i.names[e.Name]
+		if n == nil {
+			n = &nameRec{groups: e.Groups, machineID: e.MachineID}
+			i.names[e.Name] = n
+		}
+		n.serials = append(n.serials, e.Serial)
+		i.certs[e.Serial] = &certRec{name: e.Name, key: e.Key, digest: e.Digest, token: e.Token, notAfter: e.NotAfter}
+	case ActRevoked:
+		if n := i.names[e.Name]; n != nil {
+			n.revoked = true
+		}
+	case ActCRL:
+		i.crlNumber, i.crlNext = e.Number, e.NotAfter
+	case ActMoved:
+		i.movedTo = e.Key
+	case ActArrived:
+		i.movedTo = ""
+	}
+	return nil
+}
+
+// commit writes e to the log, then applies it. Callers hold mu.
+func (i *Issuer) commit(e Entry) error {
+	if err := i.refuseMoved(e); err != nil {
+		return err
+	}
+	line, err := encode(e, i.head)
+	if err != nil {
+		return err
+	}
+	if err := i.sink(line); err != nil {
+		return fmt.Errorf("audit log: %w", err)
+	}
+	prev := i.head
+	i.head = lineHash(line)
+	i.heads[i.head] = true
+	traceCommit(i.orgID, e, prev, i.head)
+	return i.apply(e)
+}
+
+// refuse logs a refusal and returns it.
+func (i *Issuer) refuse(e Entry, reason string) error {
+	e.Act, e.Reason = ActRefused, reason
+	err := fmt.Errorf("%w: %s", ErrRefused, reason)
+	if lerr := i.commit(e); lerr != nil {
+		return errors.Join(err, lerr)
+	}
+	return err
+}
+
+// RootKind is the root primary's kind. A log of v2.1.57 names none: its
+// root was the Secure Enclave, the only kind then.
+func (i *Issuer) RootKind() string {
+	if i.rootKind == "" {
+		return RootSecureEnclave
+	}
+	return i.rootKind
+}
+
+// OrgID, Root, Recovery, Cert, RootLabel and Head describe the issuer's
+// organisation as its log has it.
+func (i *Issuer) OrgID() string                { return i.orgID }
+func (i *Issuer) Root() *x509.Certificate      { return i.root }
+func (i *Issuer) Recovery() *x509.Certificate  { return i.recovery }
+func (i *Issuer) Cert() *x509.Certificate      { return i.cert }
+func (i *Issuer) RootLabel() string            { return i.rootLabel }
+func (i *Issuer) Groups() []string             { return slices.Clone(i.cert.Subject.OrganizationalUnit) }
+func (i *Issuer) Head() string                 { i.mu.Lock(); defer i.mu.Unlock(); return i.head }
+func (i *Issuer) tokenSecret(id string) []byte { return mac(i.tokenKey, "token\x00"+id) }
+
+func mac(key []byte, msg string) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(msg))
+	return h.Sum(nil)
+}
+
+func enrolMAC(secret, csr []byte) []byte { return mac(secret, "nfltr-org-enrol-v1\x00"+string(csr)) }
+func renewMessage(csr []byte) []byte     { return append([]byte("nfltr-org-renew-v1\x00"), csr...) }
+
+// TokenName is the name the token id was made for, "" for none.
+func (i *Issuer) TokenName(id string) string {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if t := i.tokens[id]; t != nil {
+		return t.name
+	}
+	return ""
+}
+
+// MakeToken makes a single-use bootstrap token for a name not enrolled,
+// bound to its groups (within the issuer's policy) and, when given, the
+// machine id; it lasts ttl.
+func (i *Issuer) MakeToken(name string, groups []string, machineID string, ttl time.Duration, now time.Time) (string, error) {
+	if err := ValidLabel("name", name); err != nil {
+		return "", err
+	}
+	if err := validGroups(groups); err != nil {
+		return "", err
+	}
+	if err := validMachineID(machineID); err != nil {
+		return "", err
+	}
+	if ttl <= 0 || ttl > IssuerLife {
+		return "", fmt.Errorf("token lifetime %s: more than 0 and at most %s", ttl, IssuerLife)
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if policy := i.Groups(); !subset(groups, policy) {
+		return "", fmt.Errorf("%w: groups %v are not all in the issuer's policy %v", ErrRefused, groups, policy)
+	}
+	if i.names[name] != nil {
+		return "", fmt.Errorf("%w: %s is enrolled already; a token is for a new name", ErrRefused, name)
+	}
+	raw := make([]byte, 16)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	id := base64.RawURLEncoding.EncodeToString(raw)
+	if err := i.commit(Entry{Time: now, Act: ActToken, Token: id, Name: name, Groups: slices.Clone(groups), MachineID: machineID, NotAfter: now.Add(ttl)}); err != nil {
+		return "", err
+	}
+	return tokenPrefix + i.orgID + "." + id + "." + base64.RawURLEncoding.EncodeToString(i.tokenSecret(id)), nil
+}
+
+// parseToken splits a token into its organisation's id, its id and its
+// secret.
+func parseToken(token string) (orgID, id string, secret []byte, err error) {
+	token = strings.TrimSpace(token)
+	if strings.HasPrefix(token, tokenPrefixV1) {
+		return "", "", nil, errors.New("an nfltr organisation token of the v1 format (before v2.1.58), which names no organisation: ask the organisation's owner for a new token (nfltr org token)")
+	}
+	rest, ok := strings.CutPrefix(token, tokenPrefix)
+	parts := strings.Split(rest, ".")
+	if ok && len(parts) == 3 {
+		orgID, id = parts[0], parts[1]
+		secret, err = base64.RawURLEncoding.Strict().DecodeString(parts[2])
+	}
+	if !ok || len(parts) != 3 || err != nil || !validOrgID(orgID) || id == "" || len(secret) != sha256.Size {
+		return "", "", nil, errors.New("not an nfltr organisation token")
+	}
+	return orgID, id, secret, nil
+}
+
+// validOrgID: OrgID's form, "o-" and 26 lower-case base32 characters.
+func validOrgID(id string) bool {
+	rest, ok := strings.CutPrefix(id, "o-")
+	sum, err := b32.DecodeString(strings.ToUpper(rest))
+	return ok && err == nil && len(sum) == 16 && rest == strings.ToLower(rest)
+}
+
+// TokenOrgID is the id of the organisation a token is for: it names the
+// organisation's mailboxes (EnrolMailbox and the rest), nothing more. The
+// root a machine takes is the one it was given the fingerprint of.
+func TokenOrgID(token string) (string, error) {
+	orgID, _, _, err := parseToken(token)
+	return orgID, err
+}
+
+// NewEnrolRequest is the machine's side: the request for csr under token.
+func NewEnrolRequest(token string, csr []byte) (EnrolRequest, error) {
+	_, id, secret, err := parseToken(token)
+	if err != nil {
+		return EnrolRequest{}, err
+	}
+	return EnrolRequest{TokenID: id, CSR: csr, MAC: enrolMAC(secret, csr)}, nil
+}
+
+// NewRenewRequest is the machine's side of a renewal: csr for its new key,
+// signed with its current key.
+func NewRenewRequest(cert []byte, current ed25519.PrivateKey, csr []byte) RenewRequest {
+	return RenewRequest{Cert: cert, CSR: csr, Sig: ed25519.Sign(current, renewMessage(csr))}
+}
+
+// parseCSR: a CSR its key signed (proof of possession), for an Ed25519 key.
+// The issuer takes only its key: the name and groups are the token's or
+// the log's (enrol.pv mutant name-from-request).
+func parseCSR(der []byte) (*x509.CertificateRequest, error) {
+	csr, err := x509.ParseCertificateRequest(der)
+	if err != nil {
+		return nil, err
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, err
+	}
+	if _, ok := csr.PublicKey.(ed25519.PublicKey); !ok {
+		return nil, errors.New("the key is not Ed25519")
+	}
+	return csr, nil
+}
+
+// Enrol redeems a token once: the certificate carries the token's name,
+// groups and machine id, never the request's.
+func (i *Issuer) Enrol(req EnrolRequest, now time.Time) ([]byte, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	refusal := Entry{Time: now, Token: req.TokenID}
+	t := i.tokens[req.TokenID]
+	if t == nil {
+		return nil, i.refuse(refusal, "unknown token")
+	}
+	refusal.Name = t.name
+	if !hmac.Equal(req.MAC, enrolMAC(i.tokenSecret(req.TokenID), req.CSR)) {
+		return nil, i.refuse(refusal, "the request is not bound to the token")
+	}
+	if !now.Before(t.expires) {
+		return nil, i.refuse(refusal, "the token expired")
+	}
+	// A token is for a name not enrolled, so its first redemption is its
+	// only one (enrol.pv 5, 6).
+	if i.names[t.name] != nil {
+		return nil, i.refuse(refusal, t.name+" is enrolled already (the token was redeemed, or another token's was)")
+	}
+	cr, err := parseCSR(req.CSR)
+	if err != nil {
+		return nil, i.refuse(refusal, "CSR: "+err.Error())
+	}
+	return i.issue(ActIssued, t.name, t.groups, t.machineID, cr.PublicKey.(ed25519.PublicKey), req.TokenID, "", now)
+}
+
+// Renew re-certifies a machine under the current issuer for a new key. It
+// takes only a certificate its own log holds (Enrol.tla renew-forged), not
+// expired (renew-expired), of a name not revoked (renew-revoked), with the
+// current key's signature over the CSR.
+func (i *Issuer) Renew(req RenewRequest, now time.Time) ([]byte, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	refusal := Entry{Time: now}
+	cur, err := x509.ParseCertificate(req.Cert)
+	if err != nil {
+		return nil, i.refuse(refusal, "certificate: "+err.Error())
+	}
+	sn := hex.EncodeToString(cur.SerialNumber.Bytes())
+	refusal.Serial = sn
+	rec := i.certs[sn]
+	sum := sha256.Sum256(req.Cert)
+	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) {
+		i.traceRefused(sn, cur, "log", now)
+		return nil, i.refuse(refusal, "the certificate is not in the issuer's log")
+	}
+	refusal.Name = rec.name
+	n := i.names[rec.name]
+	if !now.Before(rec.notAfter) {
+		i.traceRefused(sn, cur, "expired", now)
+		return nil, i.refuse(refusal, "the certificate expired; enrol again with a new token")
+	}
+	if n.revoked {
+		i.traceRefused(sn, cur, "revoked", now)
+		return nil, i.refuse(refusal, rec.name+" is revoked")
+	}
+	if pub, ok := cur.PublicKey.(ed25519.PublicKey); !ok || !ed25519.Verify(pub, renewMessage(req.CSR), req.Sig) {
+		i.traceRefused(sn, cur, "other", now)
+		return nil, i.refuse(refusal, "not signed by the certificate's key")
+	}
+	cr, err := parseCSR(req.CSR)
+	if err != nil {
+		i.traceRefused(sn, cur, "other", now)
+		return nil, i.refuse(refusal, "CSR: "+err.Error())
+	}
+	return i.issue(ActRenewed, rec.name, n.groups, n.machineID, cr.PublicKey.(ed25519.PublicKey), "", sn, now)
+}
+
+func (i *Issuer) issue(act, name string, groups []string, machineID string, pub ed25519.PublicKey, token, from string, now time.Time) ([]byte, error) {
+	if !subset(groups, i.cert.Subject.OrganizationalUnit) {
+		return nil, i.refuse(Entry{Time: now, Name: name, Token: token, Serial: from}, fmt.Sprintf("groups %v are outside the issuer's policy", groups))
+	}
+	if !now.Before(i.cert.NotAfter) {
+		return nil, fmt.Errorf("the issuer certificate expired at %s: nfltr org issuer renew", i.cert.NotAfter.UTC().Format(time.RFC3339))
+	}
+	t, err := machineTemplate(i.orgID, name, groups, machineID, i.cert, now)
+	if err != nil {
+		return nil, err
+	}
+	der, err := x509.CreateCertificate(rand.Reader, t, i.cert, pub, i.key)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(der)
+	e := Entry{Time: now, Act: act, Name: name, Groups: slices.Clone(groups), MachineID: machineID,
+		Serial: hex.EncodeToString(t.SerialNumber.Bytes()), From: from, Key: orgid.KeyFingerprint(pub),
+		Digest: hex.EncodeToString(sum[:]), Token: token, NotAfter: t.NotAfter}
+	if err := i.commit(e); err != nil {
+		return nil, err
+	}
+	traceLine(map[string]any{"ev": "issue", "o": i.orgID, "n": name, "s": e.Serial, "from": from, "exp": t.NotAfter.Unix(), "t": now.Unix()})
+	return der, nil
+}
+
+// traceRefused records a refused renewal of serial sn (Enrol.tla Issue's
+// checks: why is log, expired or revoked, or other for a reason outside
+// the model: a signature, the CSR).
+func (i *Issuer) traceRefused(sn string, cur *x509.Certificate, why string, now time.Time) {
+	traceLine(map[string]any{"ev": "refuse", "o": i.orgID, "n": cur.Subject.CommonName, "from": sn, "why": why, "t": now.Unix()})
+}
+
+// Revoke revokes a name: no renewal from now, and every unexpired serial
+// of it in the next CRL.
+func (i *Issuer) Revoke(name string, now time.Time) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	switch n := i.names[name]; {
+	case n == nil:
+		return fmt.Errorf("%s is not enrolled", name)
+	case n.revoked:
+		return fmt.Errorf("%s is revoked already", name)
+	}
+	if err := i.commit(Entry{Time: now, Act: ActRevoked, Name: name}); err != nil {
+		return err
+	}
+	traceLine(map[string]any{"ev": "revoke", "o": i.orgID, "n": name, "t": now.Unix()})
+	return nil
+}
+
+// CRL signs the issuer's next CRL: a higher Number, NextUpdate CRLLife
+// on, every unexpired serial of every revoked name (Enrol.tla
+// revoke-current-only: a renewed machine's earlier certificate is still
+// valid until its NotAfter).
+func (i *Issuer) CRL(now time.Time) ([]byte, error) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	var listed []x509.RevocationListEntry
+	for _, n := range i.names {
+		if !n.revoked {
+			continue
+		}
+		for _, sn := range n.serials {
+			if !now.Before(i.certs[sn].notAfter) {
+				continue
+			}
+			b, _ := hex.DecodeString(sn)
+			listed = append(listed, x509.RevocationListEntry{SerialNumber: new(big.Int).SetBytes(b), RevocationTime: now})
+		}
+	}
+	slices.SortFunc(listed, func(a, b x509.RevocationListEntry) int { return a.SerialNumber.Cmp(b.SerialNumber) })
+	number := i.crlNumber + 1
+	next := now.Add(CRLLife)
+	der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number: big.NewInt(number), ThisUpdate: now, NextUpdate: next, RevokedCertificateEntries: listed,
+	}, i.cert, i.key)
+	if err != nil {
+		return nil, err
+	}
+	if err := i.commit(Entry{Time: now, Act: ActCRL, Number: number, NotAfter: next}); err != nil {
+		return nil, err
+	}
+	rev := []string{}
+	for _, e := range listed {
+		rev = append(rev, hex.EncodeToString(e.SerialNumber.Bytes()))
+	}
+	traceLine(map[string]any{"ev": "crl", "o": i.orgID, "num": number, "next": next.Unix(), "t": now.Unix(), "rev": rev})
+	return der, nil
+}
+
+// checkpoint signs the head with the issuer and the root primary. Callers
+// hold mu.
+func (i *Issuer) checkpoint(root crypto.Signer, now time.Time) error {
+	sig, err := SignCheckpoint(root, i.orgID, i.head)
+	if err != nil {
+		return fmt.Errorf("root signature: %w", err)
+	}
+	return i.commit(Entry{Time: now, Act: ActCheckpoint, Head: i.head, RootSig: sig,
+		IssuerSig: ed25519.Sign(i.key, checkpointMessage(i.orgID, i.head))})
+}
+
+// RenewIssuer has the root primary certify the issuer's key again for
+// IssuerLife under groups, then sign the log's head: two signatures.
+func (i *Issuer) RenewIssuer(root crypto.Signer, groups []string, now time.Time) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	c, err := CertifyIssuer(i.root, root, i.key.Public().(ed25519.PublicKey), groups, now)
+	if err != nil {
+		return err
+	}
+	if err := i.commit(Entry{Time: now, Act: ActIssuer, Cert: c.Raw}); err != nil {
+		return err
+	}
+	return i.checkpoint(root, now)
+}
+
+// Rotate moves the organisation to a new root primary: cross is the
+// recovery key's certificate of it (CrossSign), newRoot its signer and
+// newKey the new issuer's key, which the new root certifies for groups.
+// Machines then renew into the new issuer (Renew, by serials of this log).
+func (i *Issuer) Rotate(cross *x509.Certificate, label string, newRoot crypto.Signer, newKey ed25519.PrivateKey, groups []string, now time.Time) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if err := checkRotation(cross, i.recovery, i.root); err != nil {
+		return err
+	}
+	c, err := CertifyIssuer(cross, newRoot, newKey.Public().(ed25519.PublicKey), groups, now)
+	if err != nil {
+		return err
+	}
+	if err := i.commit(Entry{Time: now, Act: ActRotated, Cert: cross.Raw, KeyLabel: label}); err != nil {
+		return err
+	}
+	if err := i.commit(Entry{Time: now, Act: ActIssuer, Cert: c.Raw}); err != nil {
+		return err
+	}
+	if err := i.useKey(newKey); err != nil {
+		return err
+	}
+	return i.checkpoint(newRoot, now)
+}

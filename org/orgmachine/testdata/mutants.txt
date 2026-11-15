@@ -1,0 +1,15 @@
+# Planted bugs of orgmachine (scripts/go-mutants.sh org/orgmachine/testdata/mutants.txt,
+# make test-go-mutants), in the format of
+# orgpki's testdata/mutants.txt. Models: relay spec/proverif/e2ee_tcp_org.pv
+# (the client's name and check, the service's group) and spec/enrol/Enrol.tla
+# (no-expiry-timer: NoExpiredSession; no-cut-on-update and reload-skips-crl:
+# RevocationBound).
+client-no-name-check | orgmachine.go | 	id, err := m.ver.Check(certs[0], certs[1], orgid.Peer{Name: name}, now) | 	id, err := m.ver.Check(certs[0], certs[1], orgid.Peer{}, now) | TestNamedMachineAndGroup
+client-skips-check | orgmachine.go | 			return until, fmt.Errorf("the server is not machine %s of the organisation (a machine enrols under its name in the account and is dialled as <machine>.<agent>): %w", name, err) | 			_ = err | TestNamedMachineAndGroup
+group-dial-skips-check | orgmachine.go | 			return until, fmt.Errorf("the server is not a machine of group %s: %w", group, err) | 			_ = err | TestGroupDialChecksTheGroup
+no-group-check | orgmachine.go | 		id, cerr := m.ver.Check(certs[0], certs[1], orgid.Peer{Group: g}, now) | 		id, cerr := m.ver.Check(certs[0], certs[1], orgid.Peer{Group: g[:0]}, now) | TestNamedMachineAndGroup
+no-expiry-timer | orgmachine.go | 	t := time.NewTimer(time.Until(until)) | 	t := time.NewTimer(time.Hour) | TestHoldEndsAtUntil
+no-cut-on-update | orgmachine.go | 			u, cerr := check(time.Now()) | 			u, cerr := until, error(nil) | TestRevocationCutsHeldSession
+reload-skips-crl | orgmachine.go | 		if err := m.ver.TakeCRL(crl, issuer, now); err != nil { | 		if false && m.ver.TakeCRL(crl, issuer, now) != nil { | TestRevocationCutsHeldSession
+install-stale-answer | orgmachine.go | 	if pub, ok := leaf.PublicKey.(ed25519.PublicKey); !ok || !pub.Equal(key.Public()) { | 	if _, ok := leaf.PublicKey.(ed25519.PublicKey); !ok { | TestInstallRefusesAnotherKey
+install-any-host-cert | orgmachine.go | 	if _, err := orgpki.CheckHostCert(hostCert, leaf, issuer); err != nil { | 	if _, err := orgpki.CheckHostCert(hostCert, leaf, issuer); false { | TestInstallChecksHostCert

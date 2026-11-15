@@ -22,14 +22,14 @@
    end; two relays are one attacker. It holds the keys of: eve (enrolled,
    live, group web: not the service's group), lost (group db, revoked: its
    serial on the CRL), old (group db, expired), and two of web's own (an
-   expired one and a revoked one). nfltr's enrol.pv proves who can get a
+   expired one and a revoked one). enrol.pv proves who can get a
    certificate of the organisation (only the issuer under the root, for a
    token's own name); here the organisation's signing key is one private
    key, orgk, and a certificate is its signature over (name, group, key,
    serial, validity). The CRL the verifier holds lists serWebRev and
    serLost; validity live or expired is the verifier's clock against
    NotAfter. Time and re-checks (a session ends at Identity.Until, a newer
-   CRL cuts what it lists) are nfltr spec/enrol/Enrol.tla's
+   CRL cuts what it lists) are spec/enrol/Enrol.tla's
    NoExpiredSession and RevocationBound, not here.
 
    TLS 1.3 is not re-proven: a client that checked the server's

@@ -1,0 +1,21 @@
+# <mutant> <property> [<cfg>]: TLC on Enrol.cfg's constants (or <cfg>'s)
+# with that Mutant must report <property> violated (scripts/spec-enrol.sh
+# mutants); a temporal property (TakesEffect, MachinesFollowRotation) runs
+# under LiveSpec.
+no-expiry-check NoExpiredSession
+no-expiry-timer NoExpiredSession
+fail-open RevocationBound
+no-crl-check RevokedMachineRefused
+no-cut-on-update RevokedMachineRefused
+accept-older-crl RevokedMachineRefused
+revoke-current-only RevokedMachineRefused
+renew-revoked NoRenewAfterRevoke
+renew-revoked RevokedMachineRefused
+renew-forged ForgedOnlyUnderStolenRoot
+keep-old-root SessionsOnTrustedRoot
+rotate-by-primary RootsAreOwners
+push-only TakesEffect
+no-reissue-on-rotation MachinesFollowRotation
+check-at-request NoRenewAfterRevoke
+install-stale-answer MachineHoldsItsKey
+no-retry MachinesFollowRotation EnrolLoss.cfg

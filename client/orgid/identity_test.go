@@ -18,7 +18,7 @@ import (
 
 // Each test names the property of spec/proverif/e2ee_tcp.pv or nfltr
 // spec/enrol/Enrol.tla it enforces; testdata/mutants.txt plants the bug
-// that makes it fail (make test-go-mutants). nfltr orgmachine's tests of
+// that makes it fail (make test-go-mutants). org/orgmachine's tests of
 // the same names.
 
 // session runs a TLS session of organisation mode over a pipe: the server

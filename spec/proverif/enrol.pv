@@ -1,0 +1,219 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   enrol.pv: enrolment through an organisation root of trust.
+   spec/proverif/README.md.
+
+   The organisation root (its primary key on the owner's machine, behind
+   Touch ID) certifies an issuer; the issuer (the enrolment signer, on the
+   owner's machine, under the owner's policy) gives each machine a
+   short-lived x509 certificate: name, public key, serial, expiry, group.
+   A machine makes its own key and redeems a single-use bootstrap token
+   that names it; it renews with its current key. Clients take a peer
+   "signed by the organisation with name X"; services admit "an
+   organisation certificate in group Y"; both check expiry and the
+   issuer's current CRL. A stolen root is replaced by a rotation statement
+   signed by the offline recovery key.
+
+   The attacker owns the relay: every enrolment request and answer, every
+   certificate, CRL and rotation statement it carries (it can replay an
+   old CRL or withhold a new one). It also holds: an enrolled machine's key
+   (mallory), a revoked stolen laptop's key (lost), a rotated-out key of
+   web whose certificate has expired, the bootstrap token of a machine not
+   yet enrolled (new1), and the old root's primary key. Signatures and
+   HMAC are ideal. Time is two epochs: ep_now (the verifier's clock) and
+   ep_old (anything that has expired, a CRL past its NextUpdate).
+
+   The code: org/orgpki (README "Code map"); every query
+   it enforces has a test there, and testdata/mutants.txt plants the
+   mutants below in the Go code (make test-go-mutants). *)
+
+free c: channel.                      (* the relay *)
+
+type skey.
+type pkey.
+type mname.
+type epoch.
+type group.
+
+fun pk(skey): pkey.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+reduc forall m: bitstring, k: skey; getmess(sign(m, k)) = m.
+fun hmac(bitstring, bitstring): bitstring.
+
+free web, mallory, lost, new1: mname.
+free ep_old, ep_now: epoch.
+free g_db, g_other: group.
+free none, s_lost: bitstring.          (* serials are public *)
+
+(* x509 (crypto/x509): the issuer's CA certificate, a machine's leaf
+   (DNS SAN <name>.<org>.internal, OU the group, NotAfter), a CRL
+   (ThisUpdate/NextUpdate as its epoch, one revoked serial here), and the
+   rotation statement (a cross-signed certificate of the new root). *)
+fun issuercert(pkey): bitstring [data].
+fun leaf(mname, pkey, bitstring, epoch, group): bitstring [data].
+fun crl(epoch, bitstring): bitstring [data].
+fun rotation(pkey): bitstring [data].
+fun renewal(pkey): bitstring [data].   (* a CSR for the new key, signed with the current one *)
+
+free skRoot: skey [private].           (* the root's current primary *)
+free skOld: skey [private].            (* the old root's primary: stolen, below *)
+free skRec: skey [private].            (* the recovery key, offline *)
+free skIss: skey [private].            (* the issuer *)
+
+event TokenMade(bitstring, mname).
+event Enrolled(bitstring, mname, pkey).
+event Holds(mname, pkey).              (* an honest machine made this key for its name *)
+event Issued(mname, pkey, bitstring, epoch, group).
+event Revoked(mname).
+event Accepted(mname, pkey, bitstring, epoch).
+event Admitted(mname, pkey).
+event IssuerCertified(pkey).
+event RecoverySigned(pkey).
+event RotatedTo(pkey).
+event TrustsIssuer(pkey).
+
+(* The issuer redeems a token once: the name and group are the token's,
+   fixed when the owner made it for a name not enrolled; the request binds
+   the machine's key to the token by an HMAC, so the relay never sees the
+   token and cannot attach another key to it. *)
+let Redeem(t: bitstring, n: mname, g: group) =
+  new s: bitstring;
+  in(c, (nr: mname, k: pkey, m: bitstring));
+  if m = hmac(t, (nr, k)) then        (* NOT:token-in-request *)
+  if m = t then                        (* ONLY:token-in-request *)
+  let nn = n in                        (* NOT:name-from-request *)
+  let nn = nr in                       (* ONLY:name-from-request *)
+  event Enrolled(t, nn, k);
+  event Issued(nn, k, s, ep_now, g);
+  out(c, sign(leaf(nn, k, s, ep_now, g), skIss)).
+
+(* web: its token delivered by the fleet's provisioning (cloud-init, a
+   k8s secret, MDM), not by the relay. *)
+let WebMachine(t: bitstring) =
+  new sk: skey;
+  event Holds(web, pk(sk));
+  out(c, (web, pk(sk), hmac(t, (web, pk(sk))))).   (* NOT:token-in-request *)
+  out(c, (web, pk(sk), t)).                        (* ONLY:token-in-request *)
+
+(* Renewal: the current certificate and a CSR for the new key signed with
+   the current one; refused for an expired or revoked certificate. *)
+let Renew =
+  new s2: bitstring;                   (* before the input: the serial is the issuer's, not a function of the request *)
+  in(c, (cert: bitstring, k2: pkey, pop: bitstring));
+  let leaf(n, k, s, e, g) = checksign(cert, pk(skIss)) in
+  if e = ep_now then                   (* NOT:renew-expired *)
+  if s <> s_lost then                  (* NOT:renew-revoked *)
+  if checksign(pop, k) = renewal(k2) then
+  event Issued(n, k2, s2, ep_now, g);
+  out(c, sign(leaf(n, k2, s2, ep_now, g), skIss)).
+
+(* A client dialing the service of machine x (the pin "signed by the
+   organisation root with name x"): chain to the root, name, expiry, a
+   current CRL from the same issuer that does not list the serial. The TLS
+   1.3 handshake then binds the session to the holder of k (assumed). *)
+let Client =
+  in(c, x: mname);
+  in(c, (icert: bitstring, lcert: bitstring, crlm: bitstring));
+  let issuercert(ki) = checksign(icert, pk(skRoot)) in   (* NOT:no-chain-check *)
+  let issuercert(ki) = getmess(icert) in                 (* ONLY:no-chain-check *)
+  let leaf(n, k, s, e, g) = checksign(lcert, ki) in
+  if n = x then                        (* NOT:no-name-check *)
+  if e = ep_now then                   (* NOT:no-expiry-check *)
+  let crl(ce, r) = checksign(crlm, ki) in
+  if ce = ep_now then                  (* NOT:stale-crl *)
+  if s <> r then                       (* NOT:no-crl-check *)
+  event Accepted(x, k, s, e).
+
+(* A service admitting clients of group g_db (allow_client "an
+   organisation certificate in group db"): the same verification, and the
+   group. *)
+let Service =
+  in(c, (icert: bitstring, lcert: bitstring, crlm: bitstring));
+  let issuercert(ki) = checksign(icert, pk(skRoot)) in   (* NOT:no-chain-check *)
+  let issuercert(ki) = getmess(icert) in                 (* ONLY:no-chain-check *)
+  let leaf(n, k, s, e, g) = checksign(lcert, ki) in
+  if e = ep_now then                   (* NOT:no-expiry-check *)
+  let crl(ce, r) = checksign(crlm, ki) in
+  if ce = ep_now then                  (* NOT:stale-crl *)
+  if s <> r then                       (* NOT:no-crl-check *)
+  if g = g_db then                     (* NOT:no-group-check *)
+  event Admitted(n, k).
+
+(* A machine still pinned to the old root (its primary stolen) and the
+   recovery key: it moves to the root a rotation statement names, then
+   trusts issuers under that root only. *)
+let RotClient =
+  in(c, rm: bitstring);
+  let rotation(kn) = checksign(rm, pk(skRec)) in         (* NOT:rotate-by-primary *)
+  let rotation(kn) = checksign(rm, pk(skOld)) in         (* ONLY:rotate-by-primary *)
+  event RotatedTo(kn);
+  in(c, icert: bitstring);
+  let issuercert(ki) = checksign(icert, kn) in           (* NOT:keep-old-root *)
+  let issuercert(ki) = checksign(icert, pk(skOld)) in    (* ONLY:keep-old-root *)
+  event TrustsIssuer(ki).
+
+let Setup =
+  (* web's previous key: rotated out, its certificate expired, the key leaked *)
+  new sko: skey; new so: bitstring;
+  event Holds(web, pk(sko));
+  event Issued(web, pk(sko), so, ep_old, g_db);
+  out(c, sign(leaf(web, pk(sko), so, ep_old, g_db), skIss)); out(c, sko);
+  (* mallory: enrolled, then compromised (not revoked) *)
+  new skm: skey; new sm: bitstring;
+  event Holds(mallory, pk(skm));
+  event Issued(mallory, pk(skm), sm, ep_now, g_other);
+  out(c, sign(leaf(mallory, pk(skm), sm, ep_now, g_other), skIss)); out(c, skm);
+  (* lost: a stolen laptop in group db, revoked *)
+  new skl: skey;
+  event Holds(lost, pk(skl));
+  event Issued(lost, pk(skl), s_lost, ep_now, g_db);
+  event Revoked(lost);
+  out(c, sign(leaf(lost, pk(skl), s_lost, ep_now, g_db), skIss)); out(c, skl);
+  (* the CRL before the revoke (now past its NextUpdate) and the current one *)
+  out(c, sign(crl(ep_old, none), skIss));
+  out(c, sign(crl(ep_now, s_lost), skIss));
+  (* the issuer's certificate, signed by the root after Touch ID *)
+  event IssuerCertified(pk(skIss));
+  out(c, sign(issuercert(pk(skIss)), skRoot));
+  (* the old root's primary was stolen; the recovery key rotated to skRoot *)
+  out(c, skOld);
+  event RecoverySigned(pk(skRoot));
+  out(c, sign(rotation(pk(skRoot)), skRec)).
+
+(* 1. no name without the root: every accepted name and key was issued *)
+query n: mname, k: pkey, s: bitstring, e: epoch, g: group;
+  event(Accepted(n, k, s, e)) ==> event(Issued(n, k, s, e, g)).
+(* 2. a client taking web reaches a key web made *)
+query k: pkey, s: bitstring, e: epoch; event(Accepted(web, k, s, e)) ==> event(Holds(web, k)).
+(* 3. an expired certificate is refused *)
+query n: mname, k: pkey, s: bitstring; event(Accepted(n, k, s, ep_old)) ==> false.
+(* 4. a revoked machine is refused, also after it tries to renew *)
+query n: mname, k: pkey, s: bitstring, e: epoch; event(Accepted(n, k, s, e)) && event(Revoked(n)) ==> false.
+(* 5. a token enrols one key (single use) *)
+query t: bitstring, n: mname, k: pkey; inj-event(Enrolled(t, n, k)) ==> inj-event(TokenMade(t, n)).
+(* 6. a token enrols only the name it was made for (never an existing one) *)
+query t: bitstring, n: mname, k: pkey; event(Enrolled(t, n, k)) ==> event(TokenMade(t, n)).
+(* 7. a service admits only certificates issued in its group *)
+query n: mname, k: pkey, s: bitstring, e: epoch; event(Admitted(n, k)) ==> event(Issued(n, k, s, e, g_db)).
+(* 8. a rotation is taken only when the recovery key signed it *)
+query k: pkey; event(RotatedTo(k)) ==> event(RecoverySigned(k)).
+(* 9. after the rotation, only issuers the new root certified *)
+query k: pkey; event(TrustsIssuer(k)) ==> event(IssuerCertified(k)).
+(* 10-14. witnesses (1, 7, 6, 8, 9 not vacuous): web reached; a client
+   admitted; the leaked token's own name enrolled by whoever redeems it
+   first (the stated residual: one name, once, and web's provisioning
+   then fails visibly); a rotation; an issuer trusted after it *)
+query k: pkey, s: bitstring; event(Accepted(web, k, s, ep_now)).
+query n: mname, k: pkey; event(Admitted(n, k)).
+query t: bitstring, k: pkey; event(Enrolled(t, new1, k)).
+query k: pkey; event(RotatedTo(k)).
+query k: pkey; event(TrustsIssuer(k)).
+
+process
+  Setup |
+  (new tw: bitstring; event TokenMade(tw, web); (Redeem(tw, web, g_db) | WebMachine(tw))) |
+  (new t1: bitstring; event TokenMade(t1, new1); out(c, t1); Redeem(t1, new1, g_other)) |   (* NOT:reusable-token *)
+  (new t1: bitstring; event TokenMade(t1, new1); out(c, t1); !Redeem(t1, new1, g_other)) |  (* ONLY:reusable-token *)
+  (!Renew) | (!Client) | (!Service) | (!RotClient)

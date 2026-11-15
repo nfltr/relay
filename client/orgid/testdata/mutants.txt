@@ -2,12 +2,12 @@
 # make test-go-mutants, in make ci): each line "<mutant> | <file> | <exact
 # line text> | <replacement> | <test>"; the lines of one mutant are applied
 # together and its test must then fail. The verifier's and the machine
-# identity's mutants of nfltr orgpki, orgmachine and orgenrol, moved with
-# their code. Models: nfltr spec/proverif/enrol.pv and spec/enrol/Enrol.tla
+# identity's mutants of org/orgpki, orgmachine and orgenrol, moved with
+# their code. Models: spec/proverif/enrol.pv and spec/enrol/Enrol.tla
 # (no-expiry-timer: NoExpiredSession; no-cut-on-update, reload-skips-crl:
 # RevocationBound; push-only: TakesEffect; crl-no-wake-on-rotation:
 # MachinesFollowRotation), spec/proverif/e2ee_tcp.pv (the client's name and
-# check, the group). Not here: the issuer's (nfltr orgpki), keep-old-root
+# check, the group). Not here: the issuer's (org/orgpki), keep-old-root
 # (the verifier holds one root: TakeRotation replaces it).
 no-chain-check | verify.go | 	return c.Verify(opts) | 	_ = opts; return [][]*x509.Certificate{{c, issuer, v.root}}, nil | TestForgedNameRefused
 no-name-check | verify.go | 		dnsName = MachineDNS(want.Name, v.orgID) | 		_ = 0 | TestForgedNameRefused

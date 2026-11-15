@@ -1,0 +1,164 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   orgmove.pv: an organisation's issuer moving to another machine.
+   spec/proverif/README.md.
+
+   The old machine holds the organisation's secrets: the issuer key and
+   the root primary (a file root's file, or a Secure Enclave key). Only
+   the issuer key moves (the root stays with its owner): the bundle never carries root-*.key, the new
+   machine refuses one that does and finish keeps it (orgissuer
+   TestRootStaysWithItsOwner, Go mutants root-moves, finish-deletes-root).
+   The machine-key root beside it (a2a-root.key) is not the
+   organisation's and never moves with it (the services that use it stay
+   where they run); orgissuer's
+   TestBundleCarriesNoA2ARoot guards that. The new
+   machine makes a single-use receive key (HPKE, DHKEM X25519) and shows
+   its public half; the owner carries it to the old machine out of band
+   (typed or pasted, as a pairing link). The old machine writes
+   the fence naming that key into its log, seals the bundle (log, fence,
+   issuer key) to it with crypto/hpke and sends it through the relay (or as a
+   file). The new machine opens it, checks the log's issuer certificate
+   chains to the root it was told (--root FP, the pin every machine has)
+   and certifies the issuer key in the bundle, and that the fence names
+   its own receive key, then imports.
+
+   The attacker owns the relay: every byte of the bundle, and any number
+   of bundles it seals itself to the receive key (HPKE Base mode says
+   nothing of who sealed). It holds another organisation's keys of its own.
+   Who serves when, the fence's order and the token's single use are state
+   (spec/orgmove/OrgMove.tla); this model is the transfer's secrecy and
+   authenticity.
+
+   Then the issuer serves on the new machine (the VM) and the root stays
+   on the old one (the owner's Mac): the monthly renewal crosses the wire
+   (orgpki renew.go). The issuer signs a request (its key, a fresh log
+   head); the root holder answers only a request naming the issuer key it
+   pins and signed by it, with the issuer certificate and the root's
+   checkpoint of that head; the issuer installs only an answer that the
+   root signed, for its own key and that head. In phase 1 the new machine
+   is compromised (it hands the attacker all it holds) and the root holder
+   keeps answering: the compromise costs the issuer key, never the root,
+   and gets no certificate for another key.
+
+   Code (org/; the commands are nfltr's orgcli: move.go receive, send,
+   finish; org.go issuer renew --request-out|--answer, issuer sign):
+   orgissuer bundle.go (Send: the fence and the seal; Import: the open and
+   its checks), orgpki move.go (the fence, FencedFor); the renewal:
+   orgpki renew.go.
+
+   Bindings (make spec-bindings: one row each in orgissuer
+   bundle_test.go's TestOrgMoveModelBindings, which changes that binding
+   of the honest move, as a relay can, and requires the import to refuse):
+     BIND:move.rcpt   the bundle opens only with this machine's receive key (seal(r, b))
+     BIND:move.root   the issuer the bundle carries is certified by the pinned root (checksign(cert, pk(kroot)))
+     BIND:move.fence  the log's fence names this machine's receive key (fence = pk(skr))
+   and in orgpki renew_test.go's TestIssuerRenewalModelBindings, which
+   changes that binding of the honest renewal and requires the root holder
+   (pin, reqsig) or the issuer (root, key, head) to refuse:
+     BIND:renew.pin     the root signs only for the issuer key it pins (p = pk(kiss))
+     BIND:renew.reqsig  ... and only a request that key signed (checksign(s, p) = req)
+     BIND:renew.root    the issuer installs only a certificate of the pinned root (checksign(cert, pk(kroot)))
+     BIND:renew.key     ... that names its own key (=pk(k))
+     BIND:renew.head    ... with the root's checkpoint of its own head (=h) *)
+
+free c: channel.                 (* the relay; also a file the owner carries; ssh *)
+
+type skey.
+fun pk(skey): bitstring.
+fun seal(bitstring, bitstring): bitstring.
+reduc forall s: skey, m: bitstring; open(s, seal(pk(s), m)) = m.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, s: skey; checksign(sign(m, s), pk(s)) = m.
+const lIssuer, lRequest, lCheckpoint: bitstring.
+
+free kroot: skey [private].      (* the root primary (file root: its file, under its passphrase) *)
+free kiss: skey [private].       (* issuer.key *)
+free kevil: skey.                (* an issuer key of the attacker's own organisation *)
+
+event Sent(bitstring, bitstring).      (* the old machine sealed issuer key pk to receive key r *)
+event Imported(bitstring, bitstring).  (* receive key r imported issuer pk *)
+event Requested(bitstring, bitstring). (* issuer key pk asked a renewal at head h *)
+event Signed(bitstring, bitstring).    (* the root answered pk's request at head h (phase 0) *)
+event Installed(bitstring, bitstring). (* issuer key pk installed a renewal at head h *)
+
+(* The old machine: one move per receive key the owner types on it (an
+   argument: the out-of-band step). *)
+let Old(rOwner: bitstring) =
+  let r = rOwner in        (* NOT:recipient-via-relay *)
+  in(c, r: bitstring);     (* ONLY:recipient-via-relay *)
+  let cert = sign((lIssuer, pk(kiss)), kroot) in
+  let b = (kiss, cert, r) in          (* NOT:root-moves *)
+  let b = (kiss, kroot, cert, r) in   (* ONLY:root-moves *)
+  event Sent(r, pk(kiss));
+  out(c, seal(r, b))       (* NOT:plain-bundle *)
+  (* ONLY:plain-bundle *) out(c, b)
+  .
+
+(* The issuer on the new machine: renewals, each at a fresh head. *)
+let Issuer(k: skey) =
+  !(new h: bitstring;
+    let req = (lRequest, pk(k), h) in
+    event Requested(pk(k), h);
+    out(c, (req, sign(req, k)));
+    in(c, (cert: bitstring, cp: bitstring));
+    let (=lIssuer, =pk(k)) = checksign(cert, pk(kroot)) in
+    let (=lCheckpoint, =h) = checksign(cp, pk(kroot)) in               (* NOT:answer-unbound *)
+    let (=lCheckpoint, hx: bitstring) = checksign(cp, pk(kroot)) in    (* ONLY:answer-unbound *)
+    event Installed(pk(k), h)).
+
+(* The new machine: a fresh receive key, shown to the owner; one import;
+   then it serves, and in phase 1 it is compromised. *)
+let New(skr: skey) =
+  out(c, pk(skr));
+  in(c, x: bitstring);
+  let (k: skey, cert: bitstring, fence: bitstring) = open(skr, x) in             (* NOT:root-moves *)
+  let (k: skey, rk: skey, cert: bitstring, fence: bitstring) = open(skr, x) in   (* ONLY:root-moves *)
+  if fence = pk(skr) then
+  let (=lIssuer, =pk(k)) = checksign(cert, pk(kroot)) in   (* NOT:no-root-check *)
+  event Imported(pk(skr), pk(k));
+  (Issuer(k) | phase 1; out(c, k))           (* NOT:root-moves *)
+  (Issuer(k) | phase 1; out(c, (k, rk)))     (* ONLY:root-moves *)
+  .
+
+(* The root holder (the old machine, the root kept): it pins the issuer
+   key of its own copy of the log. *)
+let Root =
+  in(c, (req: bitstring, s: bitstring));
+  let (=lRequest, p: bitstring, h: bitstring) = req in
+  if p = pk(kiss) then                  (* NOT:sign-any-issuer *)
+  if checksign(s, p) = req then         (* NOT:unsigned-request *)
+  event Signed(p, h);
+  out(c, (sign((lIssuer, p), kroot), sign((lCheckpoint, h), kroot))).
+
+(* ... after the new machine's compromise. *)
+let RootLate =
+  in(c, (req: bitstring, s: bitstring));
+  let (=lRequest, p: bitstring, h: bitstring) = req in
+  if p = pk(kiss) then                  (* NOT:sign-any-issuer *)
+  if checksign(s, p) = req then         (* NOT:unsigned-request *)
+  out(c, (sign((lIssuer, p), kroot), sign((lCheckpoint, h), kroot))).
+
+(* 1. the issuer key stays the owner's during the move (the relay) *)
+query attacker(kiss) phase 0.
+(* 2. the root never leaves its owner: not through the relay, not by the
+      new machine's compromise *)
+query attacker(kroot).
+(* 3. a machine imports only the organisation's own issuer, as the old
+      machine sealed it, and only for its own receive key *)
+query r: bitstring, p: bitstring; event(Imported(r, p)) ==> event(Sent(r, p)).
+(* 4. witness: an import happens (3 is not vacuous) *)
+query r: bitstring, p: bitstring; event(Imported(r, p)).
+(* 5. no root certificate of another key: the attacker owns the relay and
+      the wire, and in phase 1 the new machine *)
+query attacker(sign((lIssuer, pk(kevil)), kroot)).
+(* 6. the issuer installs only the root's answer to its own key and head *)
+query p: bitstring, h: bitstring; event(Installed(p, h)) ==> event(Signed(p, h)).
+(* 7. the root checkpoints only a head the issuer asked for (phase 0) *)
+query p: bitstring, h: bitstring; event(Signed(p, h)) ==> event(Requested(p, h)).
+(* 8. witness: a renewal is installed (6 is not vacuous) *)
+query p: bitstring, h: bitstring; event(Installed(p, h)).
+
+process
+  out(c, pk(kroot)); out(c, pk(kiss));
+  (!(new skr: skey; (Old(pk(skr)) | New(skr))) | !Root | phase 1; !RootLate)

@@ -17,7 +17,7 @@ import (
 // spec/proverif/enrol.pv query, spec/enrol/Enrol.tla invariant) and the
 // planted bug in testdata/mutants.txt that makes it fail
 // (scripts/go-mutants.sh, make test-go-mutants). The verifier's halves of
-// nfltr orgpki's tests of the same names; the issuer's halves stay there.
+// org/orgpki's tests of the same names; the issuer's halves stay there.
 
 func TestHonestMachineChecks(t *testing.T) {
 	o := newTestOrg(t, t0)

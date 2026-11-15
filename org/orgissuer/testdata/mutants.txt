@@ -1,0 +1,19 @@
+# Planted bugs of orgissuer's move (scripts/go-mutants.sh org/orgissuer/testdata/mutants.txt,
+# make test-go-mutants), in the format of
+# orgpki's testdata/mutants.txt. Models: spec/orgmove/OrgMove.tla (the
+# mutants of its mutants.txt by name), spec/proverif/orgmove.pv (no-root-check, root-moves).
+no-spool-in-bundle | bundle.go | 	return dir == "org/answers/" && base != "" && !strings.HasPrefix(base, ".") | 	return dir == "" && base == "" | TestMoveRoundTrip
+reusable-receive-key | bundle.go | 	if err := os.Remove(keyPath); err != nil { | 	if err := error(nil); err != nil { | TestReceiveKeyIsSingleUse
+ephemeral-receive-key | bundle.go | 		if err := orgfiles.WriteNew(path, pem.EncodeToMemory(&pem.Block{Type: pemReceive, Bytes: k.Bytes()}), 0o600); err != nil { | 		if err := error(nil); err != nil { | TestReceiveKeySurvivesARestart
+no-resend | bundle.go | 		if sealed, err := os.ReadFile(s.Path(SealedFile)); err == nil { // #nosec G304 -- the issuer's own file | 		if sealed := []byte(nil); true { | TestMoveResendsUntilImported
+fence-names-no-recipient | bundle.go | 	case moved != fp: | 	case false: | TestMoveResendsUntilImported
+no-root-check | bundle.go | 	if got := orgid.Fingerprint(iss.Root()); got != rootPin { | 	if got := orgid.Fingerprint(iss.Root()); false { | TestOrgMoveModelBindings
+import-unfenced | bundle.go | 	if err := iss.Arrive(fp, now); err != nil { // the log ends in the fence naming this key | 	if false { | TestOrgMoveModelBindings
+no-fence | bundle.go | 			err = iss.Fence(fp, now) | 			_ = fp | TestMoveRoundTrip
+a2a-root-moves | bundle.go | 	case "org/" + LogFile, "org/" + IssuerKeyFile, "org/" + CRLFile: | 	case "org/" + LogFile, "org/" + IssuerKeyFile, "org/" + CRLFile, "a2a-root.key", "a2a-machines.json": | TestBundleCarriesNoA2ARoot
+finish-deletes-a2a-root | bundle.go | 	for _, p := range []string{s.Path(IssuerKeyFile), s.Path(IssuerKeyFile + ".new"), s.Path(SealedFile)} { | 	for _, p := range []string{s.Path(IssuerKeyFile), s.Path(IssuerKeyFile + ".new"), s.Path(SealedFile), filepath.Join(configDir, "a2a-root.key")} { | TestBundleCarriesNoA2ARoot
+root-moves | bundle.go | 	return dir == "org/answers/" && base != "" && !strings.HasPrefix(base, ".") | 	return (dir == "org/answers/" && base != "" && !strings.HasPrefix(base, ".")) || (dir == "org/" && strings.HasPrefix(base, "root-") && strings.HasSuffix(base, ".key")) | TestRootStaysWithItsOwner
+finish-deletes-root | bundle.go | 	for _, p := range []string{s.Path(IssuerKeyFile), s.Path(IssuerKeyFile + ".new"), s.Path(SealedFile)} { | 	for _, p := range []string{s.Path(IssuerKeyFile), s.Path(IssuerKeyFile + ".new"), s.Path(SealedFile), s.Path("root-org.key")} { | TestRootStaysWithItsOwner
+root-left-behind-on-return | bundle.go | var tombstoneFiles = []string{"answers", CRLFile, KRLFile, SealedFile, "publish-failing.json", LogFile} | var tombstoneFiles = []string{"answers", CRLFile, KRLFile, SealedFile, "publish-failing.json", "root-org.key", LogFile} | TestRootStaysWithItsOwner
+refuse-own-tombstone | bundle.go | 			if !extendsLog(splitLines(members["org/"+LogFile]), lines) { | 			if true { | TestMoveBackReplacesTheTombstone
+receive-drops-membership | bundle.go | 			if err := os.Rename(s.Path(f), filepath.Join(aside, f)); err != nil && !errors.Is(err, os.ErrNotExist) { | 			if err := os.Rename(dir, aside+f[:0]); err != nil && !errors.Is(err, os.ErrNotExist) { | TestReceiveKeepsTheMachinesMembership

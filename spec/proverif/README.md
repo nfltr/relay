@@ -317,9 +317,8 @@ service admits a client certificate of the organisation in an allowed
 group, and sends its plaintext only to the target it fixed (its table's,
 `--forward`'s). The attacker owns the relays and holds the keys of eve
 (live, another group), lost (revoked), old (expired), and an expired and a
-revoked key of web itself. Who can get a certificate at all is nfltr's
-`enrol.pv`; the times (a session ends at `Identity.Until`, a newer CRL cuts
-what it lists) are nfltr's `spec/enrol/Enrol.tla` (`NoExpiredSession`,
+revoked key of web itself. Who can get a certificate at all is `enrol.pv`; the times (a session ends at `Identity.Until`, a newer CRL cuts
+what it lists) are `spec/enrol/Enrol.tla` (`NoExpiredSession`,
 `RevocationBound`), whose session-level mutants `no-expiry-timer` and
 `no-cut-on-update` are Go mutants of `client/agent` (`make
 test-go-mutants`).
@@ -758,6 +757,106 @@ none").
 | X25519 refuses low-order points | Go `crypto/ecdh` (`ECDH` errors on the all-zero output) |
 | SHA-256, HKDF, HMAC, AES-GCM are ideal | standard; nonces unique per key (see the SignalConn finding) |
 
+### enrol.pv: enrolment through an organisation root (`org/`)
+
+Enrolment through an organisation root of trust. The root (its primary
+key in a hardware key store or a passphrase-sealed file) certifies an issuer; the issuer, on the owner's machine,
+gives each machine a short-lived x509 certificate (name, key, serial,
+expiry, group) for a single-use bootstrap token made for that name, and
+renews it against the current key; clients take a peer "signed by the
+organisation with name X", services admit "an organisation certificate in
+group Y", both checking expiry and the issuer's current CRL. The attacker
+owns the relay (every request, certificate, CRL and rotation it carries:
+it replays an old CRL, withholds a new one), an enrolled machine's key
+(`mallory`), a revoked stolen laptop's key (`lost`), web's rotated-out key
+whose certificate expired, a leaked bootstrap token for a machine not yet
+enrolled (`new1`), and the old root's primary key. Time is two epochs: now
+and expired. The lifecycle over time (renewal, CRL push and backstop, fail
+closed, rotation) is `spec/enrol/Enrol.tla`. Code: `org/orgpki` (issuer, profile),
+`client/orgid` (verifier).
+
+| # | query | result |
+|---|---|---|
+| 1 | every accepted name and key was issued (no name without the root) | holds |
+| 2 | a client taking `web` reaches a key web made | holds |
+| 3 | an expired certificate is refused | holds |
+| 4 | a revoked machine is refused, also after it tries to renew | holds |
+| 5 | a token enrols one key (single use) | holds |
+| 6 | a token enrols only the name it was made for (never an existing one) | holds |
+| 7 | a service admits only certificates issued in its group | holds |
+| 8 | a rotation is taken only when the recovery key signed it | holds |
+| 9 | after the rotation, only issuers the new root certified are trusted | holds |
+| 10-14 | witnesses: web reached; a client admitted; the leaked token's own name enrolled by whoever redeems it first (the residual: one new name, once, and the real machine's enrolment then fails visibly); a rotation; an issuer trusted after it | attack (reachable), as they must |
+
+Mutants: `no-chain-check` (an issuer certificate not checked against the
+root: 1, 2, 4, 7 fail), `no-name-check` (1, 2, 4), `no-expiry-check` (3),
+`stale-crl` (an old CRL the relay replays: 4), `no-crl-check` (4),
+`renew-expired` (renewal with an expired certificate: 2), `renew-revoked`
+(4), `reusable-token` (5), `name-from-request` (the issuer takes the name
+from the request: 2, 4, 5, 6), `token-in-request` (the token itself sent
+through the relay, which redeems it first: 2), `no-group-check` (7),
+`rotate-by-primary` (8, 9), `keep-old-root` (9).
+
+### orgmove.pv: moving an organisation's issuer (`org/`)
+
+An organisation's issuer moving to another machine. The new machine
+makes a single-use receive key and shows its public half; the owner types
+it on the old machine (out of band, as a pairing link). The old
+machine seals the bundle (the issuer key, the log's issuer certificate
+and the fence naming the receive key; not the root, which stays with its
+owner; not the machine-key root beside it, which stays where its users
+run) to it with `crypto/hpke` and sends it through the
+relay. The new machine opens it and imports it when the fence names its
+own receive key and the issuer certificate chains to the root it pinned.
+The attacker owns the relay and an organisation of its own, and seals
+what it likes to any receive key (HPKE Base mode does not say who
+sealed). Who serves when, the fence's order and the tokens' single use
+are state: `spec/orgmove/OrgMove.tla`.
+
+Then the issuer renews from the root's machine (`org/orgpki/renew.go`): the issuer signs a request (its key, a fresh log head), the
+root holder answers only a request for the issuer key it pins and signed
+by it, with the certificate and the root's checkpoint of that head, and
+the issuer installs only an answer for its own key and head. In phase 1
+the new machine is compromised (it hands over all it holds) while the
+root holder keeps answering.
+
+| # | query | result |
+|---|---|---|
+| 1 | the issuer key stays secret during the move (phase 0) | holds |
+| 2 | the root's key never reaches the attacker, also after the new machine's compromise | holds |
+| 3 | a machine imports only the organisation's own issuer key, as the old machine sealed it for its receive key | holds |
+| 4 | witness: an import happens (3 not vacuous) | attack (reachable), as it must |
+| 5 | no root certificate of another key, with the relay, the wire and (phase 1) the new machine the attacker's | holds |
+| 6 | the issuer installs only the root's answer for its own key and head | holds |
+| 7 | the root checkpoints only a head the issuer asked for (before a compromise) | holds |
+| 8 | witness: a renewal is installed (6 not vacuous) | attack (reachable), as it must |
+
+Mutants: `plain-bundle` (the bundle not sealed: 1, 3, 7 fail),
+`recipient-via-relay` (the receive key reaches the old machine through
+the relay, which swaps its own in: 1, 3, 7 fail), `no-root-check` (the new
+machine does not check the issuer against the pinned root: 3 fails, the
+relay hands it an organisation of its own), `root-moves` (the bundle
+carries the root: the new machine's compromise yields it, 2 and 5 fail),
+`sign-any-issuer` (the root holder signs a request for any key: 3, 5, 6,
+7 fail), `unsigned-request` (it does not check the request's signature: 7
+fails), `answer-unbound` (the issuer installs a root checkpoint of
+another head: 6 fails). The fence's recipient binding is not a mutant
+here: HPKE already confines a bundle to its receive key, and what the
+binding prevents (a second recipient after a re-send) is `OrgMove.tla`'s
+`fence-names-no-recipient`. Bindings: `BIND:move.*` are orgissuer's
+`TestOrgMoveModelBindings`, `BIND:renew.*` orgpki's
+`TestIssuerRenewalModelBindings` (`make spec-bindings`).
+
+Environment assumptions of these two models, beside the table above:
+
+| assumption | source |
+|---|---|
+| Ed25519 / ECDSA P-256 signatures and HMAC-SHA256 are ideal; x509 parsing is exact (crypto/x509) | standard; `enrol.pv` |
+| HPKE Base mode (DHKEM X25519, HKDF-SHA256, ChaCha20-Poly1305) is ideal IND-CCA2 sealing to a public key, by anyone; the machine's X25519 key is its Ed25519 key's birational image (as age's ssh-ed25519 recipients) | RFC 9180, `crypto/hpke`; `orgmove.pv` |
+| the receive key the owner types on the old machine is the one the new machine showed (an authentic channel: the owner's eyes and keyboard) | `orgmove.pv` |
+| a bootstrap token reaches its machine through the fleet's provisioning (cloud-init, a Kubernetes secret, MDM), not the relay | `enrol.pv` |
+| a 0600 file is readable only by its owner uid | POSIX |
+
 ## Code map
 
 | model | code |
@@ -800,3 +899,8 @@ none").
 | cap_address.pv | client/agent/direct_nf1_bindings_test.go |
 | p2p_e2e.pv | client/p2p/e2e.go |
 | p2p_e2e.pv | client/p2p/rtcdata.go |
+| enrol.pv | org/orgpki/profile.go |
+| enrol.pv | org/orgpki/issuer.go |
+| enrol.pv | client/orgid/verify.go |
+| orgmove.pv | org/orgpki/renew.go |
+| orgmove.pv | org/orgissuer/bundle.go |

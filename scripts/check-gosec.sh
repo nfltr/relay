@@ -44,7 +44,7 @@ else
     # One run per workspace module (gosec loads one module's ./...), merged.
     # Exit 1 = issues found; the baseline decides below.
     parts=()
-    for mod in proto client; do
+    for mod in proto client org; do
         part="$(mktemp)"
         parts+=("${part}")
         (cd "${ROOT}/${mod}" && "${bin}" -quiet -exclude-generated -exclude-dir=vendor \
