@@ -687,9 +687,23 @@ func (c *rebindConn) Close() error {
 // the relay within the fallback bound, then goes direct again on the new
 // address after one fresh exchange (RePunch), not after the pair's
 // backoff, every byte once in order.
-func TestDirectAgentRebindDirectAgain(t *testing.T) {
+func TestDirectAgentRebindDirectAgain(t *testing.T) { rebindDirectAgain(t, false) }
+
+// TestDirectOpenOnADyingConnectionRepunches: the session's direct stream
+// ends before its connection's context does (quic-go closes a dying
+// connection's streams first), so the try after the fallback still sees
+// the connection up and its open fails: it waits for the death and
+// punches, never "no_answer" with no candidate asked (relay CI
+// a5f2b5acf990, linkdebug on a loaded runner).
+func TestDirectOpenOnADyingConnectionRepunches(t *testing.T) { rebindDirectAgain(t, true) }
+
+// rebindDirectAgain: lag, the first check of the pair's connection after
+// the rebind finds it up, as in that window.
+func rebindDirectAgain(t *testing.T, lag bool) {
 	r := newDirectRig(t, DirectOn)
 	r.d.repunch = 0 // the last punch is old enough: as a connection that lived past the backoff
+	var lagging atomic.Bool
+	r.d.ended = func(q *quic.Conn) bool { return connEnded(q) && !lagging.CompareAndSwap(true, false) }
 	table := r.l.targets.services
 	old := table.direct
 	rc := newRebindConn(t)
@@ -723,6 +737,7 @@ func TestDirectAgentRebindDirectAgain(t *testing.T) {
 	echo(t, tc, 8<<20, func() {
 		first := waitPath(t, events, PathDirect)
 		t0 := time.Now()
+		lagging.Store(lag)
 		rc.rebind(t)
 		if e, _ := within(PathRelayed, 10*time.Second); e.Reason != ReasonDirectLost {
 			t.Fatalf("fallback reason %q, want %s", e.Reason, ReasonDirectLost)
@@ -738,5 +753,8 @@ func TestDirectAgentRebindDirectAgain(t *testing.T) {
 	})
 	if st := r.d.Stats(); st.Punches["ok"] != 2 {
 		t.Fatalf("punches %v, want 2 ok", st.Punches)
+	}
+	if lagging.Load() {
+		t.Fatal("no try checked the connection after the rebind")
 	}
 }

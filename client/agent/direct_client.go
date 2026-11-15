@@ -23,6 +23,7 @@ import (
 
 	"github.com/nfltr/link"
 	"github.com/nfltr/link/pathswitch"
+	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/quic-go"
 	"github.com/nfltr/relay/client/dgram"
@@ -121,6 +122,9 @@ type DirectClient struct {
 	// qadGrace: how long the own relay's QAD answer is waited for once the
 	// agent's relay's is in (only to see whether they differ)
 	qadGrace time.Duration
+	// ended: whether a pair's connection is over, its context's word (a
+	// test's stand-in: quic-go ends a dying connection's streams first)
+	ended func(*quic.Conn) bool
 
 	directSent, directRecv, relayedSent, relayedRecv atomic.Uint64
 
@@ -164,7 +168,7 @@ func NewDirectClient(cfg DirectClientConfig) (*DirectClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, repunch: directBackoff[0], qadGrace: 250 * time.Millisecond, pairs: map[string]*directPair{}, punches: map[string]uint64{},
+	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, repunch: directBackoff[0], qadGrace: 250 * time.Millisecond, ended: connEnded, pairs: map[string]*directPair{}, punches: map[string]uint64{},
 		qad: map[string]uint64{}, sessions: map[*DirectSession]struct{}{}}
 	d.node, err = quiclink.New(quiclink.Config{Dial: d.dial, Liveness: link.LivenessFast, Datagrams: true})
 	if err != nil {
@@ -397,31 +401,48 @@ func (s *DirectSession) tryDirect() string {
 	p := s.pair
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	s.noticeDeath(p)
-	if p.q == nil {
-		if time.Now().Before(p.next) {
-			return "backoff"
+	var st peerlink.Session
+	for punched := false; ; {
+		s.noticeDeath(p)
+		if p.q == nil {
+			if punched || time.Now().Before(p.next) {
+				return "backoff"
+			}
+			punched = true
+			p.punched = time.Now()
+			reason := s.punch(p)
+			if reason == "" {
+				s.d.count("ok")
+			} else {
+				s.d.count(reason)
+			}
+			if reason != "" {
+				p.fails++
+				p.next = time.Now().Add(directBackoff[min(p.fails, len(directBackoff))-1])
+				return reason
+			}
+			p.fails = 0
 		}
-		p.punched = time.Now()
-		reason := s.punch(p)
-		if reason == "" {
-			s.d.count("ok")
-		} else {
-			s.d.count(reason)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel() // at most two opens
+		var err error
+		if st, err = s.d.node.Open(ctx, p.key, nil); err == nil {
+			break
 		}
-		if reason != "" {
-			p.fails++
-			p.next = time.Now().Add(directBackoff[min(p.fails, len(directBackoff))-1])
-			return reason
+		// The connection died during this try, or just before it: quic-go
+		// ends a dying connection's streams (this session's fallback)
+		// before its context, so the death is noticed once that ends,
+		// within the open's bound; then this try punches, a death being
+		// what the punch is for, not a refusal (no "no_answer": no
+		// candidate was asked; TestDirectOpenOnADyingConnectionRepunches).
+		select {
+		case <-p.q.Context().Done():
+		case <-ctx.Done():
+		case <-s.c.Done():
 		}
-		p.fails = 0
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	st, err := s.d.node.Open(ctx, p.key, nil)
-	if err != nil {
-		s.noticeDeath(p) // the connection died during this try: noticed now, not one try later
-		return ReasonNoAnswer
+		if s.noticeDeath(p); p.q != nil {
+			return ReasonNoAnswer
+		}
 	}
 	tc := &tokenCheck{pathStream: pathStream{Conn: st, sent: &s.d.directSent, recv: &s.d.directRecv}, ready: make(chan struct{})}
 	peer, _ := netip.ParseAddrPort(p.q.RemoteAddr().String())
@@ -452,7 +473,7 @@ func (s *DirectSession) tryDirect() string {
 // (TestDirectPairDeathBacksOffWhateverItsNoticeOrder: a starved machine
 // saw the open fail on a connection not yet dead at the try's start).
 func (s *DirectSession) noticeDeath(p *directPair) {
-	if p.q != nil && p.q.Context().Err() != nil {
+	if p.q != nil && s.d.ended(p.q) {
 		p.q, p.fails, p.next = nil, 1, p.punched.Add(s.d.repunch)
 	}
 }
@@ -533,11 +554,13 @@ func (d *DirectClient) dial(_ context.Context, peer string, _ *quic.Config) (*qu
 	d.mu.Lock()
 	p := d.pairs[peer]
 	d.mu.Unlock()
-	if p == nil || p.q == nil {
+	if p == nil || p.q == nil || connEnded(p.q) {
 		return nil, errors.New("direct path: no punched connection")
 	}
 	return p.q, nil
 }
+
+func connEnded(q *quic.Conn) bool { return q.Context().Err() != nil }
 
 // dialPair punches p's candidates on the endpoint (quiclink.Punch, 5 s)
 // and keeps the connection's exporter for the tokens.
