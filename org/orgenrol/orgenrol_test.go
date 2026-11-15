@@ -5,6 +5,7 @@ package orgenrol
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -225,6 +226,8 @@ type fleet struct {
 	// machineOf, when set, is the issuer's account name resolution
 	// (Service.MachineOf).
 	machineOf func(ctx context.Context, name string) (string, error)
+	// wait, when set, is the issuer's round (Service.Wait; 50ms when not).
+	wait time.Duration
 }
 
 // machineKeys is the issuer's machine keys (the caller's shape: a
@@ -263,7 +266,7 @@ func newFleetWith(t *testing.T, prep func(*fleet)) *fleet {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = Service{Mailbox: f.relay, Dir: f.org.dir, Logger: quiet(), Now: clk.Now, Wait: 50 * time.Millisecond, MachineKey: keys.make, MachineOf: f.machineOf}.Run(ctx)
+		_ = Service{Mailbox: f.relay, Dir: f.org.dir, Logger: quiet(), Now: clk.Now, Wait: cmp.Or(f.wait, 50*time.Millisecond), MachineKey: keys.make, MachineOf: f.machineOf}.Run(ctx)
 	}()
 	t.Cleanup(func() { cancel(); <-done })
 	var err error
@@ -763,6 +766,35 @@ func TestFollowCRLTakesTheRevokePush(t *testing.T) {
 	case <-changed:
 	case <-time.After(10 * time.Second):
 		t.Fatal("the CRL did not reach the follower")
+	}
+	if _, err := f.m.CheckServer([]*x509.Certificate{cur, issuerOf(t, f.dir)}, "web-1", f.clk.Now()); err == nil {
+		t.Fatal("a revoked machine still checks")
+	}
+}
+
+// A revoke another process writes into the issuer's directory is
+// published at its file-change notice, not at the issuer's next round
+// (an hour here): the machine's follow takes it within the network's
+// latency (spec/enrol/RevokePush.tla EventBound; mutant poll-only is the
+// code before, which waited serveWait).
+func TestRevokePublishedAtItsNotice(t *testing.T) {
+	f := newFleetWith(t, func(f *fleet) { f.wait = time.Hour })
+	ctx, cancel := context.WithCancel(f.ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); followCRL(ctx, f.relay, f.m, time.Hour, f.clk.Now, quiet()) }()
+	defer func() { cancel(); <-done }()
+	time.Sleep(200 * time.Millisecond) // the follow parks on its cursor
+	cur, _ := f.m.Current()
+	changed := f.m.Changed()
+	start := time.Now()
+	if _, err := orgissuer.RevokeMachines(f.org.dir, []string{"m-web-1"}, f.clk.Now()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+		t.Logf("the CRL reached the machine %v after the revoke", time.Since(start))
+	case <-time.After(3 * time.Second):
+		t.Fatal("the CRL did not reach the machine within 3s of the revoke (the issuer's round is an hour)")
 	}
 	if _, err := f.m.CheckServer([]*x509.Certificate{cur, issuerOf(t, f.dir)}, "web-1", f.clk.Now()); err == nil {
 		t.Fatal("a revoked machine still checks")

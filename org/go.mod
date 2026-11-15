@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/nfltr/relay/proto v0.20.0 // indirect
 	golang.org/x/net v0.60.0 // indirect

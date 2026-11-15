@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
+
 	"github.com/nfltr/relay/client/mailboxclient"
 	"github.com/nfltr/relay/client/orgid"
 
@@ -27,9 +29,11 @@ import (
 	"github.com/nfltr/relay/org/orgpki"
 )
 
-// serveWait: one long-poll of the requests; also how soon a CRL another
-// process wrote (nfltr org revoke, an account-revocation tie-in) is
-// published.
+// serveWait: one long-poll of the requests; also the backstop for a CRL
+// another process wrote (nfltr org revoke, an account-revocation tie-in)
+// whose file-change notice was lost (watchDir): that write is published at
+// once on its notice, at the latest at the next round
+// (spec/enrol/RevokePush.tla EventBound, BackstopBound).
 const serveWait = 10 * time.Second
 
 // serveLock: the file a Service holds while it serves its directory.
@@ -160,6 +164,8 @@ func (c Service) Run(ctx context.Context) error {
 	if err := s.with(func(iss *orgpki.Issuer, _ *orgissuer.Store) error { s.org = iss.OrgID(); return nil }); err != nil {
 		return err
 	}
+	wake, stopWatch := watchDir(c.Dir, logger)
+	defer stopWatch()
 	var cursor uint64
 	for ctx.Err() == nil {
 		err := s.maintain(ctx, c.Now())
@@ -169,11 +175,28 @@ func (c Service) Run(ctx context.Context) error {
 		if ctx.Err() == nil {
 			s.maintained(err, c.Now())
 		}
-		envs, _, err := mb.Pull(ctx, orgpki.EnrolMailbox(s.org), cursor, 0, c.Wait)
+		// The round: a notice ends it at once, and the loop maintains
+		// (RevokePush.tla Read: a notice taken before the read; one that
+		// came during the maintain is still in wake).
+		pctx, cancel := context.WithCancel(ctx)
+		go func() {
+			select {
+			case <-wake:
+				cancel()
+			case <-pctx.Done():
+			}
+		}()
+		envs, _, err := mb.Pull(pctx, orgpki.EnrolMailbox(s.org), cursor, 0, c.Wait)
+		woken := pctx.Err() != nil && ctx.Err() == nil
+		cancel()
 		if err != nil {
-			if ctx.Err() == nil {
+			if ctx.Err() == nil && !woken {
 				logger.Warn("org issuer: requests not read (again shortly)", "error", err)
-				sleepCtx(ctx, c.Wait)
+				select {
+				case <-ctx.Done():
+				case <-wake:
+				case <-time.After(c.Wait):
+				}
 			}
 			continue
 		}
@@ -204,6 +227,52 @@ func (c Service) Run(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// watchDir notices another process's write of the issuer's CRL or log
+// into dir (nfltr org revoke, the account-revocation tie-in, a rotation):
+// one value on wake per burst of writes, kept until taken (RevokePush.tla
+// Revoke; mutant clear-wake-after-publish drops one that comes during a
+// maintain). Without a watcher (none starts: no inotify or kqueue left)
+// wake is nil and the round is the only path, as it is the backstop for
+// a lost notice (LoseWake). An overflow counts as a notice.
+func watchDir(dir string, logger *slog.Logger) (wake <-chan struct{}, stop func()) {
+	w, err := fsnotify.NewWatcher()
+	if err == nil {
+		if err = w.Add(dir); err != nil {
+			_ = w.Close()
+		}
+	}
+	if err != nil {
+		logger.Warn("org issuer: no file-change notices; a revoke is published at the next round", "every", serveWait, "error", err)
+		return nil, func() {}
+	}
+	c := make(chan struct{}, 1)
+	notify := func() {
+		select {
+		case c <- struct{}{}:
+		default: // one is waiting already
+		}
+	}
+	go func() {
+		for {
+			select {
+			case e, ok := <-w.Events:
+				if !ok {
+					return
+				}
+				if n := filepath.Base(e.Name); n == orgissuer.CRLFile || n == orgissuer.LogFile {
+					notify()
+				}
+			case _, ok := <-w.Errors:
+				if !ok {
+					return
+				}
+				notify()
+			}
+		}
+	}()
+	return c, func() { _ = w.Close() }
 }
 
 // with runs f on the issuer under the directory's lock.
