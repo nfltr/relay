@@ -73,3 +73,12 @@ func (i *Issuer) LastCRL() (number int64, next time.Time) {
 	defer i.mu.Unlock()
 	return i.crlNumber, i.crlNext
 }
+
+// CRLDue: a revocation or a new issuer certificate (a renewal) came after
+// the last CRL, so its successor is due now, not at CRLLife/3 left (one
+// refused with ErrIssuerExpired, signed once the issuer is renewed).
+func (i *Issuer) CRLDue() bool {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return i.crlDue
+}

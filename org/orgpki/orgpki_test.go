@@ -226,6 +226,42 @@ func TestExpiredRefused(t *testing.T) {
 	refused(t, "a renewal of an expired certificate", err)
 }
 
+// Members refuse a CRL whose issuer certificate expired (orgid.Verifier.
+// TakeCRL), so the issuer signs none past its NotAfter (ErrIssuerExpired)
+// and commits nothing; the renewal makes the CRL due at once, as does a
+// revocation: mutants sign-after-expiry, crl-not-due-on-renewal,
+// crl-not-due-on-revoke.
+func TestNoCRLPastTheIssuerCertificate(t *testing.T) {
+	o := newOrg(t)
+	o.enrol(t, "web-1", "web")
+	o.takeCRL(t, t0)
+	if o.iss.CRLDue() {
+		t.Fatal("a CRL due right after one")
+	}
+	late := o.iss.Cert().NotAfter
+	n, _ := o.iss.LastCRL()
+	if _, err := o.iss.CRL(late); !errors.Is(err, ErrIssuerExpired) {
+		t.Fatalf("a CRL past the issuer certificate: %v, want ErrIssuerExpired", err)
+	}
+	if m, _ := o.iss.LastCRL(); m != n || o.iss.CRLDue() {
+		t.Fatalf("the refused CRL committed #%d (was #%d) or made one due", m, n)
+	}
+	_, ans := o.remote(t, late)
+	if err := o.iss.InstallRenewal(ans, late); err != nil {
+		t.Fatal(err)
+	}
+	if !o.iss.CRLDue() {
+		t.Fatal("no CRL due under the renewed certificate")
+	}
+	o.takeCRL(t, late)
+	if err := o.iss.Revoke("web-1", late); err != nil {
+		t.Fatal(err)
+	}
+	if !o.iss.CRLDue() {
+		t.Fatal("no CRL due after a revocation")
+	}
+}
+
 // enrol.pv 4, Enrol.tla RevokedMachineRefused and NoRenewAfterRevoke:
 // mutants no-crl-check, revoke-current-only, renew-revoked.
 func TestRevokedRefused(t *testing.T) {

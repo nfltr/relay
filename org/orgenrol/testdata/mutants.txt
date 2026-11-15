@@ -19,3 +19,9 @@ new-key-per-join | machine.go | 	key, first, err := joinKey(dir, er.TokenID, req
 same-request-id | machine.go | 	req := orgpki.Request{ID: randomID()} | 	req := orgpki.Request{ID: er.TokenID} | TestJoinRunAgainAfterALateOrLostAnswer
 pin-root-only | machine.go | 	if orgid.Fingerprint(root) != pins.Root && orgid.Fingerprint(rec) == pins.Recovery { | 	if false { | TestNewMachineJoinsAfterRotation
 any-root | machine.go | 	if err := root.CheckSignatureFrom(recovery); err != nil { | 	if err := root.CheckSignatureFrom(recovery); false && err != nil { | TestJoinRefusesARootOfAnotherRecoveryKey
+# PublishedCRL (nfltr org status, the canary) judges the CRL as members
+# take it (orgid.Verifier.TakeCRL): its issuer under the root, at now.
+published-any-time | published.go | 	if _, err := iss.Verify(x509.VerifyOptions{Roots: roots, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err != nil { | 	if _, err := iss.Verify(x509.VerifyOptions{Roots: roots, CurrentTime: iss.NotBefore, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err != nil { | TestPublishedCRLRefusesAnIssuerMembersRefuse
+published-any-root | published.go | 	roots.AddCert(root) | 	roots.AddCert(iss) | TestPublishedCRLRefusesAnIssuerMembersRefuse
+crl-due-ignored | issuer.go | 		if der == nil || iss.CRLDue() || next.Sub(now) <= orgpki.CRLLife/3 || !signedBy(der, iss.Cert()) { | 		if der == nil || next.Sub(now) <= orgpki.CRLLife/3 || !signedBy(der, iss.Cert()) { | TestServiceSignsACRLAfterTheRenewal
+root-stops-with-crl | issuer.go | 				crlErr = fmt.Errorf("CRL: %w", err) | 				return err | TestServiceSignsNoCRLPastTheIssuerCertificate

@@ -194,6 +194,12 @@ func (o *org) do(t *testing.T, f func(*orgpki.Issuer, *orgissuer.Store)) {
 	f(iss, s)
 }
 
+// root is the organisation's root certificate.
+func (o *org) root(t *testing.T) (root *x509.Certificate) {
+	o.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) { root = iss.Root() })
+	return root
+}
+
 func (o *org) token(t *testing.T, name string, now time.Time) string {
 	var tok string
 	o.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) {

@@ -46,3 +46,8 @@ import-unfenced | move.go | 	if i.movedTo == "" { | 	if false { | TestMoveImport
 renew-answer-unbound | renew.go | 	if pub, ok := issuerKey(c); !ok || !pub.Equal(i.key.Public()) { | 	if pub, ok := issuerKey(c); !ok || pub == nil { | TestIssuerRenewalModelBindings
 renew-answer-unbound | renew.go | 	if !i.heads[a.Head] { | 	if false { | TestIssuerRenewalModelBindings
 renew-unsigned-request | renew.go | 	case !ed25519.Verify(pub, renewalMessage(req), req.Sig): | 	case false: | TestIssuerRenewalModelBindings
+# Members refuse a CRL whose issuer certificate expired (orgid TakeCRL):
+# the issuer signs none then, and signs one at once after the renewal.
+sign-after-expiry | issuer.go | 	if !now.Before(i.cert.NotAfter) { | 	if false { | TestNoCRLPastTheIssuerCertificate
+crl-not-due-on-renewal | issuer.go | 		i.cert, i.crlDue = c, true | 		i.cert = c | TestNoCRLPastTheIssuerCertificate
+crl-not-due-on-revoke | issuer.go | 		i.crlDue = true | 		_ = 0 | TestNoCRLPastTheIssuerCertificate

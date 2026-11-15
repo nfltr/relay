@@ -371,18 +371,24 @@ func (s *service) sealMachineKey(iss *orgpki.Issuer, tokenID string, der []byte,
 // then publishes the root and the CRL the relay does not hold.
 func (s *service) maintain(ctx context.Context, now time.Time) error {
 	var root, rec, crl, issuer []byte
+	var crlErr error // ErrIssuerExpired: the root is still published
 	err := s.with(func(iss *orgpki.Issuer, st *orgissuer.Store) error {
 		der, err := st.ReadCRL()
 		if err != nil {
 			return err
 		}
 		_, next := iss.LastCRL()
-		if der == nil || next.Sub(now) <= orgpki.CRLLife/3 || !signedBy(der, iss.Cert()) {
-			if der, err = iss.CRL(now); err != nil {
+		if der == nil || iss.CRLDue() || next.Sub(now) <= orgpki.CRLLife/3 || !signedBy(der, iss.Cert()) {
+			der, err = iss.CRL(now)
+			switch {
+			case errors.Is(err, orgpki.ErrIssuerExpired):
+				crlErr = fmt.Errorf("CRL: %w", err)
+			case err != nil:
 				return err
-			}
-			if err := st.WriteCRL(der, iss.Cert()); err != nil {
-				return err
+			default:
+				if err := st.WriteCRL(der, iss.Cert()); err != nil {
+					return err
+				}
 			}
 		}
 		root, rec, crl, issuer = iss.Root().Raw, iss.Recovery().Raw, der, iss.Cert().Raw
@@ -396,6 +402,9 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 			return fmt.Errorf("root: %w", err)
 		}
 		s.pubRoot, s.pubRootAt = root, now
+	}
+	if crlErr != nil {
+		return crlErr
 	}
 	if !bytes.Equal(crl, s.pubCRL) || !bytes.Equal(issuer, s.pubCRLIssuer) {
 		if err := s.publish(ctx, orgid.CRLMailbox(s.org), orgid.CRLMessage{CRL: crl, Issuer: issuer}); err != nil {

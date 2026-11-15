@@ -34,11 +34,20 @@ const (
 	alarmMsg           = "org issuer: PUBLISH FAILING: members refuse every organisation session once the CRL they hold lapses"
 )
 
-// PublishedCRL is orgID's CRL as a member reads it from the relay (the
-// broadcast orgid.CRLMailbox, newest message), checked against the issuer
-// certificate it carries: its number and NextUpdate. mb declares member
-// on an organisation's mailboxes (transportcli.DeclareOrg).
-func PublishedCRL(ctx context.Context, mb Mailbox, orgID string) (number int64, next time.Time, err error) {
+// PublishedCRL is the CRL of root's organisation as a member reads it
+// from the relay (the broadcast orgid.CRLMailbox, newest message): its
+// number and NextUpdate. It is an error unless the issuer certificate the
+// message carries verifies under root at now and signed the CRL, as
+// members check it (orgid.Verifier.TakeCRL): a relay's forged issuer, or
+// an expired one members refuse while the CRL is still current. root is
+// the organisation root the caller trusts (a member's
+// orgid.Identity.Verifier().Root(), the issuer's Root()). mb declares
+// member on an organisation's mailboxes (transportcli.DeclareOrg).
+func PublishedCRL(ctx context.Context, mb Mailbox, root *x509.Certificate, now time.Time) (number int64, next time.Time, err error) {
+	orgID, err := orgid.OrgIDOfRoot(root)
+	if err != nil {
+		return 0, time.Time{}, err
+	}
 	data, err := latest(ctx, mb, orgid.CRLMailbox(orgID), 0)
 	if err == nil && data == nil {
 		err = errNoMessage
@@ -57,6 +66,12 @@ func PublishedCRL(ctx context.Context, mb Mailbox, orgID string) (number int64, 
 	crl, err := x509.ParseRevocationList(m.CRL)
 	if err != nil {
 		return 0, time.Time{}, fmt.Errorf("the published CRL: %w", err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(root)
+	if _, err := iss.Verify(x509.VerifyOptions{Roots: roots, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err != nil {
+		return 0, time.Time{}, fmt.Errorf("the published CRL's issuer certificate (valid %s to %s): members refuse it: %w (expired: nfltr org issuer renew)",
+			iss.NotBefore.UTC().Format(time.RFC3339), iss.NotAfter.UTC().Format(time.RFC3339), err)
 	}
 	if err := crl.CheckSignatureFrom(iss); err != nil {
 		return 0, time.Time{}, fmt.Errorf("the published CRL: %w", err)

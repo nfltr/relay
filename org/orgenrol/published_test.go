@@ -5,6 +5,9 @@ package orgenrol
 
 import (
 	"bytes"
+	"context"
+	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"os"
@@ -13,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/mailboxclient"
 	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/orgissuer"
 	"github.com/nfltr/relay/org/orgpki"
@@ -31,7 +35,7 @@ func TestPublishedCRLAndAFailingPublish(t *testing.T) {
 	var next time.Time
 	eventually(t, "the CRL published", func() bool {
 		var err error
-		num, next, err = PublishedCRL(f.ctx, f.relay, f.org.id)
+		num, next, err = PublishedCRL(f.ctx, f.relay, f.org.root(t), f.clk.Now())
 		return err == nil
 	})
 	f.org.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) {
@@ -74,16 +78,123 @@ func TestPublishedCRLAndAFailingPublish(t *testing.T) {
 	if !strings.Contains(p.Error, "another machine holds") || p.Since.IsZero() {
 		t.Fatalf("recorded %+v", p)
 	}
-	if n, _, err := PublishedCRL(f.ctx, f.relay, f.org.id); err != nil || n != num {
+	if n, _, err := PublishedCRL(f.ctx, f.relay, f.org.root(t), f.clk.Now()); err != nil || n != num {
 		t.Fatalf("published while refused: #%d %v, want #%d", n, err, num)
 	}
 	f.relay.mu.Lock()
 	f.relay.fail = nil
 	f.relay.mu.Unlock()
 	eventually(t, "the record cleared by the next publish", func() bool { _, ok := PublishFailing(f.org.dir); return !ok })
-	if n, _, err := PublishedCRL(f.ctx, f.relay, f.org.id); err != nil || n != num+1 {
+	if n, _, err := PublishedCRL(f.ctx, f.relay, f.org.root(t), f.clk.Now()); err != nil || n != num+1 {
 		t.Fatalf("published after the refusal: #%d %v, want #%d", n, err, num+1)
 	}
+}
+
+// PublishedCRL judges the CRL as members take it (orgid.Verifier.TakeCRL):
+// its issuer certificate verifies under the organisation root at now. An
+// issuer certificate past its NotAfter (members refuse every CRL it
+// signed, still current or not: the canary and nfltr org status read it as
+// fine, 2026-11-15) and an issuer certificate another root certified (a
+// relay's forgery) are errors.
+func TestPublishedCRLRefusesAnIssuerMembersRefuse(t *testing.T) {
+	f := newFleet(t)
+	root := f.org.root(t)
+	var notAfter time.Time
+	f.org.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) { notAfter = iss.Cert().NotAfter })
+	eventually(t, "the CRL published", func() bool {
+		_, _, err := PublishedCRL(f.ctx, f.relay, root, f.clk.Now())
+		return err == nil
+	})
+	if _, _, err := PublishedCRL(f.ctx, f.relay, root, notAfter.Add(time.Second)); err == nil || !strings.Contains(err.Error(), "renew") {
+		t.Fatalf("issuer certificate expired: %v", err)
+	}
+
+	other := newOrg(t, f.clk.Now()) // its issuer signs a CRL; the relay serves it as this organisation's
+	var m orgid.CRLMessage
+	other.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) {
+		der, err := iss.CRL(f.clk.Now())
+		check(t, err)
+		m = orgid.CRLMessage{CRL: der, Issuer: iss.Cert().Raw}
+	})
+	data, err := json.Marshal(m)
+	check(t, err)
+	_, err = f.relay.Append(context.Background(), orgid.CRLMailbox(f.org.id), data, mailboxclient.AppendOptions{ReplaceKey: "current"})
+	check(t, err)
+	var x509Err x509.UnknownAuthorityError
+	if _, _, err := PublishedCRL(f.ctx, f.relay, root, f.clk.Now()); !errors.As(err, &x509Err) {
+		t.Fatalf("forged issuer: %v, want x509.UnknownAuthorityError", err)
+	}
+}
+
+// Past the issuer certificate's NotAfter the service signs no CRL
+// (orgpki.ErrIssuerExpired): it records why for nfltr org status
+// (PublishFailing) and goes on publishing the root.
+func TestServiceSignsNoCRLPastTheIssuerCertificate(t *testing.T) {
+	f := newFleet(t)
+	root := f.org.root(t)
+	var num int64
+	eventually(t, "the CRL published", func() bool {
+		var err error
+		num, _, err = PublishedCRL(f.ctx, f.relay, root, f.clk.Now())
+		return err == nil
+	})
+	rootBox := orgpki.RootMailbox(f.org.id)
+	f.relay.mu.Lock()
+	roots := f.relay.seq[rootBox]
+	f.relay.mu.Unlock()
+	f.clk.Add(orgpki.IssuerLife)
+	var p PublishFailure
+	eventually(t, "the refusal recorded", func() bool {
+		var ok bool
+		p, ok = PublishFailing(f.org.dir)
+		return ok
+	})
+	if !strings.Contains(p.Error, orgpki.ErrIssuerExpired.Error()) {
+		t.Fatalf("recorded %+v, want %q", p, orgpki.ErrIssuerExpired)
+	}
+	eventually(t, "the root published again", func() bool {
+		f.relay.mu.Lock()
+		defer f.relay.mu.Unlock()
+		return f.relay.seq[rootBox] > roots
+	})
+	if n, _, err := PublishedCRL(f.ctx, f.relay, root, f.clk.Now().Add(-orgpki.IssuerLife)); err != nil || n != num {
+		t.Fatalf("published #%d %v, want #%d: a CRL signed past the issuer certificate", n, err, num)
+	}
+}
+
+// A revocation the expired issuer could not sign a CRL for is signed at
+// the renewal (orgpki.Issuer.CRLDue), not when the CRL held is next due.
+func TestServiceSignsACRLAfterTheRenewal(t *testing.T) {
+	f := newFleet(t)
+	root := f.org.root(t)
+	var notAfter time.Time
+	f.org.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) { notAfter = iss.Cert().NotAfter })
+	f.clk.Add(notAfter.Sub(f.clk.Now()) - 10*time.Minute) // a CRL signed 10 minutes before the issuer expires
+	var num int64
+	eventually(t, "the CRL signed before the expiry", func() bool {
+		n, next, err := PublishedCRL(f.ctx, f.relay, root, f.clk.Now())
+		num = n
+		return err == nil && next.Sub(f.clk.Now()) > orgpki.CRLLife-time.Minute
+	})
+	f.clk.Add(11 * time.Minute)
+	if _, err := orgissuer.RevokeMachines(f.org.dir, []string{"m-web-1"}, f.clk.Now()); !errors.Is(err, orgpki.ErrIssuerExpired) {
+		t.Fatalf("a revocation past the issuer certificate: %v, want its CRL refused", err)
+	}
+	f.org.do(t, func(iss *orgpki.Issuer, st *orgissuer.Store) {
+		lines, err := st.Lines()
+		check(t, err)
+		pins, err := orgpki.ReadPins(lines)
+		check(t, err)
+		req, err := iss.RenewalRequest(iss.Groups())
+		check(t, err)
+		ans, err := orgpki.SignIssuerRenewal(pins, f.org.rootKey, req, false, f.clk.Now())
+		check(t, err)
+		check(t, iss.InstallRenewal(ans, f.clk.Now()))
+	})
+	eventually(t, "a CRL signed under the renewed certificate", func() bool {
+		n, _, err := PublishedCRL(f.ctx, f.relay, root, f.clk.Now())
+		return err == nil && n > num
+	})
 }
 
 // A publish failing for PublishAlarm or longer is logged as its own

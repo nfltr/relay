@@ -28,6 +28,11 @@ import (
 // renewal); the log holds a refused entry for it.
 var ErrRefused = errors.New("refused")
 
+// ErrIssuerExpired: the issuer certificate is past its NotAfter, so the
+// issuer signs no certificate and no CRL (members refuse both) until
+// nfltr org issuer renew installs a new one.
+var ErrIssuerExpired = errors.New("the issuer certificate expired")
+
 // A token is tokenPrefix<org id>.<token id>.<secret>: the org id (public)
 // names the organisation's mailboxes, which keep the first root's id
 // across a rotation, so a machine pinned on the current root finds them.
@@ -96,6 +101,7 @@ type Issuer struct {
 	certs     map[string]*certRec // by serial (hex)
 	crlNumber int64
 	crlNext   time.Time
+	crlDue    bool   // a revocation or a new issuer certificate since the last CRL
 	movedTo   string // the receive key the log's last fence names (move.go)
 	head      string
 	heads     map[string]bool // every head the log had: a remote renewal checkpoints one (renew.go)
@@ -181,7 +187,7 @@ func (i *Issuer) apply(e Entry) error {
 		return err
 	case ActIssuer:
 		c, err := x509.ParseCertificate(e.Cert)
-		i.cert = c
+		i.cert, i.crlDue = c, true
 		return err
 	case ActToken:
 		i.tokens[e.Token] = &tokenRec{name: e.Name, groups: e.Groups, machineID: e.MachineID, expires: e.NotAfter}
@@ -197,8 +203,9 @@ func (i *Issuer) apply(e Entry) error {
 		if n := i.names[e.Name]; n != nil {
 			n.revoked = true
 		}
+		i.crlDue = true
 	case ActCRL:
-		i.crlNumber, i.crlNext = e.Number, e.NotAfter
+		i.crlNumber, i.crlNext, i.crlDue = e.Number, e.NotAfter, false
 	case ActMoved:
 		i.movedTo = e.Key
 	case ActArrived:
@@ -461,8 +468,8 @@ func (i *Issuer) issue(act, name string, groups []string, machineID string, pub 
 	if !subset(groups, i.cert.Subject.OrganizationalUnit) {
 		return nil, i.refuse(Entry{Time: now, Name: name, Token: token, Serial: from}, fmt.Sprintf("groups %v are outside the issuer's policy", groups))
 	}
-	if !now.Before(i.cert.NotAfter) {
-		return nil, fmt.Errorf("the issuer certificate expired at %s: nfltr org issuer renew", i.cert.NotAfter.UTC().Format(time.RFC3339))
+	if err := i.unexpired(now); err != nil {
+		return nil, err
 	}
 	t, err := machineTemplate(i.orgID, name, groups, machineID, i.cert, now)
 	if err != nil {
@@ -511,10 +518,14 @@ func (i *Issuer) Revoke(name string, now time.Time) error {
 // CRL signs the issuer's next CRL: a higher Number, NextUpdate CRLLife
 // on, every unexpired serial of every revoked name (Enrol.tla
 // revoke-current-only: a renewed machine's earlier certificate is still
-// valid until its NotAfter).
+// valid until its NotAfter). Past the issuer certificate's NotAfter it is
+// ErrIssuerExpired: members refuse that CRL (orgid.Verifier.TakeCRL).
 func (i *Issuer) CRL(now time.Time) ([]byte, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	if err := i.unexpired(now); err != nil {
+		return nil, err
+	}
 	var listed []x509.RevocationListEntry
 	for _, n := range i.names {
 		if !n.revoked {
@@ -546,6 +557,15 @@ func (i *Issuer) CRL(now time.Time) ([]byte, error) {
 	}
 	traceLine(map[string]any{"ev": "crl", "o": i.orgID, "num": number, "next": next.Unix(), "t": now.Unix(), "rev": rev})
 	return der, nil
+}
+
+// unexpired is ErrIssuerExpired past the issuer certificate's NotAfter.
+// Callers hold mu.
+func (i *Issuer) unexpired(now time.Time) error {
+	if !now.Before(i.cert.NotAfter) {
+		return fmt.Errorf("%w at %s: nfltr org issuer renew", ErrIssuerExpired, i.cert.NotAfter.UTC().Format(time.RFC3339))
+	}
+	return nil
 }
 
 // checkpoint signs the head with the issuer and the root primary. Callers
