@@ -3,10 +3,12 @@
 (* of verifiers that org/orgpki and the relay client's     *)
 (* orgid recorded (-tags enroltrace: trace_on.go), one JSON line per step,  *)
 (* read in order:                                                           *)
-(*   issue   the issuer certified serial s of name n until exp; from: the    *)
-(*           serial it renewed, "" for an enrolment (Enrol.tla Issue)        *)
+(*   issue   the issuer certified serial s of name n until exp for key k;    *)
+(*           from: the serial it renewed, "" for an enrolment by token tok   *)
+(*           (Enrol.tla Issue; a token answered again: Join.tla Issue)       *)
 (*   refuse  it refused to renew serial from: why log, expired, revoked, or  *)
-(*           other (a signature, the CSR: outside the model)                 *)
+(*           other (a signature, the CSR: outside the model); why enrolled:  *)
+(*           an enrolment by token tok for key k (Join.tla Issue)            *)
 (*   revoke  the owner revoked name n (Revoke)                               *)
 (*   crl     the issuer signed CRL num, NextUpdate next, listing rev         *)
 (*           (Revoke, Republish)                                             *)
@@ -27,9 +29,9 @@ CONSTANT TraceFile
 
 Log == ndJsonDeserialize(TraceFile)
 
-VARIABLES l, certs, revoked, last, held, bad
+VARIABLES l, certs, revoked, last, held, bad, tokkey, lastTok
 
-vars == <<l, certs, revoked, last, held, bad>>
+vars == <<l, certs, revoked, last, held, bad, tokkey, lastTok>>
 
 Init ==
     /\ l = 1
@@ -38,6 +40,8 @@ Init ==
     /\ last = [x \in {} |-> 0]     \* org -> its last CRL number
     /\ held = [x \in {} |-> 0]     \* <<verifier, issuer key>> -> [num, next, rev]
     /\ bad = {}
+    /\ tokkey = [x \in {} |-> ""]  \* <<org, token>> -> the key it enrolled
+    /\ lastTok = [x \in {} |-> ""] \* <<org, name>> -> its newest certificate's token, "" a renewal
 
 E == Log[l]
 Set(sq) == {sq[i] : i \in DOMAIN sq}
@@ -47,13 +51,27 @@ InLog == <<E.o, E.from>> \in DOMAIN certs
 From == certs[<<E.o, E.from>>]
 IsRevoked(o, n) == <<o, n>> \in revoked
 RenewOK == InLog /\ From.n = E.n /\ From.exp > E.t /\ ~IsRevoked(E.o, E.n)
+\* An enrolment: a token's first is enrol.pv's; answered again (Join.tla
+\* Reissues), only for the key it enrolled, of a name not revoked whose
+\* newest certificate is still the token's.
+TK == <<E.o, E.tok>>
+NK == <<E.o, E.n>>
+Redeemed == TK \in DOMAIN tokkey
+TokensNewest == NK \in DOMAIN lastTok /\ lastTok[NK] = E.tok
+EnrolBad ==
+    IF ~Redeemed THEN {}
+    ELSE (IF E.k # tokkey[TK] THEN {"reissue-any-key"} ELSE {})
+         \cup (IF IsRevoked(E.o, E.n) THEN {"renew-revoked"} ELSE {})
+         \cup (IF TokensNewest THEN {} ELSE {"reissue-after-renewal"})
 IssueBad ==
-    CASE E.from = "" -> {}                              \* an enrolment: enrol.pv's
+    CASE E.from = "" -> EnrolBad
       [] ~InLog -> {"renew-forged"}
       [] IsRevoked(E.o, E.n) -> {"renew-revoked"}
       [] OTHER -> IF RenewOK THEN {} ELSE {"diverged"}
 RefuseBad ==
     CASE E.why \in {"log", "other"} -> {}
+      [] E.why = "enrolled" ->
+            IF Redeemed /\ E.k = tokkey[TK] /\ ~IsRevoked(E.o, E.n) /\ TokensNewest THEN {"burn-name"} ELSE {}
       [] E.why = "expired" -> IF InLog /\ From.exp <= E.t THEN {} ELSE {"diverged"}
       [] E.why = "revoked" -> IF InLog /\ IsRevoked(E.o, E.n) THEN {} ELSE {"diverged"}
       [] OTHER -> {"diverged"}
@@ -90,6 +108,8 @@ Next ==
     /\ certs' = IF E.ev = "issue" THEN (<<E.o, E.s>> :> [n |-> E.n, exp |-> E.exp]) @@ certs ELSE certs
     /\ revoked' = IF E.ev = "revoke" THEN revoked \cup {<<E.o, E.n>>} ELSE revoked
     /\ last' = IF E.ev = "crl" THEN (E.o :> E.num) @@ last ELSE last
+    /\ tokkey' = IF E.ev = "issue" /\ E.from = "" /\ ~Redeemed THEN (TK :> E.k) @@ tokkey ELSE tokkey
+    /\ lastTok' = IF E.ev = "issue" THEN (NK :> E.tok) @@ lastTok ELSE lastTok
     /\ held' = CASE E.ev = "take" /\ E.ok -> (HK :> [num |-> E.num, next |-> E.next, rev |-> Set(E.rev)]) @@ held
                  [] E.ev = "rotate" -> [x \in {y \in DOMAIN held : y[1] # E.v} |-> held[x]]
                  [] OTHER -> held
@@ -106,6 +126,9 @@ Next ==
 None(names) == \A b \in bad : b[1] \notin names
 Conforms == None({"diverged"})
 NoRenewAfterRevoke == None({"renew-revoked"})
+OneKeyPerToken == None({"reissue-any-key"})
+NoRetiredKeyRevived == None({"reissue-after-renewal"})
+RefusedOnlyForCause == None({"burn-name"})
 ForgedOnlyUnderStolenRoot == None({"renew-forged"})
 RevokedMachineRefused == None({"accept-older-crl", "revoked-admitted", "revoke-current-only"})
 RevocationBound == None({"fail-open"})

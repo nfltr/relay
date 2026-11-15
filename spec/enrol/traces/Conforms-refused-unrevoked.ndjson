@@ -1,2 +1,2 @@
-{"ev":"issue","o":"o-x","n":"m1","s":"01","from":"","exp":1000,"t":0}
+{"ev":"issue","o":"o-x","n":"m1","s":"01","from":"","exp":1000,"t":0,"tok":"t-m1","k":"k-01"}
 {"ev":"refuse","o":"o-x","n":"m1","from":"01","why":"revoked","t":5}

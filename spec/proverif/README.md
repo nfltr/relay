@@ -786,7 +786,8 @@ closed, rotation) is `spec/enrol/Enrol.tla`. Code: `org/orgpki` (issuer, profile
 | 7 | a service admits only certificates issued in its group | holds |
 | 8 | a rotation is taken only when the recovery key signed it | holds |
 | 9 | after the rotation, only issuers the new root certified are trusted | holds |
-| 10-14 | witnesses: web reached; a client admitted; the leaked token's own name enrolled by whoever redeems it first (the residual: one new name, once, and the real machine's enrolment then fails visibly); a rotation; an issuer trusted after it | attack (reachable), as they must |
+| 10 | a token answered again (its answer lost, or late) certifies only the key it enrolled | holds |
+| 11-16 | witnesses: web reached; a client admitted; the leaked token's own name enrolled by whoever redeems it first (the residual: one new name, once, and the real machine's enrolment then fails visibly); a rotation; an issuer trusted after it; web's token answered again | attack (reachable), as they must |
 
 Mutants: `no-chain-check` (an issuer certificate not checked against the
 root: 1, 2, 4, 7 fail), `no-name-check` (1, 2, 4), `no-expiry-check` (3),
@@ -795,7 +796,11 @@ root: 1, 2, 4, 7 fail), `no-name-check` (1, 2, 4), `no-expiry-check` (3),
 (4), `reusable-token` (5), `name-from-request` (the issuer takes the name
 from the request: 2, 4, 5, 6), `token-in-request` (the token itself sent
 through the relay, which redeems it first: 2), `no-group-check` (7),
-`rotate-by-primary` (8, 9), `keep-old-root` (9).
+`rotate-by-primary` (8, 9), `keep-old-root` (9), `reissue-any-key` (a
+token answered again for any key: 10). The join's root check is
+`RotClient`'s: a machine joining with pins made before a rotation takes the
+root the pinned recovery key certifies (8); the join's retries, the revoke
+and a renewal since are `spec/enrol/Join.tla`.
 
 ### orgmove.pv: moving an organisation's issuer (`org/`)
 

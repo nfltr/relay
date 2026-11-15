@@ -64,6 +64,7 @@ free skIss: skey [private].            (* the issuer *)
 
 event TokenMade(bitstring, mname).
 event Enrolled(bitstring, mname, pkey).
+event Reissued(bitstring, mname, pkey).
 event Holds(mname, pkey).              (* an honest machine made this key for its name *)
 event Issued(mname, pkey, bitstring, epoch, group).
 event Revoked(mname).
@@ -87,7 +88,18 @@ let Redeem(t: bitstring, n: mname, g: group) =
   let nn = nr in                       (* ONLY:name-from-request *)
   event Enrolled(t, nn, k);
   event Issued(nn, k, s, ep_now, g);
-  out(c, sign(leaf(nn, k, s, ep_now, g), skIss)).
+  out(c, sign(leaf(nn, k, s, ep_now, g), skIss));
+  (* Asked again for the key it enrolled (its answer lost, or late: the
+     join kept its key), the token is answered again, a new serial of
+     that key; any other key is refused (spec/enrol/Join.tla Issue; the
+     revoke and a renewal since are that model's state). *)
+  !(new s2: bitstring;
+    in(c, (nr2: mname, k2: pkey, m2: bitstring));
+    if m2 = hmac(t, (nr2, k2)) then
+    if k2 = k then                     (* NOT:reissue-any-key *)
+    event Reissued(t, nn, k2);
+    event Issued(nn, k2, s2, ep_now, g);
+    out(c, sign(leaf(nn, k2, s2, ep_now, g), skIss))).
 
 (* web: its token delivered by the fleet's provisioning (cloud-init, a
    k8s secret, MDM), not by the relay. *)
@@ -143,7 +155,8 @@ let Service =
 
 (* A machine still pinned to the old root (its primary stolen) and the
    recovery key: it moves to the root a rotation statement names, then
-   trusts issuers under that root only. *)
+   trusts issuers under that root only. A join with pins made before the
+   rotation takes the root the same way (orgenrol.trust). *)
 let RotClient =
   in(c, rm: bitstring);
   let rotation(kn) = checksign(rm, pk(skRec)) in         (* NOT:rotate-by-primary *)
@@ -201,15 +214,19 @@ query n: mname, k: pkey, s: bitstring, e: epoch; event(Admitted(n, k)) ==> event
 query k: pkey; event(RotatedTo(k)) ==> event(RecoverySigned(k)).
 (* 9. after the rotation, only issuers the new root certified *)
 query k: pkey; event(TrustsIssuer(k)) ==> event(IssuerCertified(k)).
-(* 10-14. witnesses (1, 7, 6, 8, 9 not vacuous): web reached; a client
-   admitted; the leaked token's own name enrolled by whoever redeems it
-   first (the stated residual: one name, once, and web's provisioning
-   then fails visibly); a rotation; an issuer trusted after it *)
+(* 10. a token answered again certifies only the key it enrolled *)
+query t: bitstring, n: mname, k: pkey; event(Reissued(t, n, k)) ==> event(Enrolled(t, n, k)).
+(* 11-16. witnesses (1, 7, 6, 8, 9, 10 not vacuous): web reached; a
+   client admitted; the leaked token's own name enrolled by whoever
+   redeems it first (the stated residual: one name, once, and web's
+   provisioning then fails visibly); a rotation; an issuer trusted after
+   it; web's token answered again (its request replayed) *)
 query k: pkey, s: bitstring; event(Accepted(web, k, s, ep_now)).
 query n: mname, k: pkey; event(Admitted(n, k)).
 query t: bitstring, k: pkey; event(Enrolled(t, new1, k)).
 query k: pkey; event(RotatedTo(k)).
 query k: pkey; event(TrustsIssuer(k)).
+query t: bitstring, k: pkey; event(Reissued(t, web, k)).
 
 process
   Setup |

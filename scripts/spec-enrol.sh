@@ -4,10 +4,12 @@
 # spec-enrol.sh ci|check|live|mutants|witnesses|coverage|fixtures|traces|trace F: the TLA+ model of
 # organisation certificates' lifecycle: renewal, revocation, root rotation
 # (spec/enrol/README.md).
-#   check     TLC on spec/enrol/Enrol.cfg: every invariant.
+#   check     TLC on spec/enrol/Enrol.cfg: every invariant; Join.cfg: the
+#             join by token (Join.tla).
 #   live      TLC on spec/enrol/EnrolLive.cfg: the temporal properties;
 #             EnrolLoss.cfg: everything with the relay losing messages.
-#   mutants   each line of spec/enrol/mutants.txt must be caught.
+#   mutants   each line of spec/enrol/mutants.txt must be caught (a line
+#             naming a Join*.cfg runs Join.tla).
 #   witnesses each Witness* must be violated (reachable).
 #   ci        check, live, mutants, witnesses, fixtures (make spec-enrol-ci).
 #   coverage  check with -coverage 1; fails on an action never taken.
@@ -28,13 +30,17 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 dir=spec/enrol
 temporal="TakesEffect MachinesFollowRotation"
-witnesses="WitnessRenewed WitnessRevokeSeen WitnessFailClosed WitnessForgedSession WitnessRotated WitnessSessionAfterRotation WitnessRetried@EnrolLoss.cfg"
+witnesses="WitnessRenewed WitnessRevokeSeen WitnessFailClosed WitnessForgedSession WitnessRotated WitnessSessionAfterRotation WitnessRetried@EnrolLoss.cfg
+WitnessRetriedJoin@Join.cfg WitnessReissued@Join.cfg WitnessJoinedAfterLoss@Join.cfg WitnessJoinedAfterRotation@Join.cfg WitnessRefusedOther@Join.cfg WitnessRefusedEvil@Join.cfg"
+
+# modof CFG: the module a config checks (Join*.cfg: Join.tla).
+modof() { case ${1:-} in Join*) echo Join ;; *) echo Enrol ;; esac; }
 
 tlc() {
 	cfg_=$1
 	shift
 	(cd $dir && "$java" -Xmx"${TLC_HEAP:-1g}" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-2}" \
-		-noGenerateSpecTE -deadlock -metadir "$work/states-$(basename "$cfg_")" -config "$cfg_" "$@" Enrol.tla)
+		-noGenerateSpecTE -deadlock -metadir "$work/states-$(basename "$cfg_")" -config "$cfg_" "$@" "${MOD:-$(modof "$cfg_")}.tla")
 }
 
 run() {
@@ -59,7 +65,7 @@ mutants() {
 		*) { consts $c; printf '    Mutant = "%s"\nSPECIFICATION Spec\nINVARIANTS\n    TypeOK\n    %s\n' "$m" "$p"; } >"$work/X-$m-$p.cfg"
 			want="^Error: Invariant $p is violated" ;;
 		esac
-		tlc "$work/X-$m-$p.cfg" >"$work/x.out" 2>&1 || true
+		MOD=$(modof "$c") tlc "$work/X-$m-$p.cfg" >"$work/x.out" 2>&1 || true
 		if grep -Eq "$want" "$work/x.out"; then
 			echo "$m: caught by $p ($(grep -c '^State [0-9]*:' "$work/x.out") states deep)"
 		else
@@ -77,7 +83,7 @@ witnesses() {
 		w=${wc%@*} c=
 		[ "$w" = "$wc" ] || c=${wc#*@}
 		{ consts $c; printf '    Mutant = "none"\nSPECIFICATION Spec\nINVARIANTS\n    %s\n' "$w"; } >"$work/W-$w.cfg"
-		tlc "$work/W-$w.cfg" >"$work/w.out" 2>&1 || true
+		MOD=$(modof "$c") tlc "$work/W-$w.cfg" >"$work/w.out" 2>&1 || true
 		if grep -q "^Error: Invariant $w is violated" "$work/w.out"; then
 			echo "$w: reached"
 		else
@@ -102,6 +108,13 @@ coverage() {
 		echo "coverage: Lose is never taken in EnrolLoss.cfg"
 		return 1
 	fi
+	# InstallForged: mutant any-root only.
+	tlc Join.cfg -coverage 1 >"$work/cov.out" 2>&1 || { tail -20 "$work/cov.out"; return 1; }
+	grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out"
+	if grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out" | grep -v '^<InstallForged' | grep -qE ': 0:|: 0$'; then
+		echo "coverage: a Join.tla action is never taken"
+		return 1
+	fi
 }
 
 # trace F: accepted when every line was read with no violation.
@@ -109,7 +122,7 @@ trace() {
 	t=$work/$(basename "$1")
 	cat "$1" >"$t"
 	[ -s "$t" ] || { echo "$1: no lines"; return 0; }
-	printf 'CONSTANTS\n    TraceFile = "%s"\nINIT Init\nNEXT Next\nINVARIANTS\n    Conforms\n    NoRenewAfterRevoke\n    ForgedOnlyUnderStolenRoot\n    RevokedMachineRefused\n    RevocationBound\n    NoExpiredSession\n    TraceDone\n' "$t" >"$t.cfg"
+	printf 'CONSTANTS\n    TraceFile = "%s"\nINIT Init\nNEXT Next\nINVARIANTS\n    Conforms\n    NoRenewAfterRevoke\n    OneKeyPerToken\n    NoRetiredKeyRevived\n    RefusedOnlyForCause\n    ForgedOnlyUnderStolenRoot\n    RevokedMachineRefused\n    RevocationBound\n    NoExpiredSession\n    TraceDone\n' "$t" >"$t.cfg"
 	(cd $dir && "$java" -cp "$jar" tlc2.TLC -workers 1 -noGenerateSpecTE -deadlock \
 		-metadir "$t.states" -config "$t.cfg" TraceEnrol.tla) >"$t.out" 2>&1 || true
 	if grep -q '^Error: Invariant TraceDone is violated' "$t.out"; then
@@ -163,12 +176,12 @@ traces() {
 }
 
 case ${1:-} in
-check) run Enrol.cfg ;;
+check) run Enrol.cfg && run Join.cfg ;;
 live) run EnrolLive.cfg && run EnrolLoss.cfg ;;
 mutants) mutants ;;
 witnesses) witnesses ;;
 coverage) coverage ;;
-ci) run Enrol.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && mutants && witnesses && fixtures ;;
+ci) run Enrol.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && mutants && witnesses && fixtures ;;
 fixtures) fixtures ;;
 traces) traces ;;
 trace) trace "$2" ;;

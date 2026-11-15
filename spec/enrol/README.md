@@ -14,7 +14,9 @@ NotAfter, at the CRL's NextUpdate (fail closed), and on each CRL and
 rotation it takes. `Enrol.tla` is the design, checked before any code.
 Enrolment itself (single-use tokens, names, chains, groups, the recovery
 signature) is the symbolic model `spec/proverif/enrol.pv`; this model
-starts with the machines enrolled.
+starts with the machines enrolled. The join by token over the relay's
+mailboxes (a lost or late answer, the join run again, the root it takes
+after a rotation) is `Join.tla`.
 
 ## Invariants and properties
 
@@ -60,6 +62,46 @@ states, not a property it claims), `WitnessRotated`,
 | EvilRotate | mutant `rotate-by-primary` only: the stolen primary signs a rotation |
 | TakeRoot | a verifier takes the rotation statement and ends sessions under any other root |
 
+## `Join.tla`
+
+A machine's `nfltr org join` posts a request binding a key to the token
+(`orgenrol.Join`), the issuer answers it under its lock when it reads it
+(`orgpki.Issuer.Enrol`), and the join installs the answer or gives up
+waiting; run again with the token, it asks with the key it kept
+(`orgenrol.JoinKeyFile`), under a request id of its own run (the relay
+keeps a sender's idempotency key a day, an answer an hour), and takes the
+answer to its run's or to its first run's request. One token, one name;
+the relay loses one request or answer; one rotation.
+
+| property | means | mutant that breaks it |
+|---|---|---|
+| RefusedOnlyForCause | a join is refused only when another key redeemed the token or the name was revoked, and a root only when the owner did not make it: a lost or late answer never burns the name, a rotation never strands a join | `burn-name` (the issuer refuses a redeemed token's own key), `new-key-per-join` (each run a new key): together the code before 2026-11-15; `pin-root-only` (only the pinned root, not one its recovery key certifies) |
+| OneKeyPerToken | every certificate a token gets is for one key | `reissue-any-key` |
+| NoIssueAfterRevoke | nothing is issued under a token after the name's revoke | `reissue-revoked` |
+| NoRetiredKeyRevived | a key a renewal retired is never certified by the token again | `reissue-after-renewal` |
+| JoinRootsAreOwners | a machine joins only under a root the owner made | `any-root` |
+
+Witnesses: `WitnessRetriedJoin`, `WitnessReissued`,
+`WitnessJoinedAfterLoss`, `WitnessJoinedAfterRotation`,
+`WitnessRefusedOther`, `WitnessRefusedEvil`.
+
+| Action | code |
+|---|---|
+| Start | `orgenrol.Join`: the root message checked (`trust`: the pinned root, or one the pinned recovery key certifies), the token's kept key, the request posted under the run's id |
+| Issue | `orgpki.Issuer.Enrol` (through `orgenrol.Service`): a redeemed token answers again only its key, while the name is not revoked and its newest certificate is the token's |
+| Install | `orgenrol.Join`: the answer to this run's or the first run's request, checked by `orgmachine.Checked` (key, chain) |
+| GiveUp | the join's `--wait` ends |
+| Lose | the relay loses a request or an answer (or keeps it past its TTL) |
+| Other | the token leaked: another key's request |
+| Renew, ReplayOld | a renewal retires the join key; the attacker posts it with the token |
+| Revoke, Rotate | `nfltr org revoke`, `nfltr org rotate` |
+| InstallForged | mutant `any-root` only: the attacker's answer under its own root |
+
+The join takes the first answer it reads: after a rotation between a
+run's answer and the next run, the first run's answer (under the old
+root) fails the chain check until the relay drops it (an hour); the model
+lets the join skip it (a liveness gap, no safety one).
+
 ## Running
 
 `scripts/spec-enrol.sh ci` (`make spec-enrol-ci`, in `make ci`):
@@ -67,12 +109,13 @@ states, not a property it claims), `WitnessRotated`,
 two root generations, MaxKeys 4, no losses: 280785 states), `EnrolLive.cfg`
 (the same under LiveSpec), `EnrolLoss.cfg` (the relay loses one request or
 answer, no forgeries, LiveSpec and every invariant: 162030 states;
-`no-retry` and `WitnessRetried` run on its constants), every line of
+`no-retry` and `WitnessRetried` run on its constants), `Join.cfg`
+(Join.tla, every invariant: 7475 states), every line of
 `mutants.txt`, every witness, and the trace fixtures. Losses are a config
 of their own because they multiply Enrol.cfg's states tenfold (MaxLost 1
 there: 1.46M states). `coverage`: `-coverage 1`, fails on an action never
 taken (EvilRotate and IssueForged aside, mutant-only steps; Lose in
-EnrolLoss.cfg).
+EnrolLoss.cfg; Join.cfg's, InstallForged aside).
 
 ## Traces
 
@@ -82,16 +125,19 @@ each step of every verifier, when built `-tags enroltrace` with
 `ENROLTRACE=<dir>` (`trace_on.go` in each; `trace.go` is the no-op of every
 other build): issue, refuse, revoke, crl (the issuer) and take, rotate,
 check (a verifier: Take, Fetch and Replay; TakeRoot; Admit and the re-check
-of a held session). `TraceEnrol.tla` reads
+of a held session); an enrolment's issue and refusal carry its token and
+key, checked by `Join.tla`'s Issue rules (`OneKeyPerToken`,
+`NoRetiredKeyRevived`, `RefusedOnlyForCause`, and `NoRenewAfterRevoke`
+for a token answered after the revoke). `TraceEnrol.tla` reads
 the lines in order and requires each outcome to be the one this model's
 rules give from what the lines before it established; a wrong outcome a
 model mutant names is reported by that mutant's property. `scripts/spec-enrol.sh
 traces` (`make spec-enrol-traces`) runs every test of orgpki, orgmachine and
 orgenrol (the mailbox round trips, the push and the backstop, the rotation)
-that way and checks each trace (52 traces, 348 lines); with the Go mutant
+that way and checks each trace (54 traces, 375 lines); with the Go mutant
 `renew-revoked` applied (and orgid's `fail-open`, `accept-older-crl` and
-`no-expiry-check`), the trace check rejects the recorded traces by that mutant's
-property. `traces/<Invariant>-*.ndjson` are fixtures each rejected by its
+`no-expiry-check`; orgpki's `burn-name` and `reissue-any-key`), the trace
+check rejects the recorded traces by that mutant's property. `traces/<Invariant>-*.ndjson` are fixtures each rejected by its
 named invariant (`fixtures`, in `ci`). `scripts/check-spec-actions.sh`
 fails when a line kind TraceEnrol reads is no longer written by orgpki or
 orgid.
@@ -117,5 +163,7 @@ orgid.
 | Enrol.tla | org/orgenrol/ |
 | Enrol.tla | org/orgmachine/orgmachine.go |
 | Enrol.tla | org/orgissuer/store.go |
+| Join.tla | org/orgpki/issuer.go |
+| Join.tla | org/orgenrol/machine.go |
 | TraceEnrol.tla | org/orgpki/trace_on.go |
 | TraceEnrol.tla | client/orgid/trace_on.go |

@@ -19,3 +19,13 @@ no-reissue-on-rotation MachinesFollowRotation
 check-at-request NoRenewAfterRevoke
 install-stale-answer MachineHoldsItsKey
 no-retry MachinesFollowRotation EnrolLoss.cfg
+# Join.tla (the join by token, Join.cfg): burn-name and new-key-per-join
+# are the code before 2026-11-15 (a lost or late answer burnt the name);
+# pin-root-only refused a root the pinned recovery key certifies.
+burn-name RefusedOnlyForCause Join.cfg
+new-key-per-join RefusedOnlyForCause Join.cfg
+reissue-any-key OneKeyPerToken Join.cfg
+reissue-revoked NoIssueAfterRevoke Join.cfg
+reissue-after-renewal NoRetiredKeyRevived Join.cfg
+pin-root-only RefusedOnlyForCause Join.cfg
+any-root JoinRootsAreOwners Join.cfg
