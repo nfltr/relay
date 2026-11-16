@@ -21,7 +21,7 @@ reissue-any-key | issuer.go | 		if n.revoked || last.token != req.TokenID || las
 reissue-revoked | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | TestTokenAnsweredAgainForItsKey
 reissue-after-renewal | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if n.revoked || last.key != orgid.KeyFingerprint(pub) { | TestTokenAnsweredAgainForItsKey
 token-in-request | issuer.go | 	if !hmac.Equal(req.MAC, enrolMAC(i.tokenSecret(req.TokenID), req.CSR)) { | 	if false { | TestTokenForAnotherNameRefused
-name-from-request | issuer.go | 	return i.issue(ActIssued, t.name, t.groups, t.machineID, pub, req.TokenID, "", now) | 	return i.issue(ActIssued, cr.Subject.CommonName, t.groups, t.machineID, pub, req.TokenID, "", now) | TestTokenForAnotherNameRefused
+name-from-request | issuer.go | 	return i.issue(ActIssued, t.name, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now) | 	return i.issue(ActIssued, cr.Subject.CommonName, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now) | TestTokenForAnotherNameRefused
 token-outlives-ttl | issuer.go | 	if !now.Before(t.expires) { | 	if false { | TestTokenForAnotherNameRefused
 token-group-outside-policy | issuer.go | 	if policy := i.Groups(); !subset(groups, policy) { | 	if policy := i.Groups(); false && !subset(groups, policy) { | TestGroupOutsidePolicyRefused
 renew-forged | issuer.go | 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) { | 	if _ = sum; rec == nil { | TestRotationOnlyByRecoveryKey
