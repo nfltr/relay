@@ -150,6 +150,16 @@ func TestNF1AnonDirectRequired(t *testing.T) {
 	})
 	t.Run("path dropped", func(t *testing.T) {
 		r, q := newNF1AnonRig(t)
+		// an anonymous session is never re-attached, so the service learns
+		// at the path's end, not past the agent's detach bound (30 s in
+		// production; 8 s here, so that the abort's linger ends in the test)
+		d := r.l.targets.services.direct
+		d.detach = 8 * time.Second
+		defer func() { // the aborted session lingers its detach bound, then leaves
+			for end := time.Now().Add(10 * time.Second); len(d.liveSessions()) > 0 && time.Now().Before(end); {
+				time.Sleep(50 * time.Millisecond)
+			}
+		}()
 		ds, tc := r.handshake(t)
 		var m marks
 		if err := ds.RunNF1(tc.ConnectionState(), NF1Route{Addr: r.lis.Address(), Open: m.open(r), Anonymous: true}, DirectOn, nil); err != nil {
@@ -187,8 +197,12 @@ func TestNF1AnonDirectRequired(t *testing.T) {
 		if m.attach.Load() != 0 {
 			t.Fatalf("%d relayed re-attaches", m.attach.Load())
 		}
+		lost := time.Now()
 		_ = srv.SetReadDeadline(time.Now().Add(10 * time.Second))
 		_, err := srv.Read(b)
+		if el := time.Since(lost); el > 4*time.Second {
+			t.Fatalf("the service learnt the path's end after %v: the detach bound, not the path's end", el)
+		}
 		a, ok := errors.AsType[*link.Abort](err)
 		if reason, rok := dataplane.AbortReason(a); !ok || !rok || reason != relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED {
 			t.Fatalf("service read %v, want ERROR_REASON_ACCOUNT_REQUIRED", err)
@@ -214,4 +228,27 @@ func TestNF1AnonDirectRequired(t *testing.T) {
 			t.Fatal("the service took a plain session")
 		}
 	})
+}
+
+// TestServiceTableCloseEndsDirectPaths: a table one owner serves alone
+// (nfnet.Listener) ends its direct paths with Close: the listener and its
+// UDP socket, so that a closed listener leaves no QUIC endpoint behind.
+func TestServiceTableCloseEndsDirectPaths(t *testing.T) {
+	l, _, err := nf1.Mint("relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := NewSessionQueue(1)
+	defer q.Close() //nolint:errcheck
+	table, err := NewServiceTable([]Service{{Name: "blob", Kind: agentservices.TCP, Queue: q, E2EE: agentservices.E2EEOn, NF1: l, Direct: DirectOn}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pc := table.direct.ep.pc
+	table.Close(t.Context())
+	if _, err := pc.WriteTo([]byte{0}, pc.LocalAddr()); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("the direct socket after Close: %v, want closed", err)
+	}
+	table.Close(t.Context()) // twice: nothing more to end
+	(*ServiceTable)(nil).Close(t.Context())
 }

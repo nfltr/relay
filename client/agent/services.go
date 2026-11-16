@@ -341,6 +341,20 @@ func (t *ServiceTable) Continue(prev *ServiceTable) {
 	_ = n.ep.Close()
 }
 
+// Close ends the table's direct paths: their sessions within ctx (then
+// reset), the listener and its UDP socket. An agent process keeps them for
+// its life (a later table takes them over: Continue); a table one owner
+// serves alone (nfnet.Listener) closes them with it. nil, or no direct
+// service: nothing to end.
+func (t *ServiceTable) Close(ctx context.Context) {
+	if t == nil || t.direct == nil {
+		return
+	}
+	t.direct.stop(ctx)
+	_ = t.direct.node.Drain(ctx)
+	_ = t.direct.ep.Close()
+}
+
 // DirectTransport is the UDP socket of the table's direct paths, for the
 // agent link's QUIC (QUICDialer.Transport); nil: no direct service.
 func (t *ServiceTable) DirectTransport() *quic.Transport {

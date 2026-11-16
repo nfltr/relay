@@ -65,6 +65,9 @@ type directSession struct {
 	key  []byte
 	peer string        // the direct connection it last moved to (servedPeer's name); d.mu
 	nf1  *nf1.Listener // a capability address's session: its listener (nil: organisation mode)
+	// lost ends an anonymous address's session at its current stream's
+	// end (never re-attached: anonLost); nil for every other session
+	lost func()
 	sni  string        // ... the server name its direct connection asks for (nf1SNI)
 	// revoke is a udp service's association on the session (setDirect):
 	// a revocation tells its flows why before the session ends.
@@ -294,7 +297,7 @@ func (d *directServer) acceptDirect(peer string, _ []byte, s peerlink.Session) {
 	d.mu.Lock()
 	qk := d.quic[peer]
 	d.mu.Unlock()
-	ps := pathStream{Conn: s}
+	ps := pathStream{Conn: s, end: &streamEnd{}}
 	o, err := pathswitch.ReadOpen(ps)
 	if err != nil || qk == nil {
 		_ = s.Reset()
@@ -305,6 +308,9 @@ func (d *directServer) acceptDirect(peer string, _ []byte, s peerlink.Session) {
 		d.logger.Warn("direct path: an OPEN no session's token names, refused")
 		_ = s.Reset() // not Refuse: a stranger's stream resets no session
 		return
+	}
+	if sess.lost != nil {
+		ps.end.set(anonLost(sess.c, ps, sess.lost))
 	}
 	if _, err := s.Write(pathToken(sess.key, roleServer, o.Epoch, qk)); err != nil {
 		_ = s.Reset()

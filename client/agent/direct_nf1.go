@@ -23,9 +23,11 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -187,8 +189,12 @@ func serveNF1Anon(ctx context.Context, s, ps net.Conn, p sessionPlan, logger *sl
 	l, d := p.nf1, p.direct
 	done := d.handshaking()
 	defer done()
-	c := pathswitch.Server(pathStream{Conn: ps}, PathRelayed, pathswitch.Config{Detach: d.detach})
+	relayed := pathStream{Conn: ps, end: &streamEnd{}}
+	c := pathswitch.Server(relayed, PathRelayed, pathswitch.Config{Detach: d.detach})
 	tap := &detachTap{Conn: newPSConn(c, s)}
+	gone := make(chan struct{})
+	lost := sync.OnceFunc(func() { tap.detached.Store(true); close(gone); c.Abort() })
+	relayed.end.set(anonLost(c, relayed, lost))
 	tc := admitNF1(ctx, l, tap, logger)
 	if tc == nil {
 		c.Abort()
@@ -199,9 +205,9 @@ func serveNF1Anon(ctx context.Context, s, ps net.Conn, p sessionPlan, logger *sl
 		_ = tc.Close()
 		return
 	}
-	ds := d.registerSession(&directSession{c: c, key: key, nf1: l, sni: nf1SNI(key)})
+	ds := d.registerSession(&directSession{c: c, key: key, nf1: l, sni: nf1SNI(key), lost: lost})
 	done()
-	if !onPathWithin(c, PathDirect, nf1AnonDirectBound) {
+	if !onPathWithin(c, PathDirect, nf1AnonDirectBound, gone) {
 		if c.Path() == PathRelayed {
 			_ = nf1.AbortDirectRequired(s)
 		}
@@ -221,10 +227,11 @@ func serveNF1Anon(ctx context.Context, s, ps net.Conn, p sessionPlan, logger *sl
 	join(tc, target)
 }
 
-// onPathWithin waits until c is on path, false once d passed or c ended.
+// onPathWithin waits until c is on path, false once d passed, c ended or
+// gone closed.
 // ponytail: polls every 50 ms (pathswitch has no move event on the
 // server); an event when one exists.
-func onPathWithin(c *pathswitch.Conn, path string, d time.Duration) bool {
+func onPathWithin(c *pathswitch.Conn, path string, d time.Duration, gone <-chan struct{}) bool {
 	t := time.NewTicker(50 * time.Millisecond)
 	defer t.Stop()
 	end := time.After(d)
@@ -232,12 +239,29 @@ func onPathWithin(c *pathswitch.Conn, path string, d time.Duration) bool {
 		select {
 		case <-c.Done():
 			return false
+		case <-gone:
+			return false
 		case <-end:
 			return false
 		case <-t.C:
 		}
 	}
 	return true
+}
+
+// anonLost is the end hook of an anonymous session's stream st (its
+// relayed one, or a direct one): the session ends at once (lost) when st
+// ends while current and not cleanly, instead of after the detach bound,
+// which waits for a re-attach that an anonymous session never gets (the
+// client ends it at the same point: nf1-anon section 2; spec
+// NF1Anon.tla GiveUp from detached). A stream that a move left, a clean
+// end (EOF) and a session already over do not end it.
+func anonLost(c *pathswitch.Conn, st pathStream, lost func()) func(error) {
+	return func(err error) {
+		if !errors.Is(err, io.EOF) && c.Current() == pathswitch.Stream(st) {
+			lost()
+		}
+	}
 }
 
 // detachTap is an anonymous session's conn below its TLS: it notes a read

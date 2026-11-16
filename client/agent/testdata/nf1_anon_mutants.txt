@@ -7,5 +7,6 @@
 # the same rules).
 reattach-relayed | direct_client.go | 	if s.anon { // direct only: never re-attached relayed (nf1-anon section 2; the relay cuts one anyway) | 	if false { | TestNF1AnonDirectRequired
 no-bound | direct_nf1.go | 				s.directRequired() | 				_ = s | TestNF1AnonDirectRequired
-target-before-direct | direct_nf1.go | 	if !onPathWithin(c, PathDirect, nf1AnonDirectBound) { | 	if false { | TestNF1AnonDirectRequired
+target-before-direct | direct_nf1.go | 	if !onPathWithin(c, PathDirect, nf1AnonDirectBound, gone) { | 	if false { | TestNF1AnonDirectRequired
 plain-served | direct_nf1.go | 	if l.Anonymous() && first != nf1MarkControl && !framed(first) { | 	if false { | TestNF1AnonDirectRequired
+direct-lost-waits-detach | direct_server.go | 		ps.end.set(anonLost(sess.c, ps, sess.lost)) | 		_ = ps | TestNF1AnonDirectRequired

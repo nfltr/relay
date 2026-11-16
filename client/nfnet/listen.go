@@ -57,6 +57,7 @@ type ListenOptions struct {
 type Listener struct {
 	a       agent.Agent
 	q       *agent.SessionQueue
+	table   *agent.ServiceTable // its direct paths end with it (Close)
 	addr    Addr
 	address string
 	e2ee    bool
@@ -95,9 +96,10 @@ func listen(ctx context.Context, cfg Config, service string, o ListenOptions, ki
 	}
 	acfg, err := agentConfig(cfg)
 	if err != nil {
+		table.Close(context.Background())
 		return nil, err
 	}
-	l := &Listener{q: q, addr: Addr{Target: cfg.Agent + "/" + service}, e2ee: svc.E2EE == agentservices.E2EEOn,
+	l := &Listener{q: q, table: table, addr: Addr{Target: cfg.Agent + "/" + service}, e2ee: svc.E2EE == agentservices.E2EEOn,
 		events: cfg.Events, conns: map[*Conn]struct{}{}, ended: make(chan struct{})}
 	if o.Address != nil {
 		l.address = o.Address.Address().String()
@@ -130,6 +132,7 @@ func listen(ctx context.Context, cfg Config, service string, o ListenOptions, ki
 	if err != nil {
 		cancel()
 		_ = q.Close()
+		table.Close(context.Background())
 		return nil, listenError(ctx, err)
 	}
 	go l.watch()
@@ -371,5 +374,8 @@ func (l *Listener) Close() error {
 	l.a.Close()
 	l.cancel()
 	<-l.ended
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	l.table.Close(ctx)
 	return nil
 }

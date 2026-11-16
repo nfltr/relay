@@ -121,8 +121,15 @@ func NewDirectEndpoint() (*DirectEndpoint, error) {
 // Transport is the socket's quic.Transport.
 func (e *DirectEndpoint) Transport() *quic.Transport { return e.tr }
 
-// Close closes the socket.
-func (e *DirectEndpoint) Close() error { return e.tr.Close() }
+// Close closes the socket: the Transport, then the UDP socket it was given
+// (a quic.Transport closes only a socket it opened itself).
+func (e *DirectEndpoint) Close() error {
+	err := e.tr.Close()
+	if cerr := e.pc.Close(); cerr != nil && !errors.Is(cerr, net.ErrClosed) {
+		err = errors.Join(err, cerr)
+	}
+	return err
+}
 
 // QAD asks the relay at addr (its agent link's UDP port) for this
 // socket's address as it sees it: a candidate, never more (the relay's
@@ -236,6 +243,7 @@ type pathStream struct {
 	net.Conn
 	sent, recv *atomic.Uint64
 	heard      *atomic.Bool // set by its first byte read (nil: none kept)
+	end        *streamEnd   // told the read error that ended it (nil: none)
 }
 
 func (s pathStream) Read(p []byte) (int, error) {
@@ -246,8 +254,19 @@ func (s pathStream) Read(p []byte) (int, error) {
 	if n > 0 && s.heard != nil {
 		s.heard.Store(true)
 	}
+	if err != nil && s.end != nil {
+		if f := s.end.fn.Load(); f != nil {
+			(*f)(err)
+		}
+	}
 	return n, err
 }
+
+// streamEnd is a stream's end hook: fn, once set, is called with the read
+// error that ended the stream, before the path layer reads it.
+type streamEnd struct{ fn atomic.Pointer[func(error)] }
+
+func (e *streamEnd) set(fn func(error)) { e.fn.Store(&fn) }
 
 func (s pathStream) Write(p []byte) (int, error) {
 	n, err := s.Conn.Write(p)
