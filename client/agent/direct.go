@@ -111,6 +111,7 @@ type DirectEndpoint struct {
 	pm       portMap                   // the gateway's mapping of the socket (direct_portmap.go)
 	lan      func(netip.AddrPort) bool // tests: which candidates are LAN ones (nil: isLAN)
 	noHost   bool                      // tests: no host candidates (the reflexive one only)
+	grace    time.Duration             // tests: the LAN grace (0: lanGrace)
 }
 
 // NewDirectEndpoint opens the socket on an ephemeral port.

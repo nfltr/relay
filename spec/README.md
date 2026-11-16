@@ -1060,6 +1060,15 @@ off-path untagged sender; three dials at most; a bound of two ticks).
 | `PreferLan` | a punch that returned on a non-LAN connection dialled no working LAN candidate | `first-wins` |
 | `Ends` (liveness) | every punch returns | `no-bound`, `keep-loser` |
 
+`PreferLan` holds only for a LAN path whose handshake ends within the
+grace (`Reach`): a LAN path that connects after the grace, or after the
+punch returned, is not switched to; the session stays on the non-LAN
+direct path (moving a live session to a later path is not modelled and
+not built). On a loaded machine a loopback handshake can outlast 100 ms,
+so `TestDirectPunchPrefersLAN` orders its peers by events (the LAN peer
+reads only after the non-LAN handshake ended) and sets the grace past its
+bound (lane R15FIX, 2026-11-17).
+
 A port-mapped address (NAT-PMP, `client/agent/direct_portmap.go`; nfltr
 `docs/decisions/portmap-2026-11-16.md`) is one more of `Offered`: the
 mapping's lease is renewed before an offer names it, so the punch is

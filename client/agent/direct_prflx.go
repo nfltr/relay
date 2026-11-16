@@ -129,6 +129,13 @@ func (e *DirectEndpoint) readProbes() {
 // LAN (Wi-Fi under load) or shows in the time to direct.
 const lanGrace = 100 * time.Millisecond
 
+func (e *DirectEndpoint) lanGrace() time.Duration {
+	if e.grace > 0 {
+		return e.grace
+	}
+	return lanGrace
+}
+
 // isLAN: a private or link-local address, a path that stays on the LAN.
 func (e *DirectEndpoint) isLAN(a netip.AddrPort) bool {
 	if e.lan != nil {
@@ -224,7 +231,7 @@ func (e *DirectEndpoint) punch(ctx context.Context, cands []netip.AddrPort, lear
 					cancelLAN() // the LAN ones too once a LAN one won
 					grace = nil
 				} else if done != nil {
-					grace = time.After(lanGrace) // else after the grace
+					grace = time.After(e.lanGrace()) // else after the grace
 				}
 			default:
 				tr.up(r.a.String(), false)
