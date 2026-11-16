@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -261,8 +262,11 @@ func watchDir(dir string, logger *slog.Logger) (wake <-chan struct{}, stop func(
 				if !ok {
 					return
 				}
-				if n := filepath.Base(e.Name); n == orgissuer.CRLFile || n == orgissuer.LogFile {
+				switch filepath.Base(e.Name) {
+				case orgissuer.CRLFile, orgissuer.LogFile:
 					traceNotice(dir)
+					notify()
+				case orgissuer.IssuersFile: // the root's CRL of issuers: published with the root (no RevokePush.tla step)
 					notify()
 				}
 			case _, ok := <-w.Errors:
@@ -440,7 +444,7 @@ func (s *service) sealMachineKey(iss *orgpki.Issuer, tokenID string, der []byte,
 // life left, or signed by another issuer than the current: a rotation),
 // then publishes the root and the CRL the relay does not hold.
 func (s *service) maintain(ctx context.Context, now time.Time) error {
-	var root, rec, crl, issuer []byte
+	var root, rec, crl, issuer, issuers []byte
 	var crlErr error // ErrIssuerExpired: the root is still published
 	err := s.with(func(iss *orgpki.Issuer, st *orgissuer.Store) error {
 		der, err := st.ReadCRL()
@@ -461,6 +465,9 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 				}
 			}
 		}
+		if issuers, err = st.ReadIssuers(); err != nil {
+			return err
+		}
 		root, rec, crl, issuer = iss.Root().Raw, iss.Recovery().Raw, der, iss.Cert().Raw
 		traceRead(s.Dir, der) // under the lock (RevokePush.tla Read)
 		return nil
@@ -468,11 +475,11 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
-	if !bytes.Equal(root, s.pubRoot) || now.Sub(s.pubRootAt) >= rootEvery {
-		if err := s.publish(ctx, orgpki.RootMailbox(s.org), orgpki.RootMessage{Root: root, Recovery: rec}); err != nil {
+	if pub := slices.Concat(root, issuers); !bytes.Equal(pub, s.pubRoot) || now.Sub(s.pubRootAt) >= rootEvery {
+		if err := s.publish(ctx, orgpki.RootMailbox(s.org), orgpki.RootMessage{Root: root, Recovery: rec, Issuers: issuers}); err != nil {
 			return fmt.Errorf("root: %w", err)
 		}
-		s.pubRoot, s.pubRootAt = root, now
+		s.pubRoot, s.pubRootAt = pub, now
 	}
 	if crlErr != nil {
 		return crlErr

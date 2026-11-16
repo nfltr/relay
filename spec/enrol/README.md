@@ -213,7 +213,7 @@ fixtures each rejected by its invariant.
 | the relay may lose, keep or replay a request or an answer but forge neither: requests are signed by the current key or bound to a token, answers are the issuer's certificates for a key the machine checks | Lose, Install | `spec/proverif/enrol.pv`; `orgmachine.Checked` |
 | the recovery key is never online with the primary | RootsAreOwners | the design |
 | one issuer acts on the log at a time, also across a move to another machine (`nfltr org move`): the old machine acts no more after its fence, the new one continues the same log and CRL Number | Issue, Revoke, Republish | `spec/orgmove/OrgMove.tla` (AtMostOneIssuer, OldCannotIssue, CRLMonotone) |
-| the issuer's own certificate is not modelled: a stolen issuer key mints within its NameConstraints and groups until its NotAfter (30 days) or a rotation | (stated bound, not a property) | the threat model: an issuer key is a key the owner protects |
+| the issuer's own certificate is not modelled: a stolen issuer key mints within its NameConstraints and groups until its NotAfter (30 days), a rotation or the root's CRL of issuers, and a session admitted under it ends at that NotAfter at the latest (`orgid` `Checked.Until`, the chain's earliest NotAfter; `spec/orgmove/OrgHosted.tla` DelegationBound and RevokedIssuerRefused) | (stated bound, not a property) | the threat model: an issuer key is a key the owner protects |
 
 ## Code map
 

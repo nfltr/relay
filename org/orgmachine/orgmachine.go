@@ -43,6 +43,7 @@ const (
 	CertFile     = orgid.CertFile      // this machine's certificate, its issuer's, then its SSH host certificate
 	KeyFile      = orgid.KeyFile       // its key (PKCS#8 PEM), 0600
 	CRLFile      = orgid.CRLFile       // the issuer's newest CRL
+	IssuersFile  = orgid.IssuersFile   // the root's CRL of issuers, once one is published
 	KRLFile      = "revoked-hosts.krl" // its OpenSSH KRL (orgpki.HostKRL), 0644: ssh's RevokedHostKeys
 )
 
@@ -69,6 +70,7 @@ type Machine struct {
 	issuer  *x509.Certificate
 	host    *ssh.Certificate // the host certificate of cert
 	crl     []byte
+	issuers []byte // issuers.crl, as the verifier took it
 	krl     []byte // orgpki.HostKRL of crl
 	changed chan struct{}
 }
@@ -162,7 +164,19 @@ func (m *Machine) Reload(now time.Time) (changed bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	issuers, err := os.ReadFile(filepath.Join(m.dir, IssuersFile))
+	if errors.Is(err, os.ErrNotExist) {
+		issuers, err = nil, nil
+	}
+	if err != nil {
+		return false, err
+	}
 	m.mu.Lock()
+	// The root's CRL of issuers: one the verifier refuses is only not taken.
+	newIssuers := issuers != nil && !bytes.Equal(issuers, m.issuers) && m.ver.TakeIssuerCRL(issuers) == nil
+	if newIssuers {
+		m.issuers = issuers
+	}
 	newCRL := string(crl) != string(m.crl)
 	if newCRL {
 		// A CRL that the verifier refuses is not taken, and fails nothing
@@ -181,14 +195,14 @@ func (m *Machine) Reload(now time.Time) (changed bool, err error) {
 	if newCert {
 		m.cert, m.issuer, m.host = &cert, issuer, host
 	}
-	if newCRL || newCert {
+	if newCRL || newCert || newIssuers {
 		m.signal()
 	}
 	m.mu.Unlock()
 	// A KRL that cannot be written now is written at the next Reload;
 	// KRL (nfltr cat ssh, nfltr org trust) reports the error.
 	_ = m.keepKRL()
-	return rotated || newCRL || newCert, nil
+	return rotated || newCRL || newCert || newIssuers, nil
 }
 
 // signal closes Changed's channel. Callers hold mu.
@@ -212,7 +226,7 @@ func (m *Machine) takeRoot(der []byte) (bool, error) {
 	if err := m.ver.TakeRotation(der); err != nil {
 		return false, err
 	}
-	m.root, m.crl = der, nil
+	m.root, m.crl, m.issuers = der, nil, nil
 	m.signal()
 	return true, nil
 }
@@ -244,6 +258,27 @@ func (m *Machine) TakeCRL(crl, issuerDER []byte, now time.Time) (bool, error) {
 		return taken, err
 	}
 	return true, m.keepKRL()
+}
+
+// TakeIssuerCRL takes the root's CRL of issuers from the relay when the
+// verifier does (the root's, newer than the one held) and keeps it in
+// issuers.crl; Changed, so sessions under an issuer it lists are cut. The
+// one held already is no change.
+func (m *Machine) TakeIssuerCRL(der []byte) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if bytes.Equal(der, m.issuers) {
+		return false, nil
+	}
+	if err := m.ver.TakeIssuerCRL(der); err != nil {
+		return false, err
+	}
+	if err := orgfiles.Write(filepath.Join(m.dir, IssuersFile), der, 0o600); err != nil {
+		return false, err
+	}
+	m.issuers = der
+	m.signal()
+	return true, nil
 }
 
 func (m *Machine) takeCRL(crl []byte, issuer *x509.Certificate, now time.Time) (bool, error) {

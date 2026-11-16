@@ -28,3 +28,5 @@ root-stops-with-crl | issuer.go | 				crlErr = fmt.Errorf("CRL: %w", err) | 				
 # A revoke's notice (spec/enrol/RevokePush.tla poll-only: EventBound): the
 # issuer publishes a CRL another process wrote at its notice, not its round.
 poll-only | issuer.go | 	wake, stopWatch := watchDir(c.Dir, logger) | 	wake, stopWatch := (<-chan struct{})(nil), func() {} | TestRevokePublishedAtItsNotice
+root-message-drops-issuers | issuer.go | 		if err := s.publish(ctx, orgpki.RootMailbox(s.org), orgpki.RootMessage{Root: root, Recovery: rec, Issuers: issuers}); err != nil { | 		if err := s.publish(ctx, orgpki.RootMailbox(s.org), orgpki.RootMessage{Root: root, Recovery: rec}); err != nil { | TestRootRevocationOfTheIssuerReachesTheMachine
+keeper-skips-issuers | machine.go | 			_, err := m.TakeIssuerCRL(rm.Issuers) | 			err := error(nil) | TestRootRevocationOfTheIssuerReachesTheMachine

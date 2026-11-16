@@ -51,3 +51,5 @@ renew-unsigned-request | renew.go | 	case !ed25519.Verify(pub, renewalMessage(re
 sign-after-expiry | issuer.go | 	if !now.Before(i.cert.NotAfter) { | 	if false { | TestNoCRLPastTheIssuerCertificate
 crl-not-due-on-renewal | issuer.go | 		i.cert, i.crlDue = c, true | 		i.cert = c | TestNoCRLPastTheIssuerCertificate
 crl-not-due-on-revoke | issuer.go | 		i.crlDue = true | 		_ = 0 | TestNoCRLPastTheIssuerCertificate
+issuer-crl-drops-prev | issuercrl.go | 			entries = append(entries, x509.RevocationListEntry{SerialNumber: e.SerialNumber, RevocationTime: e.RevocationTime}) | 			_ = e | TestSignIssuerCRL
+issuer-crl-any-cert | issuercrl.go | 		if !c.IsCA || c.CheckSignatureFrom(root) != nil { | 		if false { | TestSignIssuerCRL

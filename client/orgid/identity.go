@@ -23,6 +23,7 @@ const (
 	CertFile     = "machine.pem"  // this machine's certificate, its issuer's (then nfltr's SSH host certificate, which Load skips)
 	KeyFile      = "machine.key"  // its key (PKCS#8 PEM), 0600
 	CRLFile      = "crl.der"      // the issuer's newest CRL
+	IssuersFile  = "issuers.crl"  // the root's CRL of issuers, once one is published (Verifier.TakeIssuerCRL)
 )
 
 // Dir is the machine directory under nfltr's config directory.
@@ -60,6 +61,7 @@ type Identity struct {
 	root    []byte // root.pem's certificate, as the verifier took it
 	cert    *tls.Certificate
 	crl     []byte
+	issuers []byte // issuers.crl, as the verifier took it
 	changed chan struct{}
 }
 
@@ -148,8 +150,18 @@ func (m *Identity) Reload(now time.Time) (changed bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	issuers, err := readOptional(filepath.Join(m.dir, IssuersFile))
+	if err != nil {
+		return false, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// The root's CRL of issuers, before the CRL: a refused one (a replay,
+	// another root's) is only not taken.
+	newIssuers := issuers != nil && !bytes.Equal(issuers, m.issuers) && m.ver.TakeIssuerCRL(issuers) == nil
+	if newIssuers {
+		m.issuers = issuers
+	}
 	newCRL := string(crl) != string(m.crl)
 	if newCRL {
 		// A CRL that the verifier refuses is not taken, and fails nothing
@@ -168,10 +180,19 @@ func (m *Identity) Reload(now time.Time) (changed bool, err error) {
 	if newCert {
 		m.cert = &cert
 	}
-	if newCRL || newCert {
+	if newCRL || newCert || newIssuers {
 		m.signal()
 	}
-	return rotated || newCRL || newCert, nil
+	return rotated || newCRL || newCert || newIssuers, nil
+}
+
+// readOptional is path's bytes, nil when it does not exist.
+func readOptional(path string) ([]byte, error) {
+	b, err := os.ReadFile(path) // #nosec G304 -- a file of the machine's own directory
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return b, err
 }
 
 // signal closes Changed's channel. Callers hold mu.
@@ -195,7 +216,7 @@ func (m *Identity) takeRoot(der []byte) (bool, error) {
 	if err := m.ver.TakeRotation(der); err != nil {
 		return false, err
 	}
-	m.root, m.crl = der, nil
+	m.root, m.crl, m.issuers = der, nil, nil
 	m.signal()
 	return true, nil
 }

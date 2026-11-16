@@ -307,7 +307,10 @@ func (k Keeper) Run(ctx context.Context) {
 			if err := json.Unmarshal(p, &rm); err != nil {
 				return err
 			}
-			_, err := m.TakeRotation(rm.Root)
+			if _, err := m.TakeRotation(rm.Root); err != nil || rm.Issuers == nil {
+				return err
+			}
+			_, err := m.TakeIssuerCRL(rm.Issuers)
 			return err
 		}, nil, k.Logger)
 	})

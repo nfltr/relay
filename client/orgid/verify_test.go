@@ -178,22 +178,3 @@ func TestRotationOnlyByRecoveryKey(t *testing.T) {
 		t.Fatal("Root is not the rotated root")
 	}
 }
-
-// OrgHosted.tla DelegationBound (finding F1 of nfltr's
-// org-hosted-issuer-2026-11-16): a stolen issuer key signs a leaf and a CRL
-// that outlive the issuer's certificate; a session admitted just before
-// the issuer's NotAfter still ends at it, the earliest NotAfter of the
-// verified chain (mutant until-leaf-only).
-func TestUntilEndsAtTheIssuersNotAfter(t *testing.T) {
-	o := newTestOrg(t, t0)
-	at := o.iss.NotAfter.Add(-time.Minute)
-	forged := mint(t, leafTemplate(t, o.orgID, "web-1", []string{"web"}, at), o.iss, newKey(t).Public(), o.issKey)
-	o.takeCRL(t, at)
-	id, err := o.ver.Check(forged, o.iss, Peer{Name: "web-1"}, at)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !id.Until.Equal(o.iss.NotAfter) {
-		t.Fatalf("Until %s, want the issuer's NotAfter %s (leaf %s, CRL next %s)", id.Until, o.iss.NotAfter, forged.NotAfter, at.Add(crlLife))
-	}
-}

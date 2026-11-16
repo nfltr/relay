@@ -227,3 +227,19 @@ func refused(t *testing.T, what string, err error) {
 		t.Fatalf("%s: accepted, want refused", what)
 	}
 }
+
+// issuersCRL is the root's CRL of issuers number num at at, listing the
+// issuer certificates revoked; signer is the root's key unless given.
+func (o *testOrg) issuersCRL(t testing.TB, num int64, at time.Time, signer crypto.Signer, revoked ...*x509.Certificate) []byte {
+	t.Helper()
+	if signer == nil {
+		signer = o.rootKey
+	}
+	var entries []x509.RevocationListEntry
+	for _, c := range revoked {
+		entries = append(entries, x509.RevocationListEntry{SerialNumber: c.SerialNumber, RevocationTime: at})
+	}
+	der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{Number: big.NewInt(num), ThisUpdate: at, NextUpdate: at.Add(30 * 24 * time.Hour), RevokedCertificateEntries: entries}, o.root, signer)
+	check(t, err)
+	return der
+}

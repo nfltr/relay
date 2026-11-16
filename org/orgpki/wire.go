@@ -47,10 +47,13 @@ type Answer struct {
 	Refused    string     `json:"refused,omitempty"`
 }
 
-// RootMessage is the organisation's current root and its recovery.
+// RootMessage is the organisation's current root and its recovery, and
+// the root's CRL of issuers once the owner revoked one (SignIssuerCRL;
+// machines take it by a higher Number only, orgid.Verifier.TakeIssuerCRL).
 type RootMessage struct {
 	Root     []byte `json:"root"`
 	Recovery []byte `json:"recovery"`
+	Issuers  []byte `json:"issuers,omitempty"`
 }
 
 // NameOfMachine is the enrolled name, not revoked, whose certificates

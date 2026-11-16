@@ -6,7 +6,10 @@
 # their code. Models: spec/proverif/enrol.pv and spec/enrol/Enrol.tla
 # (no-expiry-timer: NoExpiredSession; no-cut-on-update, reload-skips-crl:
 # RevocationBound; push-only: TakesEffect; crl-no-wake-on-rotation:
-# MachinesFollowRotation), spec/proverif/e2ee_tcp.pv (the client's name and
+# MachinesFollowRotation), spec/orgmove/OrgHosted.tla and
+# spec/proverif/orghosted.pv (until-leaf-only: DelegationBound, finding F1;
+# ignore-root-crl, root-crl-unsigned, reload-skips-issuers, keep-sessions:
+# RevokedIssuerRefused), spec/proverif/e2ee_tcp.pv (the client's name and
 # check, the group). Not here: the issuer's (org/orgpki), keep-old-root
 # (the verifier holds one root: TakeRotation replaces it).
 no-chain-check | verify.go | 	return c.Verify(opts) | 	_ = opts; return [][]*x509.Certificate{{c, issuer, v.root}}, nil | TestForgedNameRefused
@@ -30,3 +33,8 @@ reload-skips-crl | identity.go | 		if err := m.ver.TakeCRL(crl, issuer, now); er
 take-crl-unchecked | identity.go | 	if err := m.ver.TakeCRL(crl, issuer, now); err != nil { | 	if err := error(nil); err != nil || issuer == nil { | TestTakeKeepsWhatTheVerifierTakes
 push-only | follow.go | 		if time.Since(fresh) >= every { | 		if fresh.IsZero() { | TestFollowTakesTheRevokePushAndBackstop
 crl-no-wake-on-rotation | follow.go | 			again = retry() // before apply: a rotation taken meanwhile closes it | 			_ = retry | TestFollowTakesTheNewIssuersCRLAtTheRotation
+until-leaf-only | verify.go | 	for _, c := range chains[0] { // the leaf, its issuer, the root: a stolen issuer key signs a leaf past its own NotAfter (OrgHosted.tla DelegationBound) | 	for _, c := range chains[0][:1] { | TestOrgHostedModelBindings
+ignore-root-crl | verify.go | 	if v.issuers != nil && v.issuers.revoked[iss.SerialNumber.String()] { | 	if false { | TestOrgHostedModelBindings
+root-crl-unsigned | verify.go | 	if err := crl.CheckSignatureFrom(v.root); err != nil { | 	if err := error(nil); err != nil { | TestOrgHostedModelBindings
+reload-skips-issuers | identity.go | 	newIssuers := issuers != nil && !bytes.Equal(issuers, m.issuers) && m.ver.TakeIssuerCRL(issuers) == nil | 	newIssuers := false && issuers != nil | TestRootRevocationOfTheIssuerCutsHeldSessions
+keep-sessions | identity.go | 	if newCRL || newCert || newIssuers { | 	if newCRL || newCert { | TestRootRevocationOfTheIssuerCutsHeldSessions

@@ -54,6 +54,7 @@ type Verifier struct {
 	root     *x509.Certificate
 	recovery *x509.Certificate
 	crls     map[string]*crlState // by issuer key fingerprint
+	issuers  *crlState            // the root's CRL of issuers (nil: none taken; serials of issuer certificates)
 }
 
 // NewVerifier pins an organisation from its root's and recovery's
@@ -131,6 +132,38 @@ func (v *Verifier) TakeCRL(der []byte, issuer *x509.Certificate, now time.Time) 
 	return nil
 }
 
+// TakeIssuerCRL takes the root's CRL of issuers (nfltr's
+// org-hosted-issuer-2026-11-16 section 4): signed by the root v trusts,
+// newer than the one held. A chain through an issuer certificate it lists
+// is refused from then on, so a session held under it is cut at its next
+// check (OrgHosted.tla Deliver, RevokedIssuerRefused). Not fail-closed: a
+// verifier with none admits as before, and one past its NextUpdate still
+// counts (a revocation does not lapse; an issuer's own NotAfter bounds a
+// withheld one).
+func (v *Verifier) TakeIssuerCRL(der []byte) error {
+	crl, err := x509.ParseRevocationList(der)
+	if err != nil {
+		return err
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if err := crl.CheckSignatureFrom(v.root); err != nil {
+		return fmt.Errorf("CRL of issuers: %w", err)
+	}
+	if crl.Number == nil {
+		return errors.New("CRL of issuers has no number")
+	}
+	if v.issuers != nil && crl.Number.Cmp(v.issuers.number) <= 0 {
+		return fmt.Errorf("CRL of issuers %s is not newer than the one held (%s): a replay", crl.Number, v.issuers.number)
+	}
+	s := &crlState{number: crl.Number, next: crl.NextUpdate, revoked: map[string]bool{}}
+	for _, e := range crl.RevokedCertificateEntries {
+		s.revoked[e.SerialNumber.String()] = true
+	}
+	v.issuers = s
+	return nil
+}
+
 // TakeRotation takes a new root: the recovery key's cross-signed
 // certificate. The old root, its issuers and their CRLs are dropped, so
 // nothing under it checks again (Enrol.tla keep-old-root).
@@ -144,7 +177,7 @@ func (v *Verifier) TakeRotation(der []byte) error {
 	if err := checkRotation(c, v.recovery, v.root, v.orgID); err != nil {
 		return err
 	}
-	v.root, v.crls = c, map[string]*crlState{}
+	v.root, v.crls, v.issuers = c, map[string]*crlState{}, nil
 	traceLine(map[string]any{"ev": "rotate", "v": fmt.Sprintf("%p", v)})
 	return nil
 }
@@ -201,6 +234,9 @@ func (v *Verifier) check(leaf, issuer *x509.Certificate, want Peer, now time.Tim
 		return Checked{}, "name", fmt.Errorf("the certificate names %q, not %q", leaf.Subject.CommonName, want.Name)
 	}
 	iss := chains[0][len(chains[0])-2]
+	if v.issuers != nil && v.issuers.revoked[iss.SerialNumber.String()] {
+		return Checked{}, "chain", errors.New("the root revoked this issuer (its CRL of issuers)")
+	}
 	groups := leaf.Subject.OrganizationalUnit
 	if !subset(groups, iss.Subject.OrganizationalUnit) {
 		return Checked{}, "group", fmt.Errorf("groups %v are outside the issuer's policy %v", groups, iss.Subject.OrganizationalUnit)

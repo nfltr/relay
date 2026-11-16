@@ -247,3 +247,32 @@ func TestTakeKeepsWhatTheVerifierTakes(t *testing.T) {
 		t.Error("root.pem is not the rotated root")
 	}
 }
+
+// OrgHosted.tla Deliver and RevokedIssuerRefused: the root's CRL of
+// issuers in the machine's directory cuts the sessions held under the
+// issuer it lists at the Reload that takes it (mutants keep-sessions,
+// reload-skips-issuers).
+func TestRootRevocationOfTheIssuerCutsHeldSessions(t *testing.T) {
+	now := time.Now()
+	o := newTestOrg(t, now)
+	d := t.TempDir()
+	o.enrolDir(t, filepath.Join(d, "web"), "web", now, "web")
+	cli := o.enrolDir(t, filepath.Join(d, "cli"), "cli", now, "db")
+	web := load(t, filepath.Join(d, "web"))
+	chain := []*x509.Certificate{cli, o.iss}
+	until, err := web.CheckClient(chain, []string{"db"}, time.Now())
+	check(t, err)
+	cut := make(chan struct{})
+	go web.Hold(until, web.Changed(), func(now time.Time) (time.Time, error) {
+		return web.CheckClient(chain, []string{"db"}, now)
+	}, func() { close(cut) }, t.Context().Done())
+	check(t, os.WriteFile(filepath.Join(d, "web", IssuersFile), o.issuersCRL(t, 1, now, nil, o.iss), 0o600))
+	if changed, err := web.Reload(time.Now()); err != nil || !changed {
+		t.Fatalf("Reload: changed %v, %v", changed, err)
+	}
+	select {
+	case <-cut:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session under the revoked issuer was not cut")
+	}
+}

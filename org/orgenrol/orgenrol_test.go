@@ -820,3 +820,41 @@ func TestRevokePublishedAtItsNotice(t *testing.T) {
 		t.Fatal("a revoked machine still checks")
 	}
 }
+
+// The owner revokes the issuer with the root (OrgHosted.tla RevokeIssuer,
+// Deliver): the root's CRL of issuers kept in the issuer's directory is
+// published with the root, the machine's keeper takes it into
+// issuers.crl, and nothing under that issuer checks any more (mutant
+// root-message-drops-issuers).
+func TestRootRevocationOfTheIssuerReachesTheMachine(t *testing.T) {
+	f := newFleet(t)
+	ctx, cancel := context.WithCancel(f.ctx)
+	defer cancel()
+	keep(t, ctx, f.keeper())
+	cur, _ := f.m.Current()
+	iss := issuerOf(t, f.dir)
+	if _, err := f.m.CheckServer([]*x509.Certificate{cur, iss}, "web-1", f.clk.Now()); err != nil {
+		t.Fatalf("before the revocation: %v", err)
+	}
+	changed := f.m.Changed()
+	f.org.do(t, func(i *orgpki.Issuer, s *orgissuer.Store) {
+		der, err := orgpki.SignIssuerCRL(i.Root(), f.org.rootKey, nil, []*x509.Certificate{i.Cert()}, f.clk.Now())
+		check(t, err)
+		check(t, s.WriteIssuers(der))
+	})
+	deadline := time.After(hang)
+	for {
+		if _, err := f.m.CheckServer([]*x509.Certificate{cur, iss}, "web-1", f.clk.Now()); err != nil {
+			break
+		}
+		select {
+		case <-changed: // a change, not necessarily this one
+			changed = f.m.Changed()
+		case <-deadline:
+			t.Fatal("the root's CRL of issuers did not reach the machine: it still checks")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.dir, orgmachine.IssuersFile)); err != nil {
+		t.Fatal(err)
+	}
+}

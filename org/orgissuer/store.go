@@ -31,6 +31,7 @@ const (
 	LogFile       = "audit.jsonl"
 	IssuerKeyFile = "issuer.key"
 	CRLFile       = "crl.der"
+	IssuersFile   = "issuers.crl"       // the root's CRL of issuers (orgpki.SignIssuerCRL), once the owner revoked an issuer
 	KRLFile       = "revoked-hosts.krl" // the CRL's OpenSSH KRL (orgpki.HostKRL), 0644
 	PEMIssuer     = "NFLTR ORG ISSUER KEY"
 	PEMRecovery   = "NFLTR ORG RECOVERY KEY"
@@ -219,6 +220,21 @@ func (s *Store) ReadCRL() ([]byte, error) {
 		return nil, nil
 	}
 	return der, err
+}
+
+// ReadIssuers is the root's CRL of issuers kept, nil when none.
+func (s *Store) ReadIssuers() ([]byte, error) {
+	der, err := os.ReadFile(s.Path(IssuersFile)) // #nosec G304 -- the issuer's own file
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	return der, err
+}
+
+// WriteIssuers keeps der, the root's CRL of issuers
+// (orgpki.SignIssuerCRL); Serve publishes it with the root.
+func (s *Store) WriteIssuers(der []byte) error {
+	return orgfiles.Write(s.Path(IssuersFile), der, 0o600)
 }
 
 // RevokeMachines revokes, in the issuer of directory dir, every name
