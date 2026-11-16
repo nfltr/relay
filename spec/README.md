@@ -807,6 +807,57 @@ depth 33, about 5 min. Every action taken in each (`-coverage 1`); the
 14 UDP mutants and witnesses about 20 s. Code map: none yet; the lane
 that builds `client/udpflow` adds it with a trace recorder.
 
+## BrowserPeer.tla: an nf1 address in a browser, its paths' lifecycle (design, no code yet)
+
+Lane BROWSERPEER (2026-11-16). The design is nfltr's
+`docs/decisions/browser-peer-2026-11-16.md`; its keys are
+`proverif/browser_peer.pv`. One visitor tab, one address, `N` streams (app
+streams or the page's HTTP requests), the agent's side. The control
+session is an `nf1` session over the relay's WebSocket; once admitted, the
+agent may create one RTCPeerConnection for it (the SDP inside the control
+session). Each stream is its own `nf1` session, opened on a data channel
+when the connection is up and the agent's cap `MaxDC` leaves room, else on
+a WebSocket through the relay; a stream never changes path: when its path
+breaks it fails to the app, and only a new stream takes the other path. The
+agent reaps the connection and its channels when the control session ends
+or the connection fails.
+
+Invariants: `AtMostOnce` (a request reaches the service at most once: no
+replay on the other path), `PCOnlyAdmitted` (the agent holds a connection
+only for an admitted control session), `DCOnPC` (no data channel without
+its connection), `DCBounded` (at most `MaxDC` at once); properties
+`Reaped` (the connection ends once its control session has; the agent's
+`Reap` is weakly fair) and `StreamsEnd` (every opened stream ends, done or
+failed to the app). Mutants, each caught: `BP:retry-other-path`
+(`AtMostOnce`), `BP:pc-before-admit` (`PCOnlyAdmitted`), `BP:no-dc-cap`
+(`DCBounded`), `BP:pc-outlives-ctl` (`Reaped`), `BP:dc-without-pc`
+(`DCOnPC`), `BP:no-break` (`StreamsEnd`). Witnesses, each violated:
+`W_DoneDC`, `W_DoneWSAfterFail` (a stream done over the relay after the
+connection failed), `W_Failed`, `W_ReapedAfterCtl`.
+
+| action | design (no Go yet) |
+|---|---|
+| `CtlOpen`, `CtlAdmit` | the page's control session over the WebSocket: the `nf1` handshake, the agent's `Admit` |
+| `CtlEnd` | the tab closes, the relay cuts the WebSocket, the agent drops the session |
+| `Offer` | the agent answers the page's SDP inside the admitted control session and creates its connection (pion) |
+| `PCUp`, `PCFail` | ICE and DTLS complete, or fail (or a NAT drops the binding) |
+| `Reap` | the agent closes the connection and its data channels |
+| `OpenDC(s)`, `OpenWS(s)` | the page opens a stream: a data channel under the cap, else a WebSocket |
+| `Deliver(s)`, `Complete(s)` | the stream's `nf1` handshake and request reach the service; its answer reaches the page |
+| `Break(s)` | a data channel's connection is gone: the stream fails to the app |
+
+| assumption | source |
+|---|---|
+| A WebSocket and a data channel are each an ordered, reliable byte stream until they end; an end reaches both sides | RFC 6455; RFC 8831 (data channels, reliable and ordered as the page opens them) |
+| ICE and DTLS end in connected or failed; a consent-freshness failure is a failure | RFC 8445; RFC 7675 |
+| A request carried on a broken path may or may not have reached the service | the abstraction of `Deliver` before `Break` |
+
+`BrowserPeer.cfg` (three streams, `MaxDC` 2, one connection failure):
+invariants and both properties, 4,379 distinct states, depth 17, about
+10 s; every action taken (`-coverage 1`); the 6 mutants and 4 witnesses
+about 20 s. Code map: none yet; the lanes that build the bundle and the
+agent's browser-peer side add it with a trace recorder.
+
 ## DatagramAssoc.tla: datagram sessions between identities
 
 Lane NF1UDP (2026-11-14). The design is nfltr's

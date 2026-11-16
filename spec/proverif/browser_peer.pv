@@ -1,0 +1,203 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   browser_peer.pv: an nf1 address opened in a browser (a design, no code
+   yet; nfltr docs/decisions/browser-peer-2026-11-16.md, lane BROWSERPEER).
+   spec/proverif/README.md "browser_peer.pv".
+
+   The visitor holds A1 = (R, rid1, pin1, sec1) in the fragment of the
+   extension page's URL (RFC 3986 3.5: a fragment is never sent in a
+   request). The page's code is the published bundle: the extension the
+   store installed, whose hash is the release's (the code origin is not the
+   relay). The bundle runs the nf1 client unchanged (client/nf1 Handshake
+   compiled to js/wasm: the answer's pin and record, TLS 1.3 pinned to the
+   key, the proof over the exporter; cap_address.pv steps 3-6), over one of
+   two transports:
+     ws  a WebSocket to R carrying one anonymous nf1 session (the relay's
+         frontend: the same session as an anonymous data connection's);
+     dc  a WebRTC data channel to the agent's machine. The two ends' SDP
+         (ICE credentials, candidates, DTLS fingerprints) travel inside an
+         admitted nf1 session over ws (the control session); each data
+         channel then carries its own nf1 handshake, so DTLS is transport
+         only: nothing relies on its fingerprint.
+
+   The attacker owns every relay, TURN and the network (one Dolev-Yao
+   attacker), answers every open, can serve any code from any origin it
+   runs (the hosted-page mutant lets that code run), and holds a second
+   address A2 of the same server key. TLS 1.3 and DTLS are not re-proven
+   (as cap_address.pv): a key share is encryption to the checked key, the
+   exporter is h((k, ns, pk)).
+
+   Mutants (expect.txt "Part 6"):
+     hosted-page          the page's code is whatever the relay's origin
+                          serves on this load (no pinned bundle)
+     fragment-sent        the address reaches the code origin (a query or
+                          path, or a page that posts it)
+     ws-relay-tls         the fallback trusts the WebSocket's TLS (to the
+                          relay) instead of the nf1 session inside it
+     dc-trust-dtls        a data channel carries the bytes under DTLS alone,
+                          to the fingerprint the relay's signaling gave
+     dc-no-proof          the agent serves a data channel session without
+                          the proof (trusting its control session)
+     signal-before-admit  the agent sends its SDP before the control
+                          session is admitted
+
+   Bindings (README "Bindings"; rows land with the code lane, listed
+   pending in client/internal/modelbind):
+     BIND:browser.bundle  the extension's code hash equals the release's
+     BIND:browser.dc.nf1  a data channel's bytes flow only after its own nf1 handshake
+     BIND:browser.signal  the agent writes its SDP only after Admit, inside the TLS *)
+
+free c: channel.
+
+type skey.
+type pkey.
+fun pk(skey): pkey.
+fun aenc(bitstring, pkey): bitstring.
+reduc forall m: bitstring, k: skey; adec(aenc(m, pk(k)), k) = m.
+fun senc(bitstring, bitstring): bitstring.
+reduc forall m: bitstring, k: bitstring; sdec(senc(m, k), k) = m.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+fun h(bitstring): bitstring.
+
+const labPin, labRdv, labProof, labExp: bitstring.
+const c2s, s2c, sdpTag, appData: bitstring.
+const pathWS, pathDC: bitstring.
+const relayR: bitstring.
+const bundle: bitstring.                 (* the published bundle's code *)
+free rid1, rid2: bitstring.
+
+free skS: skey [private].                (* the agent's address key, A1's and A2's *)
+free sec1: bitstring [private].          (* A1's secret: in the fragment only *)
+free sec2: bitstring.                    (* A2's: the attacker holds A2 *)
+free payload: bitstring [private].       (* the visitor's bytes over ws *)
+free dcData: bitstring [private].        (* the visitor's bytes over a data channel *)
+free svcData1: bitstring [private].      (* A1's service's answers *)
+free svcData2: bitstring.
+free skD: skey [private].                (* the agent's DTLS key (dc-trust-dtls) *)
+
+letfun pinOf(s: bitstring, x: pkey) = h((labPin, s, x)).
+letfun exporter(k: bitstring, ns: bitstring, x: pkey) = h((labExp, k, ns, x)).
+letfun proofOf(s: bitstring, k: bitstring, ns: bitstring, x: pkey) = h((labProof, s, exporter(k, ns, x))).
+
+event ServerKey(pkey).
+event ClientProved(bitstring, bitstring).                    (* rid, session key *)
+event ClientSent(bitstring, bitstring, bitstring, bitstring).   (* rid, session key, path, bytes *)
+event ClientRecv(bitstring, bitstring, bitstring, bitstring).   (* rid, session key, path, response *)
+event Admitted(bitstring, bitstring).                        (* rid, session key *)
+event ServiceGot(bitstring, bitstring, bitstring, bitstring).   (* rid, session key, path, bytes *)
+event AgentSent(bitstring, bitstring, bitstring, bitstring).    (* rid, session key, path, response *)
+event AgentOffer(bitstring, bitstring).                      (* rid, control session key: SDP sent *)
+
+(* The agent's acceptor for one session over path p: answer, TLS, proof,
+   then the service; on a control session (ctl) it also sends its SDP. *)
+let Acceptor(rid: bitstring, sec: bitstring, resp: bitstring, p: bitstring) =
+  in(c, =rid);
+  out(c, (pk(skS), sign((labRdv, relayR, rid), skS)));     (* the rendezvous answer *)
+  new ns: bitstring;
+  out(c, (pk(skS), ns));                                    (* ServerHello, Certificate *)
+  in(c, ek: bitstring);
+  let (k: bitstring, =ns) = adec(ek, skS) in
+  event AgentOffer(rid, k); out(c, senc((sdpTag, pk(skD)), k)); (* ONLY:signal-before-admit *)
+  in(c, ep: bitstring);
+  let (=c2s, pr: bitstring) = sdec(ep, k) in
+  if p = pathDC then (* ONLY:dc-no-proof *)
+  (event Admitted(rid, k); in(c, e: bitstring); let (=c2s, =appData, m: bitstring) = sdec(e, k) in (* ONLY:dc-no-proof *)
+   event ServiceGot(rid, k, p, m); event AgentSent(rid, k, p, resp); out(c, senc((s2c, appData, resp), k))) else (* ONLY:dc-no-proof *)
+  if pr = proofOf(sec, k, ns, pk(skS)) then
+  event Admitted(rid, k);
+  (if p = pathWS then event AgentOffer(rid, k); out(c, senc((sdpTag, pk(skD)), k))) | ( (* NOT:signal-before-admit *)
+  ( (* ONLY:signal-before-admit *)
+  in(c, e: bitstring);
+  let (=c2s, =appData, m: bitstring) = sdec(e, k) in
+  event ServiceGot(rid, k, p, m);
+  event AgentSent(rid, k, p, resp);
+  out(c, senc((s2c, appData, resp), k))).
+
+(* dc-trust-dtls: the agent's end of a data channel used as the only
+   protection: DTLS to its own key. *)
+let DTLSAgent(rid: bitstring) =
+  in(c, e: bitstring);
+  let m = adec(e, skD) in
+  event ServiceGot(rid, e, pathDC, m).
+
+(* One nf1 session of the bundle on path p carrying bytes d: the nf1
+   client's steps (the answer's pin and record, TLS to the pinned key, the
+   proof), the same on both paths. *)
+let Session(rid: bitstring, pin: bitstring, sec: bitstring, p: bitstring, d: bitstring) =
+  out(c, rid);                                              (* OPEN: the WebSocket's first message, or the data channel's *)
+  in(c, (rpk: pkey, rec: bitstring));                       (* the answer: pin, record *)
+  if pinOf(sec, rpk) = pin then
+  let (=labRdv, =relayR, =rid) = checksign(rec, rpk) in
+  in(c, (spk: pkey, ns: bitstring));                        (* TLS: the pinned key only *)
+  if spk = rpk then
+  new k: bitstring;
+  out(c, aenc((k, ns), spk));
+  event ClientProved(rid, k);
+  out(c, senc((c2s, proofOf(sec, k, ns, spk)), k));
+  event ClientSent(rid, k, p, d);
+  out(c, senc((c2s, appData, d), k)); (* NOT:ws-relay-tls *)
+  out(c, d); (* ONLY:ws-relay-tls *)
+  in(c, e: bitstring);
+  let (=s2c, =appData, r: bitstring) = sdec(e, k) in
+  event ClientRecv(rid, k, p, r).
+
+(* The visitor: the page is opened with A1 in its fragment. *)
+let Visitor(rid: bitstring, pin: bitstring, sec: bitstring) =
+  out(c, (rid, pin, sec)); (* ONLY:fragment-sent *)
+  in(c, code: bitstring);                                   (* hosted-page: what the origin served this load; not the bundle, it has the fragment and what the visitor types *)
+  if code <> bundle then out(c, (rid, pin, sec, payload, dcData)) else (* ONLY:hosted-page *)
+  (* the control session over ws: the agent's SDP arrives inside it *)
+  ( Session(rid, pin, sec, pathWS, payload)
+  | (in(c, dk: pkey); out(c, aenc(dcData, dk))) (* ONLY:dc-trust-dtls *)
+  | Session(rid, pin, sec, pathDC, dcData) (* NOT:dc-trust-dtls *)
+  ).
+
+(* 1-4. secrecy against every relay and every code origin but the
+   published bundle: the visitor's bytes on both paths, A1's service's
+   answers (only holders of sec1 are admitted), and A1's secret *)
+(* expect true *)
+query attacker(payload).
+(* expect true *)
+query attacker(dcData).
+(* expect true *)
+query attacker(svcData1).
+(* expect true *)
+query attacker(sec1).
+(* 5. what A1's service takes on either path was sent once, in that
+   session, by A1's visitor (not on the same path: the path is transport,
+   and the attacker may carry a session's bytes on either; nothing relies
+   on it) *)
+(* expect true *)
+query k: bitstring, p: bitstring, q: bitstring, m: bitstring; inj-event(ServiceGot(rid1, k, p, m)) ==> inj-event(ClientSent(rid1, k, q, m)).
+(* 6. what the visitor takes was sent once, in that session, by A1's agent *)
+(* expect true *)
+query k: bitstring, p: bitstring, q: bitstring, r: bitstring; inj-event(ClientRecv(rid1, k, p, r)) ==> inj-event(AgentSent(rid1, k, q, r)).
+(* 7. A1's agent admits only a session whose visitor proved sec1 *)
+(* expect true *)
+query k: bitstring; event(Admitted(rid1, k)) ==> event(ClientProved(rid1, k)).
+(* 8. the agent's SDP (its addresses, ICE credentials) goes only into an
+   admitted control session *)
+(* expect true *)
+query k: bitstring; event(AgentOffer(rid1, k)) ==> event(Admitted(rid1, k)).
+(* 9-12. witnesses: the service gets the visitor's bytes over ws and over
+   a data channel; the visitor gets an answer; the agent sends its SDP *)
+(* expect false *)
+query k: bitstring, m: bitstring; event(ServiceGot(rid1, k, pathWS, m)).
+(* expect false *)
+query k: bitstring, m: bitstring; event(ServiceGot(rid1, k, pathDC, m)).
+(* expect false *)
+query k: bitstring, p: bitstring, r: bitstring; event(ClientRecv(rid1, k, p, r)).
+(* expect false *)
+query k: bitstring; event(AgentOffer(rid1, k)).
+
+process
+  let pin1 = pinOf(sec1, pk(skS)) in
+  event ServerKey(pk(skS));
+  out(c, pk(skS));
+  out(c, pk(skD));
+  ( (!Acceptor(rid1, sec1, svcData1, pathWS)) | (!Acceptor(rid1, sec1, svcData1, pathDC))
+  | (!Acceptor(rid2, sec2, svcData2, pathWS)) | (!Acceptor(rid2, sec2, svcData2, pathDC))
+  | (!DTLSAgent(rid1)) (* ONLY:dc-trust-dtls *)
+  | (!Visitor(rid1, pin1, sec1)) )

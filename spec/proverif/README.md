@@ -739,6 +739,48 @@ leaked address is a capability: revoking it is stopping the server (no
 rotation, no relay state across opens: nfltr's cli-cat decision, "TLA+:
 none").
 
+### browser_peer.pv: an nf1 address opened in a browser (lane BROWSERPEER; design, no code yet)
+
+The design is nfltr's `docs/decisions/browser-peer-2026-11-16.md`. A
+visitor opens an `nf1` address in a browser extension's page: the address
+is in the page URL's fragment (RFC 3986 3.5: never sent in a request), the
+page's code is the published bundle the extension store installed (its
+hash the release's), and that code runs the `nf1` client unchanged
+(`client/nf1` `Handshake` compiled to js/wasm: `cap_address.pv` steps 3-6)
+over a WebSocket to the address's relay, or over a WebRTC data channel to
+the agent's machine. The data channel's SDP travels inside an admitted
+`nf1` session (the control session) and every data channel carries its own
+`nf1` handshake, so DTLS is transport only. The attacker owns every relay,
+TURN and the network, may serve any code from any origin it runs, and
+holds a second address of the same key.
+
+| # | query | holds because |
+|---|---|---|
+| 1, 2 | the visitor's bytes over the WebSocket and over a data channel are secret | each rides its own pinned `nf1` TLS session |
+| 3 | A1's service's answers are secret (only holders of `sec1` are admitted, on either path) | the proof on every session, the data channel's included |
+| 4 | A1's secret is secret | the fragment never leaves the bundle's page |
+| 5, 6 | injective agreement both ways on a session's bytes (not on its path: the attacker may carry a session on either transport; nothing relies on it) | as `cap_address.pv` 3, 4 |
+| 7 | the agent admits only a session whose visitor proved `sec1` | as `cap_address.pv` 6 |
+| 8 | the agent's SDP (addresses, ICE credentials) goes only into an admitted control session | the agent writes it after `Admit`, inside the TLS |
+| 9-12 | witnesses: the service gets bytes over the WebSocket and over a data channel; the visitor gets an answer; the agent sends its SDP | (each reads F) |
+
+Mutants (`expect.txt` "Part 6"): `hosted-page` (the code is whatever the
+relay's origin serves on this load: 1-5 and 7 fail, the guarantee the
+hosted page cannot give), `fragment-sent` (the address reaches a server:
+the visitor's own sessions stay secret, 1 and 2 hold, but the attacker is
+now a visitor: 3-5, 7), `ws-relay-tls` (the fallback trusts the
+WebSocket's TLS to the relay: 1, 2), `dc-trust-dtls` (a data channel's
+bytes under DTLS alone, to the fingerprint the relay's signaling gave: 2,
+5), `dc-no-proof` (the agent serves a data channel without the proof: 3,
+5-7), `signal-before-admit` (8).
+
+Bindings, pending until their code (`client/internal/modelbind` Pending):
+`BIND:browser.bundle` (the extension's code hash is the release's),
+`BIND:browser.dc.nf1` (a data channel's bytes only after its own `nf1`
+handshake), `BIND:browser.signal` (the agent's SDP only after `Admit`,
+inside the TLS). Code map: none yet; the lanes that build the bundle and
+the agent's side add their rows and the binding tests.
+
 ### First use
 
 | path | what the first contact trusts |
@@ -747,6 +789,7 @@ none").
 | `nfltr shell` | organisation mode since nfltr lane ORGCUT: the host certificate under the organisation's root (nfltr's model) |
 | WireGuard unpaired | the relay, on every connect; paired: the pairing file, copied out of band |
 | P2P unpaired | the relay, unless the users compare the fingerprints; paired: the pairing file |
+| nf1 in a browser | the address (from whoever gave it) and the extension's code (the store and the release key), never the relay or a page it serves |
 
 ### Environment assumptions of these paths
 
@@ -755,6 +798,8 @@ none").
 | TLS 1.3 with a checked server key is an authenticated channel; no resumption skips the certificate check | Cremers et al., IEEE S&P 2017; Bhargavan et al., IEEE S&P 2017; organisation TLS (`orgServerConfig`) disables session tickets |
 | Noise IKpsk2 gives a key only to the holder of the peer key it used and the same psk | Donenfeld and Milner 2017 (Tamarin); Dowling and Paterson, ACNS 2018; Lipp, Blanchet and Bhargavan, EuroS&P 2019 |
 | DTLS-SRTP keys only the holder of the fingerprinted certificate | RFC 5763, RFC 8827 |
+| a URL's fragment is not sent in an HTTP request | RFC 3986 section 3.5; Fetch Standard (a request's URL is serialized with "exclude fragment") |
+| an installed extension's code is the package the store signed; an update is a new package for every user | Chrome Web Store CRX3 (store and publisher signatures, "verified uploads"); Firefox AMO signing |
 | X25519 refuses low-order points | Go `crypto/ecdh` (`ECDH` errors on the all-zero output) |
 | SHA-256, HKDF, HMAC, AES-GCM are ideal | standard; nonces unique per key (see the SignalConn finding) |
 

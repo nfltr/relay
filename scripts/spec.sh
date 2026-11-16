@@ -5,7 +5,8 @@
 # spec.sh check|mutants: the TLA+ models of spec/ (spec/README.md).
 #   check    TLC on spec/SignalConn.cfg, spec/A2ASession.cfg, spec/CallCredit.cfg,
 #            spec/CallCreditBoth.cfg, spec/CallCreditSenders.cfg,
-#            spec/UDPFlow.cfg, spec/UDPFlowLive.cfg and spec/DatagramAssoc*.cfg:
+#            spec/UDPFlow.cfg, spec/UDPFlowLive.cfg, spec/DatagramAssoc*.cfg and
+#            spec/BrowserPeer.cfg:
 #            their invariants and liveness
 #            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg,
 #            UDPFlowLarge.cfg).
@@ -378,7 +379,7 @@ fail=0
 cfg=
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive"
+	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	for c in $cfgs; do
 		m=${c%Large}
@@ -549,6 +550,15 @@ mutants)
 	cfg=DatagramAssocLive
 	expect DA:no-idle -e 's/Mutant = "none"/Mutant = "no-idle"/'
 	cfg=
+	model=BrowserPeer
+	# An nf1 address in a browser (design, lane BROWSERPEER): each failure
+	# the control session, connection and stream lifecycle prevents, put in.
+	for m in retry-other-path pc-before-admit no-dc-cap pc-outlives-ctl dc-without-pc no-break; do
+		expect BP:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
+	done
+	for w in W_DoneDC W_DoneWSAfterFail W_Failed W_ReapedAfterCtl; do
+		expect witness:BP-$w -e "s/^    TypeOK\$/    $w/"
+	done
 	exit $fail
 	;;
 cltraces)

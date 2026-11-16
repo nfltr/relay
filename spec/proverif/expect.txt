@@ -234,3 +234,20 @@ orgmove root-moves TFTFFTTF
 orgmove sign-any-issuer TTFFFFFF
 orgmove unsigned-request TTTFTTFF
 orgmove answer-unbound TTTFTFTF
+#
+# Part 6: an nf1 address in a browser (browser_peer; a design, no code
+# yet, nfltr docs/decisions/browser-peer-2026-11-16.md; queries in README
+# "browser_peer.pv"). Every query holds; each mutant fails the ones it
+# targets. hosted-page: the relay's origin serves the code, so 1-4 (and
+# 5, 7) fail; fragment-sent: the visitor's own sessions stay secret (1, 2
+# hold) but the address is the attacker's (3-5, 7); ws-relay-tls and
+# dc-trust-dtls lose that path's bytes; dc-no-proof serves the attacker on
+# a data channel; signal-before-admit hands the agent's SDP out before the
+# proof.
+browser_peer - TTTTTTTTFFFF
+browser_peer hosted-page FFFFFTFTFFFF
+browser_peer fragment-sent TTFFFTFTFFFF
+browser_peer ws-relay-tls FFTTTTTTTTTF
+browser_peer dc-trust-dtls TFTTFTTTFFFF
+browser_peer dc-no-proof TTFTFFFTFFFF
+browser_peer signal-before-admit TTTTTTTFFFFF
