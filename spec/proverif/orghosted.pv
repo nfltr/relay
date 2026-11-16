@@ -33,7 +33,16 @@
    off to any key), any-member-commands (the hosted issuer takes a command
    signed under a certificate it issued itself), service-key-certifies
    (verifiers take an issuer the hosting service vouches for: the
-   automatic takeover), ignore-root-crl. *)
+   automatic takeover), ignore-root-crl.
+
+   Bindings (make spec-bindings: one row each in client/orgid
+   hosted_bindings_test.go's TestOrgHostedModelBindings, which changes
+   that binding of an honest check, as a relay or a stolen issuer key can,
+   and requires the verifier to refuse):
+     BIND:hosted.rootcrl  a verifier refuses a chain through an issuer the root's CRL of issuers lists (pi <> rv), a CRL the root signed (checksign(rc, pk(kroot)))
+     BIND:hosted.until    an admission ends at the earliest NotAfter of the verified chain, the issuer's included (time is OrgHosted.tla's: DelegationBound, mutant until-leaf-only)
+   Pending until lane H3: hosted.attest, hosted.order, hosted.operator
+   (not declared yet). *)
 
 free c: channel.                 (* the relay; the hosting operator's network *)
 

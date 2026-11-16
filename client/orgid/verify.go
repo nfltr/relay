@@ -157,9 +157,10 @@ type Peer struct {
 	Group string
 }
 
-// Checked is a checked peer. Until is when the check lapses (the earlier
-// of the certificate's NotAfter and the CRL's NextUpdate): a session ends
-// then (Enrol.tla Tick).
+// Checked is a checked peer. Until is when the check lapses (the earliest
+// NotAfter of the verified chain, the issuer's and the root's included,
+// and the CRL's NextUpdate): a session ends then (Enrol.tla Tick,
+// OrgHosted.tla DelegationBound).
 type Checked struct {
 	Name      string
 	Groups    []string
@@ -217,9 +218,11 @@ func (v *Verifier) check(leaf, issuer *x509.Certificate, want Peer, now time.Tim
 	if crl.revoked[leaf.SerialNumber.String()] {
 		return Checked{}, "revoked", fmt.Errorf("%s is revoked", leaf.Subject.CommonName)
 	}
-	until := leaf.NotAfter
-	if crl.next.Before(until) {
-		until = crl.next
+	until := crl.next
+	for _, c := range chains[0] { // the leaf, its issuer, the root: a stolen issuer key signs a leaf past its own NotAfter (OrgHosted.tla DelegationBound)
+		if c.NotAfter.Before(until) {
+			until = c.NotAfter
+		}
 	}
 	return Checked{Name: leaf.Subject.CommonName, Groups: slices.Clone(groups), MachineID: MachineID(leaf), Serial: leaf.SerialNumber, Until: until}, "", nil
 }

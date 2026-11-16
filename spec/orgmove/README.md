@@ -149,7 +149,7 @@ line of `hosted-mutants.txt`, the witnesses and `-coverage 1`:
 
 | assumption | relied on by | source |
 |---|---|---|
-| verifiers check the chain at admission with the issuer's NotAfter (x509 Verify) and take the root's CRL of issuers by a higher Number only | Admit, Deliver | design (the root's CRL of issuers is not built: nfltr's decision doc, lane H1) |
+| verifiers check the chain at admission with the issuer's NotAfter (x509 Verify), end it at the chain's earliest NotAfter, and take the root's CRL of issuers by a higher Number only | Admit, Deliver | relay `client/orgid/verify.go` (`check`'s Until, `TakeIssuerCRL`; lane ORGH1, bindings `hosted.until`, `hosted.rootcrl`) |
 | the root signs a renewal only for the issuer key it pins | Renew | `spec/proverif/orgmove.pv` 5-7 |
 | the hosted machine holds no root key and no recovery key | Compromise | `spec/proverif/orghosted.pv` 2, 3 |
 | the relay may withhold the root's CRL indefinitely; liveness assumes it carries it in the end | Deliver, RevokeTakesEffect | the threat model |
