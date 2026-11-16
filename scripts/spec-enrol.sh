@@ -29,7 +29,11 @@ tools=$(scripts/fetch-tla.sh)
 java=$(echo "$tools" | sed -n 1p)
 jar=$(echo "$tools" | sed -n 2p)
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+# TLC runs go through scripts/cicache.sh: kept only when this script passes.
+cicache=$PWD/scripts/cicache.sh
+CICACHE_STAGE=$("$cicache" begin || true)
+export CICACHE_STAGE
+trap 'st=$?; "$cicache" end "$CICACHE_STAGE" $st || st=1; rm -rf "$work"; exit $st' EXIT
 dir=spec/enrol
 temporal="TakesEffect MachinesFollowRotation"
 witnesses="WitnessRenewed WitnessRevokeSeen WitnessFailClosed WitnessForgedSession WitnessRotated WitnessSessionAfterRotation WitnessRetried@EnrolLoss.cfg
@@ -43,7 +47,7 @@ modof() { case ${1:-} in Join*) echo Join ;; RevokePush*) echo RevokePush ;; *) 
 tlc() {
 	cfg_=$1
 	shift
-	(cd $dir && "$java" -Xmx"${TLC_HEAP:-1g}" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-2}" \
+	(cd $dir && "$cicache" tlc -- "$java" -Xmx"${TLC_HEAP:-1g}" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-2}" \
 		-noGenerateSpecTE -deadlock -metadir "$work/states-$(basename "$cfg_")" -config "$cfg_" "$@" "${MOD:-$(modof "$cfg_")}.tla")
 }
 

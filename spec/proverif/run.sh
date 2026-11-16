@@ -20,6 +20,10 @@ if [ "${1:-}" = one ]; then
 		i = index($0, "(* ONLY:"); if (i) { f = substr($0, i + 8); sub(/ .*/, "", f); if (index(flags, "," f ",") == 0) keep = 0 }
 		i = index($0, "(* NOT:"); if (i) { f = substr($0, i + 7); sub(/ .*/, "", f); if (index(flags, "," f ",") != 0) keep = 0 }
 		if (keep) print }' "$model.pv" >"$PROVERIF_OUT/$tag.pv"
+	# A model, its flags and want already proved with this ProVerif and
+	# this script: its verdict from scripts/cicache.sh.
+	k=$(../../scripts/cicache.sh key -v "proverif $flags $want" -v "$PROVERIF" "$PROVERIF_OUT/$tag.pv" run.sh ../../scripts/fetch-proverif.sh)
+	! ../../scripts/cicache.sh get "$k" || exit 0
 	start=$(date +%s)
 	if ! "$PROVERIF" "$PROVERIF_OUT/$tag.pv" >"$PROVERIF_OUT/$tag.log" 2>&1; then
 		echo "FAIL $model [$flags]: proverif exited non-zero, see $PROVERIF_OUT/$tag.log"
@@ -29,7 +33,8 @@ if [ "${1:-}" = one ]; then
 	secs=$(($(date +%s) - start))
 	if awk -v g="$got" -v w="$want" 'BEGIN { if (length(g) != length(w)) exit 1
 		for (i = 1; i <= length(w); i++) { c = substr(w, i, 1); if (c != "X" && c != substr(g, i, 1)) exit 1 } }'; then
-		echo "ok   $model [$flags] $got (${secs}s)"
+		echo "ok   $model [$flags] $got (${secs}s)" | tee "$PROVERIF_OUT/$tag.ok"
+		../../scripts/cicache.sh put "$k" <"$PROVERIF_OUT/$tag.ok" || true
 		exit 0
 	fi
 	echo "FAIL $model [$flags]: got $got, want $want (${secs}s), see $PROVERIF_OUT/$tag.log"

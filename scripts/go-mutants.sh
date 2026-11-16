@@ -18,6 +18,14 @@ shift
 pkg="$(dirname "$(dirname "$list")")"
 rel="${pkg#"$root"/}"
 module="${rel%%/*}"
+# A list whose package, its dependencies, the list and this script are
+# unchanged since it passed: its verdict from scripts/cicache.sh.
+cicache="$root/scripts/cicache.sh"
+deps="$(cd "$root/$module" && "$cicache" godeps "./${rel#"$module"/}")"
+# shellcheck disable=SC2086 # deps: one path a line, no spaces
+key="$("$cicache" key -v "go-mutants ${list#"$root"/} $*" -v "$(go version) $(go env GOOS GOARCH GOFLAGS GOEXPERIMENT CGO_ENABLED | tr '\n' ' ')" \
+  "$list" "$root/scripts/go-mutants.sh" $deps)"
+! "$cicache" get "$key" || exit 0
 backup="$(mktemp -d)"
 cp "$pkg"/*.go "$backup/"
 outside=() # files outside the package a mutant changed, kept as $backup/outside.<n>
@@ -59,4 +67,5 @@ for m in $mutants; do
   restore
 done
 echo "caught $caught, missed $missed"
-[[ $missed -eq 0 ]]
+[[ $missed -eq 0 ]] || exit 1
+echo "caught $caught, missed 0 ($rel ${list##*/})" | "$cicache" put "$key" || true

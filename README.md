@@ -110,6 +110,12 @@ make proto-report               # buf lint + breaking of proto/pb vs PROTO_BASEL
 
 See [CONTRIBUTING.md](CONTRIBUTING.md).
 
+A TLC run, ProVerif model or Go mutant list whose inputs did not change is not checked again:
+`scripts/cicache.sh` keys each by the sha256 of what it reads (config,
+models, jars, arguments; a Go list its package and in-repository dependencies) and replays a stored pass (`CICACHE=off`
+disables it, `CICACHE_VERIFY=1` reruns every hit and fails on a different
+verdict; `make test-cicache` is its soundness test).
+
 ## License
 
 Apache License 2.0; see [LICENSE](LICENSE) and [NOTICE](NOTICE).

@@ -188,8 +188,15 @@ spec-bptraces:
 	./scripts/spec.sh bptraces
 # The ProVerif models (spec/proverif/README.md): every line of
 # spec/proverif/expect.txt, mutants included (in make ci).
-spec-proverif:
+spec-proverif: test-cicache
 	./spec/proverif/run.sh
+
+# scripts/cicache.sh, the result cache of the TLC runs, ProVerif models and
+# Go mutant lists above (a hit skips a check whose inputs did not change):
+# its soundness test, ahead of the first check that uses it.
+.PHONY: test-cicache
+test-cicache:
+	./scripts/cicache_test.sh
 # The models' bindings against the code (spec/proverif/README.md
 # "Bindings"): each BIND id a model lists has a test row that changes that
 # field of an honest message, as a relay can, and requires a refusal; the

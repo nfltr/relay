@@ -56,14 +56,18 @@ tools=$(scripts/fetch-tla.sh)
 java=$(echo "$tools" | sed -n 1p)
 jar=$(echo "$tools" | sed -n 2p)
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+# TLC runs go through scripts/cicache.sh: kept only when this script passes.
+cicache=$PWD/scripts/cicache.sh
+CICACHE_STAGE=$("$cicache" begin || true)
+export CICACHE_STAGE
+trap 'st=$?; "$cicache" end "$CICACHE_STAGE" $st || st=1; rm -rf "$work"; exit $st' EXIT
 
 tlc() {
 	c=$1 mod=$2
 	shift 2
 	cov=
 	[ -z "${COVERAGE:-}" ] || cov="-coverage 1"
-	(cd spec && "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers 2 $cov \
+	(cd spec && "$cicache" tlc -- "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers 2 $cov \
 		-deadlock -noGenerateSpecTE -metadir "${META:-$work/states}" -config "$c" "$@" "$mod")
 }
 
