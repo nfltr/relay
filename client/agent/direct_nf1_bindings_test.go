@@ -30,7 +30,7 @@ var nf1DirectBindings = map[string]func(t *testing.T){
 	// answers the punch under another key (for the session's own server
 	// name): the client refuses it and stays relayed, bytes intact.
 	"nf1direct.pin": func(t *testing.T) {
-		r := newNF1Rig(t, DirectPublic) // the reflexive candidate only: the rogue holds it
+		r := newNF1Rig(t, directReflexive) // the reflexive candidate only: the rogue holds it
 		other, _, err := nf1.Mint("relay.example")
 		if err != nil {
 			t.Fatal(err)

@@ -98,6 +98,10 @@ type directRig struct {
 	alpn   string                  // and its ALPN
 }
 
+// directReflexive is a test rig's mode: on, with no host candidate sent
+// by either end (the endpoints' noHost): the reflexive candidate only.
+const directReflexive DirectMode = "test-reflexive"
+
 func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 	t.Helper()
 	return newDirectRigOf(t, mode, agentservices.TCP, echoTarget(t))
@@ -106,6 +110,10 @@ func newDirectRig(t *testing.T, mode DirectMode) *directRig {
 // newDirectRigOf is newDirectRig with blob a service of kind at target.
 func newDirectRigOf(t *testing.T, mode DirectMode, kind agentservices.Kind, target string) *directRig {
 	t.Helper()
+	noHost := mode == directReflexive
+	if noHost {
+		mode = DirectOn
+	}
 	o := newTestOrg(t)
 	web := o.agentOrg(o.machine(t, "web", nil, time.Hour, false))
 	qad := qadServer(t)
@@ -117,6 +125,7 @@ func newDirectRigOf(t *testing.T, mode DirectMode, kind agentservices.Kind, targ
 		}
 		if table.direct != nil {
 			table.direct.ep.loopback = true
+			table.direct.ep.noHost = noHost
 			d := table.direct
 			t.Cleanup(func() {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -142,6 +151,7 @@ func newDirectRigOf(t *testing.T, mode DirectMode, kind agentservices.Kind, targ
 		t.Fatal(err)
 	}
 	r.d.ep.loopback = true
+	r.d.ep.noHost = noHost
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -625,7 +635,7 @@ func TestDirectServiceOff(t *testing.T) {
 // TestParseDirectMode: true is on (LAN addresses included, owner
 // 2026-11-11), public withholds them, lan is gone.
 func TestParseDirectMode(t *testing.T) {
-	for in, want := range map[string]DirectMode{"": DirectOff, "false": DirectOff, "true": DirectOn, "on": DirectOn, "public": DirectPublic} {
+	for in, want := range map[string]DirectMode{"": DirectOff, "false": DirectOff, "true": DirectOn, "on": DirectOn} {
 		if got, err := ParseDirectMode(in); err != nil || got != want {
 			t.Errorf("%q: %q, %v; want %q", in, got, err, want)
 		}

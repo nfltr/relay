@@ -450,9 +450,7 @@ func (d *directServer) control(c net.Conn, relay *qadTarget, agent string, modeO
 	if a := <-mapped; a.IsValid() {
 		cands = append(cands, a)
 	}
-	if mode == DirectOn {
-		cands = append(cands, d.ep.hostCandidates()...)
-	}
+	cands = append(cands, d.ep.hostCandidates()...)
 	cands = compactCandidates(cands)
 	if len(cands) == 0 {
 		return enc.Encode(directOffer{Error: reasonNoAddr})

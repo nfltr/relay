@@ -56,15 +56,14 @@ type Config struct {
 	Events func(Event)
 }
 
-// DirectMode is a session's direct-path mode: DirectOff (relayed only),
-// DirectOn, DirectPublic (no LAN addresses).
+// DirectMode is a session's direct-path mode: DirectOff (relayed only) or
+// DirectOn (every candidate, a LAN path first).
 type DirectMode = agent.DirectMode
 
 // The direct modes.
 const (
-	DirectOff    = agent.DirectOff
-	DirectOn     = agent.DirectOn
-	DirectPublic = agent.DirectPublic
+	DirectOff = agent.DirectOff
+	DirectOn  = agent.DirectOn
 )
 
 // DialOptions are one dial's choices.

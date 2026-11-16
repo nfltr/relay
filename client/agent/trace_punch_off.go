@@ -7,8 +7,10 @@ package agent
 
 type punchTrace struct{}
 
-func tracePunch([]string) punchTrace  { return punchTrace{} }
-func (punchTrace) learn(string, bool) {}
-func (punchTrace) up(string, bool)    {}
-func (punchTrace) fail(string)        {}
-func (punchTrace) end(string)         {}
+func tracePunch([]string, []string) punchTrace { return punchTrace{} }
+func (punchTrace) learn(string, bool, bool)    {}
+func (punchTrace) up(string, bool)             {}
+func (punchTrace) closeLoser(string)           {}
+func (punchTrace) settle()                     {}
+func (punchTrace) fail(string)                 {}
+func (punchTrace) end(string)                  {}

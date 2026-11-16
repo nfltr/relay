@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/quic-go"
@@ -121,15 +122,35 @@ func (e *DirectEndpoint) readProbes() {
 	}
 }
 
+// lanGrace is how long the LAN dials outlive a non-LAN win: a LAN
+// handshake (and the agent's first probe from a LAN address) ends well
+// within it (DirectPunch.tla Settle, its Reach assumption).
+// ponytail: fixed; measure per-pair LAN RTT if 100 ms ever cuts a slow
+// LAN (Wi-Fi under load) or shows in the time to direct.
+const lanGrace = 100 * time.Millisecond
+
+// isLAN: a private or link-local address, a path that stays on the LAN.
+func (e *DirectEndpoint) isLAN(a netip.AddrPort) bool {
+	if e.lan != nil {
+		return e.lan(a)
+	}
+	return a.Addr().IsPrivate() || a.Addr().IsLinkLocalUnicast()
+}
+
 // punch dials cands at once (quiclink.Punch) and every address a probe
 // on learned names that it does not dial yet, at most
 // quiclink.MaxCandidates dials in all and none once one won. It keeps the
-// first connection whose handshake passes tc's check and closes every
-// other; it returns once no dial of it is left (DirectPunch.tla
-// OneConnection). ctx bounds it.
+// first connection whose handshake passes tc's check, unless a LAN one
+// passes later: a LAN path replaces a non-LAN winner, the LAN dials
+// outlive a non-LAN win by lanGrace and a LAN probe is still dialled in
+// it (owner 2026-11-16: a LAN path first, then the lowest handshake RTT;
+// DirectPunch.tla PreferLan). It closes every other connection and
+// returns once no dial of it is left (OneConnection). ctx bounds it.
 func (e *DirectEndpoint) punch(ctx context.Context, cands []netip.AddrPort, learned <-chan netip.AddrPort, tc *tls.Config, qc *quic.Config) (*quic.Conn, error) {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	pubCtx, cancelPub := context.WithCancel(ctx)
+	defer cancelPub()
+	lanCtx, cancelLAN := context.WithCancel(ctx)
+	defer cancelLAN()
 	type result struct {
 		a   netip.AddrPort
 		q   *quic.Conn
@@ -141,30 +162,47 @@ func (e *DirectEndpoint) punch(ctx context.Context, cands []netip.AddrPort, lear
 	start := func(a netip.AddrPort) {
 		dialled = append(dialled, a)
 		running++
+		c := pubCtx
+		if e.isLAN(a) {
+			c = lanCtx
+		}
 		go func() {
-			q, err := quiclink.Punch(ctx, e.tr, []netip.AddrPort{a}, tc, qc)
+			q, err := quiclink.Punch(c, e.tr, []netip.AddrPort{a}, tc, qc)
 			ch <- result{a, q, err}
 		}()
 	}
-	tr := tracePunch(addrStrings(cands))
+	var lan []string
+	for _, a := range cands {
+		if e.isLAN(a) {
+			lan = append(lan, a.String())
+		}
+	}
+	tr := tracePunch(addrStrings(cands), lan)
 	for _, a := range cands {
 		start(a)
 	}
 	var won *quic.Conn
-	var wonAt string
+	var wonAt netip.AddrPort
+	var grace <-chan time.Time // the LAN grace after a non-LAN win
 	var errs []error
 	done := ctx.Done()
-	// Until no dial runs, and then until one won or the bound: a probe may
-	// still name the address that answers after every offered one failed.
-	for running > 0 || won == nil && done != nil {
+	// Until no dial runs, and then until one won or the bound, and through
+	// the grace: a probe may still name the address that answers after
+	// every offered one failed, or a LAN one.
+	for running > 0 || won == nil && done != nil || grace != nil {
 		select {
 		case <-done:
-			done = nil
+			done, grace = nil, nil
+		case <-grace:
+			grace = nil
+			tr.settle()
+			cancelLAN()
 		case a := <-learned:
 			a = netip.AddrPortFrom(a.Addr().Unmap(), a.Port())
 			_, bad := e.candidate(a.String())
-			dial := won == nil && ctx.Err() == nil && len(dialled) < quiclink.MaxCandidates && !slices.Contains(dialled, a) && bad == nil
-			tr.learn(a.String(), dial)
+			isLAN := e.isLAN(a)
+			dial := (won == nil || grace != nil && isLAN) && ctx.Err() == nil && len(dialled) < quiclink.MaxCandidates && !slices.Contains(dialled, a) && bad == nil
+			tr.learn(a.String(), isLAN, dial)
 			if dial {
 				start(a)
 			}
@@ -174,17 +212,31 @@ func (e *DirectEndpoint) punch(ctx context.Context, cands []netip.AddrPort, lear
 			case r.err != nil:
 				tr.fail(r.a.String())
 				errs = append(errs, r.err)
-			case won == nil:
+			case won == nil || e.isLAN(r.a) && !e.isLAN(wonAt):
 				tr.up(r.a.String(), true)
-				won, wonAt = r.q, r.a.String()
-				cancel() // the dials still running give up
+				if won != nil {
+					tr.closeLoser(wonAt.String())
+					_ = won.CloseWithError(quiclink.CodeDone, "a LAN candidate won")
+				}
+				won, wonAt = r.q, r.a
+				cancelPub() // the dials still running give up: the non-LAN ones now,
+				if e.isLAN(r.a) {
+					cancelLAN() // the LAN ones too once a LAN one won
+					grace = nil
+				} else if done != nil {
+					grace = time.After(lanGrace) // else after the grace
+				}
 			default:
 				tr.up(r.a.String(), false)
 				_ = r.q.CloseWithError(quiclink.CodeDone, "another candidate won")
 			}
 		}
 	}
-	tr.end(wonAt)
+	wonStr := ""
+	if won != nil {
+		wonStr = wonAt.String()
+	}
+	tr.end(wonStr)
 	if won == nil {
 		return nil, fmt.Errorf("direct path: punch: no candidate answered: %w", errors.Join(errs...))
 	}

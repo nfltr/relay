@@ -120,7 +120,7 @@ func (g *natpmpGateway) lifetimes() []uint32 {
 // gateway maps its port, its offer carries the mapped address, and the
 // client goes direct through it (docs/decisions/portmap-2026-11-16.md).
 func TestDirectMappedAgentGoesDirect(t *testing.T) {
-	r := newDirectRig(t, DirectPublic) // no host candidates
+	r := newDirectRig(t, directReflexive) // no host candidates
 	ep := r.l.targets.services.direct.ep
 	g := serveNATPMP(t, ep.pc.LocalAddr().(*net.UDPAddr).Port)
 	r.l.targets.qad.Store(&qadTarget{addr: symmetricQAD(t, nil, blackhole(t)), tls: &tls.Config{InsecureSkipVerify: true}}) // #nosec G402 -- a test's relay

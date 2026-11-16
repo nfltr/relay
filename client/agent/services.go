@@ -169,8 +169,8 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if s.Name == DirectServiceName {
 			return nil, fmt.Errorf("service %q: the name is reserved for direct paths", s.Name)
 		}
-		if s.Direct != DirectOff && (s.Org == nil && s.NF1 == nil || s.Direct != DirectOn && s.Direct != DirectPublic) {
-			return nil, fmt.Errorf("service %q: direct %q needs organisation mode or a capability address (want %q or %q)", s.Name, s.Direct, DirectOn, DirectPublic)
+		if s.Direct != DirectOff && (s.Org == nil && s.NF1 == nil || s.Direct != DirectOn) {
+			return nil, fmt.Errorf("service %q: direct %q needs organisation mode or a capability address (want %q)", s.Name, s.Direct, DirectOn)
 		}
 		e := &tableService{kind: s.Kind, e2ee: s.E2EE}
 		if s.Cert != nil {
@@ -192,7 +192,7 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 			return nil, fmt.Errorf("service %q: a capability address (nf1) needs a tcp or udp service with e2ee on and no organisation or group", s.Name)
 		}
 		if s.NF1 != nil && s.NF1.Anonymous() && s.Direct == DirectOff {
-			return nil, fmt.Errorf("service %q: an address served with no account takes direct paths only (want %q or %q)", s.Name, DirectOn, DirectPublic)
+			return nil, fmt.Errorf("service %q: an address served with no account takes direct paths only (want %q)", s.Name, DirectOn)
 		}
 		if s.NF1 != nil && s.Kind == agentservices.UDP {
 			l, err := s.NF1.WithDatagram()

@@ -39,12 +39,17 @@ type nf1Rig struct {
 
 func nf1Table(t *testing.T, l *nf1.Listener, target string, mode DirectMode) *ServiceTable {
 	t.Helper()
+	noHost := mode == directReflexive
+	if noHost {
+		mode = DirectOn
+	}
 	table, err := NewServiceTable([]Service{{Name: "blob", Kind: agentservices.TCP, Target: target, E2EE: agentservices.E2EEOn, NF1: l, Direct: mode}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if d := table.direct; d != nil {
 		d.ep.loopback = true
+		d.ep.noHost = noHost
 		t.Cleanup(func() {
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
@@ -64,11 +69,15 @@ func newNF1Rig(t *testing.T, mode DirectMode) *nf1Rig {
 	table := nf1Table(t, lis, echoTarget(t), mode)
 	r := &nf1Rig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table, agent: "web", qad: tunnelQAD(qadServer(t))},
 		logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}, lis: lis, mode: mode, t: t}
+	if mode == directReflexive {
+		r.mode = DirectOn
+	}
 	r.d, err = NewDirectClient(DirectClientConfig{QADTLS: func(string) *tls.Config { return &tls.Config{InsecureSkipVerify: true} }}) // #nosec G402 -- a test's relay
 	if err != nil {
 		t.Fatal(err)
 	}
 	r.d.ep.loopback = true
+	r.d.ep.noHost = mode == directReflexive
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()

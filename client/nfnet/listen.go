@@ -163,7 +163,7 @@ func listenService(cfg Config, service string, o ListenOptions) (agent.Service, 
 			// no credential: served anonymously, its relay carrying
 			// signalling only (nfltr docs/decisions/nf1-anon-2026-11-16.md)
 			if o.Direct == DirectOff {
-				return s, usage("Listen: an address served with no account (no APIKey or ClientCert) takes direct paths only: Direct on or public (datagram services: not yet)")
+				return s, usage("Listen: an address served with no account (no APIKey or ClientCert) takes direct paths only: Direct on (datagram services: not yet)")
 			}
 			l, err := o.Address.WithAnonymous()
 			if err != nil {

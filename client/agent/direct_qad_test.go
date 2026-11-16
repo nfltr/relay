@@ -23,9 +23,9 @@ import (
 // TestDirectClientFallsBackToItsOwnRelaysQAD: the client cannot ask the
 // relay the agent's offer names (its UDP port unreachable from the
 // client's network); it asks its own relay instead, offers that answer and
-// the session goes direct. DirectPublic: no host candidate to hide behind.
+// the session goes direct. directReflexive: no host candidate to hide behind.
 func TestDirectClientFallsBackToItsOwnRelaysQAD(t *testing.T) {
-	r := newDirectRig(t, DirectPublic)
+	r := newDirectRig(t, directReflexive)
 	r.d.cfg.OwnQAD = qadServer(t)
 	r.d.cfg.QADTLS = func(addr string) *tls.Config {
 		cfg := &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- a test's relay
@@ -45,7 +45,7 @@ func TestDirectClientFallsBackToItsOwnRelaysQAD(t *testing.T) {
 // mapping (an endpoint-independent NAT): the agent's relay's answer is
 // the candidate, nothing differs.
 func TestDirectClientPrefersTheAgentsRelay(t *testing.T) {
-	r := newDirectRig(t, DirectPublic)
+	r := newDirectRig(t, directReflexive)
 	r.d.cfg.OwnQAD = qadServer(t)
 	r.d.qadGrace = 10 * time.Second // both answers in: none differs
 	_, tc, events := r.session(t)
@@ -61,7 +61,7 @@ func TestDirectClientPrefersTheAgentsRelay(t *testing.T) {
 // offered and the punch still made (a symmetric client toward a public
 // agent goes direct).
 func TestDirectDifferingQADAnswersAreReportedNotPolicy(t *testing.T) {
-	r := newDirectRig(t, DirectPublic)
+	r := newDirectRig(t, directReflexive)
 	r.d.cfg.OwnQAD = lyingQAD(t, "127.0.0.1:9")
 	r.d.qadGrace = 10 * time.Second // its answer observed on a loaded machine too
 	_, tc, events := r.session(t)

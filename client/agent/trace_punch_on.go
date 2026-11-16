@@ -25,7 +25,7 @@ var punchTraces atomic.Uint64
 
 type punchTrace struct{ f *os.File }
 
-func tracePunch(offered []string) punchTrace {
+func tracePunch(offered, lan []string) punchTrace {
 	dir := os.Getenv("RELAYTRACE")
 	if dir == "" {
 		return punchTrace{}
@@ -36,7 +36,10 @@ func tracePunch(offered []string) punchTrace {
 		panic(err)
 	}
 	t := punchTrace{f}
-	t.line(map[string]any{"ev": "Init", "offered": offered})
+	if lan == nil {
+		lan = []string{}
+	}
+	t.line(map[string]any{"ev": "Init", "offered": offered, "lan": lan})
 	return t
 }
 
@@ -53,12 +56,12 @@ func (t punchTrace) line(m map[string]any) {
 	}
 }
 
-func (t punchTrace) learn(a string, dialled bool) {
+func (t punchTrace) learn(a string, lan, dialled bool) {
 	out := "ignore"
 	if dialled {
 		out = "dial"
 	}
-	t.line(map[string]any{"ev": "Learn", "s": a, "tagged": true, "out": out})
+	t.line(map[string]any{"ev": "Learn", "s": a, "tagged": true, "lan": lan, "out": out})
 }
 func (t punchTrace) up(a string, won bool) {
 	t.line(map[string]any{"ev": "DialUp", "a": a})
@@ -68,7 +71,9 @@ func (t punchTrace) up(a string, won bool) {
 	}
 	t.line(map[string]any{"ev": ev, "a": a})
 }
-func (t punchTrace) fail(a string) { t.line(map[string]any{"ev": "DialFail", "a": a}) }
+func (t punchTrace) closeLoser(a string) { t.line(map[string]any{"ev": "CloseLoser", "a": a}) }
+func (t punchTrace) settle()             { t.line(map[string]any{"ev": "Settle"}) }
+func (t punchTrace) fail(a string)       { t.line(map[string]any{"ev": "DialFail", "a": a}) }
 func (t punchTrace) end(won string) {
 	if t.f == nil {
 		return

@@ -1101,7 +1101,7 @@ replaced a non-LAN winner), `W_NonLanWon`. TLC 2026-11-16 (`-coverage 1`):
 ### DirectPunch traces
 
 `make spec-ptraces` (in make ci, about 30 s): client/agent's punch tests
-(`TestDirectSymmetricAgentGoesDirectPeerReflexively`,
+(`TestDirectSymmetricAgentGoesDirectPeerReflexively`, `TestDirectPunchPrefersLAN`,
 `TestDirectMappedAgentGoesDirect`, `TestDirectSessionMovesAndFallsBack`, `TestDirectModelBindings`,
 `TestDirectAgentRebindDirectAgain`) built `-tags relaytrace`, each in its
 own process; every punch writes `directpunch-<pid>-<n>.ndjson` (Init with

@@ -533,7 +533,7 @@ fail=0
 cfg=
 # The punch tests ptraces records: a learned winner, an offered winner, a
 # refused rogue, a re-punch.
-PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectMappedAgentGoesDirect|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain)$'
+PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectPunchPrefersLAN|TestDirectMappedAgentGoesDirect|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain)$'
 case ${1:-} in
 check)
 	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch"

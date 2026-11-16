@@ -32,34 +32,35 @@ import (
 	"github.com/nfltr/quic-go"
 )
 
-// DirectMode is a service's (or a client's) direct-path setting
-// (direct-paths doc O1: opt-in at both ends).
+// DirectMode is a service's (or a client's) direct-path setting. The
+// caller resolves an unset setting (nfltr: on in organisation mode, owner
+// 2026-11-16 "direct is always preferred and relay is when direct not
+// possible"); this package takes the mode it is given.
 type DirectMode string
 
 const (
-	// DirectOff: relayed only, never a candidate sent (the default).
+	// DirectOff: relayed only, never a candidate sent: the one opt-out,
+	// which keeps this machine's addresses from its peers.
 	DirectOff DirectMode = ""
-	// DirectOn: the public (reflexive, QAD) address and this machine's
-	// interface addresses (host candidates), so two machines on one LAN
-	// connect directly (owner, 2026-11-11). Only the organisation peer of
-	// the control session sees them.
+	// DirectOn: every candidate this machine has: the public (reflexive,
+	// QAD) address, a port-mapped one and the interface addresses (host
+	// candidates). Only the organisation peer of the control session sees
+	// them; the punch keeps a LAN path first (DirectEndpoint.punch).
 	DirectOn DirectMode = "on"
-	// DirectPublic: the public address only, LAN addresses withheld.
-	DirectPublic DirectMode = "public"
 )
 
-// ParseDirectMode reads a mode: "", "off", "false" (off), "on", "true",
-// "public".
+// ParseDirectMode reads a mode: "", "off", "false" (off), "on", "true".
+// "public" was removed (2026-11-16): every direct path tries the LAN.
 func ParseDirectMode(s string) (DirectMode, error) {
-	switch strings.ToLower(strings.TrimSpace(s)) {
+	switch v := strings.ToLower(strings.TrimSpace(s)); v {
 	case "", "off", "false":
 		return DirectOff, nil
 	case "on", "true":
 		return DirectOn, nil
 	case "public":
-		return DirectPublic, nil
+		return DirectOff, errors.New(`direct "public" was removed (2026-11-16): want on or off`)
 	}
-	return DirectOff, fmt.Errorf("direct %q: want on, off or public", s)
+	return DirectOff, fmt.Errorf("direct %q: want on or off", s)
 }
 
 // DirectServiceName is the reserved service every agent with a direct
@@ -106,8 +107,10 @@ type DirectEndpoint struct {
 	// peer could aim this machine's probes and punches at its own
 	// loopback services.
 	loopback bool
-	probes   probeWaiters // the tagged probes' readers (direct_prflx.go)
-	pm       portMap      // the gateway's mapping of the socket (direct_portmap.go)
+	probes   probeWaiters              // the tagged probes' readers (direct_prflx.go)
+	pm       portMap                   // the gateway's mapping of the socket (direct_portmap.go)
+	lan      func(netip.AddrPort) bool // tests: which candidates are LAN ones (nil: isLAN)
+	noHost   bool                      // tests: no host candidates (the reflexive one only)
 }
 
 // NewDirectEndpoint opens the socket on an ephemeral port.
@@ -167,7 +170,7 @@ func (e *DirectEndpoint) QAD(ctx context.Context, addr string, tc *tls.Config) (
 // port (DirectOn only): global and private unicast, no loopback.
 func (e *DirectEndpoint) hostCandidates() []netip.AddrPort {
 	ua, ok := e.pc.LocalAddr().(*net.UDPAddr)
-	if !ok {
+	if !ok || e.noHost {
 		return nil
 	}
 	port := uint16(ua.Port) // #nosec G115 -- a UDP port

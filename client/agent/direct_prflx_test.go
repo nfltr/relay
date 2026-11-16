@@ -69,7 +69,7 @@ func blackhole(t *testing.T) string {
 // (docs/decisions/nat-symmetric-lan-2026-11-16.md, DirectPunch.tla
 // W_PrflxWon).
 func TestDirectSymmetricAgentGoesDirectPeerReflexively(t *testing.T) {
-	r := newDirectRig(t, DirectPublic) // no host candidates: the reflexive one only
+	r := newDirectRig(t, directReflexive) // no host candidates: the reflexive one only
 	agentAddr := r.l.targets.services.direct.ep.pc.LocalAddr().(*net.UDPAddr)
 	r.l.targets.qad.Store(&qadTarget{addr: symmetricQAD(t, agentAddr, blackhole(t)), tls: &tls.Config{InsecureSkipVerify: true}}) // #nosec G402 -- a test's relay
 	_, tc, events := r.session(t)
