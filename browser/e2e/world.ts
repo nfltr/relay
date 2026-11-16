@@ -18,7 +18,7 @@ export interface World {
 }
 
 const dist = path.resolve(__dirname, "../dist");
-const harness = path.resolve(__dirname, ".harness/harness");
+const harness = process.env.NF1_HARNESS ?? path.resolve(__dirname, ".harness/harness");
 
 async function startHarness(): Promise<World> {
   const child = spawn(harness, [], { stdio: ["pipe", "pipe", "inherit"] });

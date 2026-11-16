@@ -111,12 +111,17 @@ browser-bundle:
 # extension in Chromium against browser/e2e/harness (a relay core of the
 # version its go.mod names, nf1.websocket on, this checkout's agents):
 # session bytes, every close code's class, retries, a relay restart
-# mid-session, the direct path. $0, offline but for the first Chromium and
+# mid-session, the direct path, the HTTP view. In docker
+# (browser/e2e/Dockerfile: the Playwright image of package.json's version),
+# the same on a Mac and the Linux runner; $0, offline but for the image and
 # module downloads; not in make ci (make ci-request TARGET=browser-e2e).
+# Iterating on a Mac: build e2e/.harness/harness for it and run
+# ./node_modules/.bin/playwright test -c e2e/playwright.config.ts in browser/.
 .PHONY: browser-e2e
 browser-e2e: browser-bundle
-	cd browser/e2e/harness && GOWORK=off go build -o ../.harness/harness .
-	cd browser && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/playwright install chromium && ./node_modules/.bin/playwright test -c e2e/playwright.config.ts
+	cd browser && ./node_modules/.bin/tsc --noEmit -p .
+	cd browser/e2e/harness && GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH="$$(docker version -f '{{.Server.Arch}}')" go build -o ../.harness/linux/harness .
+	id="$$(docker build -q -f browser/e2e/Dockerfile browser)" && rc=0 && docker run --rm --init "$$id" || rc=$$?; docker rmi "$$id" >/dev/null 2>&1; exit $$rc
 
 # Fails when a _test.go file assigns a package-level variable of its package
 # (allow-list with reasons: scripts/testknobs-allow.txt). The tool lives in
