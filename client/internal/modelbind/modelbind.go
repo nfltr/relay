@@ -24,6 +24,9 @@ var Pending = map[string]string{
 	"browser.bundle": "the browser bundle's lane (BP4): its hash check",
 	"browser.dc.nf1": "the browser bundle's lane (BP4): a data channel's own nf1 handshake",
 	"browser.signal": "the agent's browser-peer lane (BP3): SDP only after Admit",
+	// spec/proverif/nf1_anon.pv: a design (nfltr
+	// docs/decisions/nf1-anon-2026-11-16.md); the SDK lane adds the row.
+	"anon.cands": "the anonymous nf1 SDK lane (NF1ANON-SDK): candidates only inside the admitted session's TLS",
 }
 
 // Check compares the BIND ids model (a model's source) declares that id

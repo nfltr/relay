@@ -251,3 +251,19 @@ browser_peer ws-relay-tls FFTTTTTTTTTF
 browser_peer dc-trust-dtls TFTTFTTTFFFF
 browser_peer dc-no-proof TTFTFFFTFFFF
 browser_peer signal-before-admit TTTTTTTFFFFF
+#
+# Part 7: an nf1 address served with no account, direct only (nf1_anon;
+# a design, lane NF1ANON). Every query holds; each mutant fails the ones it targets
+# (README "nf1_anon.pv").
+nf1_anon - TTTTTTTTTTFFFFF
+nf1_anon cands-in-answer TFTTTTTTTTFFFFF
+nf1_anon cands-before-admit TFTFTTTTTTFFFFF
+nf1_anon client-cands-unbound TTTFTTTTTTFFFFF
+nf1_anon agent-cands-unbound TTTTFTTTTTFFFFF
+nf1_anon server-no-secret-check TFTFFTFFFTFFFFF
+# direct-no-pin-check fails 6 alone: the transcript-bound tokens refuse
+# a middle (as cap_address.pv's).
+nf1_anon direct-no-pin-check TTTTTFTTTTFFFFF
+nf1_anon nf1-agent-no-token TTTTTTTFTTFFFFF
+nf1_anon rid-unbound TTTTTTTTTFFFFFF
+nf1_anon reg-unsigned TTTTTTTTTFFFFFF

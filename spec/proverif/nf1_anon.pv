@@ -1,0 +1,242 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   nf1_anon.pv: an nf1 address served with no account on either side,
+   direct only (nfltr docs/decisions/nf1-anon-2026-11-16.md, lane NF1ANON;
+   spec/proverif/README.md "nf1_anon.pv"). Design: no code yet.
+
+   What is new against cap_address.pv: the server's agent connects to R
+   with no credential, so nothing but the address's key stands behind its
+   registration; the relay carries the session's signalling only (the
+   rendezvous answer, TLS, the proof, the control exchange) and the bulk
+   goes only on a direct path; the control exchange carries both ends'
+   candidates (the agent's LAN addresses and mapping, the client's), which
+   the relay must not learn or forge. The relay's byte budget is not a
+   secrecy matter (it counts ciphertext): relay-core spec/NF1Anon.tla.
+
+   Flow (cap_address.pv's, steps 1-5, then):
+     6. CANDIDATES, inside the session's TLS after the proof is admitted:
+        the agent's, then the client's (relay client/agent directOffer,
+        directCandidates; at most 8 each).
+     7. The punch: the attacker routes it; the client takes a direct
+        connection only from the pinned key, with the agent's token; the
+        agent binds it only on the session's client token (as
+        cap_address.pv 15-18). The transfer's bytes go only there.
+
+   The attacker owns every relay (R answered both ends' QAD, so it knows
+   their public mappings: not secrets here; the candidates modelled are
+   what QAD did not tell it, the LAN addresses), the network, opens any
+   rid, and holds a second address of the same key (A2). The anonymous
+   server's registration goes to R inside its TLS to R (cReg), as an
+   account's: the account added nothing the attacker could not also have.
+
+   Mutants (expect.txt "nf1_anon"):
+     cands-in-answer        the agent's candidates in the rendezvous answer
+                            (cleartext, to every opener, before the proof)
+     cands-before-admit     the agent sends its candidates after TLS, before
+                            it checks the proof
+     client-cands-unbound   the client takes candidates from a frame not
+                            under the session key (a relay aims its punch)
+     agent-cands-unbound    the agent takes the client's candidates the same way
+     server-no-secret-check the proof not checked
+     direct-no-pin-check    the direct answer's key not compared to the pin
+     nf1-agent-no-token     the agent binds a direct connection on the
+                            relay's word
+     rid-unbound            R takes a declaration of rid under any key
+     reg-unsigned           R does not check the registration's signature
+
+   Bindings (README "Bindings"; rows in the code lane, pending until then):
+     BIND:anon.cands      candidates only inside the admitted session's TLS, both ways
+   and the existing BIND:cap.register, cap.pin, cap.secret,
+   nf1direct.pin, direct.token. *)
+
+free c: channel.
+
+type skey.
+type pkey.
+fun pk(skey): pkey.
+fun aenc(bitstring, pkey): bitstring.
+reduc forall m: bitstring, k: skey; adec(aenc(m, pk(k)), k) = m.
+fun senc(bitstring, bitstring): bitstring.
+reduc forall m: bitstring, k: bitstring; sdec(senc(m, k), k) = m.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+reduc forall m: bitstring, k: skey; getmsg(sign(m, k)) = m.
+fun h(bitstring): bitstring.
+
+const labPin, labRdv, labProof, labExp, labRid, labReg, labN: bitstring.
+const c2s, s2c, labCand: bitstring.
+const relayR: bitstring.                      (* the relay the server registered at *)
+const hintA: bitstring.                       (* hints "d1,a1": direct paths, direct only *)
+const labC, labS, labQ, ep1: bitstring.       (* the direct token's roles, the QUIC exporter's label, the attach epoch *)
+free cReg: channel [private].                 (* the anonymous agent's TLS session to R *)
+
+free skS: skey [private].                     (* the server's key, A1's and A2's *)
+free sec1: bitstring [private].               (* A1's secret *)
+free sec2: bitstring.                         (* A2's: the attacker holds A2 *)
+free rid1, rid2: bitstring.                   (* rendezvous ids: the relay learns them (queries 1-9 hold for any public rid) *)
+free candA: bitstring [private].              (* A1's agent's candidates (LAN addresses) *)
+free candC: bitstring [private].              (* A1's client's candidates *)
+free dirData: bitstring [private].            (* the transfer's bytes: direct only *)
+
+letfun pinOf(s: bitstring, x: pkey) = h((labPin, s, x)).
+letfun exporter(k: bitstring, ns: bitstring, x: pkey) = h((labExp, k, ns, x)).
+letfun proofOf(s: bitstring, k: bitstring, ns: bitstring, x: pkey) = h((labProof, s, exporter(k, ns, x))).
+letfun ridOf(nn: bitstring, x: pkey) = h((labRid, nn, x)).
+letfun nonceOf(s: bitstring) = h((labN, s)).
+letfun qexp(kd: bitstring, dn: bitstring, x: pkey) = h((labQ, kd, dn, x)).
+letfun tok(k: bitstring, qx: bitstring, role: bitstring) = h((k, qx, role, ep1)).
+
+event ServerKey(pkey).
+event ClientProved(bitstring, bitstring).          (* rid, session key *)
+event Admitted(bitstring, bitstring).              (* rid of the acceptor, session key *)
+event AgentCandsSent(bitstring, bitstring, bitstring). (* rid, session key, candidates *)
+event ClientCands(bitstring, bitstring).           (* session key, the agent's candidates taken *)
+event ClientCandsSent(bitstring, bitstring).       (* session key, the client's candidates *)
+event AgentCands(bitstring, bitstring, bitstring). (* rid, session key, the client's candidates taken *)
+event ClientQUIC(bitstring, pkey).
+event ClientDirectOffer(bitstring, bitstring).
+event ClientDirect(bitstring, bitstring, pkey).
+event AgentDirect(bitstring, bitstring, bitstring).
+event RegOwn(bitstring, pkey).
+event Hijacked(bitstring, pkey).
+
+(* R's check of an anonymous declaration of rid r (NF1Claim.tla Accepts):
+   rid = ridOf(n, key) and the key's signature over the tag, R and rid. *)
+let Registrar(r: bitstring, ch: channel, own: bool) =
+  in(ch, (=r, nn: bitstring, x: pkey, rs: bitstring));
+  if r = ridOf(nn, x) then (* NOT:rid-unbound *)
+  let (=labReg, =relayR, =r) = checksign(rs, x) in (* NOT:reg-unsigned *)
+  if own = true then event RegOwn(r, x) else event Hijacked(r, x).
+
+(* The client's direct path for session k, pinned key rpk. *)
+let DirectClient(k: bitstring, rpk: pkey) =
+  in(c, (dpk: pkey, dn: bitstring));
+  if dpk = rpk then (* NOT:direct-no-pin-check *)
+  new kd: bitstring;
+  out(c, aenc((kd, dn), dpk));
+  let qx = qexp(kd, dn, dpk) in
+  event ClientQUIC(k, dpk);
+  event ClientDirectOffer(k, qx);
+  out(c, senc((labC, tok(k, qx, labC)), kd));
+  in(c, x: bitstring);
+  let (=labS, =tok(k, qx, labS)) = sdec(x, kd) in
+  event ClientDirect(k, qx, dpk);
+  out(c, senc(dirData, kd)).
+
+let DirectAgent(rid: bitstring, k: bitstring) =
+  new dn: bitstring;
+  out(c, (pk(skS), dn));
+  in(c, ekd: bitstring);
+  let (kd: bitstring, =dn) = adec(ekd, skS) in
+  let qx = qexp(kd, dn, pk(skS)) in
+  in(c, x: bitstring);
+  let (=labC, =tok(k, qx, labC)) = sdec(x, kd) in (* NOT:nf1-agent-no-token *)
+  event AgentDirect(rid, k, qx);
+  out(c, senc((labS, tok(k, qx, labS)), kd)).
+
+(* The anonymous server's answer to every open of rid: (pk, rec); its
+   candidates there only in cands-in-answer. *)
+let Answer(rid: bitstring) =
+  out(c, (pk(skS), sign((labRdv, relayR, rid, hintA), skS))) (* NOT:cands-in-answer *)
+  out(c, (pk(skS), sign((labRdv, relayR, rid, hintA), skS), candA)) (* ONLY:cands-in-answer *)
+  .
+
+(* rid's acceptor: TLS, the proof against its own secret, then the
+   candidates both ways under the session key, then the direct path. *)
+let Acceptor(rid: bitstring, sec: bitstring, cand: bitstring) =
+  new ns: bitstring;
+  out(c, (pk(skS), ns));
+  in(c, ek: bitstring);
+  let (k: bitstring, =ns) = adec(ek, skS) in
+  event AgentCandsSent(rid, k, cand); out(c, senc((s2c, labCand, cand), k)); (* ONLY:cands-before-admit *)
+  in(c, ep: bitstring);
+  let (=c2s, p: bitstring) = sdec(ep, k) in
+  if p = proofOf(sec, k, ns, pk(skS)) then (* NOT:server-no-secret-check *)
+  event Admitted(rid, k);
+  event AgentCandsSent(rid, k, cand); (* NOT:cands-before-admit *)
+  out(c, senc((s2c, labCand, cand), k)); (* NOT:cands-before-admit *)
+  in(c, ec: bitstring);
+  let (=c2s, =labCand, cc: bitstring) = sdec(ec, k) in (* NOT:agent-cands-unbound *)
+  let (=c2s, =labCand, cc: bitstring) = ec in (* ONLY:agent-cands-unbound *)
+  event AgentCands(rid, k, cc);
+  DirectAgent(rid, k).
+
+(* A1's client: only A1 = (relayR, rid1, pin1, sec1). *)
+let Client(rid: bitstring, pin: bitstring, sec: bitstring) =
+  out(c, (relayR, rid));
+  in(c, (rpk: pkey, rec: bitstring));
+  if pinOf(sec, rpk) = pin then
+  let (=labRdv, =relayR, =rid, =hintA) = checksign(rec, rpk) in
+  in(c, (spk: pkey, ns: bitstring));
+  if spk = rpk then
+  new k: bitstring;
+  out(c, aenc((k, ns), spk));
+  event ClientProved(rid, k);
+  out(c, senc((c2s, proofOf(sec, k, ns, spk)), k));
+  in(c, e: bitstring);
+  let (=s2c, =labCand, ca: bitstring) = sdec(e, k) in (* NOT:client-cands-unbound *)
+  let (=s2c, =labCand, ca: bitstring) = e in (* ONLY:client-cands-unbound *)
+  event ClientCands(k, ca);
+  event ClientCandsSent(k, candC);
+  out(c, senc((c2s, labCand, candC), k));
+  DirectClient(k, spk).
+
+(* 1. the transfer's bytes reach only A1's server *)
+(* expect true *)
+query attacker(dirData).
+(* 2. the agent's candidates reach only a client that proved A1's secret *)
+(* expect true *)
+query attacker(candA).
+(* 3. the client's candidates reach only A1's server *)
+(* expect true *)
+query attacker(candC).
+(* 4. the candidates the client punches toward are A1's agent's, sent in
+   that session once: a relay cannot aim the punch (BIND:anon.cands) *)
+(* expect true *)
+query k: bitstring, cs: bitstring; inj-event(ClientCands(k, cs)) ==> inj-event(AgentCandsSent(rid1, k, cs)).
+(* 5. A1's agent takes candidates only from its session's own client *)
+(* expect true *)
+query k: bitstring, cs: bitstring; event(AgentCands(rid1, k, cs)) ==> event(ClientCandsSent(k, cs)).
+(* 6. the client's direct handshake ends only at the pinned key *)
+(* expect true *)
+query k: bitstring, x: pkey; event(ClientQUIC(k, x)) ==> event(ServerKey(x)).
+(* 7. a direct connection the client takes is A1's agent's, bound to the
+   client's own session, once *)
+(* expect true *)
+query k: bitstring, qx: bitstring, x: pkey; inj-event(ClientDirect(k, qx, x)) ==> inj-event(AgentDirect(rid1, k, qx)).
+(* 8. A1's agent binds a direct connection only for its session's client *)
+(* expect true *)
+query k: bitstring, qx: bitstring; event(AgentDirect(rid1, k, qx)) ==> event(ClientDirectOffer(k, qx)).
+(* 9. A1's acceptor admits only a client that proved sec1 *)
+(* expect true *)
+query k: bitstring; event(Admitted(rid1, k)) ==> event(ClientProved(rid1, k)).
+(* 10. with no account behind it, R still takes a declaration of A1's rid
+   only from the key's holder *)
+(* expect true *)
+query r: bitstring, x: pkey; event(Hijacked(r, x)).
+(* 11-15. witnesses: the client takes the agent's candidates; the agent the
+   client's; the client a direct connection; the agent binds one; R takes
+   the server's own declaration *)
+(* expect false *)
+query k: bitstring, cs: bitstring; event(ClientCands(k, cs)).
+(* expect false *)
+query k: bitstring, cs: bitstring; event(AgentCands(rid1, k, cs)).
+(* expect false *)
+query k: bitstring, qx: bitstring, x: pkey; event(ClientDirect(k, qx, x)).
+(* expect false *)
+query k: bitstring, qx: bitstring; event(AgentDirect(rid1, k, qx)).
+(* expect false *)
+query r: bitstring, x: pkey; event(RegOwn(r, x)).
+
+process
+  let n1 = nonceOf(sec1) in
+  let r1 = ridOf(n1, pk(skS)) in
+  let pin1 = pinOf(sec1, pk(skS)) in
+  event ServerKey(pk(skS));
+  out(c, (pk(skS), n1));
+  ( (!Answer(rid1)) | (!Answer(rid2)) |
+    (!Acceptor(rid1, sec1, candA)) | (!Acceptor(rid2, sec2, rid2)) |
+    (!Client(rid1, pin1, sec1)) |
+    out(cReg, (r1, n1, pk(skS), sign((labReg, relayR, r1), skS))) |
+    Registrar(r1, cReg, true) | (!Registrar(r1, c, false)) )

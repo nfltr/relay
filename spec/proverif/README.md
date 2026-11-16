@@ -784,6 +784,46 @@ handshake), `BIND:browser.signal` (the agent's SDP only after `Admit`,
 inside the TLS). Code map: none yet; the lanes that build the bundle and
 the agent's side add their rows and the binding tests.
 
+### nf1_anon.pv: an nf1 address served with no account, direct only (lane NF1ANON; design, no code yet)
+
+The design is nfltr's `docs/decisions/nf1-anon-2026-11-16.md`. The
+server's agent connects to the address's relay with no credential: its
+registration is the registration proof alone (`cap_address.pv` step 1, on
+the agent's TLS to R). The session runs `cap_address.pv` steps 2-5 (the
+record's hints `d1,a1`: direct paths, direct only); after the proof is
+admitted the control exchange carries both ends' candidates inside the
+session's TLS, the punch goes where the attacker routes it, and the
+transfer's bytes go only on a direct connection taken from the pinned key
+with the agent's token (as `cap_address.pv` 15-18). The relay's byte
+budget, which keeps the bulk off it, counts ciphertext and is no secrecy
+matter: relay-core `spec/NF1Anon.tla`. The attacker owns every relay,
+opens any rid, holds a second address of the same key, and knows both
+ends' public mappings (it answered their QAD); the candidates modelled are
+what QAD did not tell it (LAN addresses).
+
+| # | query | holds because |
+|---|---|---|
+| 1 | the transfer's bytes are secret | direct only, under the pinned key and the session's tokens |
+| 2 | the agent's candidates reach only a client that proved `sec1` | sent inside the TLS after `Admit` |
+| 3 | the client's candidates reach only A1's server | sent inside the pinned TLS |
+| 4 | the candidates the client punches toward are A1's agent's, sent in that session, once: a relay cannot aim the punch | taken only from a frame under the session key (`BIND:anon.cands`) |
+| 5 | the agent takes candidates only from its session's own client | the same, the other way |
+| 6-8 | the direct handshake ends only at the pinned key; the client's direct connection is bound by A1's agent to its own session, once; the agent binds only on that session's client token | as `cap_address.pv` 16-18 |
+| 9 | A1's acceptor admits only a client that proved `sec1` | as `cap_address.pv` 6 |
+| 10 | with no account behind it, R takes a declaration of A1's rid only from the key's holder | as `cap_address.pv` 27: the account added nothing an attacker could not have |
+| 11-15 | witnesses: both candidate exchanges, the client's direct connection, the agent's binding, R's taking the server's own declaration | (each reads F) |
+
+Mutants (`expect.txt` "Part 7"): `cands-in-answer` (the agent's
+candidates in the cleartext rendezvous answer: 2), `cands-before-admit`
+(sent after TLS, before the proof is checked: 2, 4), `client-cands-unbound`
+(4), `agent-cands-unbound` (5), `server-no-secret-check` (2, 4, 5, 7-9),
+`direct-no-pin-check` (6 alone: the transcript-bound tokens refuse a
+middle), `nf1-agent-no-token` (8), `rid-unbound` and `reg-unsigned` (10).
+
+Bindings: `BIND:anon.cands` pending until the SDK lane's row
+(`client/internal/modelbind` Pending); the rest are `cap_address.pv`'s
+rows. Code map: none yet; the SDK lane adds its rows.
+
 ### First use
 
 | path | what the first contact trusts |
@@ -793,6 +833,7 @@ the agent's side add their rows and the binding tests.
 | WireGuard unpaired | the relay, on every connect; paired: the pairing file, copied out of band |
 | P2P unpaired | the relay, unless the users compare the fingerprints; paired: the pairing file |
 | nf1 in a browser | the address (from whoever gave it) and the extension's code (the store and the release key), never the relay or a page it serves |
+| nf1 with no account | the address alone, as with an account: the account behind a server never was a trust anchor of the session |
 
 ### Environment assumptions of these paths
 
