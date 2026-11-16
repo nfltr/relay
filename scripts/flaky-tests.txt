@@ -1,5 +1,3 @@
 # Known-flaky tests (scripts/stress-flaky.sh, `make stress-flaky`):
 # <module dir> <package> <test regexp> <date seen> <run (sha)>
 # A fixed test leaves this list in its fix's commit.
-client ./agent ^TestDirectPairDeathBacksOffWhateverItsNoticeOrder$ 2026-11-12 cc81e1d4b
-client ./agent ^TestDirectAgentRebindDirectAgain$ 2026-11-15 a5f2b5acf
