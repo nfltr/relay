@@ -783,3 +783,29 @@ func rebindDirectAgain(t *testing.T, lag bool) {
 		t.Fatal("no try checked the connection after the rebind")
 	}
 }
+
+// TestDirectSessionStreamEndBeforeRunEnds (lane R15FIX): a session whose
+// relayed stream ends before Run (a refusal during its TLS handshake: an
+// nf1 address not found, a relay that answers with its own TLS) has no
+// token to re-attach with, so it ends with its stream; it waited out the
+// 30 s detach bound and the CLI hung past its tests' bound.
+func TestDirectSessionStreamEndBeforeRunEnds(t *testing.T) {
+	d, err := NewDirectClient(DirectClientConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	first, relay := net.Pipe()
+	ds := d.Start(first)
+	_ = relay.Close()
+	read := make(chan error, 1)
+	go func() { _, err := ds.Conn().Read(make([]byte, 1)); read <- err }()
+	select {
+	case err := <-read:
+		if err == nil {
+			t.Fatal("read on a session whose stream ended returned no error")
+		}
+	case <-time.After(10 * time.Second): // a bound against the hang only
+		t.Fatal("a session whose stream ended before Run still reads after 10 s (the detach bound)")
+	}
+}

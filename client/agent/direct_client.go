@@ -733,7 +733,11 @@ func (s *DirectSession) fallback(epoch uint64, _ error) {
 	lost := s.lostAt
 	s.mu.Unlock()
 	if key == nil {
-		return // before Run: no token yet; the session ends with its stream
+		// before Run: no token to re-attach with, so the session ends with
+		// its stream now, not at the detach bound
+		// (TestDirectSessionStreamEndBeforeRunEnds)
+		s.c.Abort()
+		return
 	}
 	if s.anon { // direct only: never re-attached relayed (nf1-anon section 2; the relay cuts one anyway)
 		s.directRequired()
