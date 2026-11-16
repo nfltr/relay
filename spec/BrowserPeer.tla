@@ -15,6 +15,9 @@
    agent closes the connection and its channels when the control session
    ends or the connection fails.
 
+   A data-channel stream whose own nf1 handshake fails (its proof, its
+   TLS) is refused: it fails to the app (Refuse).
+
    ctl is the control session as the agent sees it, pc the connection as
    both ends see it (ICE and DTLS are the browser's and pion's), agentPC
    the agent's resources for it. Mutants (Mutant):
@@ -128,6 +131,14 @@ Complete(s) ==
   /\ dc' = [dc EXCEPT ![s] = FALSE]
   /\ UNCHANGED <<ctl, pc, agentPC, path, sent, deliv, fails>>
 
+(* The agent refuses a data-channel stream whose own nf1 handshake fails
+   (a wrong proof, a broken TLS): it fails to the app, its channel freed.
+   Not fair: the visitor's choice. *)
+Refuse(s) ==
+  /\ st[s] = "open" /\ path[s] = "dc" /\ ~sent[s] /\ dc[s]
+  /\ st' = [st EXCEPT ![s] = "failed"] /\ dc' = [dc EXCEPT ![s] = FALSE]
+  /\ UNCHANGED <<ctl, pc, agentPC, path, sent, deliv, fails>>
+
 (* A data channel stream whose connection is gone: an error to the app
    (or, mutant, re-sent on a WebSocket). *)
 Break(s) ==
@@ -142,7 +153,7 @@ Break(s) ==
 
 Next ==
   \/ CtlOpen \/ CtlAdmit \/ CtlEnd \/ Offer \/ PCUp \/ PCFail \/ Reap
-  \/ \E s \in Streams : OpenDC(s) \/ OpenWS(s) \/ Deliver(s) \/ Complete(s) \/ Break(s)
+  \/ \E s \in Streams : OpenDC(s) \/ OpenWS(s) \/ Deliver(s) \/ Complete(s) \/ Break(s) \/ Refuse(s)
 
 (* The agent's steps and the streams' ends are weakly fair; the visitor's
    choices (opening, ending) and the network's failures are not. *)
