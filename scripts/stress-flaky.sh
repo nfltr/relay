@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright 2026 nfltr
+# SPDX-License-Identifier: Apache-2.0
+#
 # stress-flaky.sh: hammer the known-flaky tests of scripts/flaky-tests.txt
 # on a starved machine, so a CI runner can reproduce a flake on demand
 # (`make ci-request REPO=<repo> REF=<sha> TARGET=stress-flaky`).
