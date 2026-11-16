@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -51,7 +50,7 @@ func nf1RelayGated(t *testing.T, l *nf1.Listener, hello chan<- bool) (Config, <-
 			return
 		}
 		defer nc.Close() //nolint:errcheck
-		sniff := &helloSniff{Conn: nc}
+		sniff := &helloSniff{Conn: nc, hello: make(chan struct{})}
 		if hello != nil {
 			nc = sniff
 		}
@@ -67,11 +66,16 @@ func nf1RelayGated(t *testing.T, l *nf1.Listener, hello chan<- bool) (Config, <-
 				return
 			}
 			if hello != nil {
-				came := false
-				for deadline := time.Now().Add(3 * time.Second); !came && time.Now().Before(deadline); time.Sleep(time.Millisecond) {
-					came = sniff.seen.Load()
+				// The ClientHello, or the session's end: a client that waits
+				// for the answer first sends none, and its dial's bound ends
+				// the session (no fixed wait: a loaded runner's ClientHello
+				// came past one of 3 s, relay 34bf45670).
+				select {
+				case <-sniff.hello:
+					hello <- true
+				case <-s.Done():
+					hello <- false
 				}
-				hello <- came
 			}
 			c, err := l.Accept(context.Background(), s)
 			if err != nil {
@@ -232,17 +236,19 @@ func TestNF1RefusalClosesSession(t *testing.T) {
 // a TLS ClientHello's record (handshake, version 0x0301, type 1) passed it.
 type helloSniff struct {
 	net.Conn
-	mu   sync.Mutex
-	buf  []byte
-	seen atomic.Bool
+	mu    sync.Mutex
+	buf   []byte
+	seen  bool
+	hello chan struct{} // closed at the ClientHello
 }
 
 func (c *helloSniff) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
 	c.mu.Lock()
 	c.buf = append(c.buf, p[:n]...)
-	if i := bytes.Index(c.buf, []byte{0x16, 0x03, 0x01}); i >= 0 && len(c.buf) > i+5 && c.buf[i+5] == 0x01 {
-		c.seen.Store(true)
+	if i := bytes.Index(c.buf, []byte{0x16, 0x03, 0x01}); !c.seen && i >= 0 && len(c.buf) > i+5 && c.buf[i+5] == 0x01 {
+		c.seen = true
+		close(c.hello)
 	}
 	c.mu.Unlock()
 	return n, err
