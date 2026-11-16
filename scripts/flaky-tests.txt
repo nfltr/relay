@@ -1,7 +1,4 @@
 # Known-flaky tests (scripts/stress-flaky.sh, `make stress-flaky`):
 # <module dir> <package> <test regexp> <date seen> <run (sha)>
 # A fixed test leaves this list in its fix's commit.
-client ./dgram ^TestDatagramAssocRevokeNamesItself$ 2026-11-16 ca34de5cb
 client ./agent ^TestDirectClientPrefersTheAgentsRelay$ 2026-11-16 cb3837aff
-client ./agent ^TestDirectOpenOnADyingConnectionRepunches$ 2026-11-15 425e6cff3
-client ./agent ^TestDirectAgentRebindDirectAgain$ 2026-11-15 a5f2b5acf
