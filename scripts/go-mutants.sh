@@ -6,8 +6,9 @@
 # (<package>/testdata/<name>.txt, a path from the repository root; its
 # lines "<mutant> | <file> | <exact line text> | <replacement> | <test>",
 # the lines of one mutant applied together, each replacing one whole line
-# of its file that occurs exactly once) and checks that its test then
-# fails; the package's files are restored after each. Fails on a mutant
+# of its file that occurs exactly once; a file outside the package is a
+# path from it, e.g. ../internal/x/x.go) and checks that its test then
+# fails; the files are restored after each. Fails on a mutant
 # its test does not catch, or whose line is gone. A port of nfltr's
 # scripts/orgpki-mutants.sh. make test-go-mutants.
 set -euo pipefail
@@ -19,7 +20,12 @@ rel="${pkg#"$root"/}"
 module="${rel%%/*}"
 backup="$(mktemp -d)"
 cp "$pkg"/*.go "$backup/"
-restore() { cp "$backup"/*.go "$pkg/"; }
+outside=() # files outside the package a mutant changed, kept as $backup/outside.<n>
+restore() {
+  cp "$backup"/*.go "$pkg/"
+  local i
+  for i in "${!outside[@]}"; do cp "$backup/outside.$i" "${outside[$i]}"; done
+}
 trap 'restore; rm -rf "$backup"' EXIT
 
 mutants="$(grep -v '^#' "$list" | grep -v '^$' | awk -F ' [|] ' '{print $1}' | uniq)"
@@ -30,6 +36,10 @@ for m in $mutants; do
   while IFS= read -r line; do
     file="$(printf '%s' "$line" | awk -F ' [|] ' '{print $2}')"
     test="$(printf '%s' "$line" | awk -F ' [|] ' '{print $5}')"
+    if [[ "$(dirname "$pkg/$file")" != "$pkg" ]]; then
+      cp "$pkg/$file" "$backup/outside.${#outside[@]}"
+      outside+=("$pkg/$file")
+    fi
     ORIG="$(printf '%s' "$line" | awk -F ' [|] ' '{print $3}')" \
       REPL="$(printf '%s' "$line" | awk -F ' [|] ' '{print $4}')" \
       perl -i -ne 'BEGIN{$n=0} chomp; if ($_ eq $ENV{ORIG}) { $n++; print "$ENV{REPL}\n" } else { print "$_\n" } END{ exit($n == 1 ? 0 : 3) }' "$pkg/$file" ||

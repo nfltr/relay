@@ -98,6 +98,15 @@ WASM_NF1_MAX_GZIP_BYTES ?= 2272810
 wasm-nf1:
 	@WASM_NF1_MAX_BYTES=$(WASM_NF1_MAX_BYTES) WASM_NF1_MAX_GZIP_BYTES=$(WASM_NF1_MAX_GZIP_BYTES) ./scripts/wasm-nf1.sh
 
+# browser-bundle: the nf1 browser extension (browser/, lane BP4) built
+# reproducibly into browser/dist (BROWSER_OUT): twice, equal SHA256SUMS
+# listings (the code pin, BIND:browser.bundle), nf1.wasm under the
+# wasm-nf1 budgets; BROWSER_SUMS=<release SHA256SUMS> also checks the build
+# is the release's (scripts/browser-bundle.sh).
+.PHONY: browser-bundle
+browser-bundle:
+	@WASM_NF1_MAX_BYTES=$(WASM_NF1_MAX_BYTES) WASM_NF1_MAX_GZIP_BYTES=$(WASM_NF1_MAX_GZIP_BYTES) ./scripts/browser-bundle.sh
+
 # Fails when a _test.go file assigns a package-level variable of its package
 # (allow-list with reasons: scripts/testknobs-allow.txt). The tool lives in
 # proto (stdlib only) and runs from the repository root over both modules.

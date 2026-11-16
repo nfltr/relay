@@ -1,0 +1,15 @@
+{
+  "name": "nfltr-browser",
+  "private": true,
+  "license": "Apache-2.0",
+  "description": "The nf1 browser extension (nfltr docs/decisions/browser-peer-2026-11-16.md, lane BP4): built by make browser-bundle, tested by make browser-e2e.",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "e2e": "playwright test -c e2e/playwright.config.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "esbuild": "0.25.12",
+    "typescript": "5.9.3"
+  }
+}

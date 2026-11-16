@@ -6,8 +6,8 @@ package p2p
 // The bindings spec/proverif/browser_peer.pv relies on at the agent: each
 // BIND:<id> row changes one field of an honest visitor's session and
 // requires the agent to refuse. The visitor is the pion stand-in of
-// browserpeer_test.go; BIND:browser.bundle is the bundle's (lane BP4,
-// modelbind.Pending). `make spec-bindings`.
+// browserpeer_test.go; BIND:browser.bundle is the extension's code pin
+// (client/internal/bundle, lane BP4). `make spec-bindings`.
 
 import (
 	"context"
@@ -18,9 +18,11 @@ import (
 	"regexp"
 	"slices"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/nfltr/relay/client/capaddr"
+	"github.com/nfltr/relay/client/internal/bundle"
 	"github.com/nfltr/relay/client/internal/modelbind"
 	"github.com/nfltr/relay/client/nf1"
 )
@@ -44,6 +46,42 @@ func otherAddress(t *testing.T, a *bpAgent) capaddr.Address {
 }
 
 var browserBindings = map[string]func(t *testing.T){
+	// The extension's code is the release's bundle (hosted-page: code from
+	// anywhere else reads the session): a package with one byte of any file
+	// changed, a file added (a script) or a file missing fails the check
+	// that scripts/browser-bundle.sh runs against the release's SHA256SUMS.
+	"browser.bundle": func(t *testing.T) {
+		honest := fstest.MapFS{
+			"manifest.json": {Data: []byte(`{"manifest_version":3}`)},
+			"nf1.wasm":      {Data: []byte("\x00asm wasm")},
+			"open.js":       {Data: []byte("open()")},
+		}
+		sums, err := bundle.Sums(honest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := bundle.Verify(honest, sums); err != nil {
+			t.Fatalf("the release's own bundle: %v", err)
+		}
+		changed := fstest.MapFS{}
+		for k, v := range honest {
+			changed[k] = &fstest.MapFile{Data: append([]byte(nil), v.Data...)}
+		}
+		changed["nf1.wasm"].Data[1] ^= 1
+		added := fstest.MapFS{"inject.js": {Data: []byte("fetch(location.hash)")}}
+		missing := fstest.MapFS{}
+		for k, v := range honest {
+			added[k] = v
+			if k != "open.js" {
+				missing[k] = v
+			}
+		}
+		for name, pkg := range map[string]fstest.MapFS{"a byte changed": changed, "a file added": added, "a file missing": missing} {
+			if err := bundle.Verify(pkg, sums); !errors.Is(err, bundle.ErrMismatch) {
+				t.Errorf("%s: %v, want %v", name, err, bundle.ErrMismatch)
+			}
+		}
+	},
 	// The agent writes its SDP only after Admit, inside the TLS
 	// (signal-before-admit): a control session whose proof is under
 	// another secret, and one that sends its offer in the clear, get no

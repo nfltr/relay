@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nf1</title>
+<style>
+  :root { color-scheme: light dark; font: 15px/1.45 system-ui, sans-serif; }
+  body { max-width: 52rem; margin: 1.5rem auto; padding: 0 1rem; }
+  input[type=text] { width: 100%; box-sizing: border-box; font: 13px ui-monospace, monospace; padding: .4rem; }
+  pre { min-height: 8rem; max-height: 60vh; overflow: auto; padding: .6rem; border: 1px solid #8884; white-space: pre-wrap; }
+  [data-state=failed], [data-state=ended] { color: #c33; }
+  form { margin: .6rem 0; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+</style>
+<script src="wasm_exec.js"></script>
+<script type="module" src="open.js"></script>
+</head>
+<body>
+<h1>Open an nf1 address</h1>
+<form id="addr-form">
+  <label for="addr">Address</label>
+  <input type="text" id="addr" autocomplete="off" spellcheck="false" placeholder="nf1...">
+  <label><input type="checkbox" id="relay-only"> Relay only (the agent never learns your IP)</label>
+  <button>Open</button>
+</form>
+<p id="status" role="status" data-state="idle">Paste an address. It stays on this machine: the page clears it from its URL.</p>
+<p>Path: <span id="path">-</span></p>
+<pre id="out" aria-live="polite"></pre>
+<form id="send-form">
+  <input type="text" id="send" autocomplete="off" aria-label="Line to send">
+  <button>Send</button>
+  <button type="button" id="half">End input</button>
+  <button type="button" id="again">New stream</button>
+</form>
+</body>
+</html>
