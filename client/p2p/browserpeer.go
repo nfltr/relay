@@ -123,7 +123,6 @@ type browserPeer struct {
 	pc    *webrtc.PeerConnection
 	held  bool   // the agent holds pc (BrowserPeer.tla agentPC = "held")
 	state string // pc: "", "connecting", "up", "failed", "closed"
-	ended bool   // the control session ended
 	dcs   map[int]*bpConn
 	next  int // the last stream's number
 	wg    sync.WaitGroup
@@ -182,11 +181,10 @@ func (p *browserPeer) step(ev string, s int) {
 func (p *browserPeer) end() {
 	_ = p.ctl.Close()
 	p.mu.Lock()
-	p.ended = true
 	p.tr.emit("CtlEnd", 0)
-	closers := p.reapLocked()
+	reap := p.reapLocked()
 	p.mu.Unlock()
-	closers()
+	reap()
 }
 
 // reapLocked is Reap when the agent holds the connection: the connection

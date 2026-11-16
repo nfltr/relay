@@ -189,6 +189,7 @@ test-go-mutants:
 	./scripts/go-mutants.sh client/agent/testdata/queue_mutants.txt
 	./scripts/go-mutants.sh client/orgid/testdata/mutants.txt
 	./scripts/go-mutants.sh client/nf1/testdata/mutants.txt
+	./scripts/go-mutants.sh client/p2p/testdata/browser_mutants.txt
 	./scripts/go-mutants.sh client/agent/testdata/direct_dgram_mutants.txt
 	./scripts/go-mutants.sh client/agent/testdata/nf1_anon_mutants.txt
 	./scripts/go-mutants.sh org/orgpki/testdata/mutants.txt

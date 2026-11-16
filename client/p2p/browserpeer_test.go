@@ -6,7 +6,6 @@ package p2p
 import (
 	"context"
 	"crypto/ed25519"
-	"errors"
 	"io"
 	"net"
 	"sync/atomic"
@@ -279,10 +278,15 @@ func TestBrowserDirectReapsWithTheControlSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = tc.Close()
-	<-done
-	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
-	if _, err := c.Read(make([]byte, 1)); err == nil || errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("a stream outlived its control session: %v", err)
+	select {
+	case <-done:
+	case <-time.After(15 * time.Second):
+		t.Fatal("the control session's end did not reap its connection and streams")
+	}
+	start := time.Now()
+	_ = c.SetDeadline(start.Add(10 * time.Second))
+	if _, err := c.Read(make([]byte, 1)); err == nil || time.Since(start) > 5*time.Second {
+		t.Fatalf("a stream outlived its control session: %v after %v", err, time.Since(start))
 	}
 }
 
