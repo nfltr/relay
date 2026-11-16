@@ -10,11 +10,13 @@ require (
 	github.com/nfltr/link/peerlink/quiclink v0.5.21
 	github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261112202211-40e0a2570e52
 	github.com/nfltr/relay/proto v0.20.1
+	github.com/pion/datachannel v1.6.3
 	github.com/pion/logging v0.2.4
 	github.com/pion/stun/v4 v4.0.1
 	github.com/pion/webrtc/v4 v4.2.22
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.60.0
+	golang.org/x/oauth2 v0.38.0
 	golang.zx2c4.com/wireguard v0.0.0-20261006164505-2631ce99a06f
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260803160001-6ac0973c030d
 	google.golang.org/grpc v1.83.2
@@ -27,7 +29,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/pion/datachannel v1.6.3 // indirect
 	github.com/pion/dtls/v3 v3.1.9 // indirect
 	github.com/pion/ice/v4 v4.4.4 // indirect
 	github.com/pion/interceptor v0.1.49 // indirect
