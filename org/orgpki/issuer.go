@@ -605,7 +605,7 @@ func (i *Issuer) Revoke(name string, now time.Time) error {
 		return err
 	}
 	traceLine(map[string]any{"ev": "revoke", "o": i.orgID, "n": name, "t": now.Unix()})
-	appTraceLine(map[string]any{"ev": "revoke", "o": i.orgID, "names": []string{name}, "t": now.Unix()})
+	appTraceLine(map[string]any{"ev": "revoke", "o": i.orgID, "u": "", "a": "", "names": []string{name}, "t": now.Unix()})
 	return nil
 }
 

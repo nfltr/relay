@@ -36,7 +36,7 @@ Witnesses (each must be violated, the state reachable): `WitnessSSOEnrol`,
 of a disabled person is still live), `WitnessUserRevoked`,
 `WitnessAppRevoked`. `-coverage 1` shows every action taken.
 
-## Actions
+## Actions (`AppEnrol.tla`)
 
 | action | the issuer (or the world) |
 |---|---|
@@ -49,6 +49,7 @@ of a disabled person is still live), `WitnessUserRevoked`,
 | Renew | renewal with the current key, while the sign-in lasts (codes: until revoked) |
 | Reauth | a new sign-in for the name's key and person extends authUntil |
 | RevokeUser, RevokeApp | every live name of the person (app) revoked, its certificates listed, its enrolments refused |
+| RevokeBy, Issue | parts of the steps above: revoke a set of names; issue one certificate |
 
 ## Environment assumptions
 
@@ -60,20 +61,48 @@ of a disabled person is still live), `WitnessUserRevoked`,
 | verifiers end a session at the peer certificate's NotAfter and on a CRL listing it | `spec/enrol/Enrol.tla` (RevocationBound), TLS 1.3 (RFC 8446) does not re-authenticate |
 | clocks: the issuer's clock is the one that matters (it checks `exp` and `authUntil`); skew is folded into TokLife | org/orgenrol (the issuer's `now`) |
 
+## Traces
+
+`org/orgpki` records the issuer's steps under `-tags enroltrace` with
+`APPENROLTRACE=<dir>` (`trace_on.go` `appTraceLine`): a sign-in's
+enrolment or certification again (`sso`, with the token's nonce and the
+nonce of the request's keys), a code's (`code`), a renewal (`renew`), a
+refusal and its reason (`refuse`), a revocation and the names it revoked
+(`revoke`). `make spec-appenrol-traces` (nightly) runs every test of
+`org/orgpki` and `org/orgenrol` with it and checks each trace with
+`TraceAppEnrol.tla`: each line must be what this spec allows after the
+lines before it, a wrong step reported by the property its mutant breaks
+(any other by `Conforms`). It prints the events and refusals the tests
+made: one missing is a test gap. A trace sees the name's newest key: a
+renewal may change it, as `spec/enrol/Enrol.tla`'s renewals do (here the
+key is fixed per name; the sign-in finds the name by its newest key).
+Each invariant has a trace in `traces/` it must reject
+(`<Invariant>-*.ndjson`, checked in `make spec-appenrol-ci`).
+
 ## Code map
 
-The admin-code path is code: `orgpki.Issuer.MakeDeviceToken` (the code
-names person and app), the profile's SANs (`machineTemplate`), renewal
-keeping them, `RevokePerson` and `RevokeApp` (every name, and the person's
-or app's enrolments from now, a code made before included). Its Go mutants,
-in `org/orgpki/testdata/mutants.txt`, are this spec's: `renew-takes-attrs`,
-`revoke-user-one-name`, `sso-skips-deny` (here: a code made before the
-revoke), `revoke-app-sso-only`. Not yet code (lane APPID2, nfltr's decision
-doc "Lanes"): the sign-in path (`SSOEnrol`, `Renew`'s `authUntil`,
-`Reauth`) and the trace recorder (TraceAppEnrol.tla, `-tags enroltrace`).
+Both ways in are code. The admin code: `orgpki.Issuer.MakeDeviceToken`
+(the code names person and app), the profile's SANs (`machineTemplate`),
+renewal keeping them, `RevokePerson` and `RevokeApp` (every name, and the
+person's or app's enrolments from now, a code made before included). The
+sign-in: the owner's rules in the issuer's log (`AddSignInRule`),
+`EnrolSignIn` (EnrolSSO and Reauth: the ID token verified with go-oidc
+against the rule, the nonce, the deny lists, a name the issuer picks),
+`Renew` refusing a sign-in's key past `authUntil` (`AuthLife`, 30 days)
+with `ErrSignInEnded`; the device's side is `client/appenrol` `SignIn`
+(code + PKCE on `golang.org/x/oauth2`, loopback redirect). Go mutants, in
+`org/orgpki/testdata/mutants.txt`: `renew-takes-attrs`,
+`revoke-user-one-name`, `sso-skips-deny` (a code made before the revoke),
+`signin-skips-deny`, `revoke-app-sso-only`, `signin-no-nonce-check`,
+`no-aud-check`, `no-token-exp`, `email-unverified`, `reauth-any-user`,
+`signin-takes-code-key`, `renew-ignores-auth`. The model's
+`reusable-code` is enrol.pv's token mutant (`reusable-token`).
 
 | spec | code |
 |---|---|
 | AppEnrol.tla | org/orgenrol/issuer.go |
 | AppEnrol.tla | org/orgpki/issuer.go |
 | AppEnrol.tla | org/orgpki/profile.go |
+| AppEnrol.tla | org/orgpki/signin.go |
+| AppEnrol.tla | client/appenrol/signin.go |
+| TraceAppEnrol.tla | org/orgpki/trace_on.go |

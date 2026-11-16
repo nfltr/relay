@@ -17,7 +17,8 @@ enrol Join -
 enrol RevokePush -
 orgmove OrgMove -
 orgmove OrgHolds -
-orgmove OrgHosted -'
+orgmove OrgHosted -
+appenrol AppEnrol -'
 
 # steps <tla>: the model's step names.
 steps() {
@@ -64,7 +65,8 @@ done
 # <trace spec> <recorder dirs> <line kinds written only by tests or fixtures>
 recorders='enrol/TraceEnrol.tla org/orgpki,client/orgid -
 enrol/TraceRevokePush.tla org/orgenrol -
-orgmove/TraceOrgMove.tla org/orgpki,org/orgissuer -'
+orgmove/TraceOrgMove.tla org/orgpki,org/orgissuer -
+appenrol/TraceAppEnrol.tla org/orgpki -'
 set -f # the pathspecs below are git's, not the shell's
 echo "$recorders" | while read -r spec dirs only; do
 	paths=""
