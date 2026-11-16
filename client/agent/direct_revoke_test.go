@@ -92,7 +92,7 @@ func TestDirectRevokedClientCutOnEveryPath(t *testing.T) {
 
 	// A re-punch's direct connection: the agent's listener refuses it (the
 	// QUIC client's handshake ends first: the refusal closes it).
-	if q2, err := r.d.dialPair(ctx, p); err == nil {
+	if q2, err := r.d.dialPair(ctx, p, nil); err == nil {
 		select {
 		case <-q2.Context().Done():
 		case <-time.After(bound):

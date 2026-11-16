@@ -529,6 +529,10 @@ func (s *DirectSession) punch(p *directPair) string {
 	for _, a := range mine {
 		out.Candidates = append(out.Candidates, a.String())
 	}
+	// Listening before the client's candidates go: the agent probes them
+	// as soon as it reads them.
+	learned, stopLearn := s.d.ep.listen(probeTag(tc))
+	defer stopLearn()
 	if enc.Encode(out) != nil {
 		return ReasonWithheld
 	}
@@ -537,7 +541,7 @@ func (s *DirectSession) punch(p *directPair) string {
 	if p.nf1 != nil {
 		p.sni = nf1SNI(s.key)
 	}
-	q, err := s.d.dialPair(ctx, p)
+	q, err := s.d.dialPair(ctx, p, learned)
 	if err != nil {
 		if p.refused.Load() {
 			return ReasonRefusedCert
@@ -562,12 +566,13 @@ func (d *DirectClient) dial(_ context.Context, peer string, _ *quic.Config) (*qu
 
 func connEnded(q *quic.Conn) bool { return q.Context().Err() != nil }
 
-// dialPair punches p's candidates on the endpoint (quiclink.Punch, 5 s)
-// and keeps the connection's exporter for the tokens.
-func (d *DirectClient) dialPair(ctx context.Context, p *directPair) (*quic.Conn, error) {
+// dialPair punches p's candidates and the agent's probes' sources on the
+// endpoint (punch, 5 s) and keeps the connection's exporter for the
+// tokens.
+func (d *DirectClient) dialPair(ctx context.Context, p *directPair, learned <-chan netip.AddrPort) (*quic.Conn, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	q, err := quiclink.Punch(ctx, d.ep.tr, p.cands, d.punchTLS(p), d.node.QUICConfig())
+	q, err := d.ep.punch(ctx, p.cands, learned, d.punchTLS(p), d.node.QUICConfig())
 	if err != nil {
 		return nil, err
 	}

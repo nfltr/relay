@@ -106,6 +106,7 @@ type DirectEndpoint struct {
 	// peer could aim this machine's probes and punches at its own
 	// loopback services.
 	loopback bool
+	probes   probeWaiters // the tagged probes' readers (direct_prflx.go)
 }
 
 // NewDirectEndpoint opens the socket on an ephemeral port.

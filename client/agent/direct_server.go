@@ -462,7 +462,9 @@ func (d *directServer) control(c net.Conn, relay *qadTarget, agent string, modeO
 		return err
 	}
 	// The punch: datagrams toward the client's mappings open this end's
-	// NAT while the client's QUIC Initials arrive (quiclink.Punch).
+	// NAT while the client's QUIC Initials arrive; their tag lets the
+	// client dial where they came from (direct_prflx.go).
+	tag := probeTag(c)
 	done := make(chan struct{})
 	go func() { _, _ = io.Copy(io.Discard, r); close(done) }() // the client closes once punched
 	for _, wait := range []time.Duration{0, 200 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second} {
@@ -471,7 +473,7 @@ func (d *directServer) control(c net.Conn, relay *qadTarget, agent string, modeO
 			return nil
 		case <-time.After(wait):
 		}
-		_ = quiclink.Probe(d.ep.tr, peer)
+		_ = d.ep.probe(peer, tag)
 	}
 	<-done
 	return nil
