@@ -148,3 +148,22 @@ test("the direct path: streams after the first take a data channel; relay only n
 });
 
 export type { World };
+
+test("an HTTP service's page renders without its script; other types download", async ({ page, ext, world }) => {
+  const { web } = await state(world);
+  await open(page, ext, web);
+  await expect(statusEl(page)).toHaveAttribute("data-state", "open");
+  await page.locator("#http-form button").click();
+  await expect(page.locator("#http-status")).toHaveText("200 text/html; charset=utf-8");
+  await expect(page.locator("#view")).toHaveAttribute("sandbox", "");
+  await expect(page.frameLocator("#view").locator("#t")).toHaveText("served over nf1");
+  await page.locator("#http-path").fill("/file");
+  await page.locator("#http-form button").click();
+  await expect(page.locator("#view")).toBeHidden();
+  const download = page.waitForEvent("download");
+  await page.locator("#http-status a").click();
+  const d = await download;
+  const chunks: Buffer[] = [];
+  for await (const c of await d.createReadStream()) chunks.push(c as Buffer);
+  expect(Buffer.concat(chunks).toString()).toBe("file bytes");
+});

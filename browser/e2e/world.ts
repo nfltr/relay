@@ -79,7 +79,7 @@ async function ctrl(w: World, method: string, p: string): Promise<string> {
   return body;
 }
 
-export const state = async (w: World) => JSON.parse(await ctrl(w, "GET", "/state")) as { echo: string; direct: string; unknown: string };
+export const state = async (w: World) => JSON.parse(await ctrl(w, "GET", "/state")) as { echo: string; direct: string; web: string; unknown: string };
 export const fault = (w: World, code: number, n: number) => ctrl(w, "POST", `/fault?code=${code}&n=${n}`);
 export const count = async (w: World) => Number(await ctrl(w, "GET", "/count"));
 export const restart = (w: World) => ctrl(w, "POST", "/restart");

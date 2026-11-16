@@ -6,15 +6,16 @@
 // (github.com/nfltr/relay-core compose.Serve, nf1 and nf1.websocket on) in
 // a child process on fixed loopback ports, so a restart is the process's
 // exit and a new one (its sessions cut as a relay's exit cuts them), two agents of this checkout's
-// client/agent (an echo under an address, and one whose service also takes
-// the browser direct path, client/p2p BrowserDirect), and the front: the
+// client/agent (an echo under an address, one whose service also takes
+// the browser direct path, client/p2p BrowserDirect, and a web page with a
+// script), and the front: the
 // TLS host relay.test the browser maps to it (--host-resolver-rules), which
 // passes each WebSocket to the relay, or, while a fault is armed, answers it
 // itself with a close code (the codes a relay gives only under conditions a
 // test can't make cheaply: balance, draining, reset). It prints one JSON
 // line ({front, ctrl, spki}) and serves its control port on loopback:
 //
-//	GET  /state                  {echo, direct, unknown} addresses
+//	GET  /state                  {echo, direct, web, unknown} addresses
 //	POST /fault?code=N&n=K       the next K WebSockets close N (1006: dropped)
 //	GET  /count                  WebSockets the front took since the last /count
 //	POST /restart                the relay process stops (SIGTERM) and starts again
@@ -94,11 +95,23 @@ func run() error {
 		return err
 	}
 	_ = keyFile.Close()
-	echo, err := serveAgent(r.grpc, keyFile.Name(), "echo", nil)
+	echoAddr, err := echoListener()
 	if err != nil {
 		return err
 	}
-	direct, err := serveAgent(r.grpc, keyFile.Name(), "direct", &p2p.BrowserDirect{})
+	webAddr, err := webListener()
+	if err != nil {
+		return err
+	}
+	echo, err := serveAgent(r.grpc, keyFile.Name(), "echo", echoAddr, nil)
+	if err != nil {
+		return err
+	}
+	direct, err := serveAgent(r.grpc, keyFile.Name(), "direct", echoAddr, &p2p.BrowserDirect{})
+	if err != nil {
+		return err
+	}
+	web, err := serveAgent(r.grpc, keyFile.Name(), "web", webAddr, nil)
 	if err != nil {
 		return err
 	}
@@ -115,7 +128,7 @@ func run() error {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /state", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"echo": echo.Address().String(), "direct": direct.Address().String(), "unknown": unknown.String()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"echo": echo.Address().String(), "direct": direct.Address().String(), "web": web.Address().String(), "unknown": unknown.String()})
 	})
 	mux.HandleFunc("POST /fault", func(w http.ResponseWriter, q *http.Request) {
 		code, err1 := strconv.Atoi(q.URL.Query().Get("code"))
@@ -237,14 +250,10 @@ func serveRelay() error {
 	return compose.Serve(ctx, slog.New(slog.DiscardHandler), ls, []frontend.Frontend{httpingress.Frontend{}, sni.Frontend{}}, keyfile.Provider{Store: keys})
 }
 
-// serveAgent connects an agent serving an echo under a fresh address of
+// serveAgent connects an agent serving target under a fresh address of
 // host; with bd, its service also takes the browser direct path.
-func serveAgent(grpcAddr, keyFile, id string, bd *p2p.BrowserDirect) (*nf1.Listener, error) {
+func serveAgent(grpcAddr, keyFile, id, target string, bd *p2p.BrowserDirect) (*nf1.Listener, error) {
 	l, _, err := nf1.Mint(host)
-	if err != nil {
-		return nil, err
-	}
-	target, err := echoListener()
 	if err != nil {
 		return nil, err
 	}
@@ -278,6 +287,28 @@ func echoListener() (string, error) {
 			go func() { _, _ = io.Copy(c, c); _ = c.Close() }()
 		}
 	}()
+	return ln.Addr().String(), nil
+}
+
+// page is the web service's page: its script must not run in the view.
+const page = `<!doctype html><title>agent</title><p id="t">served over nf1</p><script>document.getElementById("t").textContent = "the script ran"</script>`
+
+// webListener is an HTTP service: page at /, bytes at /file.
+func webListener() (string, error) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return "", err
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, page)
+	})
+	mux.HandleFunc("GET /file", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write([]byte("file bytes"))
+	})
+	go func() { _ = http.Serve(ln, mux) }() // #nosec G114 -- loopback test service
 	return ln.Addr().String(), nil
 }
 

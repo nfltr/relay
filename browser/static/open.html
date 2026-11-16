@@ -10,6 +10,7 @@
   input[type=text] { width: 100%; box-sizing: border-box; font: 13px ui-monospace, monospace; padding: .4rem; }
   pre { min-height: 8rem; max-height: 60vh; overflow: auto; padding: .6rem; border: 1px solid #8884; white-space: pre-wrap; }
   [data-state=failed], [data-state=ended] { color: #c33; }
+  iframe { width: 100%; height: 60vh; border: 1px solid #8884; }
   form { margin: .6rem 0; display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
 </style>
 <script src="wasm_exec.js"></script>
@@ -32,5 +33,12 @@
   <button type="button" id="half">End input</button>
   <button type="button" id="again">New stream</button>
 </form>
+<form id="http-form">
+  <label for="http-path">Web page</label>
+  <input type="text" id="http-path" value="/" autocomplete="off" spellcheck="false">
+  <button>View</button>
+</form>
+<p id="http-status" role="status"></p>
+<iframe id="view" title="The service's page, without its scripts" sandbox="" hidden></iframe>
 </body>
 </html>

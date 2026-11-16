@@ -10,6 +10,7 @@
 // the relay's close code (data-code).
 
 import { NF1Client, NF1Error, NF1Socket } from "./nf1";
+import { fetchOver, render } from "./view";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const statusEl = $("status");
@@ -97,6 +98,19 @@ $("again").addEventListener("click", () => {
   sock = undefined;
   old?.close();
   void stream(false);
+});
+
+$("http-form").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const st = $("http-status");
+  if (!client) return void (st.textContent = "Open an address first.");
+  st.textContent = "Loading";
+  fetchOver(client, $<HTMLInputElement>("http-path").value || "/")
+    .then((res) => {
+      st.textContent = `${res.status} ${res.type}`;
+      render(res, $<HTMLIFrameElement>("view"), st);
+    })
+    .catch((e) => (st.textContent = `Not loaded: ${(e as NF1Error).kind ?? ""} ${(e as Error).message}`));
 });
 
 // The fragment: read once, then cleared.
