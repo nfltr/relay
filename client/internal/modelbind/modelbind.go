@@ -17,12 +17,7 @@ import (
 // module yet: id -> where the row comes from. Every bindings test and
 // client's TestEveryModelBindingHasARow exempt these ids, and each fails
 // once a pending id has a row, so the list cannot go stale.
-var Pending = map[string]string{
-	// spec/proverif/browser_peer.pv (nfltr
-	// docs/decisions/browser-peer-2026-11-16.md): the browser bundle's lane
-	// adds the bundle's row; the agent's rows are client/p2p's.
-	"browser.bundle": "the browser bundle's lane (BP4): its hash check",
-}
+var Pending = map[string]string{}
 
 // Check compares the BIND ids model (a model's source) declares that id
 // matches (its first group), less the pending ones, with a test's rows. A
