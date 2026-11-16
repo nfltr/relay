@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -206,12 +207,15 @@ func TestKeyFileOwnerOnly(t *testing.T) {
 	if err := SaveKey(path, key); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
-		t.Fatalf("key file mode %o, want 600", st.Mode().Perm())
-	}
 	got, err := LoadKey(path)
 	if err != nil || !got.Equal(key) {
 		t.Fatalf("LoadKey: %v", err)
+	}
+	if runtime.GOOS == "windows" {
+		return // modes are not ACLs there (LoadKey)
+	}
+	if st, _ := os.Stat(path); st.Mode().Perm() != 0o600 {
+		t.Fatalf("key file mode %o, want 600", st.Mode().Perm())
 	}
 	if err := os.Chmod(path, 0o644); err != nil {
 		t.Fatal(err)

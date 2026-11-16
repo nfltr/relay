@@ -28,6 +28,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -81,13 +82,15 @@ func SaveKey(path string, key *ecdsa.PrivateKey) error {
 }
 
 // LoadKey reads a key SaveKey wrote; a file group or others may read is
-// refused.
+// refused. Windows reports every writable file as 0666 whatever its ACL
+// says, so there the key is as private as its directory's ACL (the user
+// profile's) and the mode is not checked.
 func LoadKey(path string) (*ecdsa.PrivateKey, error) {
 	st, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
-	if st.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 {
 		return nil, fmt.Errorf("machine key %s: mode %o, want 0600 (owner only)", path, st.Mode().Perm())
 	}
 	b, err := os.ReadFile(path) // #nosec G304 -- the machine's own key file
