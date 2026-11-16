@@ -273,3 +273,16 @@ orghosted unsigned-move-order FTTFTFTTFFFF
 orghosted any-member-commands TTTTFTTTFFFF
 orghosted service-key-certifies TTTTTTFTFFFF
 orghosted ignore-root-crl TTTTTTTFFFFF
+#
+# app_enrol (nfltr docs/decisions/app-device-identity-2026-11-16.md): an
+# app's device enrolled for a person by sign-in (OIDC code + PKCE, the
+# nonce committing both keys) or by an admin code. 1-4 hold; 5-8 are
+# witnesses (8: a leaked code enrols its own person and app once, the
+# residual enrol.pv states). Each mutant fails the queries it targets.
+app_enrol - TTTTFFFF
+app_enrol no-aud-check FFTFFFFF
+app_enrol no-nonce-check FTFTFFFF
+app_enrol no-nonce-check,nonce-relay-key-only FTFTFFFF
+app_enrol user-from-request FFFTFFFF
+app_enrol renew-takes-attrs FFFFFFFF
+app_enrol no-app-check TTFTFFFF

@@ -961,7 +961,44 @@ binding prevents (a second recipient after a re-send) is `OrgMove.tla`'s
 `TestOrgMoveModelBindings`, `BIND:renew.*` orgpki's
 `TestIssuerRenewalModelBindings` (`make spec-bindings`).
 
-Environment assumptions of these two models, beside the table above:
+### app_enrol.pv: an app's device enrolled for a person (`org/`, design only)
+
+An app on a person's device makes a relay key `kr` and an organisation key
+`ko` and enrols `ko` by the person's sign-in at the organisation's IdP
+(OpenID Connect authorization code + PKCE, RFC 7636 / RFC 8252) whose ID
+token's nonce commits to both keys (OpenPubkey's key commitment), or by an
+admin code made for that person and app (an organisation token, as
+`enrol.pv`'s). The issuer takes a token only for an app client id the
+owner's rule names (`aud`) and only with the nonce of the keys in the
+request; the certificate names the person (email SAN) and the app (URI
+SAN); renewal keeps both; a service admits by app (`allow_app`) and logs
+or admits by person (`allow_user`). The attacker owns the relay (it reads
+every ID token and request), runs a rogue client `appX` at the same IdP
+(honest people sign in to it, with nonces it picks), holds a person `mal`'s
+account and enrolled device, and a leaked code for person `lc`. The
+lifecycle (sign-in bound renewal, re-authentication, revocation by person
+and by app) is `spec/appenrol/AppEnrol.tla`. The design is nfltr's
+`docs/decisions/app-device-identity-2026-11-16.md`; no code yet.
+
+| # | query | result |
+|---|---|---|
+| 1 | a person who enrols by sign-in (alice) is certified only for a key her own sign-in named, for the app it named | holds |
+| 2 | a person with an admin code (bob) only for a key his device made | holds |
+| 3 | a service admitting app1 takes a key an honest device of that person made for app1 (the attacker's `mal` and the leaked `lc` aside) | holds |
+| 4 | no certificate for the rogue client's app | holds |
+| 5-8 | witnesses: alice certified; bob certified; a service admits alice; the leaked code enrols its own person and app (the residual: one person and app, once) | attack (reachable), as they must |
+
+Mutants: `no-aud-check` (a token of any client id taken: 1, 2, 4 fail;
+the rogue client's tokens enrol alice and bob), `no-nonce-check` (1, 3:
+the relay attaches its own key to alice's token), `nonce-relay-key-only`
+(with `no-nonce-check`: the nonce commits only the relay key, the issuer
+checks only that: 1, 3), `user-from-request` (the code path takes the
+person from the request: 1, 2, 3), `renew-takes-attrs` (renewal takes the
+person and app from the request: 1-4), `no-app-check` (the service admits
+any app: 3). The binding rows (the nonce encoding, `BIND:app.nonce`; the
+app and person SANs, `BIND:app.attrs`) come with the code, lane APPID2.
+
+Environment assumptions of these models, beside the table above:
 
 | assumption | source |
 |---|---|
@@ -970,6 +1007,8 @@ Environment assumptions of these two models, beside the table above:
 | the receive key the owner types on the old machine is the one the new machine showed (an authentic channel: the owner's eyes and keyboard) | `orgmove.pv` |
 | a bootstrap token reaches its machine through the fleet's provisioning (cloud-init, a Kubernetes secret, MDM), not the relay | `enrol.pv` |
 | a 0600 file is readable only by its owner uid | POSIX |
+| the IdP authenticates the person, issues ID tokens only for the client id the person signed in to, and echoes the authorization request's nonce | OpenID Connect Core 1.0 §2, §3.1.2.1; `app_enrol.pv` |
+| a device's sessions with the IdP (the browser, the PKCE exchange) do not pass through the relay | RFC 8252 (loopback or claimed https redirect), TLS to the IdP; `app_enrol.pv` |
 
 ## Code map
 
@@ -1020,6 +1059,7 @@ Environment assumptions of these two models, beside the table above:
 | p2p_e2e.pv | client/p2p/rtcdata.go |
 | p2p_e2e.pv | client/p2p/p2p_e2e_bindings_test.go |
 | enrol.pv | org/orgpki/profile.go |
+| app_enrol.pv | org/orgpki/profile.go |
 | enrol.pv | org/orgpki/issuer.go |
 | enrol.pv | client/orgid/verify.go |
 | orgmove.pv | org/orgpki/renew.go |

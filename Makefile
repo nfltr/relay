@@ -254,6 +254,14 @@ spec-orgmove-traces:
 spec-orgmove-repeat:
 	./scripts/spec-orgmove.sh repeat
 
+# spec-appenrol-ci (in make ci, about a minute): an app's device enrolled
+# for a person, by sign-in or an admin code, its renewal bounded by the
+# sign-in, revocation by person and by app (spec/appenrol/README.md): the
+# invariants, every mutant, the witnesses and -coverage 1.
+.PHONY: spec-appenrol-ci
+spec-appenrol-ci:
+	./scripts/spec-appenrol.sh ci
+
 # Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
 # identical; its test is nfltr's scripts/check_spec_drift_test.sh): every
 # spec README's code-map entry exists, and the commits since origin/main
