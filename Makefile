@@ -31,6 +31,12 @@ LOAD_COUNT ?= 5
 test-under-load:
 	@test -n "$(PKGS)" || { echo "test-under-load: PKGS='<packages>' is required" >&2; exit 2; }
 	@./scripts/test-under-load.sh $(LOAD_COUNT) $(PKGS)
+# stress-flaky: every known-flaky test of scripts/flaky-tests.txt -race -count
+# STRESS_COUNT (10) under test-under-load (scripts/stress-flaky.sh); the CI
+# runners hammer them with `ci-request TARGET=stress-flaky`.
+.PHONY: stress-flaky
+stress-flaky:
+	@./scripts/stress-flaky.sh
 
 # FUZZTIME per target (default 10s).
 fuzz-short:
