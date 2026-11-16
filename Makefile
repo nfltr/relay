@@ -107,6 +107,17 @@ wasm-nf1:
 browser-bundle:
 	@WASM_NF1_MAX_BYTES=$(WASM_NF1_MAX_BYTES) WASM_NF1_MAX_GZIP_BYTES=$(WASM_NF1_MAX_GZIP_BYTES) ./scripts/browser-bundle.sh
 
+# browser-e2e: Playwright (TypeScript, browser/e2e) drives the unpacked
+# extension in Chromium against browser/e2e/harness (a relay core of the
+# version its go.mod names, nf1.websocket on, this checkout's agents):
+# session bytes, every close code's class, retries, a relay restart
+# mid-session, the direct path. $0, offline but for the first Chromium and
+# module downloads; not in make ci (make ci-request TARGET=browser-e2e).
+.PHONY: browser-e2e
+browser-e2e: browser-bundle
+	cd browser/e2e/harness && GOWORK=off go build -o ../.harness/harness .
+	cd browser && ./node_modules/.bin/tsc --noEmit -p . && ./node_modules/.bin/playwright install chromium && ./node_modules/.bin/playwright test -c e2e/playwright.config.ts
+
 # Fails when a _test.go file assigns a package-level variable of its package
 # (allow-list with reasons: scripts/testknobs-allow.txt). The tool lives in
 # proto (stdlib only) and runs from the repository root over both modules.
