@@ -138,8 +138,9 @@ stress-race:
 # spec-cltraces is its per-push slice (the stuck-handler test's CallLifecycle
 # traces, about 10 s; in make ci); spec-astraces another (the A2A E2EE
 # session tests' A2ASession traces, about 10 s; in make ci); spec-dgtraces
-# another (client/dgram's DatagramAssoc traces; in make ci).
-.PHONY: spec spec-mutants spec-traces spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-proverif spec-bindings
+# another (client/dgram's DatagramAssoc traces; in make ci); spec-bptraces
+# another (client/p2p's browser direct path BrowserPeer traces; in make ci).
+.PHONY: spec spec-mutants spec-traces spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-bptraces spec-proverif spec-bindings
 spec:
 	./scripts/spec.sh check
 spec-mutants:
@@ -158,6 +159,8 @@ spec-dgtraces:
 # seconds; in make ci).
 spec-ptraces:
 	./scripts/spec.sh ptraces
+spec-bptraces:
+	./scripts/spec.sh bptraces
 # The ProVerif models (spec/proverif/README.md): every line of
 # spec/proverif/expect.txt, mutants included (in make ci).
 spec-proverif:

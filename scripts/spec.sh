@@ -36,6 +36,12 @@
 #            against spec/TraceDirectPunch.tla; each
 #            spec/testdata/reject-directpunch-* fixture rejected (in make
 #            ci; traces runs it too).
+#   bptraces  client/p2p's browser direct path tests (BP_TRACE_TESTS,
+#            default a two-stream session and a visitor closing its
+#            connection; traces runs every TestBrowserDirect and the
+#            bindings rows), with -tags relaytrace; each control session's
+#            trace checked against spec/TraceBrowserPeer.tla; each
+#            spec/testdata/reject-browserpeer-* fixture rejected (in make ci).
 #   astraces  client/rpcclient's A2A E2EE session tests (AS_TRACE_TESTS,
 #            default the retry, restart, forged-unknown, warm, revoke and
 #            rotation ones; traces runs every TestA2AE2EE), each in its own
@@ -451,6 +457,70 @@ dgrun() {
 	return $fail
 }
 
+# bptrace FILE: TLC on a recorded BrowserPeer trace
+# (spec/TraceBrowserPeer.tla); 0 when accepted. Its TLC output: FILE.out.
+bptrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    N <- TraceN
+    MaxDC <- TraceMaxDC
+    MaxFail <- TraceLen
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    AtMostOnce
+    PCOnlyAdmitted
+    DCOnPC
+    DCBounded
+    TraceNotDone
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceBrowserPeer.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
+# bprun TESTS: the fixtures, then client/p2p's tests TESTS with the
+# recorder; every control session's trace checked.
+bprun() {
+	bpgo=$(cat client/p2p/browserpeer.go | grep -v '^//' | grep -ohE '(emit|step)\("[A-Za-z]+"' | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u)
+	for e in $(grep -oE 'E\.ev = "[A-Za-z]+"' spec/TraceBrowserPeer.tla | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u); do
+		[ "$e" = Serve ] && continue
+		echo "$bpgo" | grep -qx "$e" || { echo "spec/TraceBrowserPeer.tla: event $e is recorded by no step of client/p2p browserpeer.go"; return 1; }
+	done
+	for f in spec/testdata/reject-browserpeer-*.ndjson; do
+		cp "$f" "$work/"
+		if bptrace "$work/$(basename "$f")"; then
+			echo "$f: accepted, want rejected"
+			return 1
+		fi
+		grep -q 'distinct states found' "$work/$(basename "$f").out" || { echo "$f: TLC failed:"; tail -20 "$work/$(basename "$f").out"; return 1; }
+		echo "$f: rejected"
+	done
+	mkdir -p "$work/bptraces"
+	(cd client && RELAYTRACE=$work/bptraces go test -tags relaytrace -count=1 -run "$1" ./p2p/) >"$work/bptest.out" 2>&1 || {
+		cat "$work/bptest.out"
+		return 1
+	}
+	nt=0
+	for f in "$work"/bptraces/browserpeer-*.ndjson; do
+		[ -s "$f" ] || continue
+		nt=$((nt + 1))
+		if bptrace "$f"; then
+			echo "trace $(basename "$f"): $(wc -l <"$f" | tr -d ' ') lines: accepted"
+		else
+			echo "trace $(basename "$f"): REJECTED"
+			grep -E 'Error|unknown event' "$f.out" | head -5
+			fail=1
+		fi
+	done
+	echo "$nt traces"
+	[ "$nt" -gt 0 ] || fail=1
+	return $fail
+}
+
 fail=0
 cfg=
 # The punch tests ptraces records: a learned winner, an offered winner, a
@@ -665,6 +735,12 @@ cltraces)
 	# late frame reaches the target.
 	clrun "${CL_TRACE_TESTS:-^TestStuckHandlerDoesNotHoldTheReceiveLoop$}" "${CL_TRACE_COUNT:-3}"
 	;;
+bptraces)
+	# The per-push slice: a session with two streams and one whose
+	# visitor closed its connection.
+	bprun "${BP_TRACE_TESTS:-^TestBrowserDirect(ServesStreamsOnDataChannels|VisitorConnectionGone)\$}" || fail=1
+	exit $fail
+	;;
 dgtraces)
 	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || fail=1
 	exit $fail
@@ -736,8 +812,9 @@ traces)
 	asrun "${AS_TRACE_TESTS:-^TestA2AE2EE}" || exit 1
 	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || exit 1
 	prun "${P_TRACE_TESTS:-$PTESTS}" || exit 1
+	bprun "${BP_TRACE_TESTS:-^(TestBrowserDirect|TestBrowserPeerModelBindings)}" || exit 1
 	for f in spec/testdata/reject-*.ndjson; do
-		case $f in *reject-callcredit-* | *reject-calllifecycle-* | *reject-directpunch-*) continue ;; esac
+		case $f in *reject-callcredit-* | *reject-calllifecycle-* | *reject-directpunch-* | *reject-browserpeer-*) continue ;; esac
 		cp "$f" "$work/"
 		if trace "$work/$(basename "$f")" 1 2; then
 			echo "$f: accepted, want rejected"
@@ -783,7 +860,7 @@ traces)
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
 	;;
 *)
-	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|ptraces|cctraces FILE..." >&2
+	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|ptraces|bptraces|cctraces FILE..." >&2
 	exit 2
 	;;
 esac

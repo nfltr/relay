@@ -18,12 +18,10 @@ import (
 // client's TestEveryModelBindingHasARow exempt these ids, and each fails
 // once a pending id has a row, so the list cannot go stale.
 var Pending = map[string]string{
-	// spec/proverif/browser_peer.pv: a design (nfltr
-	// docs/decisions/browser-peer-2026-11-16.md); the browser bundle's lane
-	// adds the rows.
+	// spec/proverif/browser_peer.pv (nfltr
+	// docs/decisions/browser-peer-2026-11-16.md): the browser bundle's lane
+	// adds the bundle's row; the agent's rows are client/p2p's.
 	"browser.bundle": "the browser bundle's lane (BP4): its hash check",
-	"browser.dc.nf1": "the browser bundle's lane (BP4): a data channel's own nf1 handshake",
-	"browser.signal": "the agent's browser-peer lane (BP3): SDP only after Admit",
 }
 
 // Check compares the BIND ids model (a model's source) declares that id

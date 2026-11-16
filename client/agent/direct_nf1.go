@@ -45,7 +45,19 @@ import (
 const (
 	nf1MarkControl = 'C'
 	nf1MarkAttach  = 'A'
+	nf1MarkBrowser = 'B' // a browser visitor's control session (HintBrowser)
 )
+
+// BrowserDirect serves the direct path of an nf1 service's browser
+// visitors (Service.BrowserDirect): client/p2p's BrowserDirect, an
+// interface here so an agent that serves none links no WebRTC.
+// ServeBrowser takes a control session after the answer and the mark,
+// admits it and serves its connection's data channels, each an nf1
+// session of l handed to serve once admitted; it closes ctl and returns
+// once the control session, its connection and every stream ended.
+type BrowserDirect interface {
+	ServeBrowser(ctx context.Context, ctl net.Conn, l *nf1.Listener, serve func(ctx context.Context, tc net.Conn))
+}
 
 // nf1SNIPrefix starts the server name of an nf1 session's direct
 // connection: nf1SNIPrefix + hex(HMAC(session key, nf1SNILabel)[:16]),
@@ -66,9 +78,10 @@ func nf1SNI(key []byte) string {
 func isNF1SNI(name string) bool { return strings.HasPrefix(name, nf1SNIPrefix) }
 
 // serveNF1Direct serves a session of an nf1 service whose listener takes
-// direct paths, its open accepted: the answer, then by the client's first
-// byte a plain session, a framed one (movable once admitted), a control
-// exchange or a re-attach. The service's target is dialled only for the
+// direct paths or browser visitors' data channels, its open accepted: the
+// answer, then by the client's first byte a plain session, a framed one
+// (movable once admitted), a control exchange, a re-attach or a browser
+// visitor's control session (p.browser; d nil without direct paths). The service's target is dialled only for the
 // first two, after that byte: a control exchange or a re-attach never
 // reaches it, and never fails because it is busy or down (a target that
 // cannot be reached resets the session, since its open was accepted).
@@ -89,6 +102,10 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 		_ = nf1.AbortDirectRequired(s)
 		return
 	}
+	if first != tlsRecordHandshake && first != nf1MarkBrowser && d == nil {
+		_ = s.Close() // the listener takes no direct paths: a mark of theirs is no session
+		return
+	}
 	switch first {
 	case tlsRecordHandshake:
 		target := dialNF1Target(ctx, p, ps, logger)
@@ -96,6 +113,20 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 			return
 		}
 		join(admitNF1(ctx, l, ps, logger), target)
+	case nf1MarkBrowser:
+		if p.browser == nil {
+			_ = s.Close()
+			return
+		}
+		p.browser.ServeBrowser(ctx, s, l, func(ctx context.Context, tc net.Conn) { // s: the mark consumed
+			target, _, err := p.dial(ctx)
+			if err != nil {
+				logger.Warn("nf1 browser direct path: dial target failed", "target", p.target, "error", err)
+				_ = tc.Close()
+				return
+			}
+			_ = peerlink.Join(tc, target)
+		})
 	case nf1MarkControl:
 		tc := admitNF1(ctx, l, s, logger) // s: the mark consumed
 		if tc == nil {

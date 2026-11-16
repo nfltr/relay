@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"context"
 	"crypto/tls"
 	"io"
 	"log/slog"
@@ -109,5 +110,80 @@ func TestNF1ServiceRegistrations(t *testing.T) {
 	}
 	if err := capaddr.CheckRegistration("relay.example", lu.Address().RID, regs[lu.Address().RID]); err != nil {
 		t.Fatalf("a's udp proof: %v", err)
+	}
+}
+
+// fakeBrowser stands in for client/p2p's BrowserDirect: it admits the
+// control session and serves it as if it were a data channel's stream.
+type fakeBrowser struct{}
+
+func (fakeBrowser) ServeBrowser(ctx context.Context, ctl net.Conn, l *nf1.Listener, serve func(context.Context, net.Conn)) {
+	tc, err := l.Admit(ctx, ctl)
+	if err != nil {
+		_ = ctl.Close()
+		return
+	}
+	serve(ctx, tc)
+}
+
+// TestNF1BrowserDirectService: a service with a browser direct path says
+// so in its signed hints, hands a session marked for it to its
+// BrowserDirect, whose streams reach the target; an unmarked session is
+// served as before, a direct-path mark without direct paths is closed
+// (nfltr docs/decisions/browser-peer-2026-11-16.md, lane BP3).
+func TestNF1BrowserDirectService(t *testing.T) {
+	l, _, err := nf1.Mint("relay.example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := echoServer(t)
+	table, err := NewServiceTable([]Service{{Name: "clip", Kind: agentservices.TCP, E2EE: agentservices.E2EEOn, Target: target, NF1: l, BrowserDirect: fakeBrowser{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := planOpen(&pb.TCPData{TargetAddr: "clip", E2Ee: true, Answer: true}, sessionTargets{services: table}, nil)
+	if err != nil || p.kind != sessionNF1Direct || p.browser == nil || p.direct != nil {
+		t.Fatalf("plan = %+v, %v", p, err)
+	}
+	open := func(mark byte) net.Conn {
+		c, s := net.Pipe()
+		go serveNF1Direct(t.Context(), s, p, slog.New(slog.DiscardHandler))
+		hints, err := nf1.ReadAnswer(c, l.Address())
+		if err != nil || !nf1.TakesBrowser(hints) {
+			t.Fatalf("answer hints %q, %v: want %q", hints, err, nf1.HintBrowser)
+		}
+		if mark != 0 {
+			if _, err := c.Write([]byte{mark}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return c
+	}
+	for _, mark := range []byte{nf1MarkBrowser, 0} {
+		c := open(mark)
+		tc, err := nf1.ClientTLS(t.Context(), c, l.Address())
+		if err != nil {
+			t.Fatalf("mark %q: %v", mark, err)
+		}
+		if _, err := tc.Write([]byte("hi")); err != nil {
+			t.Fatal(err)
+		}
+		b := make([]byte, 2)
+		if _, err := io.ReadFull(tc, b); err != nil || string(b) != "hi" {
+			t.Fatalf("mark %q: echo %q, %v", mark, b, err)
+		}
+		_ = c.Close()
+	}
+	c := open(nf1MarkControl)
+	if _, err := c.Read(make([]byte, 1)); err == nil {
+		t.Fatal("a direct-path control mark was served without direct paths")
+	}
+	for _, bad := range []Service{
+		{Name: "a", Kind: agentservices.TCP, E2EE: agentservices.E2EEOn, Target: target, BrowserDirect: fakeBrowser{}},
+		{Name: "a", Kind: agentservices.UDP, E2EE: agentservices.E2EEOn, Target: target, NF1: l, BrowserDirect: fakeBrowser{}},
+	} {
+		if _, err := NewServiceTable([]Service{bad}); err == nil {
+			t.Errorf("NewServiceTable(%+v) accepted", bad)
+		}
 	}
 }

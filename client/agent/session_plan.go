@@ -32,7 +32,7 @@ const (
 	sessionE2EETCP                      // organisation TLS ended here, bytes to a tcp service's target
 	sessionDirect                       // the reserved DirectServiceName, served in process
 	sessionNF1                          // a capability address's listener here, bytes to a tcp service's target
-	sessionNF1Direct                    // ... whose listener takes direct paths: the target dialled only for a session, after its first byte (direct_nf1.go)
+	sessionNF1Direct                    // ... whose listener takes direct paths or browser visitors' data channels: the target dialled only for a session, after its first byte (direct_nf1.go)
 )
 
 // sessionPlan is how one session is served.
@@ -49,6 +49,7 @@ type sessionPlan struct {
 	direct          *directServer  // ... the table's direct paths (nil: none); a sessionDirect's server
 	relay           *qadTarget     // ... a sessionDirect's, or a direct service's: the QAD of the relay its tunnel is on (nil: none offered)
 	nf1             *nf1.Listener  // a sessionNF1's
+	browser         BrowserDirect  // a sessionNF1Direct's browser direct path (nil: none)
 	queue           *SessionQueue  // the target in this process (Service.Queue); nil: dial target
 	caller          *pb.CallerIdentity
 }
@@ -104,6 +105,9 @@ func planOpen(open *pb.TCPData, targets sessionTargets, e2ee *e2eeTLSConfig) (se
 			if svc.nf1.TakesDirect() && targets.services.direct != nil {
 				p.kind, p.direct, p.relay = sessionNF1Direct, targets.services.direct, targets.relayQAD()
 				p.bind = serviceBind{agent: targets.agent, service: open.GetTargetAddr()}
+			}
+			if svc.browser != nil {
+				p.kind, p.browser = sessionNF1Direct, svc.browser
 			}
 			return p, nil
 		}

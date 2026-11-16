@@ -80,6 +80,13 @@ type Service struct {
 	// docs/decisions/nf1-rendezvous-2026-11-13.md); the relay finds the
 	// service by the address's rendezvous id, declared with it.
 	NF1 *nf1.Listener
+	// BrowserDirect lets an nf1 tcp service's browser visitors open their
+	// streams on WebRTC data channels to this machine (client/p2p
+	// BrowserDirect; nfltr docs/decisions/browser-peer-2026-11-16.md): its
+	// answer then says nf1.HintBrowser, and a session marked for it is a
+	// control session. nil, the default: the relay path only, no address of
+	// this machine shown to a visitor.
+	BrowserDirect BrowserDirect
 	// Queue is a tcp service's target in this process, instead of
 	// Target: its sessions wait there for Accept, which answers them
 	// (SessionQueue). One of Target and Queue.
@@ -141,6 +148,7 @@ type tableService struct {
 	groups  []string       // Service.AllowGroups
 	group   string         // Service.Group: published under it
 	nf1     *nf1.Listener  // Service.NF1: served under a capability address
+	browser BrowserDirect  // Service.BrowserDirect
 	queue   *SessionQueue  // Service.Queue: the target in this process
 }
 
@@ -200,6 +208,16 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 				return nil, err
 			}
 			e.nf1 = l
+		}
+		if s.BrowserDirect != nil {
+			if s.NF1 == nil || s.Kind != agentservices.TCP {
+				return nil, fmt.Errorf("service %q: a browser direct path needs a tcp service under a capability address (nf1)", s.Name)
+			}
+			l, err := e.nf1.WithBrowser()
+			if err != nil {
+				return nil, err
+			}
+			e.nf1, e.browser = l, s.BrowserDirect
 		}
 		switch s.Kind {
 		case agentservices.TCP:

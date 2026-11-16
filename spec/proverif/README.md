@@ -740,7 +740,7 @@ leaked address is a capability: revoking it is stopping the server (no
 rotation, no relay state across opens: nfltr's cli-cat decision, "TLA+:
 none").
 
-### browser_peer.pv: an nf1 address opened in a browser (lane BROWSERPEER; design, no code yet)
+### browser_peer.pv: an nf1 address opened in a browser (lane BROWSERPEER)
 
 The design is nfltr's `docs/decisions/browser-peer-2026-11-16.md`. A
 visitor opens an `nf1` address in a browser extension's page: the address
@@ -778,12 +778,16 @@ bytes under DTLS alone, to the fingerprint the relay's signaling gave: 2,
 5), `dc-no-proof` (the agent serves a data channel without the proof: 3,
 5-7), `signal-before-admit` (8).
 
-Bindings, pending until their code (`client/internal/modelbind` Pending):
-`BIND:browser.bundle` (the extension's code hash is the release's),
-`BIND:browser.dc.nf1` (a data channel's bytes only after its own `nf1`
-handshake), `BIND:browser.signal` (the agent's SDP only after `Admit`,
-inside the TLS). Code map: none yet; the lanes that build the bundle and
-the agent's side add their rows and the binding tests.
+Bindings: `BIND:browser.dc.nf1` (a data channel's bytes only after its
+own `nf1` handshake: a stream whose proof is under a second address of
+the agent's key is refused before the service) and `BIND:browser.signal`
+(the agent's SDP only after `Admit`, inside the TLS: a control session
+under that second address, or one sending its offer in the clear, gets no
+answer and no connection) are the agent's, `client/p2p`
+`browser_peer_bindings_test.go` (lane BP3; each row fails against its
+mutant planted in `browserpeer.go`). `BIND:browser.bundle` (the
+extension's code hash is the release's) stays pending in
+`client/internal/modelbind` until the bundle's lane (BP4).
 
 ### nf1_anon.pv: an nf1 address served with no account, direct only (lane NF1ANON; design, no code yet)
 

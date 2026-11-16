@@ -67,6 +67,16 @@ var nf1Bindings = map[string]func(t *testing.T){
 			return err
 		})
 		refusedBy(t, "a direct-path hint the record does not cover (cap_address.pv hint-unbound)", err, capaddr.ErrRendezvous)
+		_, err, _ = run(t, l.Address(), func(s net.Conn) error {
+			_, err := s.Write(appendAnswer(nil, l.spki, l.rec, []byte(HintBrowser)))
+			return err
+		})
+		refusedBy(t, "a browser hint the record does not cover (a page would try a direct path the agent never offered)", err, capaddr.ErrRendezvous)
+		if b, err := l.WithDirect(); err != nil {
+			t.Fatal(err)
+		} else if bb, err := b.WithBrowser(); err != nil || string(bb.hints) != "d1,b1" || !bb.TakesBrowser() || !bb.TakesDirect() {
+			t.Fatalf("hints %q %v", bb.hints, err)
+		}
 	},
 	// The dial's kind against the record's hints (u1 or none): a stream
 	// dial to a datagram service's honest answer, a datagram dial to a

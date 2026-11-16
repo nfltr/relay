@@ -64,7 +64,15 @@ const HintDatagram = "u1"
 // it breaks the record (exit 7).
 const HintAnonymous = "a1"
 
-// Hints are a comma-separated list of flags ("d1", "u1", "d1,u1"),
+// HintBrowser is the rendezvous hints' flag of a listener whose agent
+// takes browser visitors' data channels (nfltr
+// docs/decisions/browser-peer-2026-11-16.md section 5): the record signs
+// it, so a page tries the direct path only when the agent said so; after
+// the answer the page's first byte picks a control session (client/agent
+// direct_nf1.go).
+const HintBrowser = "b1"
+
+// Hints are a comma-separated list of flags ("d1", "u1", "a1", "b1", "d1,b1"),
 // signed by the record.
 func hasHint(hints []byte, h string) bool {
 	for f := range strings.SplitSeq(string(hints), ",") {
@@ -223,10 +231,23 @@ func (l *Listener) WithDatagram() (*Listener, error) { return l.withHint(HintDat
 // address served with no credential.
 func (l *Listener) WithAnonymous() (*Listener, error) { return l.withHint(HintAnonymous) }
 
-// withHint adds flag h to l's signed hints, in the order d1, u1, a1.
+// WithBrowser is a copy of l whose rendezvous answer says it takes
+// browser visitors' data channels (HintBrowser, signed): the services table
+// makes it for a service with Service.BrowserDirect.
+func (l *Listener) WithBrowser() (*Listener, error) { return l.withHint(HintBrowser) }
+
+// TakesBrowser reports whether checked hints (CheckAnswer accepted them)
+// say the agent takes browser visitors' data channels.
+func TakesBrowser(hints []byte) bool { return hasHint(hints, HintBrowser) }
+
+// TakesBrowser reports whether l's answer says it takes browser visitors'
+// data channels.
+func (l *Listener) TakesBrowser() bool { return TakesBrowser(l.hints) }
+
+// withHint adds flag h to l's signed hints, in the order d1, u1, a1, b1.
 func (l *Listener) withHint(h string) (*Listener, error) {
 	var flags []string
-	for _, f := range []string{HintDirect, HintDatagram, HintAnonymous} {
+	for _, f := range []string{HintDirect, HintDatagram, HintAnonymous, HintBrowser} {
 		if f == h || hasHint(l.hints, f) {
 			flags = append(flags, f)
 		}

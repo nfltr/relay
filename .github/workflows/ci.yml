@@ -45,7 +45,7 @@ jobs:
       # semgrep (docker, pinned image and rules), gated by
       # scripts/semgrep-baseline.txt: a finding landed unnoticed while it was not here.
       - run: make check-semgrep
-      - run: make spec spec-mutants spec-cltraces spec-astraces spec-dgtraces spec-ptraces
+      - run: make spec spec-mutants spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-bptraces
       # the organisation issuer's models (spec/enrol, spec/orgmove)
       - run: make spec-enrol-ci spec-orgmove-ci
       # ProVerif is built from source once (scripts/fetch-proverif.sh).

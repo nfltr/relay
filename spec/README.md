@@ -807,7 +807,7 @@ depth 33, about 5 min. Every action taken in each (`-coverage 1`); the
 14 UDP mutants and witnesses about 20 s. Code map: none yet; the lane
 that builds `client/udpflow` adds it with a trace recorder.
 
-## BrowserPeer.tla: an nf1 address in a browser, its paths' lifecycle (design, no code yet)
+## BrowserPeer.tla: an nf1 address in a browser, its paths' lifecycle
 
 Lane BROWSERPEER (2026-11-16). The design is nfltr's
 `docs/decisions/browser-peer-2026-11-16.md`; its keys are
@@ -831,11 +831,13 @@ its connection), `DCBounded` (at most `MaxDC` at once); properties
 failed to the app). Mutants, each caught: `BP:retry-other-path`
 (`AtMostOnce`), `BP:pc-before-admit` (`PCOnlyAdmitted`), `BP:no-dc-cap`
 (`DCBounded`), `BP:pc-outlives-ctl` (`Reaped`), `BP:dc-without-pc`
-(`DCOnPC`), `BP:no-break` (`StreamsEnd`). Witnesses, each violated:
+(`DCOnPC`), `BP:no-break` (`StreamsEnd`). A data-channel stream whose own
+`nf1` handshake fails is refused (`Refuse`, lane BP3: the agent's proof
+check on each channel). Witnesses, each violated:
 `W_DoneDC`, `W_DoneWSAfterFail` (a stream done over the relay after the
 connection failed), `W_Failed`, `W_ReapedAfterCtl`.
 
-| action | design (no Go yet) |
+| action | design |
 |---|---|
 | `CtlOpen`, `CtlAdmit` | the page's control session over the WebSocket: the `nf1` handshake, the agent's `Admit` |
 | `CtlEnd` | the tab closes, the relay cuts the WebSocket, the agent drops the session |
@@ -845,6 +847,7 @@ connection failed), `W_Failed`, `W_ReapedAfterCtl`.
 | `OpenDC(s)`, `OpenWS(s)` | the page opens a stream: a data channel under the cap, else a WebSocket |
 | `Deliver(s)`, `Complete(s)` | the stream's `nf1` handshake and request reach the service; its answer reaches the page |
 | `Break(s)` | a data channel's connection is gone: the stream fails to the app |
+| `Refuse(s)` | a data channel's own `nf1` handshake fails (its proof, its TLS): the stream fails to the app |
 
 | assumption | source |
 |---|---|
@@ -853,10 +856,41 @@ connection failed), `W_Failed`, `W_ReapedAfterCtl`.
 | A request carried on a broken path may or may not have reached the service | the abstraction of `Deliver` before `Break` |
 
 `BrowserPeer.cfg` (three streams, `MaxDC` 2, one connection failure):
-invariants and both properties, 4,379 distinct states, depth 17, about
+invariants and both properties, 4,902 distinct states, depth 17, about
 10 s; every action taken (`-coverage 1`); the 6 mutants and 4 witnesses
-about 20 s. Code map: none yet; the lanes that build the bundle and the
-agent's browser-peer side add it with a trace recorder.
+about 20 s.
+
+### Code map (BrowserPeer.tla)
+
+Lane BP3 (2026-11-16) built the agent's side, `client/p2p`
+`browserpeer.go` (`BrowserDirect`), served from `client/agent`
+`direct_nf1.go` for a session whose answer said `nf1.HintBrowser` and whose
+first byte is the visitor's mark. The page's side (`OpenWS`, its choice of
+path) is the browser bundle's (lane BP4). One `mu` per control session
+orders the agent's steps; a step's trace line is written under it.
+
+| actions | code |
+|---|---|
+| `CtlOpen`, `CtlAdmit`, `CtlEnd`, `Offer` (`run`, `answer`, `end`); `PCUp`, `PCFail`, `Reap` (`onState`, `upLocked`, `reapLocked`); `OpenDC`, `Deliver`, `Complete`, `Break`, `Refuse` (`onDataChannel`, `stream`) | client/p2p/browserpeer.go |
+| the control session's dispatch (the mark after a `HintBrowser` answer) | client/agent/direct_nf1.go |
+| `HintBrowser` in the signed record | client/nf1/nf1.go |
+
+### BrowserPeer traces
+
+`make spec-bptraces` (in `make ci`; `scripts/spec.sh bptraces`) runs
+client/p2p's browser tests with `-tags relaytrace` (recorder
+`client/p2p/browserpeer_trace_on.go`, one file per control session) and
+checks each trace with `TraceBrowserPeer.tla`: every line one action of
+`BrowserPeer` with the run's `MaxDC` (its `Serve` line), the trace's
+streams, connection failures bounded by its length. A connection the
+visitor closed is a failure to the agent (`PCFail`). It fails on a
+`TraceBrowserPeer.tla` event that `browserpeer.go` never records. The
+fixtures `testdata/reject-browserpeer-*` are rejected: a stream delivered
+twice (`AtMostOnce`), an offer before admission (`PCOnlyAdmitted`), a
+channel past the cap (`DCBounded`), a channel after the reap (`DCOnPC`),
+a stream completed on a failed connection (`no-break`). The nightly
+`make spec-traces` runs every `TestBrowserDirect` and the bindings rows
+(which take `Refuse`).
 
 ## DatagramAssoc.tla: datagram sessions between identities
 
