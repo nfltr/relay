@@ -68,7 +68,7 @@ type directSession struct {
 	// lost ends an anonymous address's session at its current stream's
 	// end (never re-attached: anonLost); nil for every other session
 	lost func()
-	sni  string        // ... the server name its direct connection asks for (nf1SNI)
+	sni  string // ... the server name its direct connection asks for (nf1SNI)
 	// revoke is a udp service's association on the session (setDirect):
 	// a revocation tells its flows why before the session ends.
 	revoke atomic.Pointer[dgram.Server]
