@@ -95,7 +95,7 @@ witnesses `WitnessMoved`, `WitnessMovedBack`, `WitnessBackUnpublished`,
 yet (gap: the holds are relay state; the move's own recorder covers the
 fence, send and import).
 
-## `OrgHosted.tla`: the opt-in hosted issuer (design, no code yet)
+## `OrgHosted.tla`: the opt-in hosted issuer (verifier side and the root's CRL of issuers built, lane ORGH1; the hosting itself is design)
 
 The design is nfltr's `docs/decisions/org-hosted-issuer-2026-11-16.md`.
 The owner keeps the root and the recovery key; the issuer key moves onto a
@@ -216,6 +216,24 @@ abstracts a host to its issuer directory); orgenrol
 `spec/proverif/orgmove.pv`) are orgissuer's `TestOrgMoveModelBindings`
 (`make spec-bindings`).
 
+`OrgHosted.tla`'s verifier side has its own trace check,
+`TraceOrgHosted.tla`, over the lines relay client `orgid`'s verifier
+writes under `ENROLTRACE` (the files `spec/enrol/TraceEnrol.tla` checks
+too): `itake` (the root's CRL of issuers taken, or refused: a replay, or
+`why` `sig`, not the root's), `rotate`, and `check`, whose `is`, `ie` and
+`u` are the issuer certificate's serial and NotAfter and the admission's
+Until. It keeps DelegationBound (`u` at most the leaf's and the issuer's
+NotAfter: `until-leaf-only`), RevokedIssuerRefused (no admission through an
+issuer certificate a taken CRL of issuers lists: `ignore-root-crl`) and
+Conforms (a CRL of issuers taken by a higher Number only).
+`scripts/spec-orgmove.sh htraces` (in `traces`) runs every test of
+`client/orgid`, `org/orgmachine` and `org/orgenrol` that way and checks
+each trace that holds an `itake` or a `check`, then the fixtures
+`traces/hosted/<Invariant>-*.ndjson` (also in `ci`). The time steps of
+OrgHosted.tla (Tick) and its hosted-side actions (Fence, Import,
+Compromise, OwnerActivate) have no line: nothing in the code does them
+yet (the hosting lanes H2, H3).
+
 ## Code map
 
 | spec | code |
@@ -230,3 +248,6 @@ abstracts a host to its issuer directory); orgenrol
 | OrgHosted.tla | client/orgid/verify.go |
 | OrgHosted.tla | org/orgpki/profile.go |
 | OrgHosted.tla | org/orgpki/renew.go |
+| OrgHosted.tla | org/orgpki/issuercrl.go |
+| OrgHosted.tla | org/orgenrol/issuer.go |
+| TraceOrgHosted.tla | client/orgid/verify.go |

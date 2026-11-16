@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"os"
 	"path/filepath"
 	"slices"
@@ -445,6 +446,7 @@ func (s *service) sealMachineKey(iss *orgpki.Issuer, tokenID string, der []byte,
 // then publishes the root and the CRL the relay does not hold.
 func (s *service) maintain(ctx context.Context, now time.Time) error {
 	var root, rec, crl, issuer, issuers []byte
+	var rootCert *x509.Certificate
 	var crlErr error // ErrIssuerExpired: the root is still published
 	err := s.with(func(iss *orgpki.Issuer, st *orgissuer.Store) error {
 		der, err := st.ReadCRL()
@@ -468,7 +470,7 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 		if issuers, err = st.ReadIssuers(); err != nil {
 			return err
 		}
-		root, rec, crl, issuer = iss.Root().Raw, iss.Recovery().Raw, der, iss.Cert().Raw
+		rootCert, root, rec, crl, issuer = iss.Root(), iss.Root().Raw, iss.Recovery().Raw, der, iss.Cert().Raw
 		traceRead(s.Dir, der) // under the lock (RevokePush.tla Read)
 		return nil
 	})
@@ -476,10 +478,25 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 		return err
 	}
 	if pub := slices.Concat(root, issuers); !bytes.Equal(pub, s.pubRoot) || now.Sub(s.pubRootAt) >= rootEvery {
+		// The owner's machine may have published a newer CRL of issuers
+		// itself (a revoke this issuer did not publish): kept, not
+		// overwritten.
+		if data, err := latest(ctx, s.Mailbox, orgpki.RootMailbox(s.org), 0); err == nil && newerIssuers(data, rootCert, issuers) != nil {
+			err := s.with(func(_ *orgpki.Issuer, st *orgissuer.Store) error {
+				held, err := st.ReadIssuers()
+				if n := newerIssuers(data, rootCert, held); err == nil && n != nil {
+					issuers, err = n, st.WriteIssuers(n)
+				}
+				return err
+			})
+			if err != nil {
+				return err
+			}
+		}
 		if err := s.publish(ctx, orgpki.RootMailbox(s.org), orgpki.RootMessage{Root: root, Recovery: rec, Issuers: issuers}); err != nil {
 			return fmt.Errorf("root: %w", err)
 		}
-		s.pubRoot, s.pubRootAt = pub, now
+		s.pubRoot, s.pubRootAt = slices.Concat(root, issuers), now
 	}
 	if crlErr != nil {
 		return crlErr
@@ -492,6 +509,34 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 		s.pubCRL, s.pubCRLIssuer = crl, issuer
 	}
 	return nil
+}
+
+// newerIssuers is the root's CRL of issuers in a RootMessage payload when
+// root signed it and its Number is above held's (nil held: any); nil
+// otherwise. The relay can forge none of it: it is the root's signature.
+func newerIssuers(payload []byte, root *x509.Certificate, held []byte) []byte {
+	var rm orgpki.RootMessage
+	if json.Unmarshal(payload, &rm) != nil {
+		return nil
+	}
+	n := issuersNumber(rm.Issuers, root)
+	if h := issuersNumber(held, root); n == nil || (h != nil && n.Cmp(h) <= 0) {
+		return nil
+	}
+	return rm.Issuers
+}
+
+// issuersNumber is the Number of der, a CRL of issuers root signed; nil
+// when it is not one.
+func issuersNumber(der []byte, root *x509.Certificate) *big.Int {
+	if der == nil {
+		return nil
+	}
+	c, err := x509.ParseRevocationList(der)
+	if err != nil || c.CheckSignatureFrom(root) != nil {
+		return nil
+	}
+	return c.Number
 }
 
 func signedBy(crl []byte, issuer *x509.Certificate) bool {

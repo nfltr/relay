@@ -35,6 +35,6 @@ push-only | follow.go | 		if time.Since(fresh) >= every { | 		if fresh.IsZero() 
 crl-no-wake-on-rotation | follow.go | 			again = retry() // before apply: a rotation taken meanwhile closes it | 			_ = retry | TestFollowTakesTheNewIssuersCRLAtTheRotation
 until-leaf-only | verify.go | 	for _, c := range chains[0] { // the leaf, its issuer, the root: a stolen issuer key signs a leaf past its own NotAfter (OrgHosted.tla DelegationBound) | 	for _, c := range chains[0][:1] { | TestOrgHostedModelBindings
 ignore-root-crl | verify.go | 	if v.issuers != nil && v.issuers.revoked[iss.SerialNumber.String()] { | 	if false { | TestOrgHostedModelBindings
-root-crl-unsigned | verify.go | 	if err := crl.CheckSignatureFrom(v.root); err != nil { | 	if err := error(nil); err != nil { | TestOrgHostedModelBindings
+root-crl-unsigned | verify.go | 	err = crl.CheckSignatureFrom(v.root) | 	err = nil | TestOrgHostedModelBindings
 reload-skips-issuers | identity.go | 	newIssuers := issuers != nil && !bytes.Equal(issuers, m.issuers) && m.ver.TakeIssuerCRL(issuers) == nil | 	newIssuers := false && issuers != nil | TestRootRevocationOfTheIssuerCutsHeldSessions
 keep-sessions | identity.go | 	if newCRL || newCert || newIssuers { | 	if newCRL || newCert { | TestRootRevocationOfTheIssuerCutsHeldSessions

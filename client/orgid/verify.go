@@ -147,13 +147,22 @@ func (v *Verifier) TakeIssuerCRL(der []byte) error {
 	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if err := crl.CheckSignatureFrom(v.root); err != nil {
+	rev := []string{}
+	for _, e := range crl.RevokedCertificateEntries {
+		rev = append(rev, hex.EncodeToString(e.SerialNumber.Bytes()))
+	}
+	line := map[string]any{"ev": "itake", "v": fmt.Sprintf("%p", v), "num": int64(0), "rev": rev, "ok": false, "why": "sig"}
+	err = crl.CheckSignatureFrom(v.root)
+	if err == nil && crl.Number == nil {
+		err = errors.New("no number")
+	}
+	if err != nil {
+		traceLine(line)
 		return fmt.Errorf("CRL of issuers: %w", err)
 	}
-	if crl.Number == nil {
-		return errors.New("CRL of issuers has no number")
-	}
+	line["num"], line["why"] = crl.Number.Int64(), ""
 	if v.issuers != nil && crl.Number.Cmp(v.issuers.number) <= 0 {
+		traceLine(line)
 		return fmt.Errorf("CRL of issuers %s is not newer than the one held (%s): a replay", crl.Number, v.issuers.number)
 	}
 	s := &crlState{number: crl.Number, next: crl.NextUpdate, revoked: map[string]bool{}}
@@ -161,6 +170,8 @@ func (v *Verifier) TakeIssuerCRL(der []byte) error {
 		s.revoked[e.SerialNumber.String()] = true
 	}
 	v.issuers = s
+	line["ok"] = true
+	traceLine(line)
 	return nil
 }
 
@@ -207,12 +218,16 @@ func (v *Verifier) Check(leaf, issuer *x509.Certificate, want Peer, now time.Tim
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	id, why, err := v.check(leaf, issuer, want, now)
-	k := ""
+	k, is, ie := "", "", int64(0)
 	if issuer != nil {
-		k = KeyFingerprint(issuer.PublicKey)
+		k, is, ie = KeyFingerprint(issuer.PublicKey), hex.EncodeToString(issuer.SerialNumber.Bytes()), issuer.NotAfter.Unix()
+	}
+	u := int64(0)
+	if err == nil {
+		u = id.Until.Unix()
 	}
 	traceLine(map[string]any{"ev": "check", "v": fmt.Sprintf("%p", v), "k": k, "s": hex.EncodeToString(leaf.SerialNumber.Bytes()),
-		"exp": leaf.NotAfter.Unix(), "t": now.Unix(), "ok": err == nil, "why": why})
+		"exp": leaf.NotAfter.Unix(), "t": now.Unix(), "ok": err == nil, "why": why, "is": is, "ie": ie, "u": u})
 	return id, err
 }
 

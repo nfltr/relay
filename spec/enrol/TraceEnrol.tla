@@ -101,7 +101,8 @@ CheckBad ==
       [] ~E.ok /\ CheckOK -> IF E.why \in {"chain", "name", "group"} THEN {} ELSE {"diverged"}
       [] OTHER -> {}
 
-Kinds == {"issue", "refuse", "revoke", "crl", "take", "rotate", "check"}
+\* itake (the root's CRL of issuers taken) is spec/orgmove/TraceOrgHosted.tla's.
+Kinds == {"issue", "refuse", "revoke", "crl", "take", "rotate", "check", "itake"}
 
 Next ==
     /\ l <= Len(Log) /\ l' = l + 1

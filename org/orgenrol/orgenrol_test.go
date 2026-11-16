@@ -858,3 +858,43 @@ func TestRootRevocationOfTheIssuerReachesTheMachine(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The owner's machine publishes the root's CRL of issuers itself (the
+// revoked issuer would not): PublishIssuers puts it beside the root the
+// relay holds, refuses an older one, and the issuer service keeps it at
+// its next republish of the root instead of overwriting it (mutant
+// service-overwrites-issuers).
+func TestOwnerPublishedIssuersKept(t *testing.T) {
+	f := newFleet(t)
+	root := f.org.root(t)
+	var cert *x509.Certificate
+	f.org.do(t, func(i *orgpki.Issuer, _ *orgissuer.Store) { cert = i.Cert() })
+	first, err := orgpki.SignIssuerCRL(root, f.org.rootKey, nil, []*x509.Certificate{cert}, f.clk.Now())
+	check(t, err)
+	second, err := orgpki.SignIssuerCRL(root, f.org.rootKey, first, nil, f.clk.Now())
+	check(t, err)
+	check(t, PublishIssuers(f.ctx, f.relay, root, second, hang))
+	if err := PublishIssuers(f.ctx, f.relay, root, first, hang); err == nil {
+		t.Fatal("an older CRL of issuers published over a newer one")
+	}
+	f.clk.Add(rootEvery) // the service publishes the root again
+	deadline := time.After(hang)
+	for {
+		data, err := os.ReadFile(filepath.Join(f.org.dir, orgissuer.IssuersFile))
+		if err == nil && bytes.Equal(data, second) {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("the issuer service did not keep the owner's CRL of issuers")
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	data, err := latest(f.ctx, f.relay, orgpki.RootMailbox(f.org.id), hang)
+	check(t, err)
+	var rm orgpki.RootMessage
+	check(t, json.Unmarshal(data, &rm))
+	if !bytes.Equal(rm.Issuers, second) {
+		t.Fatal("the root message lost the owner's CRL of issuers")
+	}
+}

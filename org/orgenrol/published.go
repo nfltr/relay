@@ -4,6 +4,7 @@
 package orgenrol
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nfltr/relay/client/mailboxclient"
 	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/internal/orgfiles"
 	"github.com/nfltr/relay/org/orgpki"
@@ -135,4 +137,45 @@ func (s *service) maintained(err error, now time.Time) {
 		return
 	}
 	s.Logger.Warn("org issuer: CRL or root not published (again shortly)", "error", err)
+}
+
+// PublishIssuers publishes der, the root's CRL of issuers
+// (orgpki.SignIssuerCRL), from the root's machine into the organisation's
+// root mailbox beside the root and recovery the relay holds there, which
+// must be root (a relay's other root, or a rotation since, is refused).
+// For a revoke the revoked issuer would not publish; a running issuer
+// service keeps the newer one it finds there.
+func PublishIssuers(ctx context.Context, mb Mailbox, root *x509.Certificate, der []byte, wait time.Duration) error {
+	orgID, err := orgid.OrgIDOfRoot(root)
+	if err != nil {
+		return err
+	}
+	data, err := latest(ctx, mb, orgpki.RootMailbox(orgID), wait)
+	if err == nil && data == nil {
+		err = errNoMessage
+	}
+	if err != nil {
+		return fmt.Errorf("the organisation's root: %w", err)
+	}
+	var rm orgpki.RootMessage
+	if err := json.Unmarshal(data, &rm); err != nil {
+		return err
+	}
+	if !bytes.Equal(rm.Root, root.Raw) {
+		return errors.New("the relay holds another root than this machine's: nothing was published")
+	}
+	n := issuersNumber(der, root)
+	if n == nil {
+		return errors.New("not a CRL of issuers this root signed: nothing was published")
+	}
+	if held := issuersNumber(rm.Issuers, root); held != nil && held.Cmp(n) >= 0 {
+		return fmt.Errorf("the relay holds CRL of issuers %s, not older than this one (%s): nothing was published", held, n)
+	}
+	rm.Issuers = der
+	out, err := json.Marshal(rm)
+	if err != nil {
+		return err
+	}
+	_, err = mb.Append(ctx, orgpki.RootMailbox(orgID), out, mailboxclient.AppendOptions{ReplaceKey: "current", ContentType: "application/json"})
+	return err
 }

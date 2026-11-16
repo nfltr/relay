@@ -25,7 +25,14 @@
 #   hosted    the opt-in hosted issuer's delegation (spec/orgmove/OrgHosted.tla):
 #             OrgHosted.cfg, OrgHostedLive.cfg, each line of
 #             spec/orgmove/hosted-mutants.txt caught, its witnesses
-#             reached, -coverage 1 (in ci).
+#             reached, -coverage 1, hfixtures (in ci).
+#   hfixtures each spec/orgmove/traces/hosted/<Invariant>-*.ndjson is
+#             rejected by spec/orgmove/TraceOrgHosted.tla's <Invariant>.
+#   htraces   the tests of client/orgid, org/orgmachine and orgenrol built
+#             -tags enroltrace, each test's ENROLTRACE lines (the
+#             verifier's) checked by TraceOrgHosted.tla; then hfixtures
+#             (in traces).
+#   htrace F  one trace file, by TraceOrgHosted.tla.
 # TLC_WORKERS (default 2) caps TLC's threads, TLC_HEAP (default 1g) its
 # heap. Java and tla2tools.jar come from scripts/fetch-tla.sh.
 set -eu
@@ -147,11 +154,32 @@ trace() {
 	return 1
 }
 
+# htrace F: a verifier trace (orgid's, ENROLTRACE) by TraceOrgHosted.tla.
+htrace() {
+	t=$work/h-$(basename "$1")
+	cat "$1" >"$t"
+	[ -s "$t" ] || { echo "$1: no lines"; return 0; }
+	printf 'CONSTANTS\n    TraceFile = "%s"\nINIT Init\nNEXT Next\nINVARIANTS\n    Conforms\n    RevokedIssuerRefused\n    DelegationBound\n    TraceDone\n' "$t" >"$t.cfg"
+	(cd $dir && "$java" -cp "$jar" tlc2.TLC -workers 1 -noGenerateSpecTE -deadlock \
+		-metadir "$t.states" -config "$t.cfg" TraceOrgHosted.tla) >"$t.out" 2>&1 || true
+	if grep -q '^Error: Invariant TraceDone is violated' "$t.out"; then
+		echo "$(basename "$1"): $(wc -l <"$t" | tr -d ' ') lines: accepted"
+		return 0
+	fi
+	grep -m1 '^Error' "$t.out" || tail -20 "$t.out"
+	echo "$(basename "$1"): $(wc -l <"$t" | tr -d ' ') lines: REJECTED"
+	return 1
+}
+
+# fixtures [hosted]: each fixture rejected by its invariant (TraceOrgMove.tla,
+# or with hosted TraceOrgHosted.tla's of traces/hosted).
 fixtures() {
 	: >"$work/ffails"
-	for f in $dir/traces/*.ndjson; do
+	sub= chk=trace
+	[ "${1:-}" = hosted ] && sub=/hosted chk=htrace
+	for f in $dir/traces$sub/*.ndjson; do
 		want=$(basename "$f" | cut -d- -f1)
-		if trace "$f" >"$work/m.out"; then
+		if $chk "$f" >"$work/m.out"; then
 			echo "$(basename "$f"): NOT rejected"
 			echo x >>"$work/ffails"
 		elif grep -q "^Error: Invariant $want is violated" "$work/m.out"; then
@@ -185,7 +213,37 @@ traces() {
 	echo "events: $(cat "$work"/unit/*/*.ndjson 2>/dev/null | sed -E 's/.*"ev":"([a-z]+)".*/\1/' | sort | uniq -c | tr -s ' ' | tr '\n' ' ')"
 	echo "$n traces, $(wc -l <"$work/fails" | tr -d ' ') failed"
 	fixtures || echo x >>"$work/fails"
+	htraces || echo x >>"$work/fails"
 	[ ! -s "$work/fails" ]
+}
+
+# htraces: the verifier's lines of client/orgid's, orgmachine's and
+# orgenrol's tests (orgid writes them under ENROLTRACE), by
+# TraceOrgHosted.tla; then the hosted fixtures.
+htraces() {
+	: >"$work/hfails"
+	for pkg in client/orgid org/orgmachine org/orgenrol; do
+		b=h$(basename $pkg)
+		m=${pkg%%/*}
+		(cd $m && go test -tags enroltrace -c -o "$work/$b.test" ./${pkg#*/}/)
+		"$work/$b.test" -test.list '^Test' >"$work/$b.tests"
+		while read -r name; do
+			mkdir -p "$work/hunit/$b-$name"
+			(cd $pkg && ENROLTRACE=$work/hunit/$b-$name "$work/$b.test" -test.run "^$name\$" -test.count 1 -test.timeout 10m >"$work/hunit/$b-$name.out" 2>&1) ||
+				{ echo "$b $name: test failed"; tail -20 "$work/hunit/$b-$name.out"; echo x >>"$work/hfails"; }
+		done <"$work/$b.tests"
+	done
+	n=0
+	for f in "$work"/hunit/*/*.ndjson; do
+		[ -f "$f" ] || continue
+		grep -qE '"ev":"(itake|check)"' "$f" || continue
+		n=$((n + 1))
+		htrace "$f" >"$work/t.out" || { echo "$f"; cat "$work/t.out"; echo x >>"$work/hfails"; }
+	done
+	echo "hosted events: $(cat "$work"/hunit/*/*.ndjson 2>/dev/null | grep -o '"ev":"[a-z]*"' | sort | uniq -c | tr -s ' ' | tr '\n' ' ')"
+	echo "$n verifier traces, $(wc -l <"$work/hfails" | tr -d ' ') failed"
+	fixtures hosted || echo x >>"$work/hfails"
+	[ ! -s "$work/hfails" ]
 }
 
 case ${1:-} in
@@ -197,11 +255,14 @@ witnesses) witnesses ;;
 coverage) coverage ;;
 ci) run OrgMove.cfg && run OrgMoveLive.cfg && mutants && witnesses && coverage && fixtures &&
 	holds_spec && run OrgHolds.cfg && run OrgHoldsLive.cfg && mutants && witnesses && coverage &&
-	hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage ;;
-hosted) hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage ;;
+	hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage && fixtures hosted ;;
+hosted) hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage && fixtures hosted ;;
+hfixtures) fixtures hosted ;;
+htraces) htraces ;;
+htrace) htrace "$2" ;;
 holds) holds_spec && run OrgHolds.cfg && run OrgHoldsLive.cfg && mutants && witnesses && coverage ;;
 fixtures) fixtures ;;
 traces) traces ;;
 trace) trace "$2" ;;
-*) sed -n '4,26p' "$0" >&2; exit 2 ;;
+*) sed -n '4,36p' "$0" >&2; exit 2 ;;
 esac
