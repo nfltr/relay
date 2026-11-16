@@ -105,7 +105,8 @@ func (p *IdP) authorize(w http.ResponseWriter, r *http.Request) {
 	v.Set("code", code)
 	v.Set("state", q.Get("state"))
 	to.RawQuery = v.Encode()
-	http.Redirect(w, r, to.String(), http.StatusFound)
+	// nosemgrep: open-redirect -- a test IdP: it sends the browser to the client's redirect_uri, as an IdP does
+	http.Redirect(w, r, to.String(), http.StatusFound) // #nosec G710 -- as above
 }
 
 func (p *IdP) token(w http.ResponseWriter, r *http.Request) {
