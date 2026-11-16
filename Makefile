@@ -159,7 +159,8 @@ stress-race:
 
 # The TLA+ models (spec/README.md): spec checks them, spec-mutants checks
 # each bug put back is caught (both in make ci); spec-traces checks the
-# traces the tests record under -tags relaytrace against them (nightly);
+# traces the tests record under -tags relaytrace against them, and the
+# issuer's app enrolment traces (spec-appenrol-traces), nightly;
 # spec-cltraces is its per-push slice (the stuck-handler test's CallLifecycle
 # traces, about 10 s; in make ci); spec-astraces another (the A2A E2EE
 # session tests' A2ASession traces, about 10 s; in make ci); spec-dgtraces
@@ -172,6 +173,7 @@ spec-mutants:
 	./scripts/spec.sh mutants
 spec-traces:
 	./scripts/spec.sh traces
+	./scripts/spec-appenrol.sh traces
 spec-cltraces:
 	./scripts/spec.sh cltraces
 spec-astraces:
@@ -262,7 +264,7 @@ spec-orgmove-repeat:
 # invariants, every mutant, the witnesses, -coverage 1 and the trace
 # fixtures; spec-appenrol-traces: the tests of org/orgpki and orgenrol
 # built -tags enroltrace, each trace checked by
-# spec/appenrol/TraceAppEnrol.tla (nightly).
+# spec/appenrol/TraceAppEnrol.tla (nightly: spec-traces runs it).
 .PHONY: spec-appenrol-ci spec-appenrol-traces
 spec-appenrol-ci:
 	./scripts/spec-appenrol.sh ci
