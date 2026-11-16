@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"slices"
 	"strings"
@@ -151,6 +152,10 @@ type signIn struct {
 	exp                              time.Time
 }
 
+// idpWait bounds a sign-in's ID token check (the IdP's discovery and keys):
+// the issuer decides under its directory's lock.
+const idpWait = 30 * time.Second
+
 // providers caches each IdP's discovery and keys (go-oidc refreshes the
 // keys on an unknown kid).
 type providers struct {
@@ -164,7 +169,9 @@ func (p *providers) get(ctx context.Context, issuer string) (*oidc.Provider, err
 	if pr := p.by[issuer]; pr != nil {
 		return pr, nil
 	}
-	pr, err := oidc.NewProvider(context.WithoutCancel(ctx), issuer)
+	// The client bounds every request to the IdP, the key fetches go-oidc
+	// runs later included (they keep this context's values).
+	pr, err := oidc.NewProvider(oidc.ClientContext(ctx, &http.Client{Timeout: idpWait}), issuer)
 	if err != nil {
 		return nil, err
 	}
@@ -230,7 +237,9 @@ func (i *Issuer) EnrolSignIn(ctx context.Context, req SignInRequest, now time.Ti
 	var si signIn
 	var verr error
 	if ok {
-		si, verr = i.verifyIDToken(ctx, rule, req.IDToken, now)
+		vctx, cancel := context.WithTimeout(ctx, idpWait)
+		si, verr = i.verifyIDToken(vctx, rule, req.IDToken, now)
+		cancel()
 	}
 	i.mu.Lock()
 	defer i.mu.Unlock()

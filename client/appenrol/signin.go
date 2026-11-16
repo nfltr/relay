@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -119,7 +120,7 @@ func discover(ctx context.Context, hc *http.Client, issuer string) (oauth2.Endpo
 	if resp.StatusCode != http.StatusOK {
 		return oauth2.Endpoint{}, fmt.Errorf("appenrol: discovery: %s", resp.Status)
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(nil, resp.Body, 1<<20)).Decode(&d); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&d); err != nil {
 		return oauth2.Endpoint{}, fmt.Errorf("appenrol: discovery: %w", err)
 	}
 	if d.Issuer != issuer || d.Auth == "" || d.Token == "" {
