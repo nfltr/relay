@@ -205,6 +205,9 @@ func TestBrowserDirectServesStreamsOnDataChannels(t *testing.T) {
 	ctl, done := a.control(t)
 	v := newBPVisitor(t)
 	tc := v.admitted(t, ctl, a.l.Address())
+	if err := writeSignal(tc, nil); err != nil { // the page's keepalive
+		t.Fatal(err)
+	}
 	for i, first := range []bool{true, false} {
 		c, err := v.stream(t, a.l.Address(), first)
 		if err != nil {

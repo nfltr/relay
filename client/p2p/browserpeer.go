@@ -158,11 +158,16 @@ func (p *browserPeer) run(ctx context.Context) {
 	if err != nil || writeSignal(tc, answer) != nil {
 		return
 	}
-	// The control session holds the connection: its end, or any byte
-	// (one connection per control session), ends it.
+	// The control session holds the connection: its end, or a second
+	// offer (one connection per control session), ends it. An empty
+	// message is the page's keepalive (the relay closes a WebSocket idle
+	// both ways).
 	_ = tc.SetDeadline(time.Time{})
-	var x [1]byte
-	_, _ = tc.Read(x[:])
+	for {
+		if sd, err := readSignal(tc); err != nil || sd != nil {
+			return
+		}
+	}
 }
 
 // step writes one trace line under mu.
