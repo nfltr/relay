@@ -703,7 +703,12 @@ func rebindDirectAgain(t *testing.T, lag bool) {
 	r := newDirectRig(t, DirectOn)
 	r.d.repunch = 0 // the last punch is old enough: as a connection that lived past the backoff
 	var lagging atomic.Bool
-	r.d.ended = func(q *quic.Conn) bool { return connEnded(q) && !lagging.CompareAndSwap(true, false) }
+	// The first check after the rebind finds the connection up, whether it
+	// is (quic-go not yet done closing it) or not: the lag taken on the
+	// check, never carried to the next (a check that found it genuinely up
+	// left the lag to the check after the open failed, which then reported
+	// no_answer: relay ci-mac 425e6cff3c2a).
+	r.d.ended = func(q *quic.Conn) bool { return !lagging.CompareAndSwap(true, false) && connEnded(q) }
 	table := r.l.targets.services
 	old := table.direct
 	rc := newRebindConn(t)
