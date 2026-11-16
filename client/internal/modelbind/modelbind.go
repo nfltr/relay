@@ -21,8 +21,8 @@ var Pending = map[string]string{
 	// spec/proverif/browser_peer.pv: a design (nfltr
 	// docs/decisions/browser-peer-2026-11-16.md); the browser bundle's lane
 	// adds the rows.
-	"browser.bundle": "the browser bundle's lane (BP2): its hash check",
-	"browser.dc.nf1": "the browser bundle's lane (BP2): a data channel's own nf1 handshake",
+	"browser.bundle": "the browser bundle's lane (BP4): its hash check",
+	"browser.dc.nf1": "the browser bundle's lane (BP4): a data channel's own nf1 handshake",
 	"browser.signal": "the agent's browser-peer lane (BP3): SDP only after Admit",
 }
 

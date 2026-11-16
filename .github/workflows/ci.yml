@@ -37,6 +37,8 @@ jobs:
       - run: make test-ci
       - run: make check-testknobs
       - run: make check-linkvet
+      # the nf1 handshake as js/wasm: reproducible, under its size budget, runs under node
+      - run: make wasm-nf1
       # gosec over first-party code, gated by scripts/gosec-baseline.txt (as in
       # relay-server: findings landed unnoticed while it was not here).
       - run: make check-gosec

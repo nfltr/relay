@@ -86,6 +86,18 @@ hooks:
 	if [ -e "$$h" ] && ! grep -q 'scripts/pre-push' "$$h"; then echo "hooks: $$h exists and is not this one; move it away first" >&2; exit 1; fi; \
 	printf '#!/bin/sh\n# make hooks: scripts/pre-push of the checkout pushing (else of %s)\ns="$$(git rev-parse --show-toplevel)/scripts/pre-push"\n[ -x "$$s" ] || s=%s/scripts/pre-push\nexec "$$s" "$$@"\n' "$(CURDIR)" "$(CURDIR)" >"$$h" && chmod +x "$$h" && echo "hooks: installed $$h"
 
+# wasm-nf1: the nf1 handshake built for js/wasm (client/nf1/internal/jsclient)
+# reproducibly, its sha256 printed, run once under node; fails over budget or
+# when it links the relay dial (scripts/wasm-nf1.sh; nfltr
+# docs/decisions/browser-peer-2026-11-16.md, lane BP1). The budgets are the
+# size measured at go1.27.4 + 5 % (8106361 raw, 2164581 gzip -9 -n). WASM_OUT=<dir>
+# keeps nf1.wasm.
+WASM_NF1_MAX_BYTES ?= 8511679
+WASM_NF1_MAX_GZIP_BYTES ?= 2272810
+.PHONY: wasm-nf1
+wasm-nf1:
+	@WASM_NF1_MAX_BYTES=$(WASM_NF1_MAX_BYTES) WASM_NF1_MAX_GZIP_BYTES=$(WASM_NF1_MAX_GZIP_BYTES) ./scripts/wasm-nf1.sh
+
 # Fails when a _test.go file assigns a package-level variable of its package
 # (allow-list with reasons: scripts/testknobs-allow.txt). The tool lives in
 # proto (stdlib only) and runs from the repository root over both modules.

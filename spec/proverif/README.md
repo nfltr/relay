@@ -752,7 +752,10 @@ the agent's machine. The data channel's SDP travels inside an admitted
 `nf1` session (the control session) and every data channel carries its own
 `nf1` handshake, so DTLS is transport only. The attacker owns every relay,
 TURN and the network, may serve any code from any origin it runs, and
-holds a second address of the same key.
+holds a second address of the same key. That client is built: `make
+wasm-nf1` (lane BP1, in `make ci`) builds `client/nf1` for js/wasm without
+its relay dial, reproducibly and under a size budget, and runs one session
+of it under node.
 
 | # | query | holds because |
 |---|---|---|

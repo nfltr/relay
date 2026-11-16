@@ -1,6 +1,12 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
+// The relay dial (gRPC, the data plane) is native only: a js/wasm build of
+// this package is the handshake alone (nfltr
+// docs/decisions/browser-peer-2026-11-16.md, lane BP1; make wasm-nf1).
+
+//go:build !js
+
 package nf1
 
 import (
