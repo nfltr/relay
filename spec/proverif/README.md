@@ -786,8 +786,11 @@ under that second address, or one sending its offer in the clear, gets no
 answer and no connection) are the agent's, `client/p2p`
 `browser_peer_bindings_test.go` (lane BP3; each row fails against its
 mutant planted in `browserpeer.go`). `BIND:browser.bundle` (the
-extension's code hash is the release's) stays pending in
-`client/internal/modelbind` until the bundle's lane (BP4).
+extension's code is the release's bundle: a package with a byte of a file
+changed, a file added or one missing fails `client/internal/bundle`
+`Verify`, the check `make browser-bundle BROWSER_SUMS=<release
+SHA256SUMS>` runs on a rebuild) is the same test's row (lane BP4; mutant
+`hosted-page` in `testdata/browser_mutants.txt`).
 
 ### nf1_anon.pv: an nf1 address served with no account, direct only (lane NF1ANON; design, no code yet)
 

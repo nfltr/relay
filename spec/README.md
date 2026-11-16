@@ -865,15 +865,21 @@ about 20 s.
 Lane BP3 (2026-11-16) built the agent's side, `client/p2p`
 `browserpeer.go` (`BrowserDirect`), served from `client/agent`
 `direct_nf1.go` for a session whose answer said `nf1.HintBrowser` and whose
-first byte is the visitor's mark. The page's side (`OpenWS`, its choice of
-path) is the browser bundle's (lane BP4). One `mu` per control session
-orders the agent's steps; a step's trace line is written under it.
+first byte is the visitor's mark. Lane BP4 (2026-11-16) built the page's
+side (`OpenWS`, its choice of path, `AtMostOnce`), the extension's
+`browser/src/nf1.ts` (`NF1Client`, `Direct`) over the wasm client
+`client/nf1/internal/extension`; it records no trace (a page's steps are
+the agent's actions' other ends, which BP3's recorder logs), and
+`make browser-e2e` drives it against BP3's agent in Chromium. One `mu` per
+control session orders the agent's steps; a step's trace line is written
+under it.
 
 | actions | code |
 |---|---|
 | `CtlOpen`, `CtlAdmit`, `CtlEnd`, `Offer` (`run`, `answer`, `end`); `PCUp`, `PCFail`, `Reap` (`onState`, `upLocked`, `reapLocked`); `OpenDC`, `Deliver`, `Complete`, `Break`, `Refuse` (`onDataChannel`, `stream`) | client/p2p/browserpeer.go |
 | the control session's dispatch (the mark after a `HintBrowser` answer) | client/agent/direct_nf1.go |
 | `HintBrowser` in the signed record | client/nf1/nf1.go |
+| `OpenWS`, the path choice, a stream lost never re-sent (`AtMostOnce`: `NF1Client.open`, `Direct.stream`; a failed stream ends to the page) | browser/src/nf1.ts |
 
 ### BrowserPeer traces
 
