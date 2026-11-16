@@ -8,7 +8,9 @@
 // two keys, its relay key and its organisation key (the key commitment of
 // OpenPubkey). The relay's accounts service and the organisation's issuer
 // each take the token only with the keys its nonce names, so the relay,
-// which carries the token, cannot attach a key of its own to it.
+// which carries the token, cannot attach a key of its own to it. SignIn
+// gets that token: the person's sign-in at the IdP by authorization code
+// + PKCE with a loopback redirect; idptest is an IdP for tests.
 package appenrol
 
 import (
