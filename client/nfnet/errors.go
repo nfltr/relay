@@ -29,12 +29,14 @@ const (
 	CodeE2EEPinMismatch   Code = 7  // the server is not the identity the target names
 	CodeBalanceExhausted  Code = 9  // the serving account's prepaid balance is exhausted
 	CodeE2EEClientRefused Code = 10 // the server refused this client's identity
+	CodeDirectRequired    Code = 12 // an address served with no account found no direct path (or lost it): relaying needs the serving side's account
 )
 
 var codeNames = map[Code]string{
 	CodeUsage: "usage", CodeAuth: "auth", CodeNotFound: "not_found", CodeRefused: "refused",
 	CodeUnreachable: "unreachable", CodeReset: "reset", CodeE2EEPinMismatch: "e2ee_pin_mismatch",
 	CodeBalanceExhausted: "balance_exhausted", CodeE2EEClientRefused: "e2ee_client_refused",
+	CodeDirectRequired: "direct_required",
 }
 
 // String is the code's name in the sidecar's events ("usage" ...
@@ -89,6 +91,7 @@ var codeOfCause = []struct {
 	{nf1.ErrRefused, CodeRefused},
 	{nf1.ErrUnreachable, CodeUnreachable},
 	{nf1.ErrBalance, CodeBalanceExhausted},
+	{nf1.ErrDirectRequired, CodeDirectRequired},
 	{nf1.ErrAnswer, CodeE2EEPinMismatch},
 	{capaddr.ErrPin, CodeE2EEPinMismatch},
 	{capaddr.ErrRendezvous, CodeE2EEPinMismatch},

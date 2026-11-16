@@ -194,6 +194,7 @@ func TestAnswerErrorCodes(t *testing.T) {
 		relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE:      CodeE2EEPinMismatch,
 		relayv1.ErrorReason_ERROR_REASON_PROTOCOL_UNSUPPORTED:  CodeRefused,
 		relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED:     CodeBalanceExhausted,
+		relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED:      CodeDirectRequired,
 	} {
 		if e := answerError(dataplane.Refusal(reason, "why"), "t"); e.Code != want || e.Reason != reason.String() || e.Err == nil {
 			t.Errorf("%v: %+v, want %s with its reason and cause", reason, e, want)

@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"github.com/nfltr/link"
+	"github.com/nfltr/relay/client/nf1"
 	"github.com/nfltr/relay/client/relaytrust"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/dataplane"
@@ -158,6 +160,8 @@ func TestResetErrorTypesTheCut(t *testing.T) {
 		{&link.Abort{Code: dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED), Msg: "credential revoked"}, CodeAuth, "ERROR_REASON_UNAUTHENTICATED"},
 		{&link.Abort{Code: dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED), Msg: "balance exhausted"}, CodeBalanceExhausted, "ERROR_REASON_BALANCE_EXHAUSTED"},
 		{&link.Abort{Code: dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_TARGET_UNREACHABLE)}, CodeReset, ""},
+		{&link.Abort{Code: dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED), Msg: "relaying needs an account"}, CodeDirectRequired, "ERROR_REASON_ACCOUNT_REQUIRED"},
+		{fmt.Errorf("read: %w", nf1.ErrDirectRequired), CodeDirectRequired, "ERROR_REASON_ACCOUNT_REQUIRED"},
 	} {
 		if e := resetError(tc.err); e.Code != tc.code || e.Reason != tc.reason {
 			t.Errorf("%v: %+v, want code %s reason %q", tc.err, e, tc.code, tc.reason)

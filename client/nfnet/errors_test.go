@@ -21,6 +21,7 @@ func TestCodeStrings(t *testing.T) {
 	for c, want := range map[Code]string{
 		1: "usage", 2: "auth", 3: "not_found", 4: "refused", 5: "unreachable", 6: "reset",
 		7: "e2ee_pin_mismatch", 9: "balance_exhausted", 10: "e2ee_client_refused", 8: "code(8)", 11: "code(11)",
+		12: "direct_required",
 	} {
 		if c.String() != want {
 			t.Errorf("Code(%d) = %q, want %q", int(c), c.String(), want)
@@ -44,6 +45,7 @@ func TestCodeOfNF1Errors(t *testing.T) {
 		{fmt.Errorf("%w: too many connections", nf1.ErrRefused), CodeRefused},
 		{fmt.Errorf("%w: dial tcp: refused", nf1.ErrUnreachable), CodeUnreachable},
 		{nf1.ErrBalance, CodeBalanceExhausted},
+		{fmt.Errorf("%w (cut)", nf1.ErrDirectRequired), CodeDirectRequired},
 		{nf1.ErrAnswer, CodeE2EEPinMismatch},
 		{capaddr.ErrPin, CodeE2EEPinMismatch},
 		{capaddr.ErrRendezvous, CodeE2EEPinMismatch},

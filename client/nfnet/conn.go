@@ -21,6 +21,7 @@ import (
 
 	"github.com/nfltr/link"
 	"github.com/nfltr/relay/client/agent"
+	"github.com/nfltr/relay/client/nf1"
 	"github.com/nfltr/relay/client/rpcclient"
 	"github.com/nfltr/relay/client/tlsend"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
@@ -293,6 +294,9 @@ func resetError(err error) *Error {
 	if e, ok := errors.AsType[*Error](err); ok {
 		return e // typed already (clientRefused)
 	}
+	if errors.Is(err, nf1.ErrDirectRequired) { // this end's own give-up (agent.DirectSession.Err)
+		return directRequired(err)
+	}
 	if a, ok := errors.AsType[*link.Abort](err); ok {
 		if a.Code == link.CodeDrainDeadline {
 			return &Error{Code: CodeReset, Reason: ReasonDrainDeadline, Err: err,
@@ -303,6 +307,8 @@ func resetError(err error) *Error {
 			return &Error{Code: CodeAuth, Reason: reason.String(), Message: "session cut by the relay: " + a.Msg, Err: err}
 		case relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED:
 			return &Error{Code: CodeBalanceExhausted, Reason: reason.String(), Message: "session cut by the relay: " + rpcclient.BalanceExhaustedHint, Err: err}
+		case relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED:
+			return directRequired(err)
 		}
 	}
 	return &Error{Code: CodeReset, Message: "session reset: " + err.Error(), Err: err}
@@ -365,4 +371,14 @@ func asError(err error) *Error {
 		return e
 	}
 	return &Error{Code: CodeOf(err), Message: err.Error(), Err: err}
+}
+
+// directRequired is the *Error of a session to or of an address served
+// with no account that found no direct path or lost it: the relay's cut
+// (ERROR_REASON_ACCOUNT_REQUIRED) or this end's give-up
+// (nf1.ErrDirectRequired), the same at both ends (nfltr
+// docs/decisions/nf1-anon-2026-11-16.md section 2).
+func directRequired(err error) *Error {
+	return &Error{Code: CodeDirectRequired, Reason: relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED.String(),
+		Message: nf1.ErrDirectRequired.Error() + ": " + err.Error(), Err: errors.Join(nf1.ErrDirectRequired, err)}
 }

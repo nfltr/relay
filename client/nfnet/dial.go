@@ -284,6 +284,8 @@ func answerError(a *link.Abort, trace string) *Error {
 		e.Code = CodeAuth
 	case relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED:
 		e.Code = CodeBalanceExhausted
+	case relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED:
+		e.Code = CodeDirectRequired
 	case relayv1.ErrorReason_ERROR_REASON_AGENT_NOT_FOUND, relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE,
 		relayv1.ErrorReason_ERROR_REASON_UNKNOWN_SERVICE:
 		e.Code = CodeNotFound
