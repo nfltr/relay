@@ -355,6 +355,8 @@ CONSTANTS
     Spoofed <- TraceSpoofed
     Peer <- TracePeer
     Rogue = {}
+    Lan <- TraceLan
+    Reach = {}
     MaxCands = 8
     Bound = 1
     Mutant = "none"
@@ -366,6 +368,8 @@ INVARIANTS
     DialBound
     OnlyPeer
     OneConnection
+    DirectIfWorks
+    PreferLan
     TraceNotDone
 CFG
 	META=$work/states-$(basename "$1") tlc "$cfg" TraceDirectPunch.tla >"$1.out" 2>&1 || true
@@ -706,10 +710,10 @@ mutants)
 	model=DirectPunch
 	# Peer-reflexive candidates (design, lane NATSYM): each failure the punch
 	# prevents, put in.
-	for m in no-tag no-cap no-cert-check keep-loser return-early no-bound; do
+	for m in no-tag no-cap no-cert-check keep-loser return-early no-bound first-wins give-up-at-bound; do
 		expect DP:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
 	done
-	for w in W_PrflxWon W_OfferedWon W_Relayed W_RogueRefused W_LoserClosed; do
+	for w in W_PrflxWon W_OfferedWon W_Relayed W_RogueRefused W_LoserClosed W_LanReplaced W_NonLanWon; do
 		expect witness:DP-$w -e "s/^    TypeOK\$/    $w/"
 	done
 	cfg=

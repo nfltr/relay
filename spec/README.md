@@ -1037,9 +1037,18 @@ a probe carrying the control exchange's tag (an exporter of that
 exchange's TLS) from an address it does not dial is a peer-reflexive
 candidate (ICE, RFC 8445 7.2.5.3.1, 7.3.1.3), dialled too. That opens a
 public client toward an agent behind an endpoint-dependent (symmetric)
-NAT. `make spec` checks `DirectPunch.cfg` (two offered candidates, one
-the peer's and one someone else's; two probe sources, one that answers;
-one off-path untagged sender; three dials at most; a bound of two ticks).
+NAT. Owner 2026-11-16 ("direct is always preferred and relay is when
+direct not possible"; nfltr `docs/decisions/direct-paths-2026-11-11.md`
+"Direct by default"): the punch tries every candidate and stays relayed
+only when none works; among the paths that work a LAN one wins: a
+connection to a private or link-local address replaces a non-LAN winner,
+and the LAN dials outlive a non-LAN win by `lanGrace` (100 ms), in which
+a LAN probe is still learned (ICE's host-before-reflexive type preference,
+RFC 8445 5.1.2.2); the rest by measured handshake RTT (the first up among
+those dialled together). `make spec` checks `DirectPunch.cfg` (two offered
+candidates, one the peer's and one someone else's on this LAN; two probe
+sources, one a LAN address that answers before the bound (`Reach`); one
+off-path untagged sender; three dials at most; a bound of two ticks).
 
 | invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
 |---|---|---|
@@ -1047,6 +1056,8 @@ one off-path untagged sender; three dials at most; a bound of two ticks).
 | `DialBound` | at most MaxCands dials per punch | `no-cap` |
 | `OnlyPeer` | the kept connection passed the certificate check | `no-cert-check` |
 | `OneConnection` | once the punch returned, its only connection is the kept one | `return-early` |
+| `DirectIfWorks` | a punch that returned relayed dialled no working candidate and closed no connection | `give-up-at-bound` |
+| `PreferLan` | a punch that returned on a non-LAN connection dialled no working LAN candidate | `first-wins` |
 | `Ends` (liveness) | every punch returns | `no-bound`, `keep-loser` |
 
 A port-mapped address (NAT-PMP, `client/agent/direct_portmap.go`; nfltr
@@ -1055,15 +1066,16 @@ mapping's lease is renewed before an offer names it, so the punch is
 unchanged and the model with it.
 
 Witnesses (each violated): `W_PrflxWon`, `W_OfferedWon`, `W_Relayed`,
-`W_RogueRefused`, `W_LoserClosed`. TLC 2026-11-16 (`-coverage 1`): 1,240
-distinct states, depth 14, every action taken.
+`W_RogueRefused`, `W_LoserClosed`, `W_LanReplaced` (a LAN connection
+replaced a non-LAN winner), `W_NonLanWon`. TLC 2026-11-16 (`-coverage 1`):
+1,304 distinct states, depth 16, every action taken.
 
 | action | Go |
 |---|---|
 | `AgentProbe` | `directServer.control`: `DirectEndpoint.probe` with `probeTag` |
 | `SpoofProbe`, `Learn` | `DirectEndpoint.readProbes` (the tag's waiter), `DirectEndpoint.punch` (the learned case) |
 | `DialUp`, `DialFail` | `quiclink.Punch` per dial, `punchTLS`'s certificate check |
-| `Win`, `CloseLoser`, `Return`, `Tick` | `DirectEndpoint.punch` (first wins, the others closed, returns once no dial runs), `dialPair`'s 5 s bound |
+| `Win`, `CloseLoser`, `Settle`, `Return`, `Tick` | `DirectEndpoint.punch` (first wins, a LAN one replaces a non-LAN winner, the others closed, the LAN grace, returns once no dial runs), `dialPair`'s 5 s bound |
 
 ### Environment assumptions
 
@@ -1073,6 +1085,7 @@ distinct states, depth 14, every action taken.
 | quic-go hands a datagram whose first byte has its two high bits clear to `ReadNonQUICPacket`, never to a connection | quic-go `Transport.handleNonQUICPacket` |
 | Only the two ends of a control exchange can compute its exporter | RFC 8446 section 7.5 |
 | Who answers at an address is the certificate check | `spec/proverif/e2ee_tcp.pv`, BIND:direct.cert |
+| A working path's handshake ends before the punch's bound, a working LAN one within `lanGrace` (`Reach`; Tick and Settle wait on it) | the 5 s bound and 100 ms grace against LAN/WAN RTTs; a slower path is out of `Reach` and the punch may return without it |
 
 ### Code map (DirectPunch.tla)
 
@@ -1095,10 +1108,12 @@ own process; every punch writes `directpunch-<pid>-<n>.ndjson` (Init with
 the offered candidates, Learn with what the punch did, DialUp then Win or
 CloseLoser, DialFail, Return with the kept address), checked by
 `spec/TraceDirectPunch.tla` (constants from the trace: the addresses that
-came up are the peer's; TLC adds the agent's probes and the clock). Six
+came up are the peer's, the LAN ones as the code classified them, no
+`Reach`; TLC adds the agent's probes and the clock). Six
 traces on the Mac 2026-11-16, every step kind taken (Learn dialled and
 ignored, Win, CloseLoser, DialFail). Rejected fixtures, one per invariant
 the trace can break: `reject-directpunch-untagged` (OnlyTagged),
 `-over-cap` (DialBound), `-second-connection` (OneConnection),
-`-learn-after-win`. The Go mutants `prflx-*` in
+`-learn-after-win`, `-lan-closed` (a LAN connection closed under a
+non-LAN winner). The Go mutants `prflx-*` in
 `client/agent/testdata/org_mutants.txt` plant the code's bugs.

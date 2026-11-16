@@ -22,7 +22,14 @@
      once no dial of it is left running, so no second connection outlives
      it (D7: one direct connection per machine pair);
    - the punch ends: on a win, or at its bound (the design's 5 s), and then
-     the session stays relayed.
+     the session stays relayed;
+   - direct whenever a path works (owner 2026-11-16, "direct is always
+     preferred and relay is when direct not possible"): a punch with a
+     working candidate never returns relayed;
+   - a LAN path first: a connection to a LAN address replaces a non-LAN
+     winner, and the LAN dials outlive a non-LAN win by a grace
+     (lanGrace) in which a LAN probe is still learned; the rest by
+     measured handshake RTT (the first up among those dialled together).
 
    Below this module (assumed): who answers at an address is the TLS
    certificate check (relay spec/proverif/e2ee_tcp.pv, BIND:direct.cert);
@@ -38,6 +45,8 @@ CONSTANTS
     Spoofed,   \* addresses an off-path sender puts on untagged probes
     Peer,      \* addresses where the agent answers (its certificate)
     Rogue,     \* addresses where someone else answers (refused)
+    Lan,       \* the private (LAN) addresses among Addrs
+    Reach,     \* Peer addresses that answer before the bound (a working path)
     MaxCands,  \* the most dials one punch makes (quiclink.MaxCandidates)
     Bound,     \* the punch's bound, in ticks
     Mutant     \* "none" or the failure put back (scripts/spec.sh mutants)
@@ -50,13 +59,20 @@ VARIABLES
     probes,   \* probes in flight to the client: [src, tagged]
     won,      \* the kept connection's address, or None
     t,        \* ticks since the punch began
-    state     \* "punching" | "returned"
+    state,    \* "punching" | "returned"
+    settled   \* the LAN grace after a non-LAN win ended
 
-vars == <<dial, probes, won, t, state>>
+vars == <<dial, probes, won, t, state, settled>>
 
 Dialled == {a \in Addrs : dial[a] # "idle"}
 Up == {a \in Addrs : dial[a] = "up"}
 Running == {a \in Addrs : dial[a] \in {"dialing", "up"} /\ a # won}
+\* In the grace: a non-LAN connection won and LAN dials may still beat it
+\* (mutant first-wins: no grace, the first connection up is kept).
+Grace == won # None /\ won \notin Lan /\ ~settled /\ Mutant # "first-wins"
+\* A connection to a which beats the winner: a LAN one over a non-LAN one,
+\* in the grace or after it, until the punch returns.
+Beats(a) == won # None /\ won \notin Lan /\ a \in Lan /\ Mutant # "first-wins"
 
 Init ==
     /\ dial = [a \in Addrs |-> IF a \in Offered THEN "dialing" ELSE "idle"]
@@ -64,94 +80,116 @@ Init ==
     /\ won = None
     /\ t = 0
     /\ state = "punching"
+    /\ settled = FALSE
 
 \* The agent probes the client's candidates from one of its mappings.
 AgentProbe(a) ==
     /\ state = "punching" /\ t < Bound
     /\ probes' = probes \cup {[src |-> a, tagged |-> TRUE]}
-    /\ UNCHANGED <<dial, won, t, state>>
+    /\ UNCHANGED <<dial, won, t, state, settled>>
 
 \* Anyone sends a probe without the tag from an address of its choosing.
 SpoofProbe(a) ==
     /\ state = "punching"
     /\ probes' = probes \cup {[src |-> a, tagged |-> FALSE]}
-    /\ UNCHANGED <<dial, won, t, state>>
+    /\ UNCHANGED <<dial, won, t, state, settled>>
 
 \* The client reads a probe: a tagged one from an address it does not
 \* dial yet is a candidate, dialled within the cap, before the bound and
-\* while no connection has won.
+\* while no connection has won (or, in the grace, a LAN one).
 Learn(p) ==
     /\ state = "punching"
     /\ probes' = probes \ {p}
     /\ IF /\ (p.tagged \/ Mutant = "no-tag")
           /\ dial[p.src] = "idle"
-          /\ won = None /\ t < Bound
+          /\ (won = None \/ (Grace /\ p.src \in Lan)) /\ t < Bound
           /\ (Cardinality(Dialled) < MaxCands \/ Mutant = "no-cap")
        THEN dial' = [dial EXCEPT ![p.src] = "dialing"]
        ELSE UNCHANGED dial
-    /\ UNCHANGED <<won, t, state>>
+    /\ UNCHANGED <<won, t, state, settled>>
 
 \* A dial's handshake passes the certificate check.
 DialUp(a) ==
     /\ dial[a] = "dialing"
     /\ (a \in Peer \/ (Mutant = "no-cert-check" /\ a \in Rogue))
     /\ dial' = [dial EXCEPT ![a] = "up"]
-    /\ UNCHANGED <<probes, won, t, state>>
+    /\ UNCHANGED <<probes, won, t, state, settled>>
 
 \* A dial fails: someone else answered (refused), or the punch's
-\* context ended it.
+\* contexts ended it: at the bound, or once a connection won (a LAN dial
+\* only once the grace ended or a LAN connection won).
 DialFail(a) ==
     /\ dial[a] = "dialing"
-    /\ (a \in Rogue \/ t = Bound \/ won # None)
+    /\ (a \in Rogue \/ t = Bound \/ (won # None /\ ~(Grace /\ a \in Lan)))
     /\ ~(Mutant = "no-cert-check" /\ a \in Rogue)
     /\ dial' = [dial EXCEPT ![a] = "failed"]
-    /\ UNCHANGED <<probes, won, t, state>>
+    /\ UNCHANGED <<probes, won, t, state, settled>>
 
-\* The first connection up is kept; the dials still running are told to
-\* give up (the context's cancel).
+\* The first connection up is kept, and a LAN one replaces a non-LAN
+\* winner (the old winner is then a loser); the dials still running are
+\* told to give up (the contexts' cancels).
 Win(a) ==
-    /\ state = "punching" /\ won = None /\ dial[a] = "up"
+    /\ state = "punching" /\ dial[a] = "up" /\ a # won
+    /\ (won = None \/ Beats(a))
     /\ won' = a
-    /\ UNCHANGED <<dial, probes, t, state>>
+    /\ UNCHANGED <<dial, probes, t, state, settled>>
 
-\* Another connection that came up is closed.
+\* Another connection that came up is closed (not one that beats the
+\* winner: it wins instead). Mutant give-up-at-bound: at the bound with no winner,
+\* a connection that came up is closed too.
 CloseLoser(a) ==
-    /\ dial[a] = "up" /\ won # None /\ a # won
+    /\ dial[a] = "up" /\ a # won
+    /\ ((won # None /\ ~Beats(a)) \/ (Mutant = "give-up-at-bound" /\ won = None /\ t = Bound))
     /\ Mutant # "keep-loser"
     /\ dial' = [dial EXCEPT ![a] = "closed"]
-    /\ UNCHANGED <<probes, won, t, state>>
+    /\ UNCHANGED <<probes, won, t, state, settled>>
 
+\* The grace ends (lanGrace after the non-LAN win). Assumed: a LAN
+\* handshake that will pass ends within it (a working LAN dial is not
+\* left running).
+Settle ==
+    /\ Grace
+    /\ \A a \in Lan \cap Reach : dial[a] # "dialing"
+    /\ settled' = TRUE
+    /\ UNCHANGED <<dial, probes, won, t, state>>
+
+\* The clock, until a winner (and through the grace). Assumed: a working
+\* path's handshake ends before the bound (no tick past a Reach dial).
 Tick ==
-    /\ state = "punching" /\ won = None /\ t < Bound
+    /\ state = "punching" /\ (won = None \/ Grace) /\ t < Bound
+    /\ \A a \in Reach : dial[a] # "dialing"
     /\ Mutant # "no-bound"
     /\ t' = t + 1
-    /\ UNCHANGED <<dial, probes, won, state>>
+    /\ UNCHANGED <<dial, probes, won, state, settled>>
 
-\* The punch returns: won, or at its bound; once no dial of it runs
-\* (mutant return-early: as soon as it has a winner).
+\* The punch returns: won (a LAN connection, or the grace ended), or at
+\* its bound; once no dial of it runs (mutant return-early: as soon as
+\* it has a winner).
 Return ==
     /\ state = "punching"
-    /\ (won # None \/ t = Bound)
+    /\ ((won # None /\ ~Grace) \/ t = Bound)
     /\ (Running = {} \/ Mutant = "return-early")
     /\ state' = "returned"
-    /\ UNCHANGED <<dial, probes, won, t>>
+    /\ UNCHANGED <<dial, probes, won, t, settled>>
 
 Next ==
     \/ \E a \in Prflx : AgentProbe(a)
     \/ \E a \in Spoofed : SpoofProbe(a)
     \/ \E p \in probes : Learn(p)
     \/ \E a \in Addrs : DialUp(a) \/ DialFail(a) \/ Win(a) \/ CloseLoser(a)
+    \/ Settle
     \/ Tick
     \/ Return
 
 \* Fair: the client reads its probes, the punch's context ends its dials,
-\* the clock runs. Not fair: the agent's probes and a dial's answer (a
-\* NAT may drop every packet of either).
+\* the clock runs, a working path answers. Not fair: the agent's probes
+\* and the other dials' answers (a NAT may drop every packet of either).
 Spec ==
     /\ Init /\ [][Next]_vars
     /\ \A p \in [src : Addrs, tagged : BOOLEAN] : WF_vars(Learn(p))
     /\ \A a \in Addrs : WF_vars(DialFail(a)) /\ WF_vars(Win(a)) /\ WF_vars(CloseLoser(a))
-    /\ WF_vars(Tick) /\ WF_vars(Return)
+    /\ \A a \in Reach : WF_vars(DialUp(a))
+    /\ WF_vars(Settle) /\ WF_vars(Tick) /\ WF_vars(Return)
 
 TypeOK ==
     /\ dial \in [Addrs -> {"idle", "dialing", "up", "failed", "closed"}]
@@ -159,6 +197,7 @@ TypeOK ==
     /\ won \in Addrs \cup {None}
     /\ t \in 0..Bound
     /\ state \in {"punching", "returned"}
+    /\ settled \in BOOLEAN
 
 \* A dialled address is an offered one or a tagged probe's source.
 OnlyTagged == Dialled \subseteq Offered \cup Prflx
@@ -171,6 +210,16 @@ OnlyPeer == won # None => won \in Peer
 \* Once the punch returned, the only connection of it is the kept one.
 OneConnection == state = "returned" => Up \subseteq {won}
 
+\* Direct whenever a path works: a punch that returned relayed dialled
+\* no working candidate and closed no connection.
+DirectIfWorks == state = "returned" /\ won = None =>
+    \A a \in Addrs : dial[a] # "closed" /\ (a \in Reach => dial[a] = "idle")
+
+\* A LAN path first: a punch that returned on a non-LAN connection never
+\* dialled a working LAN candidate.
+PreferLan == state = "returned" /\ won # None /\ won \notin Lan =>
+    \A a \in Lan \cap Reach : dial[a] = "idle"
+
 \* Every punch returns, and with no winner none of its connections is up.
 Ends == <>(state = "returned")
 
@@ -180,4 +229,6 @@ W_OfferedWon == ~(state = "returned" /\ won \in Offered)
 W_Relayed == ~(state = "returned" /\ won = None)
 W_RogueRefused == ~(\E a \in Rogue : dial[a] = "failed")
 W_LoserClosed == ~(\E a \in Addrs : dial[a] = "closed")
+W_LanReplaced == ~(state = "returned" /\ won \in Lan /\ \E a \in Addrs \ Lan : dial[a] = "closed")
+W_NonLanWon == ~(state = "returned" /\ won \in Peer \ Lan)
 =============================================================================
