@@ -33,7 +33,7 @@ jobs:
       - run: make vet
       - run: make check-fmt
       # Fail fast: the cheap checks (each under a minute) run before the long
-      # ones (make test-ci, the TLC models, the Go mutants).
+      # ones (make test-ci, the ProVerif and TLC models, the Go mutants).
       - run: make check-testknobs
       - run: make check-linkvet
       # the nf1 handshake as js/wasm: reproducible, under its size budget, runs under node
@@ -46,12 +46,6 @@ jobs:
       # semgrep (docker, pinned image and rules), gated by
       # scripts/semgrep-baseline.txt: a finding landed unnoticed while it was not here.
       - run: make check-semgrep
-      # ProVerif is built from source once (scripts/fetch-proverif.sh).
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cache/relay-proverif
-          key: proverif-${{ runner.os }}-${{ hashFiles('scripts/fetch-proverif.sh') }}
-      - run: make spec-proverif
       # the models' bindings against the code (spec/proverif/README.md "Bindings")
       - run: make spec-bindings
       - run: make check-spec-drift
@@ -59,6 +53,13 @@ jobs:
       # test-race, test-linkdebug and fuzz-short side by side; make test
       # (the same tests without -race) is not run: test-race runs them all.
       - run: make test-ci
+      # ProVerif is built from source once (scripts/fetch-proverif.sh); its
+      # models take about 14 min, so they run after make test-ci.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/relay-proverif
+          key: proverif-${{ runner.os }}-${{ hashFiles('scripts/fetch-proverif.sh') }}
+      - run: make spec-proverif
       - run: make spec spec-mutants spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-bptraces
       # the organisation issuer's models (spec/enrol, spec/orgmove)
       - run: make spec-enrol-ci spec-orgmove-ci
