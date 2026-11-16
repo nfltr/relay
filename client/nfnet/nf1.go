@@ -51,6 +51,9 @@ func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, e
 	// left to the GC is a leak (link debug mode, TestNF1RefusalClosesSession).
 	fail := func(err error) (*Conn, error) {
 		stop()
+		if errors.Is(err, nf1.ErrDirectRequired) {
+			_ = nf1.AbortDirectRequired(ls) // the agent reads the same reason
+		}
 		_ = ls.Close()
 		d.dropMux(mux)
 		return nil, err
@@ -70,12 +73,19 @@ func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, e
 			return fail(handshakeError(ctx, err))
 		}
 	}
+	anon := nf1.Anonymous(hints) // served with no account: direct only
 	c := d.newConn(t, traceOf(ls))
 	c.closers = append(c.closers, func() { d.dropMux(mux) })
 	if !early {
+		if anon && o.Direct == DirectOff { // not reached: an early dial's answer refuses a1 (nf1.AnswerConn)
+			return fail(directRequired(nf1.ErrDirectRequired))
+		}
 		if !nf1.TakesDirect(hints) {
 			c.onPath(agent.PathEvent{Path: agent.PathRelayed, Reason: agent.ReasonOff})
 		} else if dc, err := d.nf1Direct(addr); err != nil {
+			if anon {
+				return fail(directRequired(fmt.Errorf("no direct-path socket: %w", err)))
+			}
 			c.onPath(agent.PathEvent{Path: agent.PathRelayed, Reason: "no_socket"})
 		} else {
 			c.ds = dc.Start(ls)
@@ -96,9 +106,22 @@ func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, e
 	c.tc = bind(tc)
 	c.s, c.done = c.tc, done
 	if c.ds != nil {
-		route := agent.NF1Route{Addr: addr, Open: d.nf1Relayed(addr)}
-		if err := c.ds.RunNF1(tc.ConnectionState(), route, o.Direct, c.onPath); err != nil {
+		route := agent.NF1Route{Addr: addr, Open: d.nf1Relayed(addr), Anonymous: anon}
+		err := c.ds.RunNF1(tc.ConnectionState(), route, o.Direct, c.onPath)
+		if err == nil && anon {
+			// no byte of the service before the direct path: Dial returns
+			// on it, or fails CodeDirectRequired at the direct-path bound
+			err = c.ds.WaitDirect(ctx)
+		} else if err != nil {
 			c.onPath(agent.PathEvent{Path: agent.PathRelayed, Reason: "no_exporter"})
+		}
+		if err != nil && anon {
+			_ = nf1.AbortDirectRequired(ls)
+			_ = c.Reset()
+			if errors.Is(err, nf1.ErrDirectRequired) || ctx.Err() == nil {
+				return nil, directRequired(err)
+			}
+			return nil, handshakeError(ctx, err)
 		}
 	}
 	return c, nil
@@ -259,6 +282,8 @@ func handshakeError(ctx context.Context, err error) error {
 	switch {
 	case errors.Is(err, capaddr.ErrPin), errors.Is(err, capaddr.ErrRendezvous), errors.Is(err, capaddr.ErrTLS), errors.Is(err, nf1.ErrAnswer):
 		return &Error{Code: CodeE2EEPinMismatch, Message: "the server is not this address's: " + err.Error(), Err: err}
+	case errors.Is(err, nf1.ErrDirectRequired):
+		return directRequired(err)
 	case errors.Is(err, nf1.ErrKind):
 		return &Error{Code: CodeUsage, Message: "kind_mismatch: " + err.Error(), Err: err}
 	case errors.Is(err, capaddr.ErrProof):

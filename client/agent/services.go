@@ -183,6 +183,9 @@ func NewServiceTable(services []Service) (*ServiceTable, error) {
 		if s.NF1 != nil && (!s.Kind.Sessions() || s.E2EE != agentservices.E2EEOn || s.Org != nil || s.Group != "" || len(s.AllowGroups) > 0) {
 			return nil, fmt.Errorf("service %q: a capability address (nf1) needs a tcp or udp service with e2ee on and no organisation or group", s.Name)
 		}
+		if s.NF1 != nil && s.NF1.Anonymous() && s.Direct == DirectOff {
+			return nil, fmt.Errorf("service %q: an address served with no account takes direct paths only (want %q or %q)", s.Name, DirectOn, DirectPublic)
+		}
 		if s.NF1 != nil && s.Kind == agentservices.UDP {
 			l, err := s.NF1.WithDatagram()
 			if err != nil {

@@ -26,14 +26,18 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync/atomic"
 	"time"
 
+	"github.com/nfltr/link"
 	"github.com/nfltr/link/pathswitch"
 	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/relay/client/capaddr"
 	"github.com/nfltr/relay/client/dgram"
 	"github.com/nfltr/relay/client/nf1"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
+	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
 // The client's first byte after an nf1 answer that took direct paths:
@@ -79,6 +83,12 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 		_ = s.Close()
 		return
 	}
+	if l.Anonymous() && first != nf1MarkControl && !framed(first) {
+		// served with no account: a session that cannot leave the relay
+		// (plain) or comes back to it (a re-attach) is refused
+		_ = nf1.AbortDirectRequired(s)
+		return
+	}
 	switch first {
 	case tlsRecordHandshake:
 		target := dialNF1Target(ctx, p, ps, logger)
@@ -100,6 +110,10 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 	case nf1MarkAttach:
 		d.reattach(pathStream{Conn: s})
 	default: // a path frame: the session framed for direct paths
+		if l.Anonymous() {
+			serveNF1Anon(ctx, s, ps, p, logger)
+			return
+		}
 		target := dialNF1Target(ctx, p, ps, logger)
 		if target == nil {
 			return
@@ -123,6 +137,108 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 		done()
 		join(tc, target)
 	}
+}
+
+// framed: first is a path frame's first byte (neither a TLS record nor a
+// mark).
+func framed(first byte) bool {
+	return first != tlsRecordHandshake && first != nf1MarkControl && first != nf1MarkAttach
+}
+
+// serveNF1Anon serves a framed session of an address served with no
+// account (nfltr docs/decisions/nf1-anon-2026-11-16.md section 2): the
+// service's target is dialled only once the session is on a direct path,
+// so no byte of the service crosses the relay; none within
+// nf1AnonDirectBound ends the session with ERROR_REASON_ACCOUNT_REQUIRED.
+// The direct path's loss ends it too (the client never re-attaches it
+// relayed): the target reads the same reason.
+func serveNF1Anon(ctx context.Context, s, ps net.Conn, p sessionPlan, logger *slog.Logger) {
+	l, d := p.nf1, p.direct
+	done := d.handshaking()
+	defer done()
+	c := pathswitch.Server(pathStream{Conn: ps}, PathRelayed, pathswitch.Config{Detach: d.detach})
+	tap := &detachTap{Conn: newPSConn(c, s)}
+	tc := admitNF1(ctx, l, tap, logger)
+	if tc == nil {
+		c.Abort()
+		return
+	}
+	key, err := sessionKey(tc.ConnectionState())
+	if err != nil {
+		_ = tc.Close()
+		return
+	}
+	ds := d.registerSession(&directSession{c: c, key: key, nf1: l, sni: nf1SNI(key)})
+	done()
+	if !onPathWithin(c, PathDirect, nf1AnonDirectBound) {
+		if c.Path() == PathRelayed {
+			_ = nf1.AbortDirectRequired(s)
+		}
+		c.Abort()
+		return
+	}
+	target, _, err := p.dial(ctx)
+	if err != nil {
+		logger.Warn("nf1: dial target failed", "target", p.target, "error", err)
+		c.Abort()
+		return
+	}
+	setDirect(target, ds)
+	if q, ok := target.(*QueueConn); ok {
+		target = &anonTarget{QueueConn: q, tap: tap}
+	}
+	join(tc, target)
+}
+
+// onPathWithin waits until c is on path, false once d passed or c ended.
+// ponytail: polls every 50 ms (pathswitch has no move event on the
+// server); an event when one exists.
+func onPathWithin(c *pathswitch.Conn, path string, d time.Duration) bool {
+	t := time.NewTicker(50 * time.Millisecond)
+	defer t.Stop()
+	end := time.After(d)
+	for c.Path() != path {
+		select {
+		case <-c.Done():
+			return false
+		case <-end:
+			return false
+		case <-t.C:
+		}
+	}
+	return true
+}
+
+// detachTap is an anonymous session's conn below its TLS: it notes a read
+// that ended with no stream within the detach bound (its direct path died
+// and no other came: the client does not re-attach it relayed).
+type detachTap struct {
+	net.Conn
+	detached atomic.Bool
+}
+
+func (t *detachTap) Read(p []byte) (int, error) {
+	n, err := t.Conn.Read(p)
+	if errors.Is(err, pathswitch.ErrDetached) {
+		t.detached.Store(true)
+	}
+	return n, err
+}
+
+// anonTarget is an anonymous session's queued target: a reset after its
+// direct path died reads as ERROR_REASON_ACCOUNT_REQUIRED (nfnet's
+// CodeDirectRequired), the client's end's reason.
+type anonTarget struct {
+	*QueueConn
+	tap *detachTap
+}
+
+func (t *anonTarget) Reset() error {
+	if t.tap.detached.Load() {
+		t.end(&link.Abort{Code: dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED), Msg: nf1.ErrDirectRequired.Error()})
+		return nil
+	}
+	return t.QueueConn.Reset()
 }
 
 // dialNF1Target dials p's target for session s; nil (s reset) when it
@@ -218,7 +334,17 @@ func (d *directServer) dropAddressesNotIn(t *ServiceTable) {
 type NF1Route struct {
 	Addr capaddr.Address
 	Open func(ctx context.Context) (net.Conn, error)
+	// Anonymous: the address's answer said it is served with no account
+	// (nf1.HintAnonymous): the session is direct only (WaitDirect).
+	Anonymous bool
 }
+
+// nf1AnonDirectBound is how long a session to an address served with no
+// account waits for its direct path: a control exchange and its punch
+// (directControlBound), the pair's backoff and one more, below the relay's
+// 2 min for a relayed leg of such a session (nfltr
+// docs/decisions/nf1-anon-2026-11-16.md section 2).
+const nf1AnonDirectBound = 2*directControlBound + 20*time.Second + 5*time.Second // 20 s: directBackoff[0]
 
 // RunNF1 is Run for a session to a capability address (its first stream
 // opened at r.Addr's relay and framed by Start, the address's TLS state
@@ -232,12 +358,69 @@ func (s *DirectSession) RunNF1(cs tls.ConnectionState, r NF1Route, mode DirectMo
 	pair := s.d.nf1Pair(r)
 	s.mu.Lock()
 	s.key, s.service, s.mode, s.on = key, "", mode, on
-	s.pair = pair
+	s.pair, s.anon = pair, r.Anonymous
 	s.mu.Unlock()
 	s.d.mu.Lock()
 	s.d.sessions[s] = struct{}{}
 	s.d.mu.Unlock()
+	if r.Anonymous {
+		t := time.AfterFunc(s.d.anonBound, func() {
+			select {
+			case <-s.direct: // the move landed as the bound passed
+			default:
+				s.directRequired()
+			}
+		})
+		go func() {
+			select {
+			case <-s.direct:
+				t.Stop()
+			case <-s.c.Done():
+				t.Stop()
+			}
+		}()
+	}
 	go s.loop(s.c.Written())
+	return nil
+}
+
+// directRequired ends a session to an address served with no account
+// that has no direct path (none formed in time, or it died): its relayed
+// stream, if it is on one, is aborted with ERROR_REASON_ACCOUNT_REQUIRED
+// (the agent reads the same reason), and Err is nf1.ErrDirectRequired.
+func (s *DirectSession) directRequired() {
+	err := nf1.ErrDirectRequired
+	s.err.CompareAndSwap(nil, &err)
+	if ps, ok := s.c.Current().(pathStream); ok && s.c.Path() == PathRelayed {
+		_ = nf1.AbortDirectRequired(ps.Conn)
+	}
+	s.c.Abort()
+}
+
+// WaitDirect waits until the session is on its first direct path: nil,
+// or Err (nf1.ErrDirectRequired) once it ended without one, or ctx's
+// error. A session to an address served with no account sends no byte of
+// the service before it returns nil.
+func (s *DirectSession) WaitDirect(ctx context.Context) error {
+	select {
+	case <-s.direct:
+		return nil
+	case <-s.c.Done():
+		if err := s.Err(); err != nil {
+			return err
+		}
+		return pathswitch.ErrReset
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Err is why the session ended when this end ended it for the address's
+// rule (nf1.ErrDirectRequired), else nil.
+func (s *DirectSession) Err() error {
+	if p := s.err.Load(); p != nil {
+		return *p
+	}
 	return nil
 }
 

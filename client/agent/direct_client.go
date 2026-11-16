@@ -122,6 +122,9 @@ type DirectClient struct {
 	// qadGrace: how long the own relay's QAD answer is waited for once the
 	// agent's relay's is in (only to see whether they differ)
 	qadGrace time.Duration
+	// anonBound: how long a session to an address served with no account
+	// waits for its direct path (nf1AnonDirectBound)
+	anonBound time.Duration
 	// ended: whether a pair's connection is over, its context's word (a
 	// test's stand-in: quic-go ends a dying connection's streams first)
 	ended func(*quic.Conn) bool
@@ -168,7 +171,7 @@ func NewDirectClient(cfg DirectClientConfig) (*DirectClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, repunch: directBackoff[0], qadGrace: 250 * time.Millisecond, ended: connEnded, pairs: map[string]*directPair{}, punches: map[string]uint64{},
+	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, anonBound: nf1AnonDirectBound, repunch: directBackoff[0], qadGrace: 250 * time.Millisecond, ended: connEnded, pairs: map[string]*directPair{}, punches: map[string]uint64{},
 		qad: map[string]uint64{}, sessions: map[*DirectSession]struct{}{}}
 	d.node, err = quiclink.New(quiclink.Config{Dial: d.dial, Liveness: link.LivenessFast, Datagrams: true})
 	if err != nil {
@@ -288,6 +291,14 @@ type DirectSession struct {
 	nc    *psConn
 	dg    *sessionDatagrams
 	moved chan struct{} // a fallback happened: the loop tries again
+	// direct is closed at the session's first direct path; anon: the
+	// address is served with no account (nf1.HintAnonymous): direct only,
+	// ended with nf1.ErrDirectRequired (err) when no direct path forms
+	// within the client's anonBound or the one it had dies
+	direct     chan struct{}
+	directOnce sync.Once
+	anon       bool
+	err        atomic.Pointer[error]
 	// falling: one fallback at a time, so that a stream end while another
 	// waits out its second does not re-attach beside it
 	falling sync.Mutex
@@ -307,7 +318,7 @@ type DirectSession struct {
 // Start frames a session whose first stream (relayed) is first: the
 // session's TLS runs on Conn. Run starts its moves once TLS is up.
 func (d *DirectClient) Start(first net.Conn) *DirectSession {
-	s := &DirectSession{d: d, moved: make(chan struct{}, 1), heard: new(atomic.Bool)}
+	s := &DirectSession{d: d, moved: make(chan struct{}, 1), heard: new(atomic.Bool), direct: make(chan struct{})}
 	s.heard.Store(true) // the session's TLS runs on it
 	s.c = pathswitch.Client(pathStream{Conn: first, sent: &d.relayedSent, recv: &d.relayedRecv}, PathRelayed,
 		pathswitch.Config{OnStreamEnd: s.fallback, Detach: d.detach})
@@ -447,7 +458,11 @@ func (s *DirectSession) tryDirect() string {
 	tc := &tokenCheck{pathStream: pathStream{Conn: st, sent: &s.d.directSent, recv: &s.d.directRecv}, ready: make(chan struct{})}
 	peer, _ := netip.ParseAddrPort(p.q.RemoteAddr().String())
 	heard := new(atomic.Bool)
-	tc.ok = func() { heard.Store(true); s.emit(PathEvent{Path: PathDirect, Peer: peer}) }
+	tc.ok = func() {
+		heard.Store(true)
+		s.directOnce.Do(func() { close(s.direct) })
+		s.emit(PathEvent{Path: PathDirect, Peer: peer})
+	}
 	qk := p.qk
 	if q, ok := st.(*quiclink.Session); ok {
 		s.dg.take(tc, q, heard.Load) // its agent's token checked: bound by both
@@ -715,6 +730,10 @@ func (s *DirectSession) fallback(epoch uint64, _ error) {
 	s.mu.Unlock()
 	if key == nil {
 		return // before Run: no token yet; the session ends with its stream
+	}
+	if s.anon { // direct only: never re-attached relayed (nf1-anon section 2; the relay cuts one anyway)
+		s.directRequired()
+		return
 	}
 	// A stream reset again at once (an agent that no longer holds the
 	// session resets its re-attach) gets at most one re-attach a second,

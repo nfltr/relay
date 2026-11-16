@@ -276,6 +276,9 @@ func (c *Conn) fail(err error) error {
 	if errors.Is(err, os.ErrDeadlineExceeded) || errors.Is(err, net.ErrClosed) {
 		return err
 	}
+	if c.ds != nil && c.ds.Err() != nil { // the address's rule ended it (no direct path any more)
+		err = c.ds.Err()
+	}
 	e := resetError(clientRefused(err))
 	c.failure.CompareAndSwap(nil, e)
 	return e
@@ -379,6 +382,8 @@ func asError(err error) *Error {
 // (nf1.ErrDirectRequired), the same at both ends (nfltr
 // docs/decisions/nf1-anon-2026-11-16.md section 2).
 func directRequired(err error) *Error {
-	return &Error{Code: CodeDirectRequired, Reason: relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED.String(),
-		Message: nf1.ErrDirectRequired.Error() + ": " + err.Error(), Err: errors.Join(nf1.ErrDirectRequired, err)}
+	if !errors.Is(err, nf1.ErrDirectRequired) {
+		err = fmt.Errorf("%w: %w", nf1.ErrDirectRequired, err)
+	}
+	return &Error{Code: CodeDirectRequired, Reason: relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED.String(), Message: err.Error(), Err: err}
 }

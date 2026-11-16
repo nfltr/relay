@@ -39,7 +39,9 @@ type ListenOptions struct {
 	Direct DirectMode
 	// Address serves the service under this capability address
 	// (nf1.Mint, nf1.NewListener): whoever holds the address may open it;
-	// no AllowGroups, Publish or Plain.
+	// no AllowGroups, Publish or Plain. With no credential (Config.APIKey,
+	// ClientCert) it is served anonymously: direct paths only (Direct
+	// required), its sessions failing CodeDirectRequired where none forms.
 	Address *nf1.Listener
 	// Plain serves a plain service though Config.Org is set.
 	Plain bool
@@ -154,6 +156,18 @@ func listenService(cfg Config, service string, o ListenOptions) (agent.Service, 
 			return s, usage("Listen: an Address admits whoever holds it: no AllowGroups, Publish or Plain")
 		}
 		s.E2EE, s.NF1, s.Direct = agentservices.E2EEOn, o.Address, o.Direct
+		if cfg.APIKey == "" && cfg.ClientCert == nil {
+			// no credential: served anonymously, its relay carrying
+			// signalling only (nfltr docs/decisions/nf1-anon-2026-11-16.md)
+			if o.Direct == DirectOff {
+				return s, usage("Listen: an address served with no account (no APIKey or ClientCert) takes direct paths only: Direct on or public (datagram services: not yet)")
+			}
+			l, err := o.Address.WithAnonymous()
+			if err != nil {
+				return s, err
+			}
+			s.NF1 = l
+		}
 	case cfg.Org != nil && !o.Plain:
 		if len(o.AllowGroups) == 0 {
 			return s, usage("Listen: organisation mode needs AllowGroups (whose machines may connect), or Plain for a plain service")
