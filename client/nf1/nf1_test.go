@@ -109,3 +109,20 @@ func TestAnonymousHint(t *testing.T) {
 		t.Fatalf("Handshake to an anonymous address = %v, want ErrDirectRequired", err)
 	}
 }
+
+// TestAnonymousEarly: an early session (its ClientHello sent with the
+// open, never framed for direct paths) refuses an anonymous answer.
+func TestAnonymousEarly(t *testing.T) {
+	l, _ := mint(t)
+	a, err := l.WithAnonymous()
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, s := net.Pipe()
+	defer c.Close() //nolint:errcheck
+	go func() { _ = a.WriteAnswer(s); _ = s.Close() }()
+	ac := EarlyAnswer(c, a.Address(), false, func() error { return nil })
+	if err := ac.Err(); !errors.Is(err, ErrDirectRequired) {
+		t.Fatalf("Err = %v, want ErrDirectRequired", err)
+	}
+}

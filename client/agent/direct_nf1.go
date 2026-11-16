@@ -391,6 +391,7 @@ func (s *DirectSession) RunNF1(cs tls.ConnectionState, r NF1Route, mode DirectMo
 func (s *DirectSession) directRequired() {
 	err := nf1.ErrDirectRequired
 	s.err.CompareAndSwap(nil, &err)
+	s.gaveUpOnce.Do(func() { close(s.gaveUp) })
 	if ps, ok := s.c.Current().(pathStream); ok && s.c.Path() == PathRelayed {
 		_ = nf1.AbortDirectRequired(ps.Conn)
 	}
@@ -405,6 +406,8 @@ func (s *DirectSession) WaitDirect(ctx context.Context) error {
 	select {
 	case <-s.direct:
 		return nil
+	case <-s.gaveUp:
+		return s.Err()
 	case <-s.c.Done():
 		if err := s.Err(); err != nil {
 			return err

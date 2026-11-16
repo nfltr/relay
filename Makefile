@@ -176,7 +176,8 @@ spec-bindings:
 # queue; client/orgid/testdata/mutants.txt: the organisation
 # checks; client/nf1/testdata/mutants.txt: the nf1 transport;
 # client/agent/testdata/direct_dgram_mutants.txt: the direct path's
-# datagrams; org/*/testdata/mutants.txt: the organisation issuer, its
+# datagrams; client/agent/testdata/nf1_anon_mutants.txt: sessions to an
+# address served with no account; org/*/testdata/mutants.txt: the organisation issuer, its
 # machine and issuer stores and enrolment) makes its test fail
 # (scripts/go-mutants.sh).
 .PHONY: test-go-mutants
@@ -186,6 +187,7 @@ test-go-mutants:
 	./scripts/go-mutants.sh client/orgid/testdata/mutants.txt
 	./scripts/go-mutants.sh client/nf1/testdata/mutants.txt
 	./scripts/go-mutants.sh client/agent/testdata/direct_dgram_mutants.txt
+	./scripts/go-mutants.sh client/agent/testdata/nf1_anon_mutants.txt
 	./scripts/go-mutants.sh org/orgpki/testdata/mutants.txt
 	./scripts/go-mutants.sh org/orgmachine/testdata/mutants.txt
 	./scripts/go-mutants.sh org/orgenrol/testdata/mutants.txt

@@ -5,3 +5,7 @@
 # variant): a client acts on u1 only for a datagram dial, so a relay cannot
 # make a stream client speak to a datagram service or the reverse.
 kind-unchecked | nf1.go | 	if hasHint(hints, HintDatagram) != datagram { | 	if false { | TestNF1ModelBindings
+# Model: nfltr docs/decisions/nf1-anon-2026-11-16.md section 2: a client
+# that cannot frame its session for direct paths refuses an a1 answer.
+anon-unframed | nf1.go | 	if Anonymous(hints) { // no framing here: the session could never leave the relay | 	if false { | TestAnonymousHint
+anon-early | early.go | 			if a.err == nil && Anonymous(a.hints) { // an early session is never framed for direct paths | 			if false { | TestAnonymousEarly

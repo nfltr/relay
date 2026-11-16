@@ -1,0 +1,11 @@
+# Planted bugs of sessions to an address served with no account
+# (scripts/go-mutants.sh client/agent/testdata/nf1_anon_mutants.txt, make
+# test-go-mutants, in make ci): each line "<mutant> | <file> | <exact line
+# text> | <replacement> | <test>". Design: nfltr
+# docs/decisions/nf1-anon-2026-11-16.md section 2; model relay-core
+# spec/NF1Anon.tla (reattach-unbudgeted, no-time-limit: the relay's side of
+# the same rules).
+reattach-relayed | direct_client.go | 	if s.anon { // direct only: never re-attached relayed (nf1-anon section 2; the relay cuts one anyway) | 	if false { | TestNF1AnonDirectRequired
+no-bound | direct_nf1.go | 				s.directRequired() | 				_ = s | TestNF1AnonDirectRequired
+target-before-direct | direct_nf1.go | 	if !onPathWithin(c, PathDirect, nf1AnonDirectBound) { | 	if false { | TestNF1AnonDirectRequired
+plain-served | direct_nf1.go | 	if l.Anonymous() && first != nf1MarkControl && !framed(first) { | 	if false { | TestNF1AnonDirectRequired

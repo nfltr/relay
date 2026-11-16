@@ -299,6 +299,8 @@ type DirectSession struct {
 	directOnce sync.Once
 	anon       bool
 	err        atomic.Pointer[error]
+	gaveUp     chan struct{} // closed with err set (the abort lingers until Done)
+	gaveUpOnce sync.Once
 	// falling: one fallback at a time, so that a stream end while another
 	// waits out its second does not re-attach beside it
 	falling sync.Mutex
@@ -318,7 +320,7 @@ type DirectSession struct {
 // Start frames a session whose first stream (relayed) is first: the
 // session's TLS runs on Conn. Run starts its moves once TLS is up.
 func (d *DirectClient) Start(first net.Conn) *DirectSession {
-	s := &DirectSession{d: d, moved: make(chan struct{}, 1), heard: new(atomic.Bool), direct: make(chan struct{})}
+	s := &DirectSession{d: d, moved: make(chan struct{}, 1), heard: new(atomic.Bool), direct: make(chan struct{}), gaveUp: make(chan struct{})}
 	s.heard.Store(true) // the session's TLS runs on it
 	s.c = pathswitch.Client(pathStream{Conn: first, sent: &d.relayedSent, recv: &d.relayedRecv}, PathRelayed,
 		pathswitch.Config{OnStreamEnd: s.fallback, Detach: d.detach})
