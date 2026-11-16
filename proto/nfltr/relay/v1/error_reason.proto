@@ -92,4 +92,11 @@ enum ErrorReason {
   // token). Retrying does not help. On gRPC it is Unauthenticated, on a
   // data connection HTTP 401.
   ERROR_REASON_MACHINE_NOT_ENROLLED = 51;
+  // The session's serving side has no account behind it (an nf1 address
+  // served anonymously), and its peers formed no direct path: the relay
+  // carries such a session's signalling only, never its bulk. Serve the
+  // address with an account to relay. Retrying the same way does not
+  // help; a direct path does. On a data connection it is the session's
+  // abort code, at both ends.
+  ERROR_REASON_ACCOUNT_REQUIRED = 52;
 }

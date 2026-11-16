@@ -107,6 +107,13 @@ const (
 	// token). Retrying does not help. On gRPC it is Unauthenticated, on a
 	// data connection HTTP 401.
 	ErrorReason_ERROR_REASON_MACHINE_NOT_ENROLLED ErrorReason = 51
+	// The session's serving side has no account behind it (an nf1 address
+	// served anonymously), and its peers formed no direct path: the relay
+	// carries such a session's signalling only, never its bulk. Serve the
+	// address with an account to relay. Retrying the same way does not
+	// help; a direct path does. On a data connection it is the session's
+	// abort code, at both ends.
+	ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED ErrorReason = 52
 )
 
 // Enum value maps for ErrorReason.
@@ -139,6 +146,7 @@ var (
 		43: "ERROR_REASON_E2EE_UNAVAILABLE",
 		50: "ERROR_REASON_BALANCE_EXHAUSTED",
 		51: "ERROR_REASON_MACHINE_NOT_ENROLLED",
+		52: "ERROR_REASON_ACCOUNT_REQUIRED",
 	}
 	ErrorReason_value = map[string]int32{
 		"ERROR_REASON_UNSPECIFIED":             0,
@@ -168,6 +176,7 @@ var (
 		"ERROR_REASON_E2EE_UNAVAILABLE":        43,
 		"ERROR_REASON_BALANCE_EXHAUSTED":       50,
 		"ERROR_REASON_MACHINE_NOT_ENROLLED":    51,
+		"ERROR_REASON_ACCOUNT_REQUIRED":        52,
 	}
 )
 
@@ -202,7 +211,7 @@ var File_nfltr_relay_v1_error_reason_proto protoreflect.FileDescriptor
 
 const file_nfltr_relay_v1_error_reason_proto_rawDesc = "" +
 	"\n" +
-	"!nfltr/relay/v1/error_reason.proto\x12\x0enfltr.relay.v1*\x88\b\n" +
+	"!nfltr/relay/v1/error_reason.proto\x12\x0enfltr.relay.v1*\xab\b\n" +
 	"\vErrorReason\x12\x1c\n" +
 	"\x18ERROR_REASON_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cERROR_REASON_UNAUTHENTICATED\x10\x01\x12 \n" +
@@ -231,7 +240,8 @@ const file_nfltr_relay_v1_error_reason_proto_rawDesc = "" +
 	"\x1aERROR_REASON_E2EE_REQUIRED\x10*\x12!\n" +
 	"\x1dERROR_REASON_E2EE_UNAVAILABLE\x10+\x12\"\n" +
 	"\x1eERROR_REASON_BALANCE_EXHAUSTED\x102\x12%\n" +
-	"!ERROR_REASON_MACHINE_NOT_ENROLLED\x103\"\x04\b\x04\x10\x04\"\x04\b\x05\x10\x05*\x1dERROR_REASON_SESSION_REPLACED* ERROR_REASON_SESSION_RECONNECTEDB\xb5\x01\n" +
+	"!ERROR_REASON_MACHINE_NOT_ENROLLED\x103\x12!\n" +
+	"\x1dERROR_REASON_ACCOUNT_REQUIRED\x104\"\x04\b\x04\x10\x04\"\x04\b\x05\x10\x05*\x1dERROR_REASON_SESSION_REPLACED* ERROR_REASON_SESSION_RECONNECTEDB\xb5\x01\n" +
 	"\x12com.nfltr.relay.v1B\x10ErrorReasonProtoP\x01Z3github.com/nfltr/relay/proto/nfltr/relay/v1;relayv1\xa2\x02\x03NRX\xaa\x02\x0eNfltr.Relay.V1\xca\x02\x0eNfltr\\Relay\\V1\xe2\x02\x1aNfltr\\Relay\\V1\\GPBMetadata\xea\x02\x10Nfltr::Relay::V1b\x06proto3"
 
 var (
