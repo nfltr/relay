@@ -14,6 +14,8 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net"
+	"os"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -243,6 +245,14 @@ func echo(t *testing.T, tc *tls.Conn, n int, mid func()) {
 	var got []byte
 	var rerr error
 	var wg sync.WaitGroup
+	// An echo is under a second; one stalled for a minute leaves every
+	// goroutine's stack in the log (relay ci-mac cb3837aff: a five-minute
+	// stall at 11860 of 1 MiB, then the detach bound, undiagnosable).
+	stall := time.AfterFunc(time.Minute, func() {
+		buf := make([]byte, 8<<20)
+		fmt.Fprintf(os.Stderr, "%s: echo stalled for a minute; goroutines:\n%s\n", t.Name(), buf[:runtime.Stack(buf, true)])
+	})
+	defer stall.Stop()
 	wg.Go(func() { got, rerr = io.ReadAll(tc) })
 	if _, err := tc.Write(want[:n/2]); err != nil {
 		t.Fatal(err)
