@@ -43,6 +43,26 @@
                                           (offer.Proto refused), the pair key from the key file (a2akeys)
      nfltr a2akeys PairKeys.Key           a root initiator: the peer's key id is the machine it named *)
 
+(* Bindings (README "Bindings"): the fields and keys of the messages below
+   that the queries rely on and a relay could change on the wire. Each
+   BIND:<id> has one row in client/p2p/p2p_e2e_bindings_test.go
+   (TestP2PE2EModelBindings, make spec-bindings) that changes just that in
+   the real code's honest session and requires a refusal; the test fails
+   when its rows and these ids differ.
+     BIND:p2p.salt.name     hsalt(K, name, kid): the responder's name
+     BIND:p2p.salt.kid      hsalt(K, name, kid): the offer's key id at a root responder
+     BIND:p2p.kid.named     rkid = named: a root initiator's answer key id
+     BIND:p2p.transcript    th(sid, ipub, rpub)
+     BIND:p2p.confirm.resp  hmac(k_confirm, rResp), checked by the initiator
+     BIND:p2p.confirm.init  hmac(k_confirm, rInit), checked by the responder
+     BIND:p2p.fingerprint   hkdfExpand(prk, lFp, t), the fingerprints compared
+     BIND:p2p.sdp.sealed    senc(dfp(dpk(d)), k_signal): the SDP sealed
+     BIND:p2p.dtls.fp       dfp(peerDtls) = fpPeer
+   Not a row: proto = proto4 (old-protocol-plaintext). Its check was nfltr
+   p2p_session.go / p2p_transfer.go, deleted with nfltr p2p (2026-11-13);
+   client/p2p has no plaintext data path (OpenDataPath needs E2E), so the
+   model's proto3 branch has no code. *)
+
 free c: channel.
 free oob: channel [private].        (* the two users reading their fingerprints to each other *)
 
