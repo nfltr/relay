@@ -131,21 +131,27 @@ func (e *DirectEndpoint) punch(ctx context.Context, cands []netip.AddrPort, lear
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type result struct {
+		a   netip.AddrPort
 		q   *quic.Conn
 		err error
 	}
 	ch := make(chan result, quiclink.MaxCandidates)
-	dialled := slices.Clone(cands)
+	var dialled []netip.AddrPort
 	running := 0
-	start := func(as []netip.AddrPort) {
+	start := func(a netip.AddrPort) {
+		dialled = append(dialled, a)
 		running++
 		go func() {
-			q, err := quiclink.Punch(ctx, e.tr, as, tc, qc)
-			ch <- result{q, err}
+			q, err := quiclink.Punch(ctx, e.tr, []netip.AddrPort{a}, tc, qc)
+			ch <- result{a, q, err}
 		}()
 	}
-	start(cands)
+	tr := tracePunch(addrStrings(cands))
+	for _, a := range cands {
+		start(a)
+	}
 	var won *quic.Conn
+	var wonAt string
 	var errs []error
 	done := ctx.Done()
 	// Until no dial runs, and then until one won or the bound: a probe may
@@ -156,29 +162,39 @@ func (e *DirectEndpoint) punch(ctx context.Context, cands []netip.AddrPort, lear
 			done = nil
 		case a := <-learned:
 			a = netip.AddrPortFrom(a.Addr().Unmap(), a.Port())
-			if won != nil || ctx.Err() != nil || len(dialled) >= quiclink.MaxCandidates || slices.Contains(dialled, a) {
-				continue
+			_, bad := e.candidate(a.String())
+			dial := won == nil && ctx.Err() == nil && len(dialled) < quiclink.MaxCandidates && !slices.Contains(dialled, a) && bad == nil
+			tr.learn(a.String(), dial)
+			if dial {
+				start(a)
 			}
-			if _, err := e.candidate(a.String()); err != nil {
-				continue
-			}
-			dialled = append(dialled, a)
-			start([]netip.AddrPort{a})
 		case r := <-ch:
 			running--
 			switch {
 			case r.err != nil:
+				tr.fail(r.a.String())
 				errs = append(errs, r.err)
 			case won == nil:
-				won = r.q
+				tr.up(r.a.String(), true)
+				won, wonAt = r.q, r.a.String()
 				cancel() // the dials still running give up
 			default:
+				tr.up(r.a.String(), false)
 				_ = r.q.CloseWithError(quiclink.CodeDone, "another candidate won")
 			}
 		}
 	}
+	tr.end(wonAt)
 	if won == nil {
 		return nil, fmt.Errorf("direct path: punch: no candidate answered: %w", errors.Join(errs...))
 	}
 	return won, nil
+}
+
+func addrStrings(as []netip.AddrPort) []string {
+	out := make([]string, len(as))
+	for i, a := range as {
+		out[i] = a.String()
+	}
+	return out
 }

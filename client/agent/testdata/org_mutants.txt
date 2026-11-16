@@ -29,7 +29,7 @@ direct-no-token | direct_client.go | 		if !hmac.Equal(got, t.want) { | 		if !hma
 # OnlyTagged, W_PrflxWon): the probe's tag routed, sent and learned.
 prflx-any-tag | direct_prflx.go | 		ch := e.probes.by[string(b[1:n])] | 		var ch chan netip.AddrPort; for _, c := range e.probes.by { ch = c } | TestDirectProbeRoutesOnlyItsTag
 prflx-untagged | direct_server.go | 		_ = d.ep.probe(peer, tag) | 		_ = d.ep.probe(peer, tag[:0]) | TestDirectSymmetricAgentGoesDirectPeerReflexively
-prflx-no-dial | direct_prflx.go | 			start([]netip.AddrPort{a}) | 			_ = a | TestDirectSymmetricAgentGoesDirectPeerReflexively
+prflx-no-dial | direct_prflx.go | 				start(a) | 				_ = a | TestDirectSymmetricAgentGoesDirectPeerReflexively
 # Services by name (service_alpn.go; e2ee_tcp.pv queries 30-35): the
 # client's check of the negotiated protocol, the agent's choice, its OU and
 # publish checks, the start check, the hard cut (no protocol, no session).
