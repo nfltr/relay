@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -78,5 +79,33 @@ func TestReadAnswerBounds(t *testing.T) {
 	}
 	if _, err := NewListener(capaddr.Address{}, nil); err == nil {
 		t.Fatal("NewListener accepted no key")
+	}
+}
+
+// TestAnonymousHint: an anonymous listener signs a1 beside d1 (in the
+// order d1, u1, a1, whichever copy adds which); the record covers it; a
+// handshake that cannot go direct (Handshake: no framing) refuses an
+// anonymous answer with ErrDirectRequired.
+func TestAnonymousHint(t *testing.T) {
+	l, _ := mint(t)
+	a, err := l.WithAnonymous()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a, err = a.WithDirect(); err != nil {
+		t.Fatal(err)
+	}
+	if string(a.hints) != "d1,a1" || !a.Anonymous() || l.Anonymous() || !Anonymous(a.hints) {
+		t.Fatalf("hints %q, anonymous %v (original %v)", a.hints, a.Anonymous(), l.Anonymous())
+	}
+	if err := a.Address().CheckAnswer(a.spki, a.rec, a.hints); err != nil {
+		t.Fatalf("the record does not cover the hints: %v", err)
+	}
+	_, err, _ = run(t, a.Address(), func(s net.Conn) error {
+		_, err := a.Accept(context.Background(), s)
+		return err
+	})
+	if !errors.Is(err, ErrDirectRequired) {
+		t.Fatalf("Handshake to an anonymous address = %v, want ErrDirectRequired", err)
 	}
 }

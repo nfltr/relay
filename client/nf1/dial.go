@@ -106,6 +106,9 @@ func Dial(ctx context.Context, addr capaddr.Address, opt Options) (net.Conn, err
 	if err != nil && ac.Err() != nil {
 		err = ac.Err()
 	}
+	if errors.Is(err, ErrDirectRequired) {
+		_ = AbortDirectRequired(s)
+	}
 	if err != nil {
 		_ = s.Close()
 		_ = mux.Close()
@@ -132,6 +135,8 @@ func answerErr(err error) error {
 		return fmt.Errorf("%w (%s)", ErrNotServed, a.Msg)
 	case reason == relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED:
 		return ErrBalance
+	case reason == relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED:
+		return fmt.Errorf("%w (%s)", ErrDirectRequired, a.Msg)
 	}
 	return fmt.Errorf("%w: %s: %s", ErrRefused, reason, a.Msg)
 }
@@ -157,4 +162,19 @@ func (c *conn) Reset() error {
 	err := c.Conn.Reset()
 	_ = c.mux.Close()
 	return err
+}
+
+// AbortDirectRequired ends c, a session to or of an address served with
+// no account, as relay ERROR_REASON_ACCOUNT_REQUIRED when it is a link
+// session (the relay passes the ABORT on, so the other end reads the same
+// reason; nfltr docs/decisions/nf1-anon-2026-11-16.md section 2), else
+// resets or closes it.
+func AbortDirectRequired(c net.Conn) error {
+	switch v := c.(type) {
+	case interface{ Abort(uint32, string) error }:
+		return v.Abort(dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED), ErrDirectRequired.Error())
+	case interface{ Reset() error }:
+		return v.Reset()
+	}
+	return c.Close()
 }

@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/nfltr/relay/client/tlsend"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
@@ -132,5 +133,20 @@ func TestNF1DialCutIsTruncated(t *testing.T) {
 	b, err := io.ReadAll(c)
 	if string(b) != "x" || !errors.Is(err, tlsend.ErrTruncated) {
 		t.Fatalf("client read %q, %v; want x then tlsend.ErrTruncated", b, err)
+	}
+}
+
+// TestAnswerErrReasons: each relay reason Dial types (the connect
+// sidecar's exit codes).
+func TestAnswerErrReasons(t *testing.T) {
+	for reason, want := range map[relayv1.ErrorReason]error{
+		relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE:     ErrNotServed,
+		relayv1.ErrorReason_ERROR_REASON_BALANCE_EXHAUSTED: ErrBalance,
+		relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED:  ErrDirectRequired,
+		relayv1.ErrorReason_ERROR_REASON_LIMIT_EXCEEDED:    ErrRefused,
+	} {
+		if err := answerErr(dataplane.Refusal(reason, "m")); !errors.Is(err, want) {
+			t.Errorf("%s: %v, want %v", reason, err, want)
+		}
 	}
 }

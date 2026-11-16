@@ -22,6 +22,8 @@
 // to a direct path, the client's first byte after the answer then picking
 // a plain session, a framed one, a control exchange or a re-attach
 // (client/agent direct_nf1.go; nfltr docs/decisions/nf1-direct-2026-11-14.md).
+// A listener WithAnonymous (served with no account) signs HintAnonymous
+// too: its sessions are direct only (nfltr docs/decisions/nf1-anon-2026-11-16.md).
 package nf1
 
 import (
@@ -54,6 +56,14 @@ const HintDirect = "d1"
 // service or the reverse (BIND:cap.kind).
 const HintDatagram = "u1"
 
+// HintAnonymous is the rendezvous hints' flag of a listener served with
+// no account (nfltr docs/decisions/nf1-anon-2026-11-16.md section 2): its
+// relay carries signalling only, so a client sends no byte of the service
+// until the session is on a direct path and never re-attaches it relayed
+// (ErrDirectRequired otherwise). Signed by the record: a relay that strips
+// it breaks the record (exit 7).
+const HintAnonymous = "a1"
+
 // Hints are a comma-separated list of flags ("d1", "u1", "d1,u1"),
 // signed by the record.
 func hasHint(hints []byte, h string) bool {
@@ -68,6 +78,15 @@ func hasHint(hints []byte, h string) bool {
 // TakesDirect reports whether checked hints (CheckAnswer accepted them)
 // say the listener takes direct paths.
 func TakesDirect(hints []byte) bool { return hasHint(hints, HintDirect) }
+
+// Anonymous reports whether checked hints say the listener is served
+// with no account (HintAnonymous).
+func Anonymous(hints []byte) bool { return hasHint(hints, HintAnonymous) }
+
+// ErrDirectRequired: the address is served with no account and its
+// session found no direct path (or lost it): relaying needs the serving
+// side's account (relay ERROR_REASON_ACCOUNT_REQUIRED, exit 12).
+var ErrDirectRequired = errors.New("nf1: no direct path formed, and this address has no account behind it: relaying needs the serving side's nfltr account")
 
 // ErrKind: the address serves the other kind (a datagram service to a
 // stream dial, or the reverse), as its signed record says.
@@ -199,10 +218,15 @@ func (l *Listener) WithDirect() (*Listener, error) { return l.withHint(HintDirec
 // service.
 func (l *Listener) WithDatagram() (*Listener, error) { return l.withHint(HintDatagram) }
 
-// withHint adds flag h to l's signed hints, in the order d1, u1.
+// WithAnonymous is a copy of l whose rendezvous answer says it is served
+// with no account (HintAnonymous, signed): nfnet.Listen makes it for an
+// address served with no credential.
+func (l *Listener) WithAnonymous() (*Listener, error) { return l.withHint(HintAnonymous) }
+
+// withHint adds flag h to l's signed hints, in the order d1, u1, a1.
 func (l *Listener) withHint(h string) (*Listener, error) {
 	var flags []string
-	for _, f := range []string{HintDirect, HintDatagram} {
+	for _, f := range []string{HintDirect, HintDatagram, HintAnonymous} {
 		if f == h || hasHint(l.hints, f) {
 			flags = append(flags, f)
 		}
@@ -222,6 +246,9 @@ func (l *Listener) Datagram() bool { return hasHint(l.hints, HintDatagram) }
 
 // TakesDirect reports whether l's answer says it takes direct paths.
 func (l *Listener) TakesDirect() bool { return TakesDirect(l.hints) }
+
+// Anonymous reports whether l's answer says it is served with no account.
+func (l *Listener) Anonymous() bool { return Anonymous(l.hints) }
 
 // Certificate is the listener's certificate (the address's key), which a
 // direct connection presents too (BIND:nf1direct.pin).
@@ -314,6 +341,9 @@ func handshake(ctx context.Context, conn net.Conn, addr capaddr.Address, datagra
 	}
 	if err := CheckKind(hints, datagram); err != nil {
 		return nil, err
+	}
+	if Anonymous(hints) { // no framing here: the session could never leave the relay
+		return nil, ErrDirectRequired
 	}
 	return ClientTLS(ctx, conn, addr)
 }

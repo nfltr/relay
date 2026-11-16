@@ -56,6 +56,9 @@ func (a *AnswerConn) Err() error {
 			if a.err == nil {
 				a.err = CheckKind(a.hints, a.datagram)
 			}
+			if a.err == nil && Anonymous(a.hints) { // an early session is never framed for direct paths
+				a.err = ErrDirectRequired
+			}
 		}
 	}
 	return a.err
