@@ -203,7 +203,7 @@ func (a *assoc) send() {
 			q[i] = outFrame{}
 			if len(buf) >= flushAt || i == len(q)-1 && len(buf) > 0 {
 				if _, err := a.stream.Write(buf); err != nil {
-					a.end(err)
+					a.endAfterReader(err)
 					return
 				}
 				buf = buf[:0]
@@ -327,6 +327,22 @@ func (a *assoc) endWith(err error, why Reason) {
 			}
 		}
 	})
+}
+
+// endAfterReader is the sender's end at a write error: a peer that ended
+// with a reason closed the stream after its tail of closes (endWith), so
+// the reader takes what is still to read first and ends the association
+// at the stream's end; end(err) only after tailGrace, when it did not.
+// Ending at once lost a revocation's reason to a client that was sending
+// (TestDatagramAssocRevokeNamedWhileSending).
+func (a *assoc) endAfterReader(err error) {
+	t := time.NewTimer(tailGrace)
+	defer t.Stop()
+	select {
+	case <-a.done:
+	case <-t.C:
+	}
+	a.end(err)
 }
 
 // writeTail writes b once the sender returned, both within tailGrace (a

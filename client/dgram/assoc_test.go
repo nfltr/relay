@@ -512,6 +512,44 @@ func TestDatagramAssocRevokeNamesItself(t *testing.T) {
 	}
 }
 
+// slowReader is a client stream whose reads, once slow is set, return
+// only after a pause: the agent's tail of closes is in the client's
+// buffer while its own write already fails on the closed stream.
+type slowReader struct {
+	net.Conn
+	slow atomic.Bool
+}
+
+func (s *slowReader) Read(p []byte) (int, error) {
+	n, err := s.Conn.Read(p)
+	if s.slow.Load() {
+		time.Sleep(20 * time.Millisecond)
+	}
+	return n, err
+}
+
+// A revocation names itself to a client that is sending (lane FLAKE8): its
+// write fails on the stream the agent closed after its tail of closes, and
+// the client still takes those closes (within tailGrace) before it ends,
+// so the flow's Closed gets ReasonRevoked, not the association's end (0).
+func TestDatagramAssocRevokeNamedWhileSending(t *testing.T) {
+	to, _ := echo(t, 1)
+	c1, c2 := net.Pipe()
+	cs := &slowReader{Conn: c1}
+	s := NewServer(c2, Config{}, dialUDP(to))
+	c := NewClient(cs, Config{})
+	t.Cleanup(func() { _ = c.Close(); _ = s.Close(); <-c.Done(); <-s.Done() })
+	f, in, cl := recvFlow(c)
+	f.Send([]byte("a"))
+	recv(t, in)
+	cs.slow.Store(true)
+	s.CloseWith(ReasonRevoked)
+	f.Send([]byte("after"))
+	if r := <-cl; r != ReasonRevoked {
+		t.Fatalf("flow closed %v, want ReasonRevoked", r)
+	}
+}
+
 // 10,000 DNS-style flows (a new source port per query) on one
 // association, one open: each a query, its answer, its close.
 func TestDatagramAssocDNSFlows(t *testing.T) {
