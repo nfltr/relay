@@ -379,7 +379,7 @@ fail=0
 cfg=
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer"
+	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	for c in $cfgs; do
 		m=${c%Large}
@@ -549,6 +549,16 @@ mutants)
 	expect witness:DA-FlowRefused -e 's/^    NoHOL$/    W_FlowRefused/'
 	cfg=DatagramAssocLive
 	expect DA:no-idle -e 's/Mutant = "none"/Mutant = "no-idle"/'
+	cfg=
+	model=DirectPunch
+	# Peer-reflexive candidates (design, lane NATSYM): each failure the punch
+	# prevents, put in.
+	for m in no-tag no-cap no-cert-check keep-loser return-early no-bound; do
+		expect DP:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
+	done
+	for w in W_PrflxWon W_OfferedWon W_Relayed W_RogueRefused W_LoserClosed; do
+		expect witness:DP-$w -e "s/^    TypeOK\$/    $w/"
+	done
 	cfg=
 	model=BrowserPeer
 	# An nf1 address in a browser (design, lane BROWSERPEER): each failure

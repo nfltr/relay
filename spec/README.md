@@ -987,3 +987,57 @@ branches of `Read` and `ReplyA`) are not recorded yet: its Go tests are
 `TestDatagramRevokeOnDirect` and `TestDatagramModelBindings`, with the Go
 mutants `direct-ignores-assoc` and `tag-unchecked`
 (`client/agent/testdata/direct_dgram_mutants.txt`).
+
+## DirectPunch.tla: one punch, with peer-reflexive candidates
+
+Design: nfltr `docs/decisions/nat-symmetric-lan-2026-11-16.md` (lane
+NATSYM). The client of a pair dials the agent's offered candidates at
+once (`quiclink.Punch`) and, while it punches, reads the agent's probes:
+a probe carrying the control exchange's tag (an exporter of that
+exchange's TLS) from an address it does not dial is a peer-reflexive
+candidate (ICE, RFC 8445 7.2.5.3.1, 7.3.1.3), dialled too. That opens a
+public client toward an agent behind an endpoint-dependent (symmetric)
+NAT. `make spec` checks `DirectPunch.cfg` (two offered candidates, one
+the peer's and one someone else's; two probe sources, one that answers;
+one off-path untagged sender; three dials at most; a bound of two ticks).
+
+| invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
+|---|---|---|
+| `OnlyTagged` | a dialled address is offered or a tagged probe's source | `no-tag` |
+| `DialBound` | at most MaxCands dials per punch | `no-cap` |
+| `OnlyPeer` | the kept connection passed the certificate check | `no-cert-check` |
+| `OneConnection` | once the punch returned, its only connection is the kept one | `return-early` |
+| `Ends` (liveness) | every punch returns | `no-bound`, `keep-loser` |
+
+Witnesses (each violated): `W_PrflxWon`, `W_OfferedWon`, `W_Relayed`,
+`W_RogueRefused`, `W_LoserClosed`. TLC 2026-11-16 (`-coverage 1`): 1,240
+distinct states, depth 14, every action taken.
+
+| action | Go |
+|---|---|
+| `AgentProbe` | `directServer.control`: `DirectEndpoint.probe` with `probeTag` |
+| `SpoofProbe`, `Learn` | `DirectEndpoint.readProbes` (the tag's waiter), `DirectEndpoint.punch` (the learned case) |
+| `DialUp`, `DialFail` | `quiclink.Punch` per dial, `punchTLS`'s certificate check |
+| `Win`, `CloseLoser`, `Return`, `Tick` | `DirectEndpoint.punch` (first wins, the others closed, returns once no dial runs), `dialPair`'s 5 s bound |
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| A UDP datagram may be lost, and a NAT may drop every packet toward an address (no fairness on `AgentProbe` and `DialUp`) | RFC 4787 (filtering behaviour) |
+| quic-go hands a datagram whose first byte has its two high bits clear to `ReadNonQUICPacket`, never to a connection | quic-go `Transport.handleNonQUICPacket` |
+| Only the two ends of a control exchange can compute its exporter | RFC 8446 section 7.5 |
+| Who answers at an address is the certificate check | `spec/proverif/e2ee_tcp.pv`, BIND:direct.cert |
+
+### Code map (DirectPunch.tla)
+
+| actions | code |
+|---|---|
+| `AgentProbe`, `Learn`, `Win`, `CloseLoser`, `Return` | client/agent/direct_prflx.go |
+| `AgentProbe` (when) | client/agent/direct_server.go |
+| `Learn` (listen), `Tick` (bound) | client/agent/direct_client.go |
+
+Trace recorder: none yet (gap: the punch is one function with no
+recorder; the e2e test `TestDirectSymmetricAgentGoesDirectPeerReflexively`
+and the Go mutants `prflx-*` in `client/agent/testdata/org_mutants.txt`
+hold the code to it meanwhile).
