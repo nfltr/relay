@@ -534,7 +534,11 @@ func (s *DirectSession) punch(p *directPair) string {
 	if err != nil {
 		return ReasonNoQAD
 	}
+	mapped := s.d.ep.mapping()
 	mine := s.d.reflexive(ctx, offer.QAD)
+	if a := <-mapped; a.IsValid() {
+		mine = append(mine, a)
+	}
 	if s.mode == DirectOn {
 		mine = append(mine, s.d.ep.hostCandidates()...)
 	}

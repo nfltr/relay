@@ -30,6 +30,12 @@ direct-no-token | direct_client.go | 		if !hmac.Equal(got, t.want) { | 		if !hma
 prflx-any-tag | direct_prflx.go | 		ch := e.probes.by[string(b[1:n])] | 		var ch chan netip.AddrPort; for _, c := range e.probes.by { ch = c } | TestDirectProbeRoutesOnlyItsTag
 prflx-untagged | direct_server.go | 		_ = d.ep.probe(peer, tag) | 		_ = d.ep.probe(peer, tag[:0]) | TestDirectSymmetricAgentGoesDirectPeerReflexively
 prflx-no-dial | direct_prflx.go | 				start(a) | 				_ = a | TestDirectSymmetricAgentGoesDirectPeerReflexively
+# Port mapping (direct_portmap.go; nfltr docs/decisions/portmap-2026-11-16.md):
+# the mapped address offered, the mapping deleted on Close, only a silent
+# gateway left alone (a refusal or a restarted router is asked again).
+portmap-not-offered | direct_server.go | 	if a := <-mapped; a.IsValid() { | 	if a := <-mapped; false && a.IsValid() { | TestDirectMappedAgentGoesDirect
+portmap-no-delete | direct_portmap.go | 		_, _ = e.askMap(m.gw, 0) | 		_ = m.gw | TestDirectPortMapLease
+portmap-cache-refusal | direct_portmap.go | 		if time.Since(start) >= portMapBound { | 		if start.IsZero() || true { | TestDirectPortMapLease
 # Services by name (service_alpn.go; e2ee_tcp.pv queries 30-35): the
 # client's check of the negotiated protocol, the agent's choice, its OU and
 # publish checks, the start check, the hard cut (no protocol, no session).

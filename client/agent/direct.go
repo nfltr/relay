@@ -107,6 +107,7 @@ type DirectEndpoint struct {
 	// loopback services.
 	loopback bool
 	probes   probeWaiters // the tagged probes' readers (direct_prflx.go)
+	pm       portMap      // the gateway's mapping of the socket (direct_portmap.go)
 }
 
 // NewDirectEndpoint opens the socket on an ephemeral port.
@@ -121,9 +122,11 @@ func NewDirectEndpoint() (*DirectEndpoint, error) {
 // Transport is the socket's quic.Transport.
 func (e *DirectEndpoint) Transport() *quic.Transport { return e.tr }
 
-// Close closes the socket: the Transport, then the UDP socket it was given
-// (a quic.Transport closes only a socket it opened itself).
+// Close deletes the port mapping, if any, and closes the socket: the
+// Transport, then the UDP socket it was given (a quic.Transport closes only
+// a socket it opened itself).
 func (e *DirectEndpoint) Close() error {
+	e.unmap()
 	err := e.tr.Close()
 	if cerr := e.pc.Close(); cerr != nil && !errors.Is(cerr, net.ErrClosed) {
 		err = errors.Join(err, cerr)

@@ -18,7 +18,7 @@ import (
 // symmetricQAD answers QAD as qadServer does, but answers lie to the source
 // whose port is victim's: the observed address of an agent behind an
 // endpoint-dependent (symmetric) NAT, whose mapping toward the relay is
-// not the one toward its peer.
+// not the one toward its peer. victim nil: it lies to every source.
 func symmetricQAD(t *testing.T, victim *net.UDPAddr, lie string) string {
 	t.Helper()
 	o := newTestOrg(t)
@@ -38,7 +38,7 @@ func symmetricQAD(t *testing.T, victim *net.UDPAddr, lie string) string {
 				s, err := q.OpenUniStream()
 				if err == nil {
 					answer := q.RemoteAddr().String()
-					if q.RemoteAddr().(*net.UDPAddr).Port == victim.Port {
+					if victim == nil || q.RemoteAddr().(*net.UDPAddr).Port == victim.Port {
 						answer = lie
 					}
 					_, _ = io.WriteString(s, answer)

@@ -1049,6 +1049,11 @@ one off-path untagged sender; three dials at most; a bound of two ticks).
 | `OneConnection` | once the punch returned, its only connection is the kept one | `return-early` |
 | `Ends` (liveness) | every punch returns | `no-bound`, `keep-loser` |
 
+A port-mapped address (NAT-PMP, `client/agent/direct_portmap.go`; nfltr
+`docs/decisions/portmap-2026-11-16.md`) is one more of `Offered`: the
+mapping's lease is renewed before an offer names it, so the punch is
+unchanged and the model with it.
+
 Witnesses (each violated): `W_PrflxWon`, `W_OfferedWon`, `W_Relayed`,
 `W_RogueRefused`, `W_LoserClosed`. TLC 2026-11-16 (`-coverage 1`): 1,240
 distinct states, depth 14, every action taken.
@@ -1076,6 +1081,7 @@ distinct states, depth 14, every action taken.
 | `AgentProbe`, `Learn`, `Win`, `CloseLoser`, `Return` | client/agent/direct_prflx.go |
 | `AgentProbe` (when) | client/agent/direct_server.go |
 | `Learn` (listen), `Tick` (bound) | client/agent/direct_client.go |
+| `Offered` (the mapped candidate) | client/agent/direct_portmap.go |
 
 | trace recorder | client/agent/trace_punch_on.go |
 
@@ -1083,7 +1089,7 @@ distinct states, depth 14, every action taken.
 
 `make spec-ptraces` (in make ci, about 30 s): client/agent's punch tests
 (`TestDirectSymmetricAgentGoesDirectPeerReflexively`,
-`TestDirectSessionMovesAndFallsBack`, `TestDirectModelBindings`,
+`TestDirectMappedAgentGoesDirect`, `TestDirectSessionMovesAndFallsBack`, `TestDirectModelBindings`,
 `TestDirectAgentRebindDirectAgain`) built `-tags relaytrace`, each in its
 own process; every punch writes `directpunch-<pid>-<n>.ndjson` (Init with
 the offered candidates, Learn with what the punch did, DialUp then Win or

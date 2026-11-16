@@ -438,6 +438,7 @@ func (d *directServer) control(c net.Conn, relay *qadTarget, agent string, modeO
 	}
 	offer := directOffer{Agent: agent}
 	var cands []netip.AddrPort
+	mapped := d.ep.mapping()
 	if relay != nil {
 		offer.QAD = relay.addr
 		if a, err := d.ep.QAD(context.Background(), relay.addr, relay.tls); err == nil {
@@ -445,6 +446,9 @@ func (d *directServer) control(c net.Conn, relay *qadTarget, agent string, modeO
 		} else {
 			d.logger.Info("direct path: qad", "error", err)
 		}
+	}
+	if a := <-mapped; a.IsValid() {
+		cands = append(cands, a)
 	}
 	if mode == DirectOn {
 		cands = append(cands, d.ep.hostCandidates()...)
