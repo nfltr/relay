@@ -16,3 +16,9 @@ func traceLine(map[string]any) {}
 // (trace_on.go, ORGMOVETRACE=<dir>); here they compile away.
 func traceCommit(string, Entry, string, string) {}
 func moveTrace(map[string]any)                  {}
+
+// appTraceLine records one step of the issuer for
+// spec/appenrol/TraceAppEnrol.tla (scripts/spec-appenrol.sh traces).
+// Built only with -tags enroltrace (trace_on.go, APPENROLTRACE=<dir>);
+// here it compiles away.
+func appTraceLine(map[string]any) {}

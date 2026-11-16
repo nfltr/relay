@@ -95,6 +95,9 @@ func answerOf(ctx context.Context, mb Mailbox, orgID string, ids []string, wait 
 			if json.Unmarshal(e.Payload, &a) != nil || !slices.Contains(ids, a.ID) {
 				continue
 			}
+			if a.SignInEnded { // a renewal past its sign-in: the device signs in again
+				return a, fmt.Errorf("the issuer refused: %w", orgpki.ErrSignInEnded)
+			}
 			if a.Refused != "" {
 				return a, fmt.Errorf("the issuer refused: %s", a.Refused)
 			}

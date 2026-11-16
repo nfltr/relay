@@ -321,7 +321,7 @@ func (s *service) answer(ctx context.Context, e mailboxclient.Envelope, now time
 	if os.IsNotExist(err) {
 		var refuse string
 		if refuse, err = s.wrongMachine(ctx, req, e.Sender); err == nil {
-			data, err = s.decide(req, refuse, now)
+			data, err = s.decide(ctx, req, refuse, now)
 		}
 		if err == nil {
 			err = orgfiles.Write(f, data, 0o600)
@@ -383,7 +383,7 @@ func senderMachine(sender string) string {
 
 // decide answers req under the directory's lock; refuse, when set, is the
 // answer's refusal (nothing is redeemed).
-func (s *service) decide(req orgpki.Request, refuse string, now time.Time) ([]byte, error) {
+func (s *service) decide(ctx context.Context, req orgpki.Request, refuse string, now time.Time) ([]byte, error) {
 	a := orgpki.Answer{ID: req.ID}
 	if refuse != "" {
 		a.Refused = refuse
@@ -397,11 +397,14 @@ func (s *service) decide(req orgpki.Request, refuse string, now time.Time) ([]by
 			der, err = iss.Enrol(*req.Enrol, now)
 		case req.Renew != nil:
 			der, err = iss.Renew(*req.Renew, now)
+		case req.SignIn != nil:
+			// ponytail: fetches the IdP's keys (once per IdP, cached) under the directory's lock
+			der, err = iss.EnrolSignIn(ctx, *req.SignIn, now)
 		default:
-			err = errors.New("neither an enrolment nor a renewal")
+			err = errors.New("neither an enrolment, a renewal nor a sign-in")
 		}
 		if err != nil {
-			a.Refused = err.Error()
+			a.Refused, a.SignInEnded = err.Error(), errors.Is(err, orgpki.ErrSignInEnded)
 			return nil
 		}
 		a.Cert, a.Issuer = der, iss.Cert().Raw

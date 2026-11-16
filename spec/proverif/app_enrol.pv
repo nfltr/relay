@@ -35,7 +35,9 @@
    Bindings (spec/proverif/README.md "Bindings"; make spec-bindings):
      BIND:app.nonce   the nonce: SHA-256 of both keys' SPKIs, length-prefixed, in order (client/appenrol)
      BIND:app.attrs   the person and app SANs: a service admits by them (client/orgid Peer.Users, Peer.Apps)
-     BIND:app.urihost an nfltr URI SAN names the organisation's domain (client/orgid; the issuer's DNS constraints do not cover it) *)
+     BIND:app.urihost an nfltr URI SAN names the organisation's domain (client/orgid; the issuer's DNS constraints do not cover it)
+     BIND:app.aud     the issuer takes a token only for a client id of the rule, aud and azp (org/orgpki EnrolSignIn)
+     BIND:app.idtoken the token is the rule's IdP's: its signature, iss and exp (org/orgpki EnrolSignIn, go-oidc) *)
 
 free c: channel.                       (* the relay *)
 free cidp: channel [private].          (* a device's TLS session with the IdP *)

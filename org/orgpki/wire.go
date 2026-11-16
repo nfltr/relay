@@ -31,6 +31,8 @@ type Request struct {
 	ID    string        `json:"id"`
 	Enrol *EnrolRequest `json:"enrol,omitempty"`
 	Renew *RenewRequest `json:"renew,omitempty"`
+	// SignIn is an enrolment by a person's sign-in (ID: random, the device's own).
+	SignIn *SignInRequest `json:"sign_in,omitempty"`
 }
 
 // Answer is the issuer's answer to request ID: the certificate and the
@@ -45,6 +47,8 @@ type Answer struct {
 	HostCert   []byte     `json:"host_cert,omitempty"` // SSH wire form (Issuer.HostCert)
 	MachineKey *SealedKey `json:"machine_key,omitempty"`
 	Refused    string     `json:"refused,omitempty"`
+	// SignInEnded: the refusal is ErrSignInEnded (the device signs in again).
+	SignInEnded bool `json:"sign_in_ended,omitempty"`
 }
 
 // RootMessage is the organisation's current root and its recovery, and

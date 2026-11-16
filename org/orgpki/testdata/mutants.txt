@@ -21,7 +21,7 @@ reissue-any-key | issuer.go | 		if n.revoked || last.token != req.TokenID || las
 reissue-revoked | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | TestTokenAnsweredAgainForItsKey
 reissue-after-renewal | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if n.revoked || last.key != orgid.KeyFingerprint(pub) { | TestTokenAnsweredAgainForItsKey
 token-in-request | issuer.go | 	if !hmac.Equal(req.MAC, enrolMAC(i.tokenSecret(req.TokenID), req.CSR)) { | 	if false { | TestTokenForAnotherNameRefused
-name-from-request | issuer.go | 	return i.issue(ActIssued, t.name, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now) | 	return i.issue(ActIssued, cr.Subject.CommonName, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now) | TestTokenForAnotherNameRefused
+name-from-request | issuer.go | 	der, err := i.issue(ActIssued, t.name, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now) | 	der, err := i.issue(ActIssued, cr.Subject.CommonName, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now) | TestTokenForAnotherNameRefused
 token-outlives-ttl | issuer.go | 	if !now.Before(t.expires) { | 	if false { | TestTokenForAnotherNameRefused
 token-group-outside-policy | issuer.go | 	if policy := i.Groups(); !subset(groups, policy) { | 	if policy := i.Groups(); false && !subset(groups, policy) { | TestGroupOutsidePolicyRefused
 renew-forged | issuer.go | 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) { | 	if _ = sum; rec == nil { | TestRotationOnlyByRecoveryKey
@@ -56,8 +56,18 @@ issuer-crl-any-cert | issuercrl.go | 		if !c.IsCA || c.CheckSignatureFrom(root) 
 renew-revoked-issuer | issuercrl.go | 		if e.SerialNumber.Cmp(c.SerialNumber) == 0 { | 		if e.SerialNumber == nil { | TestSignIssuerCRL
 # An app's device for a person (spec/appenrol/AppEnrol.tla, nfltr
 # docs/decisions/app-device-identity-2026-11-16.md).
-renew-takes-attrs | issuer.go | 	return i.issue(ActRenewed, rec.name, n.groups, n.machineID, n.dev, cr.PublicKey.(ed25519.PublicKey), "", sn, now) | 	return i.issue(ActRenewed, rec.name, n.groups, n.machineID, Device{}, cr.PublicKey.(ed25519.PublicKey), "", sn, now) | TestDeviceTokenNamesPersonAndApp
+renew-takes-attrs | issuer.go | 	der, err := i.issue(ActRenewed, rec.name, n.groups, n.machineID, n.dev, cr.PublicKey, "", sn, now) | 	der, err := i.issue(ActRenewed, rec.name, n.groups, n.machineID, Device{}, cr.PublicKey, "", sn, now) | TestDeviceTokenNamesPersonAndApp
 revoke-user-one-name | issuer.go | 				if n.dev.of(e.Person, e.App) { | 				if n.dev.of(e.Person, e.App) && n.revoked { | TestRevokePersonRevokesEveryName
 sso-skips-deny | issuer.go | 	if i.deniedDev(t.dev) { // AppEnrol.tla RevokedUserCut: a code made before the revoke | 	if false { | TestRevokePersonRevokesEveryName
 revoke-app-sso-only | issuer.go | 	return d.Person != "" && i.denied[denyKey(d.Person, "")] || d.App != "" && i.denied[denyKey("", d.App)] | 	return d.Person != "" && i.denied[denyKey(d.Person, "")] | TestRevokeAppRevokesEveryName
 uri-unconstrained | profile.go | 		PermittedURIDomains: []string{orgid.Domain(orgID)}, | 		PermittedURIDomains: nil, | TestIssuerConstrainsURIs
+# The sign-in path (signin.go; AppEnrol.tla EnrolSSO, Renew, Reauth;
+# app_enrol.pv IssuerSSO, its BIND:app.* rows).
+signin-no-nonce-check | signin.go | 	if err := appenrol.CheckNonce(si.nonce, kr, pub); err != nil { | 	if err := error(nil); err != nil { | TestAppEnrolSignInModelBindings
+no-aud-check | signin.go | 	case client == "" || c.AZP != "" && !slices.Contains(rule.ClientIDs, c.AZP): | 	case false: | TestAppEnrolSignInModelBindings
+no-token-exp | signin.go | 	t, err := p.VerifierContext(ctx, &oidc.Config{SkipClientIDCheck: true, Now: func() time.Time { return now }}).Verify(ctx, raw) | 	t, err := p.VerifierContext(ctx, &oidc.Config{SkipClientIDCheck: true, SkipExpiryCheck: true, Now: func() time.Time { return now }}).Verify(ctx, raw) | TestAppEnrolSignInModelBindings
+email-unverified | signin.go | 	case !c.Verified: | 	case false: | TestAppEnrolSignInModelBindings
+signin-skips-deny | signin.go | 	if i.deniedDev(dev) { // AppEnrol.tla EnrolSSO, Reauth: the deny lists | 	if false { | TestSignInOnlyForItsPersonNotRevoked
+reauth-any-user | signin.go | 		case n.dev != dev: // AppEnrol.tla Reauth (mutant reauth-any-user) | 		case false: | TestSignInOnlyForItsPersonNotRevoked
+signin-takes-code-key | signin.go | 		case n.authUntil.IsZero(): | 		case false: | TestSignInOnlyForItsPersonNotRevoked
+renew-ignores-auth | issuer.go | 	if !n.authUntil.IsZero() && now.After(n.authUntil) { // AppEnrol.tla Renew (mutant renew-ignores-auth) | 	if false { | TestSignInRenewalEndsWithAuthLife

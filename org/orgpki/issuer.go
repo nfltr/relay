@@ -5,7 +5,9 @@ package orgpki
 
 import (
 	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/rand"
@@ -83,7 +85,8 @@ type nameRec struct {
 	machineID string
 	dev       Device
 	revoked   bool
-	serials   []string // in issue order
+	serials   []string  // in issue order
+	authUntil time.Time // enrolled by sign-in: renews by itself until then (AuthLife); zero: by a code, until revoked
 }
 
 // Issuer is the organisation's automated signer: every act takes its one
@@ -107,7 +110,9 @@ type Issuer struct {
 	crlDue    bool   // a revocation or a new issuer certificate since the last CRL
 	movedTo   string // the receive key the log's last fence names (move.go)
 	head      string
-	heads     map[string]bool // every head the log had: a remote renewal checkpoints one (renew.go)
+	heads     map[string]bool       // every head the log had: a remote renewal checkpoints one (renew.go)
+	rules     map[string]SignInRule // by id (signin.go)
+	idps      providers
 	sink      Sink
 }
 
@@ -140,7 +145,7 @@ func Open(lines [][]byte, key ed25519.PrivateKey, sink Sink) (*Issuer, error) {
 	if err != nil {
 		return nil, err
 	}
-	i := &Issuer{tokens: map[string]*tokenRec{}, names: map[string]*nameRec{}, certs: map[string]*certRec{}, heads: map[string]bool{}, sink: sink}
+	i := &Issuer{tokens: map[string]*tokenRec{}, names: map[string]*nameRec{}, certs: map[string]*certRec{}, heads: map[string]bool{}, rules: map[string]SignInRule{}, sink: sink}
 	for _, l := range lines {
 		i.heads[lineHash(l)] = true
 	}
@@ -201,6 +206,9 @@ func (i *Issuer) apply(e Entry) error {
 			i.names[e.Name] = n
 		}
 		n.serials = append(n.serials, e.Serial)
+		if !e.AuthUntil.IsZero() {
+			n.authUntil = e.AuthUntil
+		}
 		i.certs[e.Serial] = &certRec{name: e.Name, key: e.Key, digest: e.Digest, token: e.Token, notAfter: e.NotAfter}
 	case ActRevoked:
 		if n := i.names[e.Name]; n != nil {
@@ -218,6 +226,13 @@ func (i *Issuer) apply(e Entry) error {
 			}
 		}
 		i.crlDue = true
+	case ActRule:
+		if e.Rule == nil {
+			return errors.New("a rule line names no rule")
+		}
+		i.rules[e.Rule.ID] = *e.Rule
+	case ActRuleRemoved:
+		delete(i.rules, e.Name)
 	case ActCRL:
 		i.crlNumber, i.crlNext, i.crlDue = e.Number, e.NotAfter, false
 	case ActMoved:
@@ -394,7 +409,8 @@ func NewRenewRequest(cert []byte, current ed25519.PrivateKey, csr []byte) RenewR
 	return RenewRequest{Cert: cert, CSR: csr, Sig: ed25519.Sign(current, renewMessage(csr))}
 }
 
-// parseCSR: a CSR its key signed (proof of possession), for an Ed25519 key.
+// parseCSR: a CSR its key signed (proof of possession), for an Ed25519 key
+// or (a device's key in a Secure Enclave or TPM) a P-256 one.
 // The issuer takes only its key: the name and groups are the token's or
 // the log's (enrol.pv mutant name-from-request).
 func parseCSR(der []byte) (*x509.CertificateRequest, error) {
@@ -405,8 +421,14 @@ func parseCSR(der []byte) (*x509.CertificateRequest, error) {
 	if err := csr.CheckSignature(); err != nil {
 		return nil, err
 	}
-	if _, ok := csr.PublicKey.(ed25519.PublicKey); !ok {
-		return nil, errors.New("the key is not Ed25519")
+	switch k := csr.PublicKey.(type) {
+	case ed25519.PublicKey:
+	case *ecdsa.PublicKey:
+		if k.Curve != elliptic.P256() {
+			return nil, errors.New("the key is not Ed25519 or P-256")
+		}
+	default:
+		return nil, errors.New("the key is not Ed25519 or P-256")
 	}
 	return csr, nil
 }
@@ -450,7 +472,11 @@ func (i *Issuer) Enrol(req EnrolRequest, now time.Time) ([]byte, error) {
 			return nil, i.refuse(refusal, t.name+" is enrolled already (the token was redeemed, or another token's was)")
 		}
 	}
-	return i.issue(ActIssued, t.name, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now)
+	der, err := i.issue(ActIssued, t.name, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now)
+	if err == nil {
+		appTraceLine(map[string]any{"ev": "code", "o": i.orgID, "n": t.name, "u": t.dev.Person, "a": t.dev.App, "tok": req.TokenID, "k": orgid.KeyFingerprint(pub), "t": now.Unix()})
+	}
+	return der, err
 }
 
 // Renew re-certifies a machine under the current issuer for a new key. It
@@ -483,7 +509,17 @@ func (i *Issuer) Renew(req RenewRequest, now time.Time) ([]byte, error) {
 		i.traceRefused(sn, cur, "revoked", now)
 		return nil, i.refuse(refusal, rec.name+" is revoked")
 	}
-	if pub, ok := cur.PublicKey.(ed25519.PublicKey); !ok || !ed25519.Verify(pub, renewMessage(req.CSR), req.Sig) {
+	if !n.authUntil.IsZero() && now.After(n.authUntil) { // AppEnrol.tla Renew (mutant renew-ignores-auth)
+		i.traceRefused(sn, cur, "other", now)
+		appTraceLine(map[string]any{"ev": "refuse", "o": i.orgID, "n": rec.name, "why": "auth", "t": now.Unix()})
+		refusal.Reason = ErrSignInEnded.Error()
+		refusal.Act = ActRefused
+		if err := i.commit(refusal); err != nil {
+			return nil, err
+		}
+		return nil, fmt.Errorf("%w: %w", ErrRefused, ErrSignInEnded)
+	}
+	if !verifyRenewSig(cur.PublicKey, renewMessage(req.CSR), req.Sig) {
 		i.traceRefused(sn, cur, "other", now)
 		return nil, i.refuse(refusal, "not signed by the certificate's key")
 	}
@@ -492,10 +528,33 @@ func (i *Issuer) Renew(req RenewRequest, now time.Time) ([]byte, error) {
 		i.traceRefused(sn, cur, "other", now)
 		return nil, i.refuse(refusal, "CSR: "+err.Error())
 	}
-	return i.issue(ActRenewed, rec.name, n.groups, n.machineID, n.dev, cr.PublicKey.(ed25519.PublicKey), "", sn, now)
+	der, err := i.issue(ActRenewed, rec.name, n.groups, n.machineID, n.dev, cr.PublicKey, "", sn, now)
+	if err == nil {
+		appTraceLine(map[string]any{"ev": "renew", "o": i.orgID, "n": rec.name, "u": n.dev.Person, "a": n.dev.App, "k": orgid.KeyFingerprint(cr.PublicKey), "t": now.Unix()})
+	}
+	return der, err
 }
 
-func (i *Issuer) issue(act, name string, groups []string, machineID string, dev Device, pub ed25519.PublicKey, token, from string, now time.Time) ([]byte, error) {
+// verifyRenewSig: sig is pub's over msg (Ed25519, or P-256 ECDSA over its
+// SHA-256).
+func verifyRenewSig(pub crypto.PublicKey, msg, sig []byte) bool {
+	switch k := pub.(type) {
+	case ed25519.PublicKey:
+		return ed25519.Verify(k, msg, sig)
+	case *ecdsa.PublicKey:
+		sum := sha256.Sum256(msg)
+		return ecdsa.VerifyASN1(k, sum[:], sig)
+	}
+	return false
+}
+
+func (i *Issuer) issue(act, name string, groups []string, machineID string, dev Device, pub crypto.PublicKey, token, from string, now time.Time) ([]byte, error) {
+	return i.issueEntry(act, name, groups, machineID, dev, pub, token, from, now, nil)
+}
+
+// issueEntry is issue with more of the log line (extra, when not nil:
+// a sign-in's).
+func (i *Issuer) issueEntry(act, name string, groups []string, machineID string, dev Device, pub crypto.PublicKey, token, from string, now time.Time, extra func(*Entry)) ([]byte, error) {
 	if !subset(groups, i.cert.Subject.OrganizationalUnit) {
 		return nil, i.refuse(Entry{Time: now, Name: name, Token: token, Serial: from}, fmt.Sprintf("groups %v are outside the issuer's policy", groups))
 	}
@@ -514,6 +573,9 @@ func (i *Issuer) issue(act, name string, groups []string, machineID string, dev 
 	e := Entry{Time: now, Act: act, Name: name, Groups: slices.Clone(groups), MachineID: machineID, Person: dev.Person, App: dev.App,
 		Serial: hex.EncodeToString(t.SerialNumber.Bytes()), From: from, Key: orgid.KeyFingerprint(pub),
 		Digest: hex.EncodeToString(sum[:]), Token: token, NotAfter: t.NotAfter}
+	if extra != nil {
+		extra(&e)
+	}
 	if err := i.commit(e); err != nil {
 		return nil, err
 	}
@@ -543,6 +605,7 @@ func (i *Issuer) Revoke(name string, now time.Time) error {
 		return err
 	}
 	traceLine(map[string]any{"ev": "revoke", "o": i.orgID, "n": name, "t": now.Unix()})
+	appTraceLine(map[string]any{"ev": "revoke", "o": i.orgID, "names": []string{name}, "t": now.Unix()})
 	return nil
 }
 
@@ -576,11 +639,14 @@ func (i *Issuer) revokeDev(d Device, now time.Time) error {
 	if err := i.commit(Entry{Time: now, Act: ActRevoked, Person: d.Person, App: d.App}); err != nil {
 		return err
 	}
+	names := []string{}
 	for name, n := range i.names {
-		if n.dev.of(d.Person, d.App) {
+		if n.dev.of(d.Person, d.App) && n.revoked {
 			traceLine(map[string]any{"ev": "revoke", "o": i.orgID, "n": name, "t": now.Unix()})
+			names = append(names, name)
 		}
 	}
+	appTraceLine(map[string]any{"ev": "revoke", "o": i.orgID, "u": d.Person, "a": d.App, "names": names, "t": now.Unix()})
 	return nil
 }
 

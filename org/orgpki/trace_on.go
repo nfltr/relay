@@ -76,3 +76,29 @@ func moveTrace(l map[string]any) {
 		panic(err)
 	}
 }
+
+// App enrolment traces (APPENROLTRACE=<dir>, scripts/spec-appenrol.sh
+// traces): the issuer's sign-in, code, renewal and revocation steps,
+// written under its lock; spec/appenrol/TraceAppEnrol.tla checks them.
+var appMu sync.Mutex
+
+func appTraceLine(l map[string]any) {
+	dir := os.Getenv("APPENROLTRACE")
+	if dir == "" {
+		return
+	}
+	b, err := json.Marshal(l)
+	if err != nil {
+		panic(err)
+	}
+	appMu.Lock()
+	defer appMu.Unlock()
+	f, err := os.OpenFile(filepath.Join(dir, strconv.Itoa(os.Getpid())+".ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		panic(err)
+	}
+}

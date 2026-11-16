@@ -22,46 +22,53 @@ import (
 
 // Acts in the audit log.
 const (
-	ActInit       = "init"       // Cert: the root; Recovery: the recovery's certificate; KeyLabel: the root primary's
-	ActIssuer     = "issuer"     // Cert: an issuer certificate the root signed
-	ActRotated    = "rotated"    // Cert: the new root, cross-signed by the recovery key; KeyLabel
-	ActToken      = "token"      // Token, Name, Groups, MachineID, Person, App, NotAfter (the token's expiry)
-	ActIssued     = "issued"     // Name, Groups, MachineID, Person, App, Serial, Key, Digest, NotAfter, Token
-	ActRenewed    = "renewed"    // as issued; From: the serial it renews
-	ActRefused    = "refused"    // Reason; Token or Serial when known
-	ActRevoked    = "revoked"    // Name; or Person or App: every name of it, and no enrolment of it from now
-	ActCRL        = "crl"        // Number, NotAfter (its NextUpdate)
-	ActCheckpoint = "checkpoint" // Head; IssuerSig; RootSig (at an issuer renewal)
-	ActMoved      = "moved"      // Key: the new machine's receive key fingerprint (the fence, move.go)
-	ActArrived    = "arrived"    // Key: the receive key the fence named, on the new machine
+	ActInit        = "init"         // Cert: the root; Recovery: the recovery's certificate; KeyLabel: the root primary's
+	ActIssuer      = "issuer"       // Cert: an issuer certificate the root signed
+	ActRotated     = "rotated"      // Cert: the new root, cross-signed by the recovery key; KeyLabel
+	ActToken       = "token"        // Token, Name, Groups, MachineID, Person, App, NotAfter (the token's expiry)
+	ActIssued      = "issued"       // Name, Groups, MachineID, Person, App, Serial, Key, Digest, NotAfter, Token; by sign-in IdP, Subject, ClientID, AuthUntil
+	ActRenewed     = "renewed"      // as issued; From: the serial it renews
+	ActRefused     = "refused"      // Reason; Token or Serial when known
+	ActRevoked     = "revoked"      // Name; or Person or App: every name of it, and no enrolment of it from now
+	ActCRL         = "crl"          // Number, NotAfter (its NextUpdate)
+	ActCheckpoint  = "checkpoint"   // Head; IssuerSig; RootSig (at an issuer renewal)
+	ActMoved       = "moved"        // Key: the new machine's receive key fingerprint (the fence, move.go)
+	ActArrived     = "arrived"      // Key: the receive key the fence named, on the new machine
+	ActRule        = "rule"         // Rule: a sign-in rule added or replaced (signin.go)
+	ActRuleRemoved = "rule-removed" // Name: the sign-in rule's id
 )
 
 // Entry is one line of the issuer's hash-chained JSON-lines log. Prev is
 // the SHA-256 of the previous line's bytes ("" for the first).
 type Entry struct {
-	Time      time.Time `json:"time"`
-	Act       string    `json:"act"`
-	Name      string    `json:"name,omitempty"`
-	Groups    []string  `json:"groups,omitempty"`
-	MachineID string    `json:"machine_id,omitempty"`
-	Person    string    `json:"person,omitempty"`
-	App       string    `json:"app,omitempty"`
-	Serial    string    `json:"serial,omitempty"`
-	From      string    `json:"from,omitempty"`
-	Key       string    `json:"key,omitempty"`
-	Digest    string    `json:"digest,omitempty"`
-	Token     string    `json:"token,omitempty"`
-	NotAfter  time.Time `json:"not_after,omitzero"`
-	Number    int64     `json:"number,omitempty"`
-	Reason    string    `json:"reason,omitempty"`
-	KeyLabel  string    `json:"key_label,omitempty"`
-	RootKind  string    `json:"root_kind,omitempty"`
-	Cert      []byte    `json:"cert,omitempty"`
-	Recovery  []byte    `json:"recovery,omitempty"`
-	Head      string    `json:"head,omitempty"`
-	IssuerSig []byte    `json:"issuer_sig,omitempty"`
-	RootSig   []byte    `json:"root_sig,omitempty"`
-	Prev      string    `json:"prev"`
+	Time      time.Time   `json:"time"`
+	Act       string      `json:"act"`
+	Name      string      `json:"name,omitempty"`
+	Groups    []string    `json:"groups,omitempty"`
+	MachineID string      `json:"machine_id,omitempty"`
+	Person    string      `json:"person,omitempty"`
+	App       string      `json:"app,omitempty"`
+	Serial    string      `json:"serial,omitempty"`
+	From      string      `json:"from,omitempty"`
+	Key       string      `json:"key,omitempty"`
+	Digest    string      `json:"digest,omitempty"`
+	Token     string      `json:"token,omitempty"`
+	NotAfter  time.Time   `json:"not_after,omitzero"`
+	Number    int64       `json:"number,omitempty"`
+	Reason    string      `json:"reason,omitempty"`
+	KeyLabel  string      `json:"key_label,omitempty"`
+	RootKind  string      `json:"root_kind,omitempty"`
+	Cert      []byte      `json:"cert,omitempty"`
+	Recovery  []byte      `json:"recovery,omitempty"`
+	Head      string      `json:"head,omitempty"`
+	IssuerSig []byte      `json:"issuer_sig,omitempty"`
+	RootSig   []byte      `json:"root_sig,omitempty"`
+	Rule      *SignInRule `json:"rule,omitempty"`
+	IdP       string      `json:"idp,omitempty"`
+	Subject   string      `json:"sub,omitempty"`
+	ClientID  string      `json:"client_id,omitempty"`
+	AuthUntil time.Time   `json:"auth_until,omitzero"`
+	Prev      string      `json:"prev"`
 }
 
 func lineHash(line []byte) string {
