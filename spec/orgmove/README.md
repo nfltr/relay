@@ -95,6 +95,65 @@ witnesses `WitnessMoved`, `WitnessMovedBack`, `WitnessBackUnpublished`,
 yet (gap: the holds are relay state; the move's own recorder covers the
 fence, send and import).
 
+## `OrgHosted.tla`: the opt-in hosted issuer (design, no code yet)
+
+The design is nfltr's `docs/decisions/org-hosted-issuer-2026-11-16.md`.
+The owner keeps the root and the recovery key; the issuer key moves onto a
+machine the hosting service runs (and back) by the fenced move above, and
+the root renews it monthly (at most `DelegLife`). k1 is the organisation's
+issuer key; k2 a standby the root pre-certified on the hosted machine (the
+shape a high-availability design would use), served only by the owner's
+signed activation. The attacker owns the relay (it withholds the root's
+revocation as long as it likes) and may compromise the hosted machine (it
+then holds every key there, a copy that outlives a move off). The
+transfer's secrecy, the attested receive key, the root-signed move order
+and the operator's commands are `spec/proverif/orghosted.pv`.
+
+| property | means | mutant that breaks it |
+|---|---|---|
+| AtMostOneIssuer | at most one issuer serves | `auto-takeover` (the hosted side activates the standby because it no longer hears the owner's issuer) |
+| ServingAuthorized | an issuer serves only where the owner put it: genesis, a fence naming that host, a signed activation | `auto-takeover` |
+| DelegationBound | no session under an issuer key outlives the NotAfter the root signed for it, whoever holds the key | `self-renew` (the hosted issuer extends its own certificate), `until-leaf-only` (a session's admission ends at the leaf's NotAfter alone: a stolen issuer key signs a leaf that outlives it; relay client `orgid` `Checked.Until` today, finding F1 of the design doc) |
+| RevokedIssuerRefused | a verifier that took the root's revocation of an issuer admits nothing under it and holds no session under it | `ignore-root-crl`, `keep-sessions` (taken, sessions not cut) |
+| RevokeTakesEffect (LiveSpec) | a revocation the root signed reaches the verifier once the relay carries it | `no-push` |
+
+Witnesses (each must be violated, the state reachable): `WitnessHostedServes`,
+`WitnessMovedOff` (back on the owner's machine while the attacker still
+holds a copy taken on the hosted machine), `WitnessStolenSession` (the
+bound is a bound, not a prevention: a stolen key admits until its
+delegation ends), `WitnessRevokedCut` (a stolen key revoked before its
+NotAfter), `WitnessOwnerActivated`, `WitnessRenewed`. TLC also showed
+that a compromise of the hosted machine yields the standby k2 too
+(`until-leaf-only` is caught through k2 at depth 4): a pre-certified
+standby is a live credential for its whole life, served or not.
+
+| Action | design |
+|---|---|
+| Tick | time; a session ends at its admission's Until |
+| Renew | the monthly renewal: the serving issuer's request, the root's answer (`org/orgpki/renew.go`); only the root extends a delegation |
+| SelfRenew | mutant only (`self-renew`); coverage skips it |
+| Admit | a verifier admits a machine certificate under k: the chain at now (the issuer's NotAfter), the root's revocations it took; an honest issuer caps the leaf at its own NotAfter (`org/orgpki/profile.go`), a stolen key signs any; the admission ends at the chain's earliest NotAfter |
+| Compromise | the hosted machine is compromised: every key there is the attacker's |
+| RevokeIssuer | the owner's root signs its CRL of issuers naming k |
+| Deliver | the relay carries that CRL to a verifier, which cuts every session under k |
+| Fence, Import | the fenced move (`OrgMove.tla`): onto the hosted machine to a receive key the hosting service attested, off it by the root's signed order |
+| LoseSelf | the owner's machine and its issuer are lost (no move under way) |
+| Partition | the hosted side stops or starts hearing the owner's machine |
+| OwnerActivate | the owner's signed activation of the standby, only when no issuer serves |
+| AutoActivate | mutant only (`auto-takeover`); coverage skips it |
+
+`OrgHosted.cfg` (MaxTime 4, DelegLife 2, CertLife 2): 60600 states, about
+2 s; `OrgHostedLive.cfg` RevokeTakesEffect under LiveSpec, about 7 s; every
+line of `hosted-mutants.txt`, the witnesses and `-coverage 1`:
+`scripts/spec-orgmove.sh hosted`, in `ci` (about 40 s more).
+
+| assumption | relied on by | source |
+|---|---|---|
+| verifiers check the chain at admission with the issuer's NotAfter (x509 Verify) and take the root's CRL of issuers by a higher Number only | Admit, Deliver | design (the root's CRL of issuers is not built: nfltr's decision doc, lane H1) |
+| the root signs a renewal only for the issuer key it pins | Renew | `spec/proverif/orgmove.pv` 5-7 |
+| the hosted machine holds no root key and no recovery key | Compromise | `spec/proverif/orghosted.pv` 2, 3 |
+| the relay may withhold the root's CRL indefinitely; liveness assumes it carries it in the end | Deliver, RevokeTakesEffect | the threat model |
+
 ## Running
 
 `scripts/spec-orgmove.sh ci` (`make spec-orgmove-ci`, in `make ci`, about a
@@ -168,3 +227,6 @@ abstracts a host to its issuer directory); orgenrol
 | TraceOrgMove.tla | org/orgpki/trace_on.go |
 | OrgHolds.tla | org/orgenrol/issuer.go |
 | OrgHolds.tla | org/orgissuer/bundle.go |
+| OrgHosted.tla | client/orgid/verify.go |
+| OrgHosted.tla | org/orgpki/profile.go |
+| OrgHosted.tla | org/orgpki/renew.go |

@@ -16,7 +16,8 @@ models='enrol Enrol -
 enrol Join -
 enrol RevokePush -
 orgmove OrgMove -
-orgmove OrgHolds -'
+orgmove OrgHolds -
+orgmove OrgHosted -'
 
 # steps <tla>: the model's step names.
 steps() {

@@ -22,6 +22,10 @@
 #             OrgHolds.cfg, OrgHoldsLive.cfg, each line of
 #             spec/orgmove/holds-mutants.txt caught, its witnesses
 #             reached, -coverage 1 (in ci).
+#   hosted    the opt-in hosted issuer's delegation (spec/orgmove/OrgHosted.tla):
+#             OrgHosted.cfg, OrgHostedLive.cfg, each line of
+#             spec/orgmove/hosted-mutants.txt caught, its witnesses
+#             reached, -coverage 1 (in ci).
 # TLC_WORKERS (default 2) caps TLC's threads, TLC_HEAP (default 1g) its
 # heap. Java and tla2tools.jar come from scripts/fetch-tla.sh.
 set -eu
@@ -44,6 +48,15 @@ holds_spec() {
 	mfile=holds-mutants.txt
 	witnesses="WitnessMoved WitnessMovedBack WitnessBackUnpublished WitnessTakenVacant WitnessLateWrite WitnessFinished WitnessReturnToFinished"
 	covskip="EarlyRelease|XRelease"
+}
+# OrgHosted.tla: SelfRenew and AutoActivate are taken only under a mutant.
+hosted_spec() {
+	spec=OrgHosted
+	actprops=""
+	temporal="RevokeTakesEffect"
+	mfile=hosted-mutants.txt
+	witnesses="WitnessHostedServes WitnessMovedOff WitnessStolenSession WitnessRevokedCut WitnessOwnerActivated WitnessRenewed"
+	covskip="SelfRenew|AutoActivate"
 }
 
 tlc() {
@@ -183,10 +196,12 @@ mutants) mutants ;;
 witnesses) witnesses ;;
 coverage) coverage ;;
 ci) run OrgMove.cfg && run OrgMoveLive.cfg && mutants && witnesses && coverage && fixtures &&
-	holds_spec && run OrgHolds.cfg && run OrgHoldsLive.cfg && mutants && witnesses && coverage ;;
+	holds_spec && run OrgHolds.cfg && run OrgHoldsLive.cfg && mutants && witnesses && coverage &&
+	hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage ;;
+hosted) hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage ;;
 holds) holds_spec && run OrgHolds.cfg && run OrgHoldsLive.cfg && mutants && witnesses && coverage ;;
 fixtures) fixtures ;;
 traces) traces ;;
 trace) trace "$2" ;;
-*) sed -n '4,22p' "$0" >&2; exit 2 ;;
+*) sed -n '4,26p' "$0" >&2; exit 2 ;;
 esac

@@ -1,0 +1,10 @@
+# <mutant> <property> [<cfg>]: TLC on OrgHosted.cfg's constants (or <cfg>'s)
+# with that Mutant must report <property> violated (scripts/spec-orgmove.sh
+# hosted); RevokeTakesEffect runs under LiveSpec.
+self-renew DelegationBound
+until-leaf-only DelegationBound
+ignore-root-crl RevokedIssuerRefused
+keep-sessions RevokedIssuerRefused
+auto-takeover AtMostOneIssuer
+auto-takeover ServingAuthorized
+no-push RevokeTakesEffect OrgHostedLive.cfg

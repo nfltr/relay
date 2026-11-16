@@ -1,0 +1,174 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   orghosted.pv: an organisation's issuer on a host its owner does not run
+   (the opt-in hosted issuer). spec/proverif/README.md.
+
+   The owner keeps the root (kroot) and an operator key (kop) the root
+   certified; the hosted machine holds only the issuer key (kiss) the root
+   certified. The issuer moves onto the hosted machine and off it by the
+   fenced move (orgmove.pv): onto it, the owner's machine seals the bundle
+   to a receive key the hosting service attested with its own key (ksvc,
+   whose public half ships pinned in the client's signed release, not
+   carried by the relay); off it, the hosted issuer seals only to a receive
+   key the root ordered. The owner's day-to-day commands (tokens, revoke,
+   status) reach the hosted issuer through the relay signed by the operator
+   key, which the root certified (not the issuer: a certificate the issuer
+   made is a member's, not the owner's). Verifiers take issuers only from
+   the root, and the root's CRL of issuers ends one.
+
+   The attacker owns the relay and the hosting operator's network: every
+   message here. It is a customer of the hosting service too: it asks for
+   slots and gets their attested receive keys. It gets machine
+   certificates under the issuer (enrolment is enrol.pv's). In phase 1
+   the hosted machine is compromised: it hands over the issuer key, its
+   receive key and the hosting service's key. What still holds then is
+   what the hosted mode promises against nfltr itself: the root and the
+   operator key stay the owner's, no issuer but the root's, the root's
+   revocation ends the hosted issuer for a verifier that took it. The time
+   bound (30 days, the leaf capped by the issuer) is OrgHosted.tla's.
+
+   Mutants: unattested-receive-key (the owner's machine takes a receive
+   key the relay hands it), unsigned-move-order (the hosted issuer moves
+   off to any key), any-member-commands (the hosted issuer takes a command
+   signed under a certificate it issued itself), service-key-certifies
+   (verifiers take an issuer the hosting service vouches for: the
+   automatic takeover), ignore-root-crl. *)
+
+free c: channel.                 (* the relay; the hosting operator's network *)
+
+type skey.
+fun pk(skey): bitstring.
+fun seal(bitstring, bitstring): bitstring.
+reduc forall s: skey, m: bitstring; open(s, seal(pk(s), m)) = m.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, s: skey; checksign(sign(m, s), pk(s)) = m.
+const lIssuer, lLeaf, lSlot, lOperator, lCmd, lMoveOrder, lRootCRL: bitstring.
+const orgO: bitstring.
+
+free kroot: skey [private].      (* the root primary, the owner's *)
+free kop: skey [private].        (* the operator key, on the owner's machine *)
+free kiss: skey [private].       (* the issuer key *)
+free ksvc: skey [private].       (* the hosting service's attestation key *)
+free kevil: skey.                (* a key of the attacker's own *)
+
+event Sent(bitstring, bitstring).       (* the owner's machine sealed issuer pk to receive key r *)
+event HostedImported(bitstring, bitstring). (* hosted slot r imported issuer pk *)
+event Commanded(bitstring).             (* the owner signed operator command m *)
+event Executed(bitstring).              (* the hosted issuer executed m *)
+event Ordered(bitstring).               (* the root ordered a move off to receive key r *)
+event MovedOff(bitstring).              (* the hosted issuer sealed itself to r *)
+event OwnerImported(bitstring).         (* the owner's machine imported issuer pk back *)
+event RootCertified(bitstring).         (* the root certified issuer key pk *)
+event Accepted(bitstring, bitstring).   (* a verifier admitted name n under issuer pk *)
+event AcceptedUnder(bitstring, bitstring). (* a verifier that took the root's revocation of r admitted under p *)
+
+(* The owner's machine moves the issuer onto the hosted machine: it seals
+   only to a receive key the hosting service attested for this org. *)
+let OntoHosted =
+  in(c, (r: bitstring, att: bitstring));
+  if checksign(att, pk(ksvc)) = (lSlot, orgO, r) then    (* NOT:unattested-receive-key *)
+  let cert = sign((lIssuer, pk(kiss)), kroot) in
+  event Sent(r, pk(kiss));
+  out(c, seal(r, (kiss, cert, r))).
+
+(* The hosted issuer serving with k: machine certificates for anyone
+   (enrolment's checks are enrol.pv's), operator commands, a move off. *)
+let Serve(k: skey) =
+  (!in(c, (n: bitstring, pl: bitstring)); out(c, sign((lLeaf, n, pl), k)))
+  |
+  (!in(c, (m: bitstring, s: bitstring, oc: bitstring));
+    let (=lOperator, po: bitstring) = checksign(oc, pk(kroot)) in                (* NOT:any-member-commands *)
+    let (=lLeaf, nn: bitstring, po: bitstring) = checksign(oc, pk(k)) in        (* ONLY:any-member-commands *)
+    if checksign(s, po) = (lCmd, m) then
+    event Executed(m))
+  |
+  (!in(c, (r2: bitstring, s: bitstring));
+    if checksign(s, pk(kroot)) = (lMoveOrder, r2) then    (* NOT:unsigned-move-order *)
+    event MovedOff(r2);
+    out(c, seal(r2, (k, sign((lIssuer, pk(k)), kroot), r2)))).
+
+(* A slot of the hosting service, for whichever organisation a customer
+   names: a fresh receive key, attested; one import of this
+   organisation's issuer; then it serves, and in phase 1 its machine is
+   compromised. *)
+let Slot =
+  in(c, o: bitstring);
+  new skr: skey;
+  out(c, (pk(skr), sign((lSlot, o, pk(skr)), ksvc)));
+  if o = orgO then
+  in(c, x: bitstring);
+  let (k: skey, cert: bitstring, fence: bitstring) = open(skr, x) in
+  if fence = pk(skr) then
+  let (=lIssuer, =pk(k)) = checksign(cert, pk(kroot)) in
+  event HostedImported(pk(skr), pk(k));
+  (Serve(k) | phase 1; out(c, (k, skr))).
+
+(* The owner: operator commands, and a move off to a fresh receive key on
+   its own machine, ordered by the root. *)
+let Owner =
+  (!new m: bitstring;
+    event Commanded(m);
+    out(c, (m, sign((lCmd, m), kop), sign((lOperator, pk(kop)), kroot))))
+  |
+  (new skr2: skey;
+    event Ordered(pk(skr2));
+    out(c, (pk(skr2), sign((lMoveOrder, pk(skr2)), kroot)));
+    in(c, x: bitstring);
+    let (k: skey, cert: bitstring, fence: bitstring) = open(skr2, x) in
+    if fence = pk(skr2) then
+    let (=lIssuer, =pk(k)) = checksign(cert, pk(kroot)) in
+    event OwnerImported(pk(k))).
+
+(* A verifier: an issuer the root certified, a leaf under it. Verifiers
+   run in phase 1, after the hosted machine's compromise (the attacker
+   then knows more than in phase 0). *)
+let Verifier =
+  in(c, (ic: bitstring, lc: bitstring));
+  let (=lIssuer, pi: bitstring) = checksign(ic, pk(kroot)) in    (* NOT:service-key-certifies *)
+  let (=lIssuer, pi: bitstring) = checksign(ic, pk(ksvc)) in     (* ONLY:service-key-certifies *)
+  let (=lLeaf, n: bitstring, pl: bitstring) = checksign(lc, pi) in
+  event Accepted(n, pi).
+
+(* A verifier that took the root's CRL of issuers naming rv. *)
+let VerifierRevoked =
+  in(c, rc: bitstring);
+  let (=lRootCRL, rv: bitstring) = checksign(rc, pk(kroot)) in
+  in(c, (ic: bitstring, lc: bitstring));
+  let (=lIssuer, pi: bitstring) = checksign(ic, pk(kroot)) in
+  if pi <> rv then          (* NOT:ignore-root-crl *)
+  let (=lLeaf, n: bitstring, pl: bitstring) = checksign(lc, pi) in
+  event AcceptedUnder(rv, pi).
+
+(* 1. the issuer key reaches only the hosted slot the owner meant and the
+      owner's own machine (before the hosted machine's compromise) *)
+query attacker(kiss) phase 0.
+(* 2. the root never leaves its owner, whatever the hosted machine gives up *)
+query attacker(kroot).
+(* 3. nor does the operator key *)
+query attacker(kop).
+(* 4. the hosted issuer imports only what the owner's machine sealed to it *)
+query r: bitstring, p: bitstring; event(HostedImported(r, p)) ==> event(Sent(r, p)).
+(* 5. the hosted issuer executes only the owner's commands *)
+query m: bitstring; event(Executed(m)) ==> event(Commanded(m)).
+(* 6. it moves off only to a receive key the root ordered *)
+query r: bitstring; event(MovedOff(r)) ==> event(Ordered(r)).
+(* 7. no takeover: a verifier admits only under an issuer the root certified,
+      also after the hosting service's key is the attacker's *)
+query n: bitstring, p: bitstring; event(Accepted(n, p)) ==> event(RootCertified(p)).
+(* 8. the root's revocation of an issuer ends it for a verifier that took it *)
+query r: bitstring; event(AcceptedUnder(r, r)).
+(* 9-12. witnesses: the issuer arrives on the hosted slot, an owner's
+      command is executed, the issuer moves back to the owner, a verifier
+      admits (4, 5, 6, 7 are not vacuous) *)
+query r: bitstring, p: bitstring; event(HostedImported(r, p)).
+query m: bitstring; event(Executed(m)).
+query p: bitstring; event(OwnerImported(p)).
+query n: bitstring, p: bitstring; event(Accepted(n, p)).
+
+process
+  out(c, pk(kroot)); out(c, pk(ksvc));
+  event RootCertified(pk(kiss));
+  out(c, sign((lIssuer, pk(kiss)), kroot));
+  (!OntoHosted | !Slot | Owner
+   | phase 1; (out(c, ksvc) | out(c, sign((lRootCRL, pk(kiss)), kroot)) | !Verifier | !VerifierRevoked))

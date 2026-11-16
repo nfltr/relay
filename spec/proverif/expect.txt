@@ -267,3 +267,9 @@ nf1_anon direct-no-pin-check TTTTTFTTTTFFFFF
 nf1_anon nf1-agent-no-token TTTTTTTFTTFFFFF
 nf1_anon rid-unbound TTTTTTTTTFFFFFF
 nf1_anon reg-unsigned TTTTTTTTTFFFFFF
+orghosted - TTTTTTTTFFFF
+orghosted unattested-receive-key FTTFTTTTFFFF
+orghosted unsigned-move-order FTTFTFTTFFFF
+orghosted any-member-commands TTTTFTTTFFFF
+orghosted service-key-certifies TTTTTTFTFFFF
+orghosted ignore-root-crl TTTTTTTFFFFF
