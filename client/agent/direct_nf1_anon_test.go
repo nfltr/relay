@@ -193,7 +193,7 @@ func TestNF1AnonDirectRequired(t *testing.T) {
 		if reason, rok := dataplane.AbortReason(a); !ok || !rok || reason != relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED {
 			t.Fatalf("service read %v, want ERROR_REASON_ACCOUNT_REQUIRED", err)
 		}
-	})	// A client that ignores a1 and runs a plain session (unframed: it
+	}) // A client that ignores a1 and runs a plain session (unframed: it
 	// could never leave the relay) is refused by the agent too: no TLS, no
 	// session of the service.
 	t.Run("plain refused", func(t *testing.T) {
