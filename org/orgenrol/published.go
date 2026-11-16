@@ -144,7 +144,11 @@ func (s *service) maintained(err error, now time.Time) {
 // root mailbox beside the root and recovery the relay holds there, which
 // must be root (a relay's other root, or a rotation since, is refused).
 // For a revoke the revoked issuer would not publish; a running issuer
-// service keeps the newer one it finds there.
+// service keeps the newer one it finds there. The root mailbox is a
+// broadcast only its holder machine writes (relay-server
+// mailbox-shared-holds-2026-11-13.md): from a root's machine that is not
+// the issuer's, the append is refused until that machine is revoked at
+// the relay and its hold vacated.
 func PublishIssuers(ctx context.Context, mb Mailbox, root *x509.Certificate, der []byte, wait time.Duration) error {
 	orgID, err := orgid.OrgIDOfRoot(root)
 	if err != nil {
