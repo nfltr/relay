@@ -44,6 +44,7 @@ is not imported).
 | Action | design (phase 2 code) |
 |---|---|
 | MakeToken, Redeem, Revoke, SignCRL | the issuer's acts (`orgpki.Issuer`), each committed to the log under the directory's lock; a host acts only while its log does not end in a fence |
+| Commit | not a step of its own: the one log append MakeToken, Redeem, Revoke, SignCRL and Fence share |
 | Fence | `nfltr org move send`, first half: under the lock, the fence line naming the receive key (after a fresh CRL: the move then has the CRL's hour) |
 | Send | ... second half: the fenced log and the keys sealed (`crypto/hpke`) to that key, through the relay mailbox `org.<org>.move` or to a file; again until the new host serves |
 | Backup | a copy that is not a move: a backup, a disk image, a bundle made before the fence |

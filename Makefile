@@ -199,6 +199,12 @@ spec-orgmove-repeat:
 # spec README's code-map entry exists, and the commits since origin/main
 # that change a file a code map lists change that spec too or carry
 # `Spec-Reviewed: <spec> <reason>`. The pre-push hook checks the pushed range.
+# check-spec-actions (no Java, < 1 s): every enrol and orgmove model step in
+# its README action table, every trace spec's line kind still recorded.
+.PHONY: check-spec-actions
+check-spec-actions:
+	./scripts/check-spec-actions.sh
+
 .PHONY: check-spec-drift
 check-spec-drift:
 	./scripts/check-spec-drift.sh maps
