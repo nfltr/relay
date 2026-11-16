@@ -38,3 +38,9 @@ ignore-root-crl | verify.go | 	if v.issuers != nil && v.issuers.revoked[iss.Seri
 root-crl-unsigned | verify.go | 	err = crl.CheckSignatureFrom(v.root) | 	err = nil | TestOrgHostedModelBindings
 reload-skips-issuers | identity.go | 	newIssuers := issuers != nil && !bytes.Equal(issuers, m.issuers) && m.ver.TakeIssuerCRL(issuers) == nil | 	newIssuers := false && issuers != nil | TestRootRevocationOfTheIssuerCutsHeldSessions
 keep-sessions | identity.go | 	if newCRL || newCert || newIssuers { | 	if newCRL || newCert { | TestRootRevocationOfTheIssuerCutsHeldSessions
+# spec/proverif/app_enrol.pv (nfltr docs/decisions/app-device-identity-2026-11-16.md):
+# a service's persons and apps (BIND:app.attrs), an nfltr URI SAN of
+# another organisation (BIND:app.urihost, finding F1).
+no-app-check | verify.go | 	if want.Apps != nil && !slices.Contains(want.Apps, app) { | 	if false { | TestAppEnrolModelBindingsAttrs
+no-user-check | verify.go | 	if want.Users != nil && !slices.Contains(want.Users, person) { | 	if false { | TestAppEnrolModelBindingsAttrs
+uri-host-unchecked | verify.go | 		if u.Scheme == "nfltr" && u.Host != Domain(v.orgID) { | 		if false { | TestAppEnrolModelBindingsAttrs

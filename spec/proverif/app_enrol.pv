@@ -30,7 +30,12 @@
    id appX), so it receives ID tokens of honest people for appX with any
    nonce it picks; it holds the account and key of a person mal; the code
    made for a person lc leaked (the residual enrol.pv states for tokens).
-   The IdP is honest, its signatures ideal. *)
+   The IdP is honest, its signatures ideal.
+
+   Bindings (spec/proverif/README.md "Bindings"; make spec-bindings):
+     BIND:app.nonce   the nonce: SHA-256 of both keys' SPKIs, length-prefixed, in order (client/appenrol)
+     BIND:app.attrs   the person and app SANs: a service admits by them (client/orgid Peer.Users, Peer.Apps)
+     BIND:app.urihost an nfltr URI SAN names the organisation's domain (client/orgid; the issuer's DNS constraints do not cover it) *)
 
 free c: channel.                       (* the relay *)
 free cidp: channel [private].          (* a device's TLS session with the IdP *)

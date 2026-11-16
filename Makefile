@@ -202,7 +202,7 @@ test-cicache:
 # field of an honest message, as a relay can, and requires a refusal; the
 # test fails when a model's ids and its rows differ (in make ci).
 spec-bindings:
-	cd client && go test -count=1 -run 'ModelBindings' ./rpcclient/ ./p2p/ ./agent/ ./agent/wgexit/ ./capaddr/ ./nf1/ ./orgid/ ./nfnet/
+	cd client && go test -count=1 -run 'ModelBindings' ./rpcclient/ ./p2p/ ./agent/ ./agent/wgexit/ ./capaddr/ ./nf1/ ./orgid/ ./nfnet/ ./appenrol/
 	cd org && go test -count=1 -run 'ModelBindings' ./orgpki/ ./orgissuer/
 
 # test-go-mutants (in make ci, about a minute): every planted bug of a Go
@@ -210,6 +210,7 @@ spec-bindings:
 # organisation mode; client/agent/testdata/queue_mutants.txt: its session
 # queue; client/orgid/testdata/mutants.txt: the organisation
 # checks; client/nf1/testdata/mutants.txt: the nf1 transport;
+# client/appenrol/testdata/mutants.txt: the sign-in nonce;
 # client/agent/testdata/direct_dgram_mutants.txt: the direct path's
 # datagrams; client/agent/testdata/nf1_anon_mutants.txt: sessions to an
 # address served with no account; org/*/testdata/mutants.txt: the organisation issuer, its
@@ -220,6 +221,7 @@ test-go-mutants:
 	./scripts/go-mutants.sh client/agent/testdata/org_mutants.txt
 	./scripts/go-mutants.sh client/agent/testdata/queue_mutants.txt
 	./scripts/go-mutants.sh client/orgid/testdata/mutants.txt
+	./scripts/go-mutants.sh client/appenrol/testdata/mutants.txt
 	./scripts/go-mutants.sh client/nf1/testdata/mutants.txt
 	./scripts/go-mutants.sh client/p2p/testdata/browser_mutants.txt
 	./scripts/go-mutants.sh client/agent/testdata/direct_dgram_mutants.txt

@@ -195,10 +195,14 @@ func (v *Verifier) TakeRotation(der []byte) error {
 
 // Peer is what a verifier asks of a peer: Name, a client's (the machine it
 // dials; "" for a service); Group, a service's required group ("" for a
-// client).
+// client); Users and Apps, a service's persons and apps (allow_user,
+// allow_app: the peer's PersonOf and AppOf must be listed; nil admits any,
+// devices without them too).
 type Peer struct {
 	Name  string
 	Group string
+	Users []string
+	Apps  []string
 }
 
 // Checked is a checked peer. Until is when the check lapses (the earliest
@@ -209,6 +213,8 @@ type Checked struct {
 	Name      string
 	Groups    []string
 	MachineID string
+	Person    string // PersonOf: "" for a machine enrolled for no person
+	App       string // AppOf: "" for a machine enrolled for no app
 	Serial    *big.Int
 	Until     time.Time
 }
@@ -232,7 +238,8 @@ func (v *Verifier) Check(leaf, issuer *x509.Certificate, want Peer, now time.Tim
 }
 
 // check is Check under mu; why classifies a refusal for the trace (Enrol.tla
-// Valid: expired, nocrl, lapsed, revoked; chain, name, group: outside it).
+// Valid: expired, nocrl, lapsed, revoked; chain, name, group, user, app:
+// outside it).
 func (v *Verifier) check(leaf, issuer *x509.Certificate, want Peer, now time.Time) (Checked, string, error) {
 	dnsName := ""
 	if want.Name != "" {
@@ -259,6 +266,18 @@ func (v *Verifier) check(leaf, issuer *x509.Certificate, want Peer, now time.Tim
 	if want.Group != "" && !slices.Contains(groups, want.Group) {
 		return Checked{}, "group", fmt.Errorf("%s is not in group %s", leaf.Subject.CommonName, want.Group)
 	}
+	for _, u := range leaf.URIs {
+		if u.Scheme == "nfltr" && u.Host != Domain(v.orgID) {
+			return Checked{}, "chain", fmt.Errorf("URI SAN %s is outside the organisation %s", u, v.orgID)
+		}
+	}
+	person, app := PersonOf(leaf), AppOf(leaf)
+	if want.Users != nil && !slices.Contains(want.Users, person) {
+		return Checked{}, "user", fmt.Errorf("%s: person %q is not admitted", leaf.Subject.CommonName, person)
+	}
+	if want.Apps != nil && !slices.Contains(want.Apps, app) {
+		return Checked{}, "app", fmt.Errorf("%s: app %q is not admitted", leaf.Subject.CommonName, app)
+	}
 	crl := v.crls[KeyFingerprint(iss.PublicKey)]
 	if crl == nil {
 		return Checked{}, "nocrl", errors.New("no CRL of the issuer: fail closed")
@@ -275,7 +294,7 @@ func (v *Verifier) check(leaf, issuer *x509.Certificate, want Peer, now time.Tim
 			until = c.NotAfter
 		}
 	}
-	return Checked{Name: leaf.Subject.CommonName, Groups: slices.Clone(groups), MachineID: MachineID(leaf), Serial: leaf.SerialNumber, Until: until}, "", nil
+	return Checked{Name: leaf.Subject.CommonName, Groups: slices.Clone(groups), MachineID: MachineID(leaf), Person: person, App: app, Serial: leaf.SerialNumber, Until: until}, "", nil
 }
 
 // Issued checks a certificate an issuer answered: it chains (through

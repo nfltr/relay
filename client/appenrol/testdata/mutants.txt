@@ -1,0 +1,6 @@
+# Planted bugs of appenrol (scripts/go-mutants.sh client/appenrol/testdata/mutants.txt,
+# make test-go-mutants, in make ci): each line "<mutant> | <file> | <exact
+# line text> | <replacement> | <test>". Model: spec/proverif/app_enrol.pv
+# (no-nonce-check, nonce-relay-key-only).
+no-nonce-check | appenrol.go | 	if subtle.ConstantTimeCompare([]byte(nonce), []byte(want)) != 1 { | 	if subtle.ConstantTimeCompare([]byte(want), nil) == 2 { | TestAppEnrolModelBindingsNonce
+nonce-relay-key-only | appenrol.go | 	for _, k := range []crypto.PublicKey{relayKey, orgKey} { | 	for _, k := range []crypto.PublicKey{relayKey} { | TestAppEnrolModelBindingsNonce

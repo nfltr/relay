@@ -31,6 +31,7 @@ const (
 	rootCNPrefix   = "nfltr org "
 	recoverySuffix = " recovery"
 	machineURIPath = "/machine/"
+	appURIPath     = "/app/"
 )
 
 // Fingerprint is "sha256:" and the hex SHA-256 of a certificate's SPKI:
@@ -66,15 +67,40 @@ func OrgIDOfRoot(c *x509.Certificate) (string, error) {
 }
 
 // MachineID is the A2A machine id a machine certificate carries (its URI
-// SAN nfltr://<org id>.internal/machine/<id>: a URI with a host, which the
-// issuer's name constraints cover), or "".
-func MachineID(c *x509.Certificate) string {
+// SAN nfltr://<org id>.internal/machine/<id>), or "".
+func MachineID(c *x509.Certificate) string { return uriID(c, machineURIPath) }
+
+// AppOf is the app a device certificate was enrolled for (its URI SAN
+// nfltr://<org id>.internal/app/<id>), or "" (nfltr
+// docs/decisions/app-device-identity-2026-11-16.md).
+func AppOf(c *x509.Certificate) string { return uriID(c, appURIPath) }
+
+// PersonOf is the person a device certificate names (its one rfc822Name
+// SAN, the IdP's verified email or the admin code's), or "": none, or more
+// than one.
+func PersonOf(c *x509.Certificate) string {
+	if len(c.EmailAddresses) != 1 {
+		return ""
+	}
+	return c.EmailAddresses[0]
+}
+
+// uriID is the id after path of the certificate's one nfltr URI SAN with
+// that path, or "" (none, or more than one). The URI's host is checked
+// against the organisation by Verifier.Check: the issuer's DNS name
+// constraints do not cover URI SANs (crypto/x509 checks them against
+// PermittedURIDomains only).
+func uriID(c *x509.Certificate, path string) string {
+	id := ""
 	for _, u := range c.URIs {
-		if id, ok := strings.CutPrefix(u.Path, machineURIPath); ok && u.Scheme == "nfltr" {
-			return id
+		if v, ok := strings.CutPrefix(u.Path, path); ok && u.Scheme == "nfltr" {
+			if id != "" {
+				return ""
+			}
+			id = v
 		}
 	}
-	return ""
+	return id
 }
 
 func subset(a, of []string) bool {

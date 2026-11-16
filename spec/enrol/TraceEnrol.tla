@@ -98,7 +98,7 @@ CheckBad ==
             IF E.exp <= E.t THEN {"admit-expired"}
             ELSE IF ~Held \/ held[HK].next <= E.t THEN {"fail-open"}
             ELSE {"revoked-admitted"}
-      [] ~E.ok /\ CheckOK -> IF E.why \in {"chain", "name", "group"} THEN {} ELSE {"diverged"}
+      [] ~E.ok /\ CheckOK -> IF E.why \in {"chain", "name", "group", "user", "app"} THEN {} ELSE {"diverged"}
       [] OTHER -> {}
 
 \* itake (the root's CRL of issuers taken) is spec/orgmove/TraceOrgHosted.tla's.
