@@ -25,22 +25,6 @@ import (
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
-// Dial's errors for the relay's answers, each one exit code of the connect
-// sidecar's table (the decision's section 6); a server that is not the
-// address's is capaddr.ErrPin, ErrRendezvous or ErrTLS (7), a refused
-// secret capaddr.ErrProof (10).
-var (
-	// ErrNotServed: no live agent serves the address at its relay (unknown,
-	// offline, or the relay serves no nf1 addresses): exit 3.
-	ErrNotServed = errors.New("nf1: no service at this address")
-	// ErrRefused: the relay refused the open (a cap, its E2EE policy): exit 4.
-	ErrRefused = errors.New("nf1: the relay refused the session")
-	// ErrUnreachable: the relay was not reached or ended the connection: exit 5.
-	ErrUnreachable = errors.New("nf1: relay unreachable")
-	// ErrBalance: the serving account's balance is exhausted: exit 9.
-	ErrBalance = errors.New("nf1: the serving account's balance is exhausted")
-)
-
 // Options are Dial's transport to the address's relay.
 type Options struct {
 	// DialRelay connects to the address's relay (its host and port) and
