@@ -32,13 +32,16 @@ repo=relay
 #  rebase: <sha> is a green B rebased onto <main>: the files B changes (from
 #          its base on main) and the files main changed since that base do
 #          not overlap, <sha> is B's tree with main's files, and <main> is
-#          green (its tree holds every main commit since B's base).
+#          green (its tree holds every main commit since B's base): its own
+#          result, or green_main's: a green main with only docs-only commits
+#          (the docs rule's) on top; a code commit never inherits.
 # Anything else needs the exact sha green: when unsure, the rules refuse.
 docsonly='docs/decisions/*.md docs/reports/*.md docs/task-analysis/*.md docs/evidence/*.md CHANGELOG.md LICENSE LICENSE.* NOTICE'
 legacy="onprem""link" # split so this file does not match the legacy-name check
 LC_ALL=C && export LC_ALL # sort and comm agree on order
 
-green() { grep -F "\"repo\":\"$repo\",\"sha\":\"$1\"" "$results" 2>/dev/null | grep -qF '"ok":true'; }
+# A requested target's run ("target", make ci-request TARGET=) is not a CI result.
+green() { grep -F "\"repo\":\"$repo\",\"sha\":\"$1\"" "$results" 2>/dev/null | grep -vF '"target":' | grep -qF '"ok":true'; }
 
 # docs_only: 0 when every path on stdin matches $docsonly.
 docs_only() {
@@ -52,6 +55,28 @@ docs_only() {
 	done
 }
 
+# docs_change <a> <b>: 0 when <a>..<b> changes only $docsonly files, deletes
+# nothing and adds no line with the legacy name or a Go block.
+docs_change() {
+	[ -n "$(git diff --name-only --no-renames "$1" "$2")" ] &&
+		[ -z "$(git diff --name-only --no-renames --diff-filter=D "$1" "$2")" ] &&
+		git diff --name-only --no-renames "$1" "$2" | docs_only &&
+		! git diff "$1" "$2" | grep -iE "^\+.*($legacy|\`\`\`go)" >/dev/null # not -q: no SIGPIPE under pipefail
+}
+
+# green_main <main>: prints the green commit <main> inherits from: itself
+# when green, else the nearest green ancestor reached through single-parent
+# docs-only commits (at most 100); nonzero when there is none.
+green_main() {
+	c=$1 n=0
+	until green "$c"; do
+		[ $n -lt 100 ] && [ -z "$(git rev-parse -q --verify "$c^2")" ] && pa="$(git rev-parse -q --verify "$c^1")" &&
+			docs_change "$pa" "$c" || return 1
+		c=$pa n=$((n + 1))
+	done
+	echo "$c"
+}
+
 # admit <sha> <main>: prints the rule that admits <sha> over the remote's
 # <main>; nonzero when none does.
 admit() {
@@ -60,14 +85,14 @@ admit() {
 	git cat-file -e "$m^{commit}" 2>/dev/null && git merge-base --is-ancestor "$m" "$s" || return 1
 	t="$(mktemp -d)"
 	git diff --name-only --no-renames "$m" "$s" | sort >"$t/s"
-	if [ -s "$t/s" ] && [ -z "$(git diff --name-only --no-renames --diff-filter=D "$m" "$s")" ] &&
-		docs_only <"$t/s" && git diff "$m" "$s" >"$t/d" && ! grep -iqE "^\+.*($legacy|\`\`\`go)" "$t/d"; then
+	if docs_change "$m" "$s"; then
 		echo "docs only: $(wc -l <"$t/s" | tr -d ' ') prose files" && rm -rf "$t" && return 0
 	fi
-	green "$m" || { rm -rf "$t"; return 1; }
+	gm="$(green_main "$m")" || { rm -rf "$t"; return 1; }
+	[ "$gm" = "$m" ] && gm="" || gm=" (docs only since green $(git rev-parse --short "$gm"))"
 	# Candidates: green shas of this repository this clone has, not on main.
 	git rev-list "$m" | sort >"$t/main"
-	grep -F "\"repo\":\"$repo\"" "$results" 2>/dev/null | grep -F '"ok":true' |
+	grep -F "\"repo\":\"$repo\"" "$results" 2>/dev/null | grep -vF '"target":' | grep -F '"ok":true' |
 		sed -n 's/.*"sha":"\([0-9a-f]\{40\}\)".*/\1/p' | sort -u |
 		git cat-file --batch-check='%(objectname) %(objecttype)' 2>/dev/null | awk '$2 == "commit" { print $1 }' |
 		comm -23 - "$t/main" >"$t/cand"
@@ -78,7 +103,7 @@ admit() {
 		[ -z "$(comm -12 "$t/b" "$t/m")" ] || continue                                      # disjoint
 		[ -z "$(git diff --name-only --no-renames "$b" "$s" | sort | comm -23 - "$t/m")" ] || continue # B's tree outside main's files
 		[ -z "$(comm -23 "$t/s" "$t/b")" ] || continue                                       # main's tree outside B's files
-		rm -rf "$t" && echo "rebase of green $(git rev-parse --short "$b") onto green $(git rev-parse --short "$m")" && return 0
+		rm -rf "$t" && echo "rebase of green $(git rev-parse --short "$b") onto green $(git rev-parse --short "$m")$gm" && return 0
 	done <"$t/cand"
 	rm -rf "$t"
 	return 1
