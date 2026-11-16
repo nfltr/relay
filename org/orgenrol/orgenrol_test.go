@@ -270,7 +270,7 @@ func newFleetWith(t *testing.T, prep func(*fleet)) *fleet {
 	}()
 	t.Cleanup(func() { cancel(); <-done })
 	var err error
-	f.joined, err = Join(ctx, f.relay, f.dir, f.org.pins, f.org.token(t, "web-1", clk.Now()), 5*time.Second, clk.Now)
+	f.joined, err = Join(ctx, f.relay, f.dir, f.org.pins, f.org.token(t, "web-1", clk.Now()), hang, clk.Now)
 	check(t, err)
 	if f.joined.Cert.Subject.CommonName != "web-1" {
 		t.Fatalf("enrolled as %q", f.joined.Cert.Subject.CommonName)
@@ -280,18 +280,27 @@ func newFleetWith(t *testing.T, prep func(*fleet)) *fleet {
 	return f
 }
 
+// hang bounds every wait for something the test expects (an answer, a
+// join, a CRL), only against a hang: a loaded machine gets there when it
+// gets there (a 300 ms answer wait timed out under -race on the runner:
+// TestStaleAnswerRefused). A test that needs a wait to run out (a lost
+// request, a withheld answer) sets its own short one. Below retryWait, so
+// a step a wake takes at once never passes by the machine's retry instead
+// (mutant crl-no-wake-on-rotation).
+const hang = retryWait / 2
+
 func (f *fleet) keeper() Keeper {
-	return Keeper{Mailbox: f.relay, Machine: f.m, Logger: quiet(), Now: f.clk.Now, AnswerWait: 300 * time.Millisecond, RetryWait: 10 * time.Millisecond, FollowEvery: 100 * time.Millisecond}
+	return Keeper{Mailbox: f.relay, Machine: f.m, Logger: quiet(), Now: f.clk.Now, AnswerWait: hang, RetryWait: 10 * time.Millisecond, FollowEvery: 100 * time.Millisecond}
 }
 
 func serial(m *orgmachine.Machine) string { c, _ := m.Current(); return c.SerialNumber.String() }
 
 func eventually(t *testing.T, what string, cond func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(hang)
 	for !cond() {
 		if time.Now().After(deadline) {
-			t.Fatalf("not within 10s: %s", what)
+			t.Fatalf("not within %s: %s", hang, what)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -379,7 +388,9 @@ func TestRenewAsksAgainAfterALoss(t *testing.T) {
 	f.relay.mu.Unlock()
 	before := serial(f.m)
 	f.clk.Add(17 * time.Hour)
-	go f.keeper().Run(f.ctx)
+	k := f.keeper()
+	k.AnswerWait = 300 * time.Millisecond // the lost request's wait runs out
+	go k.Run(f.ctx)
 	eventually(t, "renewed after a lost request", func() bool { return serial(f.m) != before })
 }
 
@@ -448,7 +459,7 @@ func TestRevokePushAndBackstop(t *testing.T) {
 			}
 			select {
 			case <-changed:
-			case <-time.After(10 * time.Second):
+			case <-time.After(hang):
 				t.Fatal("the CRL did not reach the machine")
 			}
 			if _, err := f.m.CheckServer([]*x509.Certificate{cur, issuerOf(t, f.dir)}, "web-1", f.clk.Now()); err == nil {
@@ -582,7 +593,7 @@ func TestNewMachineJoinsAfterRotation(t *testing.T) {
 		return bytes.Equal(rm.Root, newRoot.Raw) && err == nil && iss.CheckSignatureFrom(newRoot) == nil
 	})
 	pins := Pins{Root: orgid.Fingerprint(newRoot), Recovery: f.org.pins.Recovery}
-	j, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "late"), pins, f.org.token(t, "web-late", f.clk.Now()), 5*time.Second, f.clk.Now)
+	j, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "late"), pins, f.org.token(t, "web-late", f.clk.Now()), hang, f.clk.Now)
 	check(t, err)
 	if j.Cert.Subject.CommonName != "web-late" {
 		t.Fatalf("enrolled as %q", j.Cert.Subject.CommonName)
@@ -590,7 +601,7 @@ func TestNewMachineJoinsAfterRotation(t *testing.T) {
 	// Pinned on the first root, a join takes the new one too: the pinned
 	// recovery key certifies it, as a running machine takes a rotation
 	// (Join.tla Trusts, mutant pin-root-only).
-	j, err = Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "old"), f.org.pins, f.org.token(t, "web-old", f.clk.Now()), 5*time.Second, f.clk.Now)
+	j, err = Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "old"), f.org.pins, f.org.token(t, "web-old", f.clk.Now()), hang, f.clk.Now)
 	check(t, err)
 	if j.Cert.Subject.CommonName != "web-old" {
 		t.Fatalf("enrolled as %q", j.Cert.Subject.CommonName)
@@ -622,7 +633,7 @@ func TestJoinRefusesARootOfAnotherRecoveryKey(t *testing.T) {
 		check(t, err)
 		_, err = f.relay.Append(f.ctx, orgpki.RootMailbox(f.org.id), msg, mailboxclient.AppendOptions{ReplaceKey: "current"})
 		check(t, err)
-		_, err = Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "evil"), f.org.pins, f.org.token(t, "web-evil-"+strconv.Itoa(len(name)), f.clk.Now()), time.Second, f.clk.Now)
+		_, err = Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "evil"), f.org.pins, f.org.token(t, "web-evil-"+strconv.Itoa(len(name)), f.clk.Now()), hang, f.clk.Now)
 		if err == nil || !strings.Contains(err.Error(), "pinned") {
 			t.Fatalf("a root of another recovery key with %s: %v, want refused", name, err)
 		}
@@ -635,10 +646,10 @@ func TestJoinRefusesARootOfAnotherRecoveryKey(t *testing.T) {
 func TestReplayedTokenNamesTheCause(t *testing.T) {
 	f := newFleet(t)
 	tok := f.org.token(t, "web-2", f.clk.Now())
-	if _, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "a"), f.org.pins, tok, 5*time.Second, f.clk.Now); err != nil {
+	if _, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "a"), f.org.pins, tok, hang, f.clk.Now); err != nil {
 		t.Fatal(err)
 	}
-	_, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "b"), f.org.pins, tok, 5*time.Second, f.clk.Now)
+	_, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "b"), f.org.pins, tok, hang, f.clk.Now)
 	if err == nil || !strings.Contains(err.Error(), "the token was redeemed") {
 		t.Fatalf("replayed token: %v", err)
 	}
@@ -677,7 +688,7 @@ func TestJoinRunAgainAfterALateOrLostAnswer(t *testing.T) {
 		f.relay.mu.Unlock()
 		kept, err := os.ReadFile(filepath.Join(dir, JoinKeyFile))
 		check(t, err)
-		j, err := Join(f.ctx, f.relay, dir, f.org.pins, tok, 5*time.Second, f.clk.Now)
+		j, err := Join(f.ctx, f.relay, dir, f.org.pins, tok, hang, f.clk.Now)
 		if err != nil {
 			t.Fatalf("%s: run again: %v", name, err)
 		}
@@ -715,7 +726,7 @@ func TestEnrolOnAnotherMachineIsRefused(t *testing.T) {
 		f.relay.mu.Lock()
 		f.relay.from = from
 		f.relay.mu.Unlock()
-		_, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), name), f.org.pins, f.org.token(t, name, f.clk.Now()), 5*time.Second, f.clk.Now)
+		_, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), name), f.org.pins, f.org.token(t, name, f.clk.Now()), hang, f.clk.Now)
 		return err
 	}
 	err := join("web-2", web1)
@@ -739,7 +750,7 @@ func TestEnrolUnderANameTheAccountHasNotIsRefused(t *testing.T) {
 			return map[string]string{"web-1": web1}[name], nil
 		}
 	})
-	_, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "lab-1"), f.org.pins, f.org.token(t, "lab-1", f.clk.Now()), 5*time.Second, f.clk.Now)
+	_, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "lab-1"), f.org.pins, f.org.token(t, "lab-1", f.clk.Now()), hang, f.clk.Now)
 	if err == nil || !strings.Contains(err.Error(), "lab-1") || !strings.Contains(err.Error(), web1) || !strings.Contains(err.Error(), "no machine named lab-1") {
 		t.Fatalf("lab-1's token from web-1's machine: %v", err)
 	}
@@ -764,7 +775,7 @@ func TestFollowCRLTakesTheRevokePush(t *testing.T) {
 	}
 	select {
 	case <-changed:
-	case <-time.After(10 * time.Second):
+	case <-time.After(hang):
 		t.Fatal("the CRL did not reach the follower")
 	}
 	if _, err := f.m.CheckServer([]*x509.Certificate{cur, issuerOf(t, f.dir)}, "web-1", f.clk.Now()); err == nil {

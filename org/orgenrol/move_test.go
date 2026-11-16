@@ -53,7 +53,7 @@ func TestServiceStopsAtTheFence(t *testing.T) {
 		if !errors.Is(err, orgpki.ErrMoved) {
 			t.Fatalf("the service stopped with %v, want ErrMoved", err)
 		}
-	case <-time.After(10 * time.Second):
+	case <-time.After(hang):
 		t.Fatal("the fenced issuer's service still runs")
 	}
 }
@@ -67,7 +67,7 @@ func TestFleetRenewsWithTheMovedIssuer(t *testing.T) {
 	dir := moveTo(t, f.org.dir, f.org.pins.Root, f.clk.Now())
 	joined := make(chan error, 1)
 	go func() {
-		_, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "machine"), f.org.pins, tok, 10*time.Second, f.clk.Now)
+		_, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "machine"), f.org.pins, tok, hang, f.clk.Now)
 		joined <- err
 	}()
 	time.Sleep(100 * time.Millisecond) // the request waits in the enrol mailbox
