@@ -37,6 +37,13 @@ func TestSignIssuerCRL(t *testing.T) {
 		t.Fatal("web-1 under the revoked issuer admitted")
 	}
 	refused(t, "an older CRL of issuers", o.ver.TakeIssuerCRL(first))
+	noErr(t, RefuseRevoked(nil, o.iss.Cert()))
+	refused(t, "renewing a revoked issuer", RefuseRevoked(again, o.iss.Cert()))
+	certs, err := IssuerCerts(o.lines)
+	noErr(t, err)
+	if len(certs) != 1 || certs[0].SerialNumber.Cmp(o.iss.Cert().SerialNumber) != 0 {
+		t.Fatalf("issuer certificates in the log: %d", len(certs))
+	}
 
 	other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	noErr(t, err)

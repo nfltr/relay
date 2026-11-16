@@ -56,3 +56,44 @@ func SignIssuerCRL(root *x509.Certificate, signer crypto.Signer, prev []byte, re
 		Number: number, ThisUpdate: now, NextUpdate: now.Add(IssuerLife), RevokedCertificateEntries: entries,
 	}, root, signer)
 }
+
+// IssuerCerts are the issuer certificates the root signed in a log
+// (ActIssuer lines, oldest first): what `nfltr org issuer revoke` lists
+// for a key.
+func IssuerCerts(lines [][]byte) ([]*x509.Certificate, error) {
+	entries, _, err := VerifyLog(lines)
+	if err != nil {
+		return nil, err
+	}
+	var certs []*x509.Certificate
+	for _, e := range entries {
+		if e.Act != ActIssuer {
+			continue
+		}
+		c, err := x509.ParseCertificate(e.Cert)
+		if err != nil {
+			return nil, err
+		}
+		certs = append(certs, c)
+	}
+	return certs, nil
+}
+
+// RefuseRevoked is ErrRefused when issuers, the root's CRL of issuers
+// (nil: none), lists issuer c: the root renews no issuer it revoked
+// (OrgHosted.tla Renew).
+func RefuseRevoked(issuers []byte, c *x509.Certificate) error {
+	if issuers == nil {
+		return nil
+	}
+	crl, err := x509.ParseRevocationList(issuers)
+	if err != nil {
+		return err
+	}
+	for _, e := range crl.RevokedCertificateEntries {
+		if e.SerialNumber.Cmp(c.SerialNumber) == 0 {
+			return fmt.Errorf("%w: the root revoked this issuer (its CRL of issuers, number %s)", ErrRefused, crl.Number)
+		}
+	}
+	return nil
+}

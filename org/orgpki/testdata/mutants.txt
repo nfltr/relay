@@ -53,3 +53,4 @@ crl-not-due-on-renewal | issuer.go | 		i.cert, i.crlDue = c, true | 		i.cert = c
 crl-not-due-on-revoke | issuer.go | 		i.crlDue = true | 		_ = 0 | TestNoCRLPastTheIssuerCertificate
 issuer-crl-drops-prev | issuercrl.go | 			entries = append(entries, x509.RevocationListEntry{SerialNumber: e.SerialNumber, RevocationTime: e.RevocationTime}) | 			_ = e | TestSignIssuerCRL
 issuer-crl-any-cert | issuercrl.go | 		if !c.IsCA || c.CheckSignatureFrom(root) != nil { | 		if false { | TestSignIssuerCRL
+renew-revoked-issuer | issuercrl.go | 		if e.SerialNumber.Cmp(c.SerialNumber) == 0 { | 		if e.SerialNumber == nil { | TestSignIssuerCRL
