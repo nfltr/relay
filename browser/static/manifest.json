@@ -8,5 +8,7 @@
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'none'; base-uri 'none'"
   },
-  "browser_specific_settings": { "gecko": { "id": "nf1@nfltr.xyz", "strict_min_version": "128.0" } }
+  "browser_specific_settings": {
+    "gecko": { "id": "nf1@nfltr.xyz", "strict_min_version": "128.0", "data_collection_permissions": { "required": ["none"] } }
+  }
 }
