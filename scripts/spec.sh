@@ -31,6 +31,11 @@
 #            checked against spec/TraceDatagramAssoc.tla; each
 #            spec/testdata/reject-datagramassoc-* fixture rejected (in make
 #            ci; traces runs it too).
+#   ptraces   client/agent's punch tests (P_TRACE_TESTS), each in its own
+#            process with -tags relaytrace, every punch's trace checked
+#            against spec/TraceDirectPunch.tla; each
+#            spec/testdata/reject-directpunch-* fixture rejected (in make
+#            ci; traces runs it too).
 #   astraces  client/rpcclient's A2A E2EE session tests (AS_TRACE_TESTS,
 #            default the retry, restart, forged-unknown, warm, revoke and
 #            rotation ones; traces runs every TestA2AE2EE), each in its own
@@ -328,6 +333,77 @@ CFG
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
 }
 
+# ptrace FILE: TLC on a recorded DirectPunch trace
+# (spec/TraceDirectPunch.tla); 0 when accepted. Its TLC output: FILE.out.
+ptrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Offered <- TraceOffered
+    Prflx <- TracePrflx
+    Spoofed <- TraceSpoofed
+    Peer <- TracePeer
+    Rogue = {}
+    MaxCands = 8
+    Bound = 1
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    OnlyTagged
+    DialBound
+    OnlyPeer
+    OneConnection
+    TraceNotDone
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceDirectPunch.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
+# prun TESTS: the fixtures, then client/agent's tests TESTS, each in its
+# own process with the recorder; every punch's trace checked.
+prun() {
+	pgo=$(grep -ohE '"ev": "[A-Za-z]+"|ev := "[A-Za-z]+"|ev = "[A-Za-z]+"' client/agent/trace_punch_on.go | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u)
+	for e in $(grep -oE 'E\.ev = "[A-Za-z]+"' spec/TraceDirectPunch.tla | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u); do
+		echo "$pgo" | grep -qx "$e" || { echo "spec/TraceDirectPunch.tla: event $e is recorded by no trace line of client/agent"; return 1; }
+	done
+	for f in spec/testdata/reject-directpunch-*.ndjson; do
+		cp "$f" "$work/"
+		if ptrace "$work/$(basename "$f")"; then
+			echo "$f: accepted, want rejected"
+			return 1
+		fi
+		grep -q 'distinct states found' "$work/$(basename "$f").out" || { echo "$f: TLC failed:"; tail -20 "$work/$(basename "$f").out"; return 1; }
+		echo "$f: rejected"
+	done
+	(cd client && go test -c -tags relaytrace -o "$work/agent.test" ./agent/) || return 1
+	nt=0
+	for t in $("$work/agent.test" -test.list "$1"); do
+		d=$work/ptraces/$t
+		mkdir -p "$d"
+		(cd client/agent && RELAYTRACE=$d "$work/agent.test" -test.run "^$t\$" -test.count 1) >"$work/ptest.out" 2>&1 || {
+			cat "$work/ptest.out"
+			return 1
+		}
+		for f in "$d"/directpunch-*.ndjson; do
+			[ -s "$f" ] || continue
+			nt=$((nt + 1))
+			if ptrace "$f"; then
+				echo "trace $t $(basename "$f"): $(wc -l <"$f" | tr -d ' ') lines: accepted"
+			else
+				echo "trace $t $(basename "$f"): REJECTED"
+				grep -E 'Error|unknown event' "$f.out" | head -5
+				fail=1
+			fi
+		done
+	done
+	echo "$nt traces"
+	[ "$nt" -gt 0 ] || fail=1
+	return $fail
+}
+
 # dgrun TESTS COUNT: the fixtures, then client/dgram's tests TESTS, each run
 # COUNT times in its own process (one association per trace) with the
 # recorder; every trace checked.
@@ -377,6 +453,9 @@ dgrun() {
 
 fail=0
 cfg=
+# The punch tests ptraces records: a learned winner, an offered winner, a
+# refused rogue, a re-punch.
+PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain)$'
 case ${1:-} in
 check)
 	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch"
@@ -590,6 +669,10 @@ dgtraces)
 	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || fail=1
 	exit $fail
 	;;
+ptraces)
+	prun "${P_TRACE_TESTS:-$PTESTS}" || fail=1
+	exit $fail
+	;;
 astraces)
 	# The per-push slice: the session tests of the retry, the restart, the
 	# forged unknown, the warm, the revoke, the rotation and the restart
@@ -652,8 +735,9 @@ traces)
 	clrun "${CL_TRACE_TESTS:-.}" 1
 	asrun "${AS_TRACE_TESTS:-^TestA2AE2EE}" || exit 1
 	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || exit 1
+	prun "${P_TRACE_TESTS:-$PTESTS}" || exit 1
 	for f in spec/testdata/reject-*.ndjson; do
-		case $f in *reject-callcredit-* | *reject-calllifecycle-*) continue ;; esac
+		case $f in *reject-callcredit-* | *reject-calllifecycle-* | *reject-directpunch-*) continue ;; esac
 		cp "$f" "$work/"
 		if trace "$work/$(basename "$f")" 1 2; then
 			echo "$f: accepted, want rejected"
@@ -699,7 +783,7 @@ traces)
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
 	;;
 *)
-	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|cctraces FILE..." >&2
+	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|ptraces|cctraces FILE..." >&2
 	exit 2
 	;;
 esac

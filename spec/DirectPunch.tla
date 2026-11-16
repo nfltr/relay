@@ -78,14 +78,14 @@ SpoofProbe(a) ==
     /\ UNCHANGED <<dial, won, t, state>>
 
 \* The client reads a probe: a tagged one from an address it does not
-\* dial yet is a candidate, dialled within the cap and while no
-\* connection has won.
+\* dial yet is a candidate, dialled within the cap, before the bound and
+\* while no connection has won.
 Learn(p) ==
     /\ state = "punching"
     /\ probes' = probes \ {p}
     /\ IF /\ (p.tagged \/ Mutant = "no-tag")
           /\ dial[p.src] = "idle"
-          /\ won = None
+          /\ won = None /\ t < Bound
           /\ (Cardinality(Dialled) < MaxCands \/ Mutant = "no-cap")
        THEN dial' = [dial EXCEPT ![p.src] = "dialing"]
        ELSE UNCHANGED dial

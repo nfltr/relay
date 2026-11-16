@@ -139,7 +139,7 @@ stress-race:
 # traces, about 10 s; in make ci); spec-astraces another (the A2A E2EE
 # session tests' A2ASession traces, about 10 s; in make ci); spec-dgtraces
 # another (client/dgram's DatagramAssoc traces; in make ci).
-.PHONY: spec spec-mutants spec-traces spec-cltraces spec-astraces spec-dgtraces spec-proverif spec-bindings
+.PHONY: spec spec-mutants spec-traces spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-proverif spec-bindings
 spec:
 	./scripts/spec.sh check
 spec-mutants:
@@ -154,6 +154,10 @@ spec-astraces:
 # (about 10 s; in make ci).
 spec-dgtraces:
 	./scripts/spec.sh dgtraces
+# client/agent's punch traces against spec/TraceDirectPunch.tla (a few
+# seconds; in make ci).
+spec-ptraces:
+	./scripts/spec.sh ptraces
 # The ProVerif models (spec/proverif/README.md): every line of
 # spec/proverif/expect.txt, mutants included (in make ci).
 spec-proverif:

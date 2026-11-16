@@ -1037,7 +1037,22 @@ distinct states, depth 14, every action taken.
 | `AgentProbe` (when) | client/agent/direct_server.go |
 | `Learn` (listen), `Tick` (bound) | client/agent/direct_client.go |
 
-Trace recorder: none yet (gap: the punch is one function with no
-recorder; the e2e test `TestDirectSymmetricAgentGoesDirectPeerReflexively`
-and the Go mutants `prflx-*` in `client/agent/testdata/org_mutants.txt`
-hold the code to it meanwhile).
+| trace recorder | client/agent/trace_punch_on.go |
+
+### DirectPunch traces
+
+`make spec-ptraces` (in make ci, about 30 s): client/agent's punch tests
+(`TestDirectSymmetricAgentGoesDirectPeerReflexively`,
+`TestDirectSessionMovesAndFallsBack`, `TestDirectModelBindings`,
+`TestDirectAgentRebindDirectAgain`) built `-tags relaytrace`, each in its
+own process; every punch writes `directpunch-<pid>-<n>.ndjson` (Init with
+the offered candidates, Learn with what the punch did, DialUp then Win or
+CloseLoser, DialFail, Return with the kept address), checked by
+`spec/TraceDirectPunch.tla` (constants from the trace: the addresses that
+came up are the peer's; TLC adds the agent's probes and the clock). Six
+traces on the Mac 2026-11-16, every step kind taken (Learn dialled and
+ignored, Win, CloseLoser, DialFail). Rejected fixtures, one per invariant
+the trace can break: `reject-directpunch-untagged` (OnlyTagged),
+`-over-cap` (DialBound), `-second-connection` (OneConnection),
+`-learn-after-win`. The Go mutants `prflx-*` in
+`client/agent/testdata/org_mutants.txt` plant the code's bugs.
