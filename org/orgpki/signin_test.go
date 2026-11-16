@@ -325,8 +325,8 @@ func TestSignInRenewalEndsWithAuthLife(t *testing.T) {
 // AppEnrol.tla Reauth (mutant reauth-any-user) and EnrolSSO's deny lists
 // (mutant signin-skips-deny): another person's sign-in with a device's
 // key does not move that device's sign-in on, nor does a sign-in with a
-// code-enrolled key (mutant signin-takes-code-key); a revoked person or
-// app signs in no device.
+// code-enrolled key (mutant signin-takes-code-key) or a revoked device's;
+// a revoked person or app signs in no device.
 func TestSignInOnlyForItsPersonNotRevoked(t *testing.T) {
 	s := newSignInOrg(t, "alice@example.com")
 	d := newDevice(t)
@@ -339,6 +339,17 @@ func TestSignInOnlyForItsPersonNotRevoked(t *testing.T) {
 	_, ck := s.codeDevice(t, "code-1", "alice@example.com")
 	if _, err := s.enrol(t, device{d.kr, ck}, nil); !errors.Is(err, ErrRefused) {
 		t.Fatalf("a sign-in with a code-enrolled key: %v, want refused", err)
+	}
+	d2 := newDevice(t)
+	der2, err := s.enrol(t, d2, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.iss.Revoke(parse(t, der2).Subject.CommonName, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.enrol(t, d2, nil); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a sign-in with a revoked device's key: %v, want refused", err)
 	}
 	if err := s.iss.RevokePerson("alice@example.com", t0); err != nil {
 		t.Fatal(err)

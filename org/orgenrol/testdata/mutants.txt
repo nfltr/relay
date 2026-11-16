@@ -32,3 +32,6 @@ root-message-drops-issuers | issuer.go | 		if err := s.publish(ctx, orgpki.RootM
 keeper-skips-issuers | machine.go | 			_, err := m.TakeIssuerCRL(rm.Issuers) | 			err := error(nil) | TestRootRevocationOfTheIssuerReachesTheMachine
 service-overwrites-issuers | issuer.go | 		if data, err := latest(ctx, s.Mailbox, orgpki.RootMailbox(s.org), 0); err == nil && newerIssuers(data, rootCert, issuers) != nil { | 		if data, err := latest(ctx, s.Mailbox, orgpki.RootMailbox(s.org), 0); false && err == nil && newerIssuers(data, rootCert, issuers) != nil { | TestOwnerPublishedIssuersKept
 publish-older-issuers | published.go | 	if held := issuersNumber(rm.Issuers, root); held != nil && held.Cmp(n) >= 0 { | 	if held := issuersNumber(rm.Issuers, root); held != nil && false { | TestOwnerPublishedIssuersKept
+# A renewal refused past its sign-in is ErrSignInEnded on the device
+# (spec/appenrol/AppEnrol.tla Renew; the app signs in again).
+sign-in-ended-untyped | orgenrol.go | 			if a.SignInEnded { // a renewal past its sign-in: the device signs in again | 			if false { | TestSignInEndedIsTypedOnTheDevice
