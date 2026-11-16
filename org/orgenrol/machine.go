@@ -5,6 +5,7 @@ package orgenrol
 
 import (
 	"context"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
@@ -373,4 +374,40 @@ func (k Keeper) renew(ctx context.Context) error {
 		return err
 	}
 	return m.Install(a.Cert, a.Issuer, a.HostCert, key, k.Now())
+}
+
+// JoinSignIn enrols this device into dir by a person's sign-in
+// (orgpki.Issuer.EnrolSignIn; spec/appenrol/AppEnrol.tla EnrolSSO): key is
+// the device's organisation key and relayKey its relay key, the two the ID
+// token's nonce names (appenrol.SignIn), rule the owner's sign-in rule.
+// The organisation is orgID's, checked against pins as Join does; the
+// answer is checked for key. Run again with the same key and a token for
+// it, the issuer certifies the same name again (and moves its sign-in on:
+// Reauth).
+func JoinSignIn(ctx context.Context, mb Mailbox, dir string, pins Pins, orgID, rule, idToken string, key ed25519.PrivateKey, relayKey crypto.PublicKey, wait time.Duration, now func() time.Time) (*x509.Certificate, error) {
+	ctx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+	ver, _, rm, cm, err := trust(ctx, mb, orgID, pins, wait, now)
+	if err != nil {
+		return nil, err
+	}
+	csr, err := csrOf(key)
+	if err != nil {
+		return nil, err
+	}
+	sr, err := orgpki.NewSignInRequest(rule, idToken, csr, relayKey)
+	if err != nil {
+		return nil, err
+	}
+	a, err := exchange(ctx, mb, orgID, orgpki.Request{ID: randomID(), SignIn: &sr}, wait)
+	if err != nil {
+		return nil, err
+	}
+	if err := orgmachine.Checked(ver, a.Cert, a.Issuer, a.HostCert, key, "", now()); err != nil {
+		return nil, fmt.Errorf("the answer: %w", err)
+	}
+	if err := orgmachine.WriteFiles(dir, orgmachine.Enrolment{Root: rm.Root, Recovery: rm.Recovery, Cert: a.Cert, Issuer: a.Issuer, HostCert: a.HostCert, CRL: cm.CRL, Key: key}); err != nil {
+		return nil, err
+	}
+	return x509.ParseCertificate(a.Cert)
 }

@@ -12,13 +12,16 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/nfltr/relay/client/appenrol"
 	"github.com/nfltr/relay/client/appenrol/idptest"
 	"github.com/nfltr/relay/client/mailboxclient"
 	"github.com/nfltr/relay/org/orgissuer"
+	"github.com/nfltr/relay/org/orgmachine"
 	"github.com/nfltr/relay/org/orgpki"
 )
 
@@ -48,6 +51,43 @@ func TestSignInThroughMailboxes(t *testing.T) {
 	check(t, err)
 	if c.Subject.CommonName != "send-1" || !slices.Equal(c.EmailAddresses, []string{"alice@example.com"}) {
 		t.Fatalf("certificate %s for %v", c.Subject.CommonName, c.EmailAddresses)
+	}
+}
+
+// JoinSignIn: the device's side of a sign-in over the mailboxes, the
+// answer checked and installed, renewed as any machine; run again with the
+// same key it keeps its name.
+func TestJoinSignInInstallsTheDevice(t *testing.T) {
+	f := newFleet(t)
+	idp := idptest.New("alice@example.com")
+	defer idp.Close()
+	f.org.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) {
+		check(t, iss.AddSignInRule(orgpki.SignInRule{ID: "people", Issuer: idp.URL, ClientIDs: []string{"send-desktop"}, App: "send", Groups: []string{"web"}}, f.clk.Now()))
+	})
+	kr, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	check(t, err)
+	_, ko, err := ed25519.GenerateKey(rand.Reader)
+	check(t, err)
+	nonce, err := appenrol.Nonce(kr.Public(), ko.Public())
+	check(t, err)
+	dir := filepath.Join(t.TempDir(), "device")
+	for range 2 {
+		c, err := JoinSignIn(f.ctx, f.relay, dir, f.org.pins, f.org.id, "people", idp.Token(idp.Claims("send-desktop", nonce)), ko, kr.Public(), hang, f.clk.Now)
+		check(t, err)
+		if c.Subject.CommonName != "send-1" {
+			t.Fatalf("enrolled as %s", c.Subject.CommonName)
+		}
+	}
+	m, err := orgmachine.Open(dir)
+	check(t, err)
+	before := serial(m)
+	f.clk.Add(17 * time.Hour)
+	check(t, Keeper{Mailbox: f.relay, Machine: m, Logger: quiet(), Now: f.clk.Now, AnswerWait: hang, RetryWait: 10 * time.Millisecond}.renew(f.ctx))
+	if serial(m) == before {
+		t.Fatal("the device did not renew")
+	}
+	if _, err := JoinSignIn(f.ctx, f.relay, filepath.Join(t.TempDir(), "x"), f.org.pins, f.org.id, "people", idp.Token(idp.Claims("rogue", nonce)), ko, kr.Public(), hang, f.clk.Now); err == nil {
+		t.Fatal("a rogue client's token joined")
 	}
 }
 

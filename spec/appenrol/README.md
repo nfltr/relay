@@ -90,7 +90,9 @@ sign-in: the owner's rules in the issuer's log (`AddSignInRule`),
 against the rule, the nonce, the deny lists, a name the issuer picks),
 `Renew` refusing a sign-in's key past `authUntil` (`AuthLife`, 30 days)
 with `ErrSignInEnded`; the device's side is `client/appenrol` `SignIn`
-(code + PKCE on `golang.org/x/oauth2`, loopback redirect). Go mutants, in
+(code + PKCE on `golang.org/x/oauth2`, loopback redirect) and
+`orgenrol.JoinSignIn` (the request over the mailboxes, the answer
+checked and installed). Go mutants, in
 `org/orgpki/testdata/mutants.txt`: `renew-takes-attrs`,
 `revoke-user-one-name`, `sso-skips-deny` (a code made before the revoke),
 `signin-skips-deny`, `revoke-app-sso-only`, `signin-no-nonce-check`,
@@ -101,6 +103,7 @@ with `ErrSignInEnded`; the device's side is `client/appenrol` `SignIn`
 | spec | code |
 |---|---|
 | AppEnrol.tla | org/orgenrol/issuer.go |
+| AppEnrol.tla | org/orgenrol/machine.go |
 | AppEnrol.tla | org/orgpki/issuer.go |
 | AppEnrol.tla | org/orgpki/profile.go |
 | AppEnrol.tla | org/orgpki/signin.go |
