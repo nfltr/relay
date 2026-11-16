@@ -68,6 +68,7 @@ type tokenRec struct {
 	name      string
 	groups    []string
 	machineID string
+	dev       Device
 	expires   time.Time
 }
 
@@ -80,6 +81,7 @@ type certRec struct {
 type nameRec struct {
 	groups    []string
 	machineID string
+	dev       Device
 	revoked   bool
 	serials   []string // in issue order
 }
@@ -98,6 +100,7 @@ type Issuer struct {
 	tokenKey  []byte
 	tokens    map[string]*tokenRec
 	names     map[string]*nameRec
+	denied    map[string]bool     // "person:<address>", "app:<app>": revoked (RevokePerson, RevokeApp)
 	certs     map[string]*certRec // by serial (hex)
 	crlNumber int64
 	crlNext   time.Time
@@ -190,11 +193,11 @@ func (i *Issuer) apply(e Entry) error {
 		i.cert, i.crlDue = c, true
 		return err
 	case ActToken:
-		i.tokens[e.Token] = &tokenRec{name: e.Name, groups: e.Groups, machineID: e.MachineID, expires: e.NotAfter}
+		i.tokens[e.Token] = &tokenRec{name: e.Name, groups: e.Groups, machineID: e.MachineID, dev: Device{e.Person, e.App}, expires: e.NotAfter}
 	case ActIssued, ActRenewed:
 		n := i.names[e.Name]
 		if n == nil {
-			n = &nameRec{groups: e.Groups, machineID: e.MachineID}
+			n = &nameRec{groups: e.Groups, machineID: e.MachineID, dev: Device{e.Person, e.App}}
 			i.names[e.Name] = n
 		}
 		n.serials = append(n.serials, e.Serial)
@@ -202,6 +205,17 @@ func (i *Issuer) apply(e Entry) error {
 	case ActRevoked:
 		if n := i.names[e.Name]; n != nil {
 			n.revoked = true
+		}
+		if e.Person != "" || e.App != "" {
+			if i.denied == nil {
+				i.denied = map[string]bool{}
+			}
+			i.denied[denyKey(e.Person, e.App)] = true
+			for _, n := range i.names {
+				if n.dev.of(e.Person, e.App) {
+					n.revoked = true
+				}
+			}
 		}
 		i.crlDue = true
 	case ActCRL:
@@ -286,6 +300,17 @@ func (i *Issuer) TokenName(id string) string {
 // bound to its groups (within the issuer's policy) and, when given, the
 // machine id; it lasts ttl.
 func (i *Issuer) MakeToken(name string, groups []string, machineID string, ttl time.Duration, now time.Time) (string, error) {
+	return i.MakeDeviceToken(name, groups, machineID, Device{}, ttl, now)
+}
+
+// MakeDeviceToken is MakeToken for an app's device enrolled for a person
+// (the admin code of spec/appenrol/AppEnrol.tla): the certificate, and
+// every renewal of it, names dev's person and app.
+func (i *Issuer) MakeDeviceToken(name string, groups []string, machineID string, dev Device, ttl time.Duration, now time.Time) (string, error) {
+	dev, err := dev.valid()
+	if err != nil {
+		return "", err
+	}
 	if err := ValidLabel("name", name); err != nil {
 		return "", err
 	}
@@ -306,12 +331,15 @@ func (i *Issuer) MakeToken(name string, groups []string, machineID string, ttl t
 	if i.names[name] != nil {
 		return "", fmt.Errorf("%w: %s is enrolled already; a token is for a new name", ErrRefused, name)
 	}
+	if i.deniedDev(dev) {
+		return "", fmt.Errorf("%w: %s or %s is revoked", ErrRefused, dev.Person, dev.App)
+	}
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
 	id := base64.RawURLEncoding.EncodeToString(raw)
-	if err := i.commit(Entry{Time: now, Act: ActToken, Token: id, Name: name, Groups: slices.Clone(groups), MachineID: machineID, NotAfter: now.Add(ttl)}); err != nil {
+	if err := i.commit(Entry{Time: now, Act: ActToken, Token: id, Name: name, Groups: slices.Clone(groups), MachineID: machineID, Person: dev.Person, App: dev.App, NotAfter: now.Add(ttl)}); err != nil {
 		return "", err
 	}
 	return tokenPrefix + i.orgID + "." + id + "." + base64.RawURLEncoding.EncodeToString(i.tokenSecret(id)), nil
@@ -405,6 +433,9 @@ func (i *Issuer) Enrol(req EnrolRequest, now time.Time) ([]byte, error) {
 	if !now.Before(t.expires) {
 		return nil, i.refuse(refusal, "the token expired")
 	}
+	if i.deniedDev(t.dev) { // AppEnrol.tla RevokedUserCut: a code made before the revoke
+		return nil, i.refuse(refusal, "the token's person or app is revoked")
+	}
 	cr, err := parseCSR(req.CSR)
 	if err != nil {
 		return nil, i.refuse(refusal, "CSR: "+err.Error())
@@ -419,7 +450,7 @@ func (i *Issuer) Enrol(req EnrolRequest, now time.Time) ([]byte, error) {
 			return nil, i.refuse(refusal, t.name+" is enrolled already (the token was redeemed, or another token's was)")
 		}
 	}
-	return i.issue(ActIssued, t.name, t.groups, t.machineID, pub, req.TokenID, "", now)
+	return i.issue(ActIssued, t.name, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now)
 }
 
 // Renew re-certifies a machine under the current issuer for a new key. It
@@ -461,17 +492,17 @@ func (i *Issuer) Renew(req RenewRequest, now time.Time) ([]byte, error) {
 		i.traceRefused(sn, cur, "other", now)
 		return nil, i.refuse(refusal, "CSR: "+err.Error())
 	}
-	return i.issue(ActRenewed, rec.name, n.groups, n.machineID, cr.PublicKey.(ed25519.PublicKey), "", sn, now)
+	return i.issue(ActRenewed, rec.name, n.groups, n.machineID, n.dev, cr.PublicKey.(ed25519.PublicKey), "", sn, now)
 }
 
-func (i *Issuer) issue(act, name string, groups []string, machineID string, pub ed25519.PublicKey, token, from string, now time.Time) ([]byte, error) {
+func (i *Issuer) issue(act, name string, groups []string, machineID string, dev Device, pub ed25519.PublicKey, token, from string, now time.Time) ([]byte, error) {
 	if !subset(groups, i.cert.Subject.OrganizationalUnit) {
 		return nil, i.refuse(Entry{Time: now, Name: name, Token: token, Serial: from}, fmt.Sprintf("groups %v are outside the issuer's policy", groups))
 	}
 	if err := i.unexpired(now); err != nil {
 		return nil, err
 	}
-	t, err := machineTemplate(i.orgID, name, groups, machineID, i.cert, now)
+	t, err := machineTemplate(i.orgID, name, groups, machineID, dev, i.cert, now)
 	if err != nil {
 		return nil, err
 	}
@@ -480,7 +511,7 @@ func (i *Issuer) issue(act, name string, groups []string, machineID string, pub 
 		return nil, err
 	}
 	sum := sha256.Sum256(der)
-	e := Entry{Time: now, Act: act, Name: name, Groups: slices.Clone(groups), MachineID: machineID,
+	e := Entry{Time: now, Act: act, Name: name, Groups: slices.Clone(groups), MachineID: machineID, Person: dev.Person, App: dev.App,
 		Serial: hex.EncodeToString(t.SerialNumber.Bytes()), From: from, Key: orgid.KeyFingerprint(pub),
 		Digest: hex.EncodeToString(sum[:]), Token: token, NotAfter: t.NotAfter}
 	if err := i.commit(e); err != nil {
@@ -513,6 +544,60 @@ func (i *Issuer) Revoke(name string, now time.Time) error {
 	}
 	traceLine(map[string]any{"ev": "revoke", "o": i.orgID, "n": name, "t": now.Unix()})
 	return nil
+}
+
+// RevokePerson revokes every name enrolled for person and refuses its
+// enrolments from now, a token made before included (AppEnrol.tla
+// RevokeUser; mutants revoke-user-one-name, sso-skips-deny).
+func (i *Issuer) RevokePerson(person string, now time.Time) error {
+	d, err := Device{Person: person}.valid()
+	if err != nil || d.Person == "" {
+		return fmt.Errorf("person %q: %v", person, err)
+	}
+	return i.revokeDev(d, now)
+}
+
+// RevokeApp revokes every name enrolled for app, whoever's, and refuses
+// its enrolments from now (AppEnrol.tla RevokeApp; mutant
+// revoke-app-sso-only).
+func (i *Issuer) RevokeApp(app string, now time.Time) error {
+	if err := ValidLabel("app", app); err != nil {
+		return err
+	}
+	return i.revokeDev(Device{App: app}, now)
+}
+
+func (i *Issuer) revokeDev(d Device, now time.Time) error {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	if i.deniedDev(d) {
+		return fmt.Errorf("%s%s is revoked already", d.Person, d.App)
+	}
+	if err := i.commit(Entry{Time: now, Act: ActRevoked, Person: d.Person, App: d.App}); err != nil {
+		return err
+	}
+	for name, n := range i.names {
+		if n.dev.of(d.Person, d.App) {
+			traceLine(map[string]any{"ev": "revoke", "o": i.orgID, "n": name, "t": now.Unix()})
+		}
+	}
+	return nil
+}
+
+func denyKey(person, app string) string {
+	if person != "" {
+		return "person:" + person
+	}
+	return "app:" + app
+}
+
+// of: d is person's (person != "") or app's.
+func (d Device) of(person, app string) bool {
+	return person != "" && d.Person == person || app != "" && d.App == app
+}
+
+func (i *Issuer) deniedDev(d Device) bool {
+	return d.Person != "" && i.denied[denyKey(d.Person, "")] || d.App != "" && i.denied[denyKey("", d.App)]
 }
 
 // CRL signs the issuer's next CRL: a higher Number, NextUpdate CRLLife

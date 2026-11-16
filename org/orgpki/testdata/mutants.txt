@@ -54,3 +54,10 @@ crl-not-due-on-revoke | issuer.go | 		i.crlDue = true | 		_ = 0 | TestNoCRLPastT
 issuer-crl-drops-prev | issuercrl.go | 			entries = append(entries, x509.RevocationListEntry{SerialNumber: e.SerialNumber, RevocationTime: e.RevocationTime}) | 			_ = e | TestSignIssuerCRL
 issuer-crl-any-cert | issuercrl.go | 		if !c.IsCA || c.CheckSignatureFrom(root) != nil { | 		if false { | TestSignIssuerCRL
 renew-revoked-issuer | issuercrl.go | 		if e.SerialNumber.Cmp(c.SerialNumber) == 0 { | 		if e.SerialNumber == nil { | TestSignIssuerCRL
+# An app's device for a person (spec/appenrol/AppEnrol.tla, nfltr
+# docs/decisions/app-device-identity-2026-11-16.md).
+renew-takes-attrs | issuer.go | 	return i.issue(ActRenewed, rec.name, n.groups, n.machineID, n.dev, cr.PublicKey.(ed25519.PublicKey), "", sn, now) | 	return i.issue(ActRenewed, rec.name, n.groups, n.machineID, Device{}, cr.PublicKey.(ed25519.PublicKey), "", sn, now) | TestDeviceTokenNamesPersonAndApp
+revoke-user-one-name | issuer.go | 				if n.dev.of(e.Person, e.App) { | 				if n.dev.of(e.Person, e.App) && n.revoked { | TestRevokePersonRevokesEveryName
+sso-skips-deny | issuer.go | 	if i.deniedDev(t.dev) { // AppEnrol.tla RevokedUserCut: a code made before the revoke | 	if false { | TestRevokePersonRevokesEveryName
+revoke-app-sso-only | issuer.go | 	return d.Person != "" && i.denied[denyKey(d.Person, "")] || d.App != "" && i.denied[denyKey("", d.App)] | 	return d.Person != "" && i.denied[denyKey(d.Person, "")] | TestRevokeAppRevokesEveryName
+uri-unconstrained | profile.go | 		PermittedURIDomains: []string{orgid.Domain(orgID)}, | 		PermittedURIDomains: nil, | TestIssuerConstrainsURIs

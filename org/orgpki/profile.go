@@ -25,6 +25,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"net/mail"
 	"net/url"
 	"regexp"
 	"slices"
@@ -47,6 +48,7 @@ const (
 	rootCNPrefix   = "nfltr org "
 	recoverySuffix = " recovery"
 	machineURIPath = "/machine/"
+	appURIPath     = "/app/"
 )
 
 var (
@@ -83,6 +85,31 @@ func validGroups(groups []string) error {
 		}
 	}
 	return nil
+}
+
+// Device is the person and the app a device's certificate is for (nfltr
+// docs/decisions/app-device-identity-2026-11-16.md): the person as an
+// rfc822Name SAN, the app as the URI SAN nfltr://<org domain>/app/<app>.
+// Either may be "" (none); a plain machine has neither.
+type Device struct {
+	Person string // an email address, lowercased
+	App    string // a lowercase DNS label
+}
+
+// valid returns d with its person lowercased, or an error.
+func (d Device) valid() (Device, error) {
+	if d.Person != "" {
+		d.Person = strings.ToLower(d.Person)
+		if a, err := mail.ParseAddress(d.Person); err != nil || a.Address != d.Person || a.Name != "" {
+			return d, fmt.Errorf("person %q is not a bare email address", d.Person)
+		}
+	}
+	if d.App != "" {
+		if err := ValidLabel("app", d.App); err != nil {
+			return d, err
+		}
+	}
+	return d, nil
 }
 
 // validMachineID: "" (none) or an id that needs no escaping in a URI path.
@@ -187,14 +214,17 @@ func CertifyIssuer(root *x509.Certificate, rootSigner crypto.Signer, issuer ed25
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true, IsCA: true, MaxPathLen: 0, MaxPathLenZero: true,
 		PermittedDNSDomainsCritical: true, PermittedDNSDomains: []string{orgid.Domain(orgID)},
+		// URI SANs (machine and app ids) too: the DNS constraint does not
+		// cover them (finding F1, docs/decisions/app-device-identity-2026-11-16.md).
+		PermittedURIDomains: []string{orgid.Domain(orgID)},
 	}
 	return create(t, root, issuer, rootSigner)
 }
 
 // machineTemplate is a machine's leaf: CN the name, DNS SAN, OU the groups,
-// the machine id as URI SAN, both TLS uses, NotAfter capped by the
-// issuer's own.
-func machineTemplate(orgID, name string, groups []string, machineID string, issuer *x509.Certificate, now time.Time) (*x509.Certificate, error) {
+// the machine id and the device's app as URI SANs, its person as rfc822Name
+// SAN, both TLS uses, NotAfter capped by the issuer's own.
+func machineTemplate(orgID, name string, groups []string, machineID string, dev Device, issuer *x509.Certificate, now time.Time) (*x509.Certificate, error) {
 	sn, err := serial()
 	if err != nil {
 		return nil, err
@@ -216,6 +246,12 @@ func machineTemplate(orgID, name string, groups []string, machineID string, issu
 			return nil, err
 		}
 		t.URIs = []*url.URL{{Scheme: "nfltr", Host: orgid.Domain(orgID), Path: machineURIPath + machineID}}
+	}
+	if dev.App != "" {
+		t.URIs = append(t.URIs, &url.URL{Scheme: "nfltr", Host: orgid.Domain(orgID), Path: appURIPath + dev.App})
+	}
+	if dev.Person != "" {
+		t.EmailAddresses = []string{dev.Person}
 	}
 	return t, nil
 }

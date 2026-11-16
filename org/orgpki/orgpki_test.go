@@ -183,7 +183,7 @@ func TestForgedNameRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmpl, _ := machineTemplate(o.iss.OrgID(), "web-1", []string{"web"}, "", rogueIss, t0)
+	tmpl, _ := machineTemplate(o.iss.OrgID(), "web-1", []string{"web"}, "", Device{}, rogueIss, t0)
 	forged, err := x509.CreateCertificate(rand.Reader, tmpl, rogueIss, newKey(t).Public(), rogueKey)
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ func TestForgedNameRefused(t *testing.T) {
 
 	// The issuer's own key signing a name outside the organisation's domain
 	// (the root's NameConstraints bound a misbehaving or stolen issuer).
-	tmpl, _ = machineTemplate("o-elsewhere", "web-1", []string{"web"}, "", o.iss.Cert(), t0)
+	tmpl, _ = machineTemplate("o-elsewhere", "web-1", []string{"web"}, "", Device{}, o.iss.Cert(), t0)
 	outside, err := x509.CreateCertificate(rand.Reader, tmpl, o.iss.Cert(), newKey(t).Public(), o.iss.key)
 	if err != nil {
 		t.Fatal(err)
@@ -450,7 +450,7 @@ func TestGroupOutsidePolicyRefused(t *testing.T) {
 	refused(t, "a web machine at a db service", err)
 
 	// A leaf whose OU is outside the issuer's (an issuer bug): refused.
-	tmpl, _ := machineTemplate(o.iss.OrgID(), "web-9", []string{"ci"}, "", o.iss.Cert(), t0)
+	tmpl, _ := machineTemplate(o.iss.OrgID(), "web-9", []string{"ci"}, "", Device{}, o.iss.Cert(), t0)
 	der, err := x509.CreateCertificate(rand.Reader, tmpl, o.iss.Cert(), newKey(t).Public(), o.iss.key)
 	if err != nil {
 		t.Fatal(err)
@@ -561,7 +561,7 @@ func TestRotationOnlyByRecoveryKey(t *testing.T) {
 	if _, err := o.ver.Check(parse(t, der), o.iss.Cert(), orgid.Peer{Name: "web-1"}, at); err != nil {
 		t.Fatalf("web-1 renewed under the new root: %v", err)
 	}
-	mt, _ := machineTemplate(o.iss.OrgID(), "web-1", []string{"web"}, "", o.rootCrt, t0)
+	mt, _ := machineTemplate(o.iss.OrgID(), "web-1", []string{"web"}, "", Device{}, o.rootCrt, t0)
 	mt.SerialNumber = web.SerialNumber // serials are public
 	fk := newKey(t)
 	forged, err := x509.CreateCertificate(rand.Reader, mt, o.rootCrt, fk.Public(), o.root)

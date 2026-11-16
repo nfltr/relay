@@ -62,10 +62,18 @@ of a disabled person is still live), `WitnessUserRevoked`,
 
 ## Code map
 
-The code lands in lane APPID2 (nfltr's decision doc "Lanes"); its trace
-recorder (TraceAppEnrol.tla, `-tags enroltrace`) comes with it.
+The admin-code path is code: `orgpki.Issuer.MakeDeviceToken` (the code
+names person and app), the profile's SANs (`machineTemplate`), renewal
+keeping them, `RevokePerson` and `RevokeApp` (every name, and the person's
+or app's enrolments from now, a code made before included). Its Go mutants,
+in `org/orgpki/testdata/mutants.txt`, are this spec's: `renew-takes-attrs`,
+`revoke-user-one-name`, `sso-skips-deny` (here: a code made before the
+revoke), `revoke-app-sso-only`. Not yet code (lane APPID2, nfltr's decision
+doc "Lanes"): the sign-in path (`SSOEnrol`, `Renew`'s `authUntil`,
+`Reauth`) and the trace recorder (TraceAppEnrol.tla, `-tags enroltrace`).
 
 | spec | code |
 |---|---|
 | AppEnrol.tla | org/orgenrol/issuer.go |
+| AppEnrol.tla | org/orgpki/issuer.go |
 | AppEnrol.tla | org/orgpki/profile.go |

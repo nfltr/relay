@@ -25,11 +25,11 @@ const (
 	ActInit       = "init"       // Cert: the root; Recovery: the recovery's certificate; KeyLabel: the root primary's
 	ActIssuer     = "issuer"     // Cert: an issuer certificate the root signed
 	ActRotated    = "rotated"    // Cert: the new root, cross-signed by the recovery key; KeyLabel
-	ActToken      = "token"      // Token, Name, Groups, MachineID, NotAfter (the token's expiry)
-	ActIssued     = "issued"     // Name, Groups, MachineID, Serial, Key, Digest, NotAfter, Token
+	ActToken      = "token"      // Token, Name, Groups, MachineID, Person, App, NotAfter (the token's expiry)
+	ActIssued     = "issued"     // Name, Groups, MachineID, Person, App, Serial, Key, Digest, NotAfter, Token
 	ActRenewed    = "renewed"    // as issued; From: the serial it renews
 	ActRefused    = "refused"    // Reason; Token or Serial when known
-	ActRevoked    = "revoked"    // Name
+	ActRevoked    = "revoked"    // Name; or Person or App: every name of it, and no enrolment of it from now
 	ActCRL        = "crl"        // Number, NotAfter (its NextUpdate)
 	ActCheckpoint = "checkpoint" // Head; IssuerSig; RootSig (at an issuer renewal)
 	ActMoved      = "moved"      // Key: the new machine's receive key fingerprint (the fence, move.go)
@@ -44,6 +44,8 @@ type Entry struct {
 	Name      string    `json:"name,omitempty"`
 	Groups    []string  `json:"groups,omitempty"`
 	MachineID string    `json:"machine_id,omitempty"`
+	Person    string    `json:"person,omitempty"`
+	App       string    `json:"app,omitempty"`
 	Serial    string    `json:"serial,omitempty"`
 	From      string    `json:"from,omitempty"`
 	Key       string    `json:"key,omitempty"`
