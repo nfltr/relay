@@ -139,7 +139,9 @@ func run() error {
 		}
 		f.arm(code, n)
 	})
-	mux.HandleFunc("GET /count", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprint(w, f.take()) })
+	mux.HandleFunc("GET /count", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, strconv.Itoa(f.take())) // nosemgrep: no-io-writestring-to-responsewriter -- a number, on the loopback control port
+	})
 	mux.HandleFunc("POST /restart", func(w http.ResponseWriter, _ *http.Request) {
 		if err := r.restart(); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -183,7 +185,7 @@ func (r *relay) start() error {
 	if err != nil {
 		return err
 	}
-	r.cmd = exec.Command(self, "relay") // #nosec G204 -- this binary
+	r.cmd = exec.Command(self, "relay") // #nosec G204 -- this binary // nosemgrep: dangerous-exec-command -- this binary, a fixed argument
 	r.cmd.Env = append(os.Environ(), "HARNESS_KEY="+r.key, "HARNESS_PROXY="+r.proxy, "HARNESS_GRPC="+r.grpc, "HARNESS_INTERNAL="+r.internal)
 	r.cmd.Stderr = os.Stderr
 	if _, err := r.cmd.StdinPipe(); err != nil { // the child ends with this process
@@ -302,7 +304,7 @@ func webListener() (string, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, page)
+		_, _ = io.WriteString(w, page)
 	})
 	mux.HandleFunc("GET /file", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
@@ -401,7 +403,7 @@ func (f *front) fault(c net.Conn, br *bufio.Reader, code int) {
 	if err != nil {
 		return
 	}
-	h := sha1.Sum([]byte(req.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")) // #nosec G401 -- RFC 6455
+	h := sha1.Sum([]byte(req.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")) // #nosec G401 -- RFC 6455 // nosemgrep: use-of-sha1 -- RFC 6455's accept key, not a security hash
 	fmt.Fprintf(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\nSec-WebSocket-Protocol: nf1.v1\r\n\r\n", base64.StdEncoding.EncodeToString(h[:]))
 	var mr wsframe.MessageReader
 	if _, _, err := mr.ReadMessage(br, 1<<20); err != nil || code == 1006 {
