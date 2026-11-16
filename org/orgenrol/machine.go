@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/nfltr/relay/client/orgid"
@@ -293,19 +294,23 @@ func (k Keeper) defaults() Keeper {
 	return k
 }
 
-// Run keeps the machine until ctx ends.
+// Run keeps the machine until ctx ends; it returns once its follows did.
 func (k Keeper) Run(ctx context.Context) {
 	k = k.defaults()
 	m, org := k.Machine, k.Machine.OrgID()
-	go followCRL(ctx, k.Mailbox, m, k.FollowEvery, k.Now, k.Logger)
-	go follow(ctx, k.Mailbox, orgpki.RootMailbox(org), k.FollowEvery, func(p []byte) error {
-		var rm orgpki.RootMessage
-		if err := json.Unmarshal(p, &rm); err != nil {
+	var follows sync.WaitGroup
+	defer follows.Wait() // nothing of Run writes the machine's directory once it returned (TestKeeperRunJoinsItsFollows)
+	follows.Go(func() { followCRL(ctx, k.Mailbox, m, k.FollowEvery, k.Now, k.Logger) })
+	follows.Go(func() {
+		follow(ctx, k.Mailbox, orgpki.RootMailbox(org), k.FollowEvery, func(p []byte) error {
+			var rm orgpki.RootMessage
+			if err := json.Unmarshal(p, &rm); err != nil {
+				return err
+			}
+			_, err := m.TakeRotation(rm.Root)
 			return err
-		}
-		_, err := m.TakeRotation(rm.Root)
-		return err
-	}, nil, k.Logger)
+		}, nil, k.Logger)
+	})
 	for ctx.Err() == nil {
 		changed := m.Changed()
 		if d := m.RenewDue(k.Now()).Sub(k.Now()); d > 0 {

@@ -293,6 +293,15 @@ func (f *fleet) keeper() Keeper {
 	return Keeper{Mailbox: f.relay, Machine: f.m, Logger: quiet(), Now: f.clk.Now, AnswerWait: hang, RetryWait: 10 * time.Millisecond, FollowEvery: 100 * time.Millisecond}
 }
 
+// keep runs k until the test (or ctx) ends, joined before TempDir's
+// cleanup removes the machine's directory.
+func keep(t *testing.T, ctx context.Context, k Keeper) {
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { defer close(done); k.Run(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+}
+
 func serial(m *orgmachine.Machine) string { c, _ := m.Current(); return c.SerialNumber.String() }
 
 func eventually(t *testing.T, what string, cond func() bool) {
@@ -390,7 +399,7 @@ func TestRenewAsksAgainAfterALoss(t *testing.T) {
 	f.clk.Add(17 * time.Hour)
 	k := f.keeper()
 	k.AnswerWait = 300 * time.Millisecond // the lost request's wait runs out
-	go k.Run(f.ctx)
+	keep(t, f.ctx, k)
 	eventually(t, "renewed after a lost request", func() bool { return serial(f.m) != before })
 }
 
@@ -443,7 +452,7 @@ func TestRevokePushAndBackstop(t *testing.T) {
 			if !withhold {
 				k.FollowEvery = time.Hour // the push alone
 			}
-			go k.Run(ctx)
+			keep(t, ctx, k)
 			time.Sleep(200 * time.Millisecond) // the follows park on their cursors
 			f.relay.mu.Lock()
 			if withhold {
@@ -512,7 +521,7 @@ func rotationMoves(t *testing.T, mode string) {
 		}
 	}
 	f.relay.mu.Unlock()
-	go k.Run(f.ctx)
+	keep(t, f.ctx, k)
 	time.Sleep(200 * time.Millisecond) // the follows park on their cursors
 	newRoot := f.rotate(t)
 	eventually(t, "the machine renewed under the new root", func() bool {
