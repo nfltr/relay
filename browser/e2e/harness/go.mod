@@ -24,7 +24,7 @@ require (
 	github.com/jackpal/gateway v1.2.0 // indirect
 	github.com/jackpal/go-nat-pmp v1.1.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nfltr/link v0.12.15 // indirect
+	github.com/nfltr/link v0.12.16 // indirect
 	github.com/nfltr/link/peerlink/quiclink v0.5.22 // indirect
 	github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261112202211-40e0a2570e52 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
