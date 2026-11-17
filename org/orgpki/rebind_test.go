@@ -7,6 +7,8 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	"errors"
+	"os"
+	"regexp"
 	"slices"
 	"testing"
 	"time"
@@ -145,5 +147,64 @@ func TestRebindTokenRules(t *testing.T) {
 	req2, _ := NewEnrolRequest(tok, csr(t, newKey(t), "web"))
 	if _, err := o.iss.Enrol(req2, t0); !errors.Is(err, ErrRefused) {
 		t.Fatalf("the rebind token for another key: %v, want refused", err)
+	}
+}
+
+// rebindBindings: each BIND:rebind.* of spec/proverif/enrol.pv changes that
+// field of the honest rebind request (web, a new key, its rebind token) and
+// requires the issuer to refuse it, or not to take it.
+var rebindBindings = map[string]func(t *testing.T, o *org, tok string){
+	"rebind.mac": func(t *testing.T, o *org, tok string) {
+		req, err := NewEnrolRequest(tok, csr(t, newKey(t), "web"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.CSR = csr(t, newKey(t), "web") // another key under the token's MAC
+		if _, err := o.iss.Enrol(req, t0); !errors.Is(err, ErrRefused) {
+			t.Fatalf("a key the rebind token does not MAC: %v, want refused", err)
+		}
+	},
+	"rebind.name": func(t *testing.T, o *org, tok string) {
+		o.enrol(t, "other", "web")
+		req, _ := NewEnrolRequest(tok, csr(t, newKey(t), "other"))
+		der, err := o.iss.Enrol(req, t0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cn := parse(t, der).Subject.CommonName; cn != "web" {
+			t.Fatalf("a request naming other got %q, want the token's name (web)", cn)
+		}
+	},
+}
+
+// TestRebindModelBindings runs every row (make spec-bindings) and fails
+// when enrol.pv's BIND:rebind.* ids and the rows differ.
+func TestRebindModelBindings(t *testing.T) {
+	src, err := os.ReadFile("../../spec/proverif/enrol.pv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var model, rows []string
+	for _, m := range regexp.MustCompile(`BIND:(rebind\.[a-z0-9.]+)`).FindAllSubmatch(src, -1) {
+		model = append(model, string(m[1]))
+	}
+	for id := range rebindBindings {
+		rows = append(rows, id)
+	}
+	slices.Sort(model)
+	slices.Sort(rows)
+	if !slices.Equal(model, rows) {
+		t.Fatalf("enrol.pv BIND ids %v, rows %v: each binding of the model needs one row", model, rows)
+	}
+	for _, id := range rows {
+		t.Run(id, func(t *testing.T) {
+			o := newOrg(t)
+			o.enrol(t, "web", "db")
+			tok, err := o.iss.MakeRebindToken("web", mid, time.Hour, t0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rebindBindings[id](t, o, tok)
+		})
 	}
 }
