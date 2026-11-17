@@ -66,7 +66,7 @@ hosted_spec() {
 	actprops=""
 	temporal="RevokeTakesEffect"
 	mfile=hosted-mutants.txt
-	witnesses="WitnessHostedServes WitnessMovedOff WitnessStolenSession WitnessRevokedCut WitnessOwnerActivated WitnessRenewed"
+	witnesses="WitnessHostedServes WitnessMovedOff WitnessStolenSession WitnessRevokedCut WitnessOwnerActivated WitnessRenewed WitnessRevokedRemoteRenewal WitnessResigned"
 	covskip="SelfRenew|AutoActivate"
 }
 

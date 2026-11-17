@@ -25,6 +25,15 @@
 \* certificate's NotAfter) and the root's revocations they took; a session
 \* lasts until its admission's end (Until) and is cut by a revocation they
 \* take.
+\*
+\* The root's record: the root's machine keeps every issuer certificate it
+\* signs (kept), also a remote renewal's (`nfltr org issuer sign`), so its
+\* revocation lists them all (mutant sign-forgets: a remotely renewed
+\* certificate missing from the CRL of issuers stays admitted). Its CRL of
+\* issuers is re-signed with every renewal (rnext, its NextUpdate, the new
+\* delegation's end; mutant no-resign): a machine past NextUpdate holds no
+\* delegation that outlives it, so F1's Until (the issuer certificate's
+\* NotAfter) refuses there; the revocations themselves never lapse.
 EXTENDS Naturals, FiniteSets
 
 CONSTANTS
@@ -47,12 +56,14 @@ VARIABLES
     serving,   \* the keys an issuer serves with
     auth,      \* the owner's authorisations <<k, host>>: genesis, a fence's recipient, a signed activation
     stolen,    \* keys the attacker holds (the hosted machine compromised)
-    rcrl,      \* keys the root revoked (its CRL of issuers, published)
-    taken,     \* keys whose revocation the verifier took
+    kept,      \* kept[k]: the latest NotAfter of k's certificates in the root's record
+    rcrl,      \* rcrl[k]: the latest NotAfter of k's certificates the root's CRL of issuers lists (0: not revoked)
+    rnext,     \* the NextUpdate of the root's CRL of issuers (0: none signed yet)
+    taken,     \* taken[k]: rcrl[k] as the verifier took it (0: none)
     sessions,  \* <<k, until>>: sessions a verifier admitted under k, open until until
     reach      \* the hosted side hears the owner's machine (FALSE: a partition)
 
-vars == <<now, signed, cert, loc, dest, serving, auth, stolen, rcrl, taken, sessions, reach>>
+vars == <<now, signed, cert, loc, dest, serving, auth, stolen, kept, rcrl, rnext, taken, sessions, reach>>
 
 TypeOK ==
     /\ now \in 0..MaxTime
@@ -63,8 +74,10 @@ TypeOK ==
     /\ serving \subseteq Keys
     /\ auth \subseteq Keys \X Hosts
     /\ stolen \subseteq Keys
-    /\ rcrl \subseteq Keys
-    /\ taken \subseteq rcrl
+    /\ kept \in [Keys -> 0..(MaxTime + DelegLife)]
+    /\ rcrl \in [Keys -> 0..(MaxTime + DelegLife)]
+    /\ rnext \in 0..(MaxTime + DelegLife)
+    /\ taken \in [Keys -> 0..(MaxTime + DelegLife)]
     /\ sessions \subseteq Keys \X (0..(MaxTime + CertLife))
     /\ reach \in BOOLEAN
 
@@ -77,8 +90,10 @@ Init ==
     /\ serving = {"k1"}
     /\ auth = {<<"k1", "self">>}
     /\ stolen = {}
-    /\ rcrl = {}
-    /\ taken = {}
+    /\ kept = signed
+    /\ rcrl = [k \in Keys |-> 0]
+    /\ rnext = 0
+    /\ taken = [k \in Keys |-> 0]
     /\ sessions = {}
     /\ reach = TRUE
 
@@ -87,16 +102,23 @@ Tick ==
     /\ now < MaxTime
     /\ now' = now + 1
     /\ sessions' = {s \in sessions : s[2] > now + 1}
-    /\ UNCHANGED <<signed, cert, loc, dest, serving, auth, stolen, rcrl, taken, reach>>
+    /\ UNCHANGED <<signed, cert, loc, dest, serving, auth, stolen, kept, rcrl, rnext, taken, reach>>
 
 \* The monthly renewal: the serving issuer's request, the root's answer
-\* (org/orgpki renew.go). Only the root extends a delegation.
+\* (org/orgpki renew.go). Only the root extends a delegation. The root's
+\* machine records the certificate it signs (orgissuer KeepSigned; mutant
+\* sign-forgets: a remote renewal, the issuer hosted, left out) and
+\* re-signs its CRL of issuers, if it has one, to the new delegation's end
+\* (mutant no-resign).
 Renew(k) ==
     /\ k \in serving
-    /\ k \notin rcrl
+    /\ rcrl[k] = 0
     /\ now + DelegLife > signed[k]
     /\ signed' = [signed EXCEPT ![k] = now + DelegLife]
     /\ cert' = [cert EXCEPT ![k] = now + DelegLife]
+    /\ kept' = IF Mutant = "sign-forgets" /\ loc[k] = "hosted" THEN kept
+               ELSE [kept EXCEPT ![k] = now + DelegLife]
+    /\ rnext' = IF rnext = 0 \/ Mutant = "no-resign" THEN rnext ELSE now + DelegLife
     /\ UNCHANGED <<now, loc, dest, serving, auth, stolen, rcrl, taken, sessions, reach>>
 
 \* Mutant self-renew: the hosted issuer extends its own certificate (a
@@ -107,7 +129,7 @@ SelfRenew(k) ==
     /\ loc[k] = "hosted"
     /\ now + DelegLife > cert[k]
     /\ cert' = [cert EXCEPT ![k] = now + DelegLife]
-    /\ UNCHANGED <<now, signed, loc, dest, serving, auth, stolen, rcrl, taken, sessions, reach>>
+    /\ UNCHANGED <<now, signed, loc, dest, serving, auth, stolen, kept, rcrl, rnext, taken, sessions, reach>>
 
 \* A verifier admits a machine certificate under k whose NotAfter is u.
 \* An honest issuer caps u at its own certificate's NotAfter (org/orgpki
@@ -119,33 +141,37 @@ Until(k, u) == IF Mutant = "until-leaf-only" THEN u ELSE Min(u, cert[k])
 Admit(k, u) ==
     /\ k \in serving \/ k \in stolen
     /\ now < cert[k]
-    /\ k \notin taken \/ Mutant = "ignore-root-crl"
+    /\ taken[k] < cert[k] \/ Mutant = "ignore-root-crl"
     /\ k \in stolen \/ u <= cert[k]
     /\ Until(k, u) > now
     /\ sessions' = sessions \cup {<<k, Until(k, u)>>}
-    /\ UNCHANGED <<now, signed, cert, loc, dest, serving, auth, stolen, rcrl, taken, reach>>
+    /\ UNCHANGED <<now, signed, cert, loc, dest, serving, auth, stolen, kept, rcrl, rnext, taken, reach>>
 
 \* The hosted machine is compromised: the attacker holds every key there.
 Compromise(k) ==
     /\ loc[k] = "hosted"
     /\ k \notin stolen
     /\ stolen' = stolen \cup {k}
-    /\ UNCHANGED <<now, signed, cert, loc, dest, serving, auth, rcrl, taken, sessions, reach>>
+    /\ UNCHANGED <<now, signed, cert, loc, dest, serving, auth, kept, rcrl, rnext, taken, sessions, reach>>
 
-\* The owner revokes an issuer: the root signs its CRL of issuers.
+\* The owner revokes an issuer: the root signs its CRL of issuers, listing
+\* every certificate of k in its record.
 RevokeIssuer(k) ==
-    /\ k \notin rcrl
-    /\ rcrl' = rcrl \cup {k}
-    /\ UNCHANGED <<now, signed, cert, loc, dest, serving, auth, stolen, taken, sessions, reach>>
+    /\ rcrl[k] = 0
+    /\ rcrl' = [rcrl EXCEPT ![k] = kept[k]]
+    /\ rnext' = now + DelegLife
+    /\ UNCHANGED <<now, signed, cert, loc, dest, serving, auth, stolen, kept, taken, sessions, reach>>
 
 \* The relay delivers the root's CRL to the verifier (when it likes): it
-\* takes it and cuts every session under the revoked key.
+\* takes it and cuts the sessions under the certificates it lists (k's
+\* current one listed: every session under k).
 Deliver(k) ==
     /\ Mutant # "no-push"
-    /\ k \in rcrl \ taken
-    /\ taken' = taken \cup {k}
-    /\ sessions' = IF Mutant = "keep-sessions" THEN sessions ELSE {s \in sessions : s[1] # k}
-    /\ UNCHANGED <<now, signed, cert, loc, dest, serving, auth, stolen, rcrl, reach>>
+    /\ taken[k] # rcrl[k]
+    /\ taken' = [taken EXCEPT ![k] = rcrl[k]]
+    /\ sessions' = IF Mutant = "keep-sessions" \/ rcrl[k] < cert[k] THEN sessions
+                   ELSE {s \in sessions : s[1] # k}
+    /\ UNCHANGED <<now, signed, cert, loc, dest, serving, auth, stolen, kept, rcrl, rnext, reach>>
 
 \* The fenced move (OrgMove.tla): the owner's order names the recipient
 \* (onto hosted: the owner's own send to a receive key the hosting service
@@ -158,14 +184,14 @@ Fence(k, h) ==
     /\ loc' = [loc EXCEPT ![k] = "flight"]
     /\ dest' = [dest EXCEPT ![k] = h]
     /\ auth' = (auth \ {<<k, loc[k]>>}) \cup {<<k, h>>}
-    /\ UNCHANGED <<now, signed, cert, stolen, rcrl, taken, sessions, reach>>
+    /\ UNCHANGED <<now, signed, cert, stolen, kept, rcrl, rnext, taken, sessions, reach>>
 
 Import(k) ==
     /\ loc[k] = "flight"
     /\ loc' = [loc EXCEPT ![k] = dest[k]]
     /\ dest' = [dest EXCEPT ![k] = None]
     /\ serving' = serving \cup {k}
-    /\ UNCHANGED <<now, signed, cert, auth, stolen, rcrl, taken, sessions, reach>>
+    /\ UNCHANGED <<now, signed, cert, auth, stolen, kept, rcrl, rnext, taken, sessions, reach>>
 
 \* The owner's machine and its issuer are lost (no move under way).
 LoseSelf(k) ==
@@ -173,24 +199,24 @@ LoseSelf(k) ==
     /\ loc' = [loc EXCEPT ![k] = None]
     /\ serving' = serving \ {k}
     /\ auth' = auth \ {<<k, "self">>}
-    /\ UNCHANGED <<now, signed, cert, dest, stolen, rcrl, taken, sessions, reach>>
+    /\ UNCHANGED <<now, signed, cert, dest, stolen, kept, rcrl, rnext, taken, sessions, reach>>
 
 \* The hosted side's view of the owner's machine comes and goes.
 Partition ==
     /\ reach' = ~reach
-    /\ UNCHANGED <<now, signed, cert, loc, dest, serving, auth, stolen, rcrl, taken, sessions>>
+    /\ UNCHANGED <<now, signed, cert, loc, dest, serving, auth, stolen, kept, rcrl, rnext, taken, sessions>>
 
 \* The owner's signed activation of the standby, only when no issuer serves
 \* (the owner's act is its fence; its design is the high-availability one).
 OwnerActivate(k) ==
     /\ loc[k] = "hosted"
     /\ k \notin serving
-    /\ k \notin rcrl
+    /\ rcrl[k] = 0
     /\ serving = {}
     /\ ~\E j \in Keys : loc[j] = "flight"
     /\ serving' = {k}
     /\ auth' = auth \cup {<<k, "hosted">>}
-    /\ UNCHANGED <<now, signed, cert, loc, dest, stolen, rcrl, taken, sessions, reach>>
+    /\ UNCHANGED <<now, signed, cert, loc, dest, stolen, kept, rcrl, rnext, taken, sessions, reach>>
 
 \* Mutant auto-takeover: the hosted side activates the standby because it
 \* no longer hears the owner's issuer (the owner's CRL seems to lapse).
@@ -200,7 +226,7 @@ AutoActivate(k) ==
     /\ loc[k] = "hosted"
     /\ k \notin serving
     /\ serving' = serving \cup {k}
-    /\ UNCHANGED <<now, signed, cert, loc, dest, auth, stolen, rcrl, taken, sessions, reach>>
+    /\ UNCHANGED <<now, signed, cert, loc, dest, auth, stolen, kept, rcrl, rnext, taken, sessions, reach>>
 
 Next ==
     \/ Tick
@@ -228,16 +254,22 @@ ServingAuthorized == \A k \in serving : <<k, loc[k]>> \in auth
 DelegationBound == \A s \in sessions : s[2] <= signed[s[1]]
 
 \* The root's revocation ends the issuer for a verifier that took it.
-RevokedIssuerRefused == \A s \in sessions : s[1] \notin taken
+RevokedIssuerRefused == \A s \in sessions : taken[s[1]] = 0
+
+\* The root's CRL of issuers outlives every delegation it does not revoke:
+\* past its NextUpdate no issuer certificate counts (F1's Until refuses).
+RootCRLCurrent == rnext = 0 \/ \A k \in Keys : rcrl[k] > 0 \/ signed[k] <= rnext
 
 \* Liveness (LiveSpec): a revocation the root signed reaches the verifier.
-RevokeTakesEffect == \A k \in Keys : (k \in rcrl) ~> (k \in taken)
+RevokeTakesEffect == \A k \in Keys : (rcrl[k] > 0) ~> (taken[k] > 0)
 
 \* Witnesses (each must be violated: the states are reachable).
 WitnessHostedServes == ~("k1" \in serving /\ loc["k1"] = "hosted")
 WitnessMovedOff == ~("k1" \in serving /\ loc["k1"] = "self" /\ <<"k1", "hosted">> \notin auth /\ stolen # {})
 WitnessStolenSession == ~(\E s \in sessions : s[1] \in stolen)
-WitnessRevokedCut == ~(\E k \in stolen : k \in taken /\ now < signed[k])
+WitnessRevokedCut == ~(\E k \in stolen : taken[k] > 0 /\ now < signed[k])
 WitnessOwnerActivated == ~("k2" \in serving)
 WitnessRenewed == ~(signed["k1"] > DelegLife)
+WitnessRevokedRemoteRenewal == ~(\E k \in Keys : rcrl[k] > DelegLife)
+WitnessResigned == ~(rnext > DelegLife /\ \E k \in Keys : rcrl[k] = 0 /\ signed[k] > DelegLife)
 =============================================================================
