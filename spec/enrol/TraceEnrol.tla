@@ -62,8 +62,9 @@ TK == <<E.o, E.tok>>
 NK == <<E.o, E.n>>
 Redeemed == TK \in DOMAIN tokkey
 TokensNewest == NK \in DOMAIN lastTok /\ lastTok[NK] = E.tok
+\* (An enrolment by sign-in carries no token: spec/appenrol's.)
 EnrolBad ==
-    IF ~Redeemed THEN {}
+    IF ~Redeemed \/ E.tok = "" THEN {}
     ELSE (IF E.k # tokkey[TK] THEN {"reissue-any-key"} ELSE {})
          \cup (IF IsRevoked(E.o, E.n) THEN {"renew-revoked"} ELSE {})
          \cup (IF TokensNewest THEN {} ELSE {"reissue-after-renewal"})
@@ -121,7 +122,7 @@ Next ==
     /\ certs' = IF E.ev = "issue" THEN (<<E.o, E.s>> :> [n |-> E.n, exp |-> E.exp]) @@ certs ELSE certs
     /\ revoked' = IF E.ev = "revoke" THEN revoked \cup {<<E.o, E.n>>} ELSE revoked
     /\ last' = IF E.ev = "crl" THEN (E.o :> E.num) @@ last ELSE last
-    /\ tokkey' = IF E.ev = "issue" /\ E.from = "" /\ ~Redeemed THEN (TK :> E.k) @@ tokkey ELSE tokkey
+    /\ tokkey' = IF E.ev = "issue" /\ E.from = "" /\ E.tok # "" /\ ~Redeemed THEN (TK :> E.k) @@ tokkey ELSE tokkey
     /\ lastTok' = IF E.ev = "issue" THEN (NK :> E.tok) @@ lastTok ELSE lastTok
     /\ retired' = IF E.ev = "rebind" THEN retired \cup Retires ELSE retired
     /\ held' = CASE E.ev = "take" /\ E.ok -> (HK :> [num |-> E.num, next |-> E.next, rev |-> Set(E.rev)]) @@ held
