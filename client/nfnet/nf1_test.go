@@ -284,11 +284,10 @@ func TestNF1ClientHelloGoesWithOpen(t *testing.T) {
 	echoAndHalfCloseWith(t, c, srv)
 }
 
-// A refused open keeps the relay's reason (exit 4 refused, not 6 reset):
-// the ClientHello sent with the open fails at its write, before TLS reads
-// the refusal (nf1.AnswerConn.Err; found by the connect conformance suite's
-// per-address cap, lane NF1TTFB).
-func TestNF1RefusedOpenKeepsItsReason(t *testing.T) {
+// refusingNF1Relay is a plaintext relay stand-in that refuses every open
+// with reason and msg.
+func refusingNF1Relay(t *testing.T, reason relayv1.ErrorReason, msg string) Config {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -297,25 +296,37 @@ func TestNF1RefusedOpenKeepsItsReason(t *testing.T) {
 	t.Cleanup(func() { _ = ln.Close(); <-done })
 	go func() {
 		defer close(done)
-		nc, err := ln.Accept()
-		if err != nil {
-			return
+		for { // every open, held or not, on a data connection of its own
+			nc, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer nc.Close() //nolint:errcheck
+				if _, err := http.ReadRequest(bufio.NewReader(nc)); err != nil {
+					return
+				}
+				mux, err := dataplane.Accept(context.Background(), nc, dataWindow, "allow")
+				if err != nil {
+					return
+				}
+				_ = mux.Serve(func(_ *pb.TCPData, s *dataplane.Session) {
+					_ = s.AbortWith(dataplane.Refusal(reason, msg))
+				})
+			}()
 		}
-		defer nc.Close() //nolint:errcheck
-		if _, err := http.ReadRequest(bufio.NewReader(nc)); err != nil {
-			return
-		}
-		mux, err := dataplane.Accept(context.Background(), nc, dataWindow, "allow")
-		if err != nil {
-			return
-		}
-		_ = mux.Serve(func(_ *pb.TCPData, s *dataplane.Session) {
-			_ = s.AbortWith(dataplane.Refusal(relayv1.ErrorReason_ERROR_REASON_LIMIT_EXCEEDED, "over the relay's limit"))
-		})
 	}()
-	cfg := Config{Plaintext: true, DialRelay: func(ctx context.Context, _ string) (net.Conn, error) {
+	return Config{Plaintext: true, DialRelay: func(ctx context.Context, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "tcp", ln.Addr().String())
 	}}
+}
+
+// A refused open keeps the relay's reason (exit 4 refused, not 6 reset):
+// the ClientHello sent with the open fails at its write, before TLS reads
+// the refusal (nf1.AnswerConn.Err; found by the connect conformance suite's
+// per-address cap, lane NF1TTFB).
+func TestNF1RefusedOpenKeepsItsReason(t *testing.T) {
+	cfg := refusingNF1Relay(t, relayv1.ErrorReason_ERROR_REASON_LIMIT_EXCEEDED, "over the relay's limit")
 	l, _, err := nf1.Mint("relay.example:443")
 	if err != nil {
 		t.Fatal(err)
@@ -328,5 +339,30 @@ func TestNF1RefusedOpenKeepsItsReason(t *testing.T) {
 	}
 	if CodeOf(err) != CodeRefused {
 		t.Fatalf("dial: %v (%s), want refused", err, CodeOf(err))
+	}
+}
+
+// An address no service holds is not_found at once, with or without
+// direct paths: the relay's nf1 answer (unknown, offline and every dial
+// failed are one) is final, so the dial is not held for the open's bound
+// (60 s with direct paths: nfltr cat pipe's DefaultOpenTimeout; lane
+// NF1FAST).
+func TestNF1NotServedIsNotHeld(t *testing.T) {
+	cfg := refusingNF1Relay(t, relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE, "no nf1 service at this address")
+	l, _, err := nf1.Mint("relay.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, direct := range []DirectMode{DirectOff, DirectOn} {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		start := time.Now()
+		c, err := dialer(t, cfg).DialTarget(ctx, Target{Kind: AddressTarget, Address: l.Address()}, DialOptions{Direct: direct})
+		cancel()
+		if c != nil {
+			_ = c.Close()
+		}
+		if took := time.Since(start); CodeOf(err) != CodeNotFound || took > 2*time.Second {
+			t.Fatalf("direct %q: %v (%s) after %v, want not_found within 2 s", direct, err, CodeOf(err), took)
+		}
 	}
 }

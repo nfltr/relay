@@ -80,7 +80,11 @@ func (d *Dialer) Dial(ctx context.Context, target string, o DialOptions) (*Conn,
 // ctx.
 func (d *Dialer) DialTarget(ctx context.Context, t Target, o DialOptions) (*Conn, error) {
 	var c *Conn
-	err := hold(ctx, !o.Early, func() (err error) {
+	held := heldReasons
+	if t.Kind == AddressTarget {
+		held = nf1HeldReasons
+	}
+	err := hold(ctx, !o.Early, held, func() (err error) {
 		c, err = d.dialOnce(ctx, t, o)
 		return err
 	})
@@ -320,15 +324,25 @@ var heldReasons = map[string]bool{
 	relayv1.ErrorReason_ERROR_REASON_DIRECTORY_UNAVAILABLE.String(): true,
 }
 
-// hold runs open until its answer is not one to hold for: the agent
-// offline (or unknown: the relay does not tell them apart), a relay that
+// nf1HeldReasons are an nf1 dial's: not the address's "not served"
+// (AGENT_OFFLINE: unknown, offline and every dial failed are one answer),
+// which the relay gives from its directory at once and is final; held, an
+// unknown address waited out the whole open bound (60 s with direct
+// paths, nfltr's DefaultOpenTimeout; TestNF1NotServedIsNotHeld).
+var nf1HeldReasons = map[string]bool{
+	relayv1.ErrorReason_ERROR_REASON_DIRECTORY_UNAVAILABLE.String(): true,
+}
+
+// hold runs open until its answer is not one to hold for: a reason in
+// reasons (the agent offline, or unknown: the relay does not tell them
+// apart; a relay that cannot read its directory), a relay that
 // cannot route the open for now, a path lost before the agent answered
 // (Unopened). Asking again is safe: an open sends no byte before the
 // answer and the far end none before it accepted (link spec/Link.tla
 // DataOK). When ctx ends it returns the last such refusal, wrapping ctx's
 // error. Without again (an early open, whose bytes went with it) it runs
 // open once.
-func hold(ctx context.Context, again bool, open func() error) error {
+func hold(ctx context.Context, again bool, reasons map[string]bool, open func() error) error {
 	var held *Error // the last refusal held for
 	last := func() error {
 		held.Err = errors.Join(held.Err, ctx.Err())
@@ -339,7 +353,7 @@ func hold(ctx context.Context, again bool, open func() error) error {
 		err := open()
 		e, ok := errors.AsType[*Error](err)
 		switch {
-		case again && ok && (heldReasons[e.Reason] || e.Unopened):
+		case again && ok && (reasons[e.Reason] || e.Unopened):
 			held = e
 		case err != nil && held != nil && ctx.Err() != nil:
 			return last() // ctx cut an attempt while held
