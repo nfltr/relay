@@ -50,23 +50,9 @@ a2a_machine early-data TTTTTTFTTTTTTTTTTTTFTTTTT
 a2a_machine clear-header TTTTTTTTTTTTTTTTTTFFFTTTF
 a2a_machine sess,clear-header TTTTTTTTTTTTTTTTTTFFFFFFF
 #
-# Part 3: the agent-side E2EE paths (wg_exit: WireGuard client and exit;
-# p2p_e2e: p2p; e2ee_tcp, TCP, is Part 4). Queries in README "E2EE paths";
-# an F on the base line is a finding or a documented limit there.
-wg_exit - TTTFTTTFF
+# Part 3: the agent-side E2EE paths (p2p_e2e: p2p; e2ee_tcp, TCP, is
+# Part 4). Queries in README "E2EE paths"; an F on the base line is a finding or a documented limit there.
 p2p_e2e - TTTTFTTTTFFF
-wg_exit psk-dropped-on-relay-word FTTFTFTFF
-wg_exit client-no-psk FTTFTFTTT
-wg_exit exit-no-psk TFFFFTTFF
-# finding 5 (E2EEPROOF, lane A2AFINAL2): one key for all machines, or the
-# exit's name not in the preshared key (since lane ROOTNAMEPIN only 4
-# fails: a client takes only the machine it named, so the name matters
-# between exits of one machine)
-wg_exit group-key FFTFFFTFF
-wg_exit name-unbound TTTFFTTFF
-# lane ROOTNAMEPIN: a root client takes the relay's key id (the code
-# before): 1, 2 (home1 on m2), 5 and 6 fail
-wg_exit relay-kid FFTFTFFFF
 p2p_e2e no-pairing-salt FFTTFFFTTTTT
 p2p_e2e skip-await-confirm TTTFFTTTTFFF
 p2p_e2e old-protocol-plaintext FTTTFTFTTFFF

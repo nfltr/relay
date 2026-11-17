@@ -201,7 +201,6 @@ row, so the list cannot go stale.
 | `e2ee_tcp.pv` (services by name) | `client/agent/service_bindings_test.go` `TestServiceModelBindings` | 4 here, one per `BIND:org.*`: web serving pg as tcp and udp, a session routed to the datagram pg refuses the stream protocols and the stream pg the datagram ones, the client refuses a negotiated protocol of the other kind (`org.kind`, lane UDP2; Go mutant `agent-ignores-kind` in `org_mutants.txt`: `serviceBind.protos` offering both kinds); a session routed to pg refuses an offer of web/vault, another agent's pg and no protocol, a session routed to vault refuses web/pg, and the client's `BindServiceTLS` refuses a server that negotiated none (`org.service`); a service published under a group the certificate lacks refused at `NewServiceTable`, and pg@db refused once a renewed certificate lacks db (`org.group`); pg@db refused for a pg published under ops, vault@db for a vault under none (`org.publish`) (lane SVCBIND; Go mutants `client-no-alpn-check`, `agent-no-alpn-check`, `no-protocol-accepted`, `agent-no-publish-check`, `agent-no-ou-check`, `publish-not-in-cert`). The group-dial client's own check (OU contains the group, no name) is `client/orgid/group_dial_bindings_test.go` `TestE2EETCPModelBindingsGroupDialClient` (`org.group`; Go mutant `no-group-check` in `client/orgid/testdata/mutants.txt`). The dialling client's half through `nfnet.Conn`'s organisation TLS is `client/nfnet/dial_bindings_test.go` `TestE2EETCPModelBindingsDialClient`: web/pg refuses web's vault and a server negotiating none (`org.service`; Go mutant caught by hand: `BindServiceTLS` dropped), pg@db reaches machines of db whatever their name and refuses eve (group web), naming her for the next pick's exclude, and a server negotiating vault@db (`org.group`) |
 | `app_enrol.pv` | `client/appenrol/appenrol_bindings_test.go` `TestAppEnrolModelBindingsNonce`, `client/orgid/app_identity_bindings_test.go` `TestAppEnrolModelBindingsAttrs`, `org/orgpki/signin_test.go` `TestAppEnrolSignInModelBindings` | 6: the sign-in nonce refuses the org key swapped, the relay key swapped and the keys reordered (`app.nonce`; Go mutants `no-nonce-check`, `nonce-relay-key-only` in `client/appenrol/testdata/mutants.txt`); a service admitting alice's `send` refuses bob's `send`, alice's other app and a machine enrolled for neither (`app.attrs`; `no-app-check`, `no-user-check` in `client/orgid/testdata/mutants.txt`); an app URI SAN of another organisation is refused though the chain verifies (`app.urihost`, finding F1; `uri-host-unchecked`); `org/orgpki/signin_test.go` `TestAppEnrolSignInModelBindings`: the issuer refuses a sign-in whose nonce names another org or relay key (`app.nonce`; `signin-no-nonce-check`), a token for a rogue client id or azp (`app.aud`; `no-aud-check`), and a token another key signed, of another issuer, expired, with an unverified email or outside the rule's domains (`app.idtoken`; `no-token-exp`) |
 | `p2p_e2e.pv` | `client/p2p/p2p_e2e_bindings_test.go` `TestP2PE2EModelBindings` | 9, through the real offer, answer and confirmation messages, SignalConns and two pion peer connections on loopback: a call for home3 answered by office3 on the same machine (`p2p.salt.name`), the offer's key id changed at a root responder (`p2p.salt.kid`; bound twice, by the key the responder derives too, so `kid` out of `pairSalt` alone is not caught, as `init.kid`), a root initiator's answer under a leaked or another machine's key id, refused by its Pair (`p2p.kid.named`), the offer under another session id (`p2p.transcript`), the answer's confirmation altered or dropped (`p2p.confirm.resp`), the initiator's altered, dropped, retyped or the responder's own reflected (`p2p.confirm.init`), a relay in the middle of an unpaired session leaving the fingerprints different (`p2p.fingerprint`), the relay's own SDP, an altered, moved or reflected sealed frame not delivered (`p2p.sdp.sealed`), the answer's DTLS fingerprint changed below the seal: the data channel never opens, the sender takes the relay (`p2p.dtls.fp`). Go mutants caught by hand: the name out of the salt, the session id out of the transcript, either confirmation unchecked, the role out of the tag, the fingerprint not from the keys, the SignalConn unsealed, the peer's key id not asked of the Pair, the Pair's refusal ignored, `DisableCertificateFingerprintVerification`. `proto = proto4` has no row: its check was nfltr's deleted p2p commands, and client/p2p has no plaintext path |
-| `wg_exit.pv` | `client/agent/wgexit/wg_exit_bindings_test.go` `TestWGExitModelBindings` | 3 here (psk binds the exit's name; each end's psk on the key the relay told it) + 3 in nfltr `cmd/nfltr/internal/wgcli/wg_exit_bindings_test.go` (the key id of the machine named, psk whatever `x-wg-paired` says, one key per machine) |
 | `nf1_anon.pv` | `client/agent/direct_nf1_anon_bindings_test.go` `TestNF1AnonModelBindings` | 1, `anon.cands`: candidates sent outside the admitted TLS (the control exchange's open before TLS, to the client; after the control mark, to the agent) are taken by neither end (lane NFA1) |
 | `orghosted.pv` | `client/orgid/hosted_bindings_test.go` `TestOrgHostedModelBindings` | 2: a chain through an issuer certificate the root's CRL of issuers lists refused, and a CRL of issuers signed by another key than the root not taken (`hosted.rootcrl`; Go mutants `ignore-root-crl`, `root-crl-unsigned`); a leaf a stolen issuer key signed past the issuer's NotAfter admitted only until the issuer's NotAfter and refused at it (`hosted.until`, finding F1 of nfltr's `org-hosted-issuer-2026-11-16.md`; Go mutant `until-leaf-only`) (lane ORGH1) |
 | `cap_address.pv` | `client/capaddr/capaddr_bindings_test.go` `TestCapAddressModelBindings` | 5 of 6, one per `BIND:cap.*` but `cap.kind` (the transport's), against the codec `client/capaddr` (real TLS 1.3 over a pipe): the answer's key and the TLS certificate's key of another server, and a plain answer with no key (`cap.pin`); the record over another relay, rid, tag or hints, under another key, or none (`cap.rendezvous`); the proof over another session's exporter, under another secret, without the exporter (`cap.secret`); A1's proof at A2's acceptor and A2's at A1's, one key (`cap.service`). A declaration of A1's rid (`cap.register`, lane NF1RISKS): under another key with the holder's nonce, another key's signature, the rendezvous record (with hints, and with none: an answer's record before direct paths, which an untagged proof would equal byte for byte), another tag, no signature, truncated, empty, the server's proof at another relay or for A2's rid: each refused. Go mutants caught by hand: the rid's binding to the key unchecked, the proof under the record's tag. Go mutants caught by hand: the answer's key unchecked, the certificate unchecked, the relay out of the record, the exporter out of the proof. `pin-unkeyed` is no binding: `TestRoundTrip` requires two addresses of one key to differ in pin; and 5 of 5 against the transport, `client/nf1/nf1_bindings_test.go` `TestNF1ModelBindings` (lane NF1RDV): a relay routing to another server or running TLS under another key (`cap.pin`), a record over another rid or with hints it does not cover (`cap.rendezvous`), a proof over another exporter (`cap.secret`, no verdict), A1's client at A2's listener (`cap.service`), a stream dial to a `u1` record and a datagram dial to one without, a `u1` the record does not cover (`cap.kind`, lane UDP2; Go mutant `kind-unchecked` in `client/nf1/testdata/mutants.txt`, `make test-go-mutants`); Go mutants caught by hand: the answer unchecked, `VerifyConnection` dropped, `Admit` skipped; and 1 of 1 for the direct phase (lane NF1DIRECT), `client/agent/direct_nf1_bindings_test.go` `TestNF1DirectModelBindings`: a holder of another key answering the punch at the agent's candidate, for the session's own server name, is refused (`refused_cert`) and the session stays relayed with its bytes intact (`nf1direct.pin`; Go mutant `nf1-direct-no-pin` in `org_mutants.txt`); the tokens are `e2ee_tcp.pv`'s rows (`TestDirectModelBindings`), and the `d1` hint's binding is `cap.rendezvous` (a hint the record does not cover) |
@@ -217,19 +216,6 @@ message 1 untyped, a call's keys or a resume's tag without the call number,
 a resume's tag without the txn. Where the existing hostile-relay tests
 already make the attack (`frame.end`, `frame.header`, `init.warm`,
 `resume.pair`), the row runs them.
-
-`wg_exit.pv`'s rows run real WireGuard handshakes (wireguard-go on both
-ends, the test as the relay) and require the client's to fail: a client
-rerouted to another exit of the same machine key (`psk.name`), a paired
-client told the relay's exit key (`client.psk`), a paired exit told the
-relay's client key (`exit.psk`); an honest pairing completes first. The
-client's choices are rows in nfltr (`nfltr.*` ids, listed in the relay test
-as `wgNfltrRows`): it takes the relay's key id only for the machine it
-named, its psk does not depend on `x-wg-paired`, machine keys differ per
-machine. Planted Go mutants caught (lane E2EEVECTORS-2): the service name
-out of `PresharedKey`, the client's psk off its peer, the exit's psk off its
-tunnel. The key id inside the HMAC has no row: keys already differ per key
-id, and no query relies on it.
 
 `client/agent/e2ee_share_bindings_test.go` `TestE2EEShareModelBindingsAgent`
 holds the agent's row of relay-core's `e2ee_share.pv` (`relay.agent.cred`:
@@ -288,9 +274,9 @@ skipped).
   by its mutant). A revoked machine itself learns nothing: frames a root
   holder sealed before the revoke still open there, which is harmless.
 
-## E2EE paths: TCP, WireGuard, P2P (lane E2EEPROOF, 2026-11-07)
+## E2EE paths: TCP, P2P (lane E2EEPROOF, 2026-11-07)
 
-`e2ee_tcp.pv`, `wg_exit.pv` and `p2p_e2e.pv` model the other E2EE paths
+`e2ee_tcp.pv` and `p2p_e2e.pv` model the other E2EE paths
 whose ends live in this repository (Part 3 of `expect.txt`); nfltr's
 `docs/e2ee.md` "Formal proofs" is the overview of every path. The
 attacker owns every relay: with two relays (each end on another relay or
@@ -299,7 +285,7 @@ third machine) one Dolev-Yao attacker plays all of them, which is the
 colluding case and so covers each relay hostile alone. A query that holds
 holds for two relays too; none needs one relay.
 
-Not re-proven: TLS 1.3, WireGuard's Noise IKpsk2, DTLS-SRTP. Each is an
+Not re-proven: TLS 1.3, DTLS-SRTP. Each is an
 ideal channel to the holder of the key its end checked (citations in each
 model and below). Modelled is ours: where each end gets the other's key or
 fingerprint, the check, the pairing key, rotation, the plaintext
@@ -501,42 +487,6 @@ agent accepts a datagram on any direct connection it accepted, before the
 client's token) fails 39 alone. Every earlier query keeps its result under
 every mutant. The flows inside the association are `spec/DatagramAssoc.tla`.
 
-### wg_exit.pv: WireGuard client and exit (Track B)
-
-The preshared key is HMAC(K, "nfltr-wg-psk-v2", the exit's service name,
-key id), K the exit's A2A key: the root key, or the machine key of the key
-id the exit says (relay-server hands it to the client as
-`x-wg-peer-key-id`, its word, as A2A's learned machine; a machine client
-holds only its own). A root client takes that key id only when it is the
-machine the client named (lane ROOTNAMEPIN, nfltr a2akeys
-`PairKeys.Target`): the machine id of a ref `<machine id>-<service>`, the
-id its own machine store holds for `<machine name>.<service>` (the name
-the owner gave `machines add`), or the root key for a bare service name;
-never the relay's word. Before, it derived whatever machine the relay
-named, so a relay could steer `m1.lan` to `lan` on another of the owner's
-machines, or, holding a leaked machine key, sit in the middle. Each end
-binds its own name for the exit: the client the one it named, the exit
-its own. No wire change: the key id in the preshared key already names
-the machine.
-
-| # | query | result |
-|---|---|---|
-| 1 | paired: a client's payload secret unless the machine it named is leaked | holds (before ROOTNAMEPIN only "unless the key id the relay names is a leaked machine's") |
-| 2 | paired: injective agreement exit <- client on the exit name, the machine named (its key id), both keys and the payload (home1 on two machines; an exit on the root key) | holds |
-| 3 | unpaired: payload secret | attack: the relay hands each end its own key (documented) |
-| 4 | two exits on one machine key, the relay reroutes a client to the other: the exit that got it is the one the client named | holds (finding 5 fixed: the name is in the key) |
-| 5 | a client that named m1 gets nothing to a leaked machine key, whatever key id the relay names | holds |
-| 6 | the key id a client used is the machine it named | holds |
-| 7-8 | witnesses: a paired payload arrives at home1 on m1, and at the second home1, on m2 | reachable |
-
-`x-wg-paired` is advisory: each end applies its own preshared key whatever
-the relay says. Mutants: drop the preshared key on the relay's word, no
-preshared key at the client, none at the exit, `group-key` (one key for
-all machines: v1's group secret), `name-unbound` (the exit's name not in
-the preshared key: v1, finding 5; since the machine check only 4 fails:
-the name keeps apart exits of one machine), `relay-kid` (a root client
-takes the relay's key id: the code before ROOTNAMEPIN; fails 1, 2, 5, 6).
-
 ### p2p_e2e.pv: P2P sessions (calls, file transfer, the call page)
 
 The HKDF salt is HMAC(K, "nfltr-p2p-e2e-v2", the responder's service name,
@@ -546,7 +496,7 @@ carries the initiator's key id, the answer the responder's (the relay's
 word); a root end derives the machine key of the peer's key id, a machine
 end holds only its own and takes a root peer or one of its own machine. A
 root initiator takes the answer's key id only when it is the machine it
-named, from its own store (lane ROOTNAMEPIN, as `wg_exit.pv`); a
+named, from its own store (lane ROOTNAMEPIN); a
 responder names no peer. Queries 1-4 are about paired ends (a key file on
 both).
 
@@ -850,7 +800,6 @@ below.
 |---|---|
 | TCP (organisation mode) | nothing on first contact: both ends hold the organisation's root from their enrolment; never the relay's word |
 | `nfltr shell` | organisation mode since nfltr lane ORGCUT: the host certificate under the organisation's root (nfltr's model) |
-| WireGuard unpaired | the relay, on every connect; paired: the pairing file, copied out of band |
 | P2P unpaired | the relay, unless the users compare the fingerprints; paired: the pairing file |
 | nf1 in a browser | the address (from whoever gave it) and the extension's code (the store and the release key), never the relay or a page it serves |
 | nf1 with no account | the address alone, as with an account: the account behind a server never was a trust anchor of the session |
@@ -1048,10 +997,6 @@ Environment assumptions of these models, beside the table above:
 | e2ee_tcp.pv | client/orgid/testdata/mutants.txt |
 | e2ee_tcp.pv | client/nfnet/org.go |
 | e2ee_tcp.pv | client/nfnet/dial_bindings_test.go |
-| wg_exit.pv | client/wg/keys.go |
-| wg_exit.pv | client/wg/tunnel.go |
-| wg_exit.pv | client/agent/wgexit/wgexit.go |
-| wg_exit.pv | proto/wire/wgwire/wgwire.go |
 | cap_address.pv | client/capaddr/capaddr.go |
 | cap_address.pv | client/capaddr/capaddr_bindings_test.go |
 | cap_address.pv | client/nf1/nf1.go |

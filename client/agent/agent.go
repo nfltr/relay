@@ -442,10 +442,6 @@ type agent struct {
 	// E2EE TLS termination (WithTLSCert / WithSelfSignedTLS option)
 	e2eeTLS *e2eeTLSConfig
 
-	// WireGuard exit (WithWireGuardExit; package wgexit's options)
-	wgExit WireGuardExit
-	wgx    WireGuardTunnel // the running tunnel
-
 	// initErr captures errors from functional options so Connect() can surface them.
 	initErr error
 
@@ -472,7 +468,6 @@ func (a *agent) stopWith(err error) {
 }
 
 func (a *agent) Close() {
-	a.closeWireGuard()
 	if a.cancel != nil {
 		a.cancel()
 		<-a.done

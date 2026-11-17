@@ -44,20 +44,6 @@ func TestRelayConnsGoThroughGRPCClient(t *testing.T) {
 	}
 }
 
-// TestAgentDoesNotLinkWireGuard: wireguard-go and gvisor reach a program only
-// through client/agent/wgexit (or client/wg), never through client/agent.
-func TestAgentDoesNotLinkWireGuard(t *testing.T) {
-	out, err := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", "./agent").CombinedOutput()
-	if err != nil {
-		t.Fatalf("go list: %v\n%s", err, out)
-	}
-	for p := range strings.FieldsSeq(string(out)) {
-		if strings.HasPrefix(p, "gvisor.dev/") || strings.HasPrefix(p, "golang.zx2c4.com/wireguard") || p == "github.com/nfltr/relay/client/wg" {
-			t.Errorf("client/agent links %s: keep WireGuard in client/agent/wgexit", p)
-		}
-	}
-}
-
 func TestSourceFilesCarryLicenseHeader(t *testing.T) {
 	checkLicenseHeaders(t, ".")
 }

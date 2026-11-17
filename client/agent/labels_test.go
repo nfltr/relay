@@ -31,7 +31,7 @@ func labelStream(t *testing.T, a *agent, header metadata.MD) (sent chan *pb.HTTP
 	cfg := Config{RequestTimeout: 5, Concurrency: 1, HeartbeatRecvThreshold: time.Hour}
 	done := make(chan error, 1)
 	go func() {
-		done <- processStream(ctx, stream, "a", routes, cfg, newBackendClient(cfg), slog.New(slog.DiscardHandler), nil, nil, nil, &a.labelUpdates)
+		done <- processStream(ctx, stream, "a", routes, cfg, newBackendClient(cfg), slog.New(slog.DiscardHandler), nil, nil, &a.labelUpdates)
 	}()
 	synctest.Wait() // attached, blocked in Recv
 	return stream.sent, func() { cancel(); <-done }

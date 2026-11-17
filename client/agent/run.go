@@ -51,7 +51,6 @@ func processStream(
 	cfg Config,
 	httpClient *http.Client,
 	logger *slog.Logger,
-	wgx WireGuardTunnel,
 	mv *move,
 	linkUp func() bool,
 	labels *labelUpdates,
@@ -62,12 +61,6 @@ func processStream(
 		sendMu.Lock()
 		defer sendMu.Unlock()
 		return stream.Send(msg)
-	}
-
-	// WireGuard exit: send the tunnel's sealed packets to the relay, each
-	// tagged with the client it is for.
-	if wgx != nil {
-		go wgx.Pump(ctx, safeSend)
 	}
 
 	// sem limits the number of concurrently running request handlers.
@@ -137,11 +130,6 @@ func processStream(
 			if err := safeSend(&pb.HTTPProxyResponse{}); err != nil {
 				return fmt.Errorf("heartbeat send: %w", err)
 			}
-			continue
-		}
-
-		// WireGuard: a client's sealed packet, or a PeerUpdate from the relay.
-		if wgx != nil && msg.Request != nil && wgx.Handle(msg.Request) {
 			continue
 		}
 

@@ -240,14 +240,8 @@ func (a *agent) runWithReconnect(
 
 	for {
 		startedAt := time.Now()
-		var mv *move
-		if a.canMove() {
-			mv = newMove()
-		}
-		growth := &tcpStreamGrowth{} // shared by this cycle's streams
-		if mv != nil {
-			growth = mv.tcp
-		}
+		mv := newMove()
+		growth := mv.tcp // shared by this cycle's streams
 		growth.stats = a.stats
 		targets, e2ee, needed := a.tunnelTargets(acc.tunnel)
 		tcpCtx, tcpStreamCtx, cycleCtx, endTCP := drainContexts(ctx, streamCtx, a.cfg.Drain)
@@ -278,7 +272,7 @@ func (a *agent) runWithReconnect(
 				cycleCtx,
 				conn,
 				func() error {
-					err := processStream(ctx, stream, a.cfg.AgentID, a.routes, a.cfg, a.client, a.logger, a.wgx, mv, growth.linkUp, &a.labelUpdates)
+					err := processStream(ctx, stream, a.cfg.AgentID, a.routes, a.cfg, a.client, a.logger, mv, growth.linkUp, &a.labelUpdates)
 					switch {
 					case waitsForTCPSessions(err):
 						growth.waitIdle(ctx) // its TCP sessions end before the connection closes
@@ -575,15 +569,11 @@ func (a *agent) connectOnce(ctx context.Context, since time.Time, attempts int) 
 	a.setFingerprintMetadata(md)
 	// processStream reads cancel/ack frames and streams uploads.
 	md.Set(chunking.FlowControlMetadataKey, chunking.FlowControlUploads)
-	if a.canMove() {
-		md.Set(agentwire.MoveKey, "1")
-	}
+	md.Set(agentwire.MoveKey, "1")
 	// The heartbeat this agent's liveness asks of the relay.
 	if kv := agentwire.HeartbeatPairs(agentwire.HeartbeatAskKey, a.cfg.Liveness.Interval); kv != nil {
 		md.Set(kv[0], kv[1])
 	}
-	// Send the WireGuard public key and end-to-end protocol.
-	a.setWireGuardMetadata(md)
 	streamCtx := metadata.NewOutgoingContext(ctx, md)
 
 	client := pb.NewDispatcherClient(conn)
@@ -642,20 +632,10 @@ func (a *agent) connectOnce(ctx context.Context, since time.Time, attempts int) 
 		if vals := header.Get("x-admin-message"); len(vals) > 0 && vals[0] != "" {
 			a.logger.Info("admin message", "message", vals[0])
 		}
-		// WireGuard: the assigned address; refuse a relay-terminated relay.
-		if wgErr := a.startWireGuardFromHeader(ctx, header); wgErr != nil {
-			_ = conn.Close()
-			return nil, nil, nil, nil, wgErr
-		}
 	}
 
 	return conn, client, stream, streamCtx, nil
 }
-
-// canMove: the agent moves off a leaving relay replica make-before-break
-// (move.go). A WireGuard exit or client does not: its tunnel's packets go
-// through one stream.
-func (a *agent) canMove() bool { return !a.wireGuardEnabled() }
 
 // isRetryableError returns true for transient transport/server failures where
 // reconnecting is likely to succeed.
