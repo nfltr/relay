@@ -20,6 +20,15 @@
 \* carries requests and answers and may lose them (Lose) or hand back an
 \* old answer; a machine whose request or answer is gone asks again with a
 \* new key.
+\*
+\* A rebind (nfltr docs/decisions/org-rebind-2026-11-17.md; RFC 7030
+\* simplereenroll) moves an enrolled name to a new relay machine id: the
+\* issuer certifies the new machine (its join is Join.tla's, the token's
+\* authority enrol.pv's) and, in the same log entry, retires every
+\* earlier serial of the name, listed in the CRL it signs then. The old
+\* machine's disk (its certificate and key) is the attacker's from then:
+\* any of its certificates can be presented (Admit) and its renewal
+\* requests still sit in the relay's mailbox (Issue must refuse them).
 EXTENDS Integers, Sequences, FiniteSets
 
 CONSTANTS
@@ -34,6 +43,7 @@ CONSTANTS
     MaxForged,    \* certificates the attacker mints under a stolen root
     MaxKeys,      \* keys a machine makes without a loss (renewal requests + 1: state bound)
     MaxLost,      \* requests or answers the relay loses
+    MaxRebinds,   \* 0 or 1: whether a machine is rebound (Rebind.cfg; state bound)
     Mutant
 
 Machines == 1..NM
@@ -57,17 +67,22 @@ VARIABLES
     want,       \* want[m]: the key m waits an answer for, 0 = none
     reqs,       \* renewal requests the relay carries: [m, from, key, ok]
     ans,        \* answers the relay carries (serials); it may keep old ones
-    lost        \* requests and answers the relay lost
+    lost,       \* requests and answers the relay lost
+    rebound,    \* rebound[m]: Len(certs) at m's rebind: serials <= it are retired; 0 = none
+    rebindCrl   \* rebindCrl[m]: the CRL the rebind signed, 0 = none
 
-vars == <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, reqs, ans, lost>>
-rt == <<keys, want, reqs, ans, lost>>
+vars == <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, reqs, ans, lost, rebound, rebindCrl>>
+rt == <<keys, want, reqs, ans, lost, rebound, rebindCrl>>
 
 Last == crls[Len(crls)]
 SerialsOf(m) == {i \in DOMAIN certs : certs[i].m = m /\ ~certs[i].forged}
 Unrevoked(m) == revokedAt[m] = -1
-\* The machines whose revocation v has learned: a serial of theirs is in
-\* the newest CRL v took.
-RevokedSeen(v) == {m \in Machines : SerialsOf(m) \cap crls[maxSeen[v]].rev # {}}
+\* A serial a rebind retired (the old machine id's), and m's others.
+Retired(i) == ~certs[i].forged /\ i <= rebound[certs[i].m]
+Current(m) == {i \in SerialsOf(m) : ~Retired(i)}
+\* The machines whose revocation v has learned: a current serial of
+\* theirs is in the newest CRL v took (a rebind lists only retired ones).
+RevokedSeen(v) == {m \in Machines : Current(m) \cap crls[maxSeen[v]].rev # {}}
 Forged == Cardinality({i \in DOMAIN certs : certs[i].forged})
 
 \* The verifier's check (enrol.pv's Client and Service, in state).
@@ -98,13 +113,14 @@ TypeOK ==
     /\ stolen \subseteq 1..EvilRoot
     /\ evil \in BOOLEAN
     /\ \A s \in sess : s.v \in Verifiers /\ s.c \in DOMAIN certs
-    /\ keys \in [Machines -> 1..MaxKeys + MaxLost] /\ want \in [Machines -> 0..MaxKeys + MaxLost]
-    /\ \A r \in reqs : r.m \in Machines /\ r.from \in DOMAIN certs /\ r.key \in 1..MaxKeys + MaxLost
+    /\ keys \in [Machines -> 1..MaxKeys + MaxLost + 1] /\ want \in [Machines -> 0..MaxKeys + MaxLost + 1]
+    /\ \A r \in reqs : r.m \in Machines /\ r.from \in DOMAIN certs /\ r.key \in 1..MaxKeys + MaxLost + 1
     /\ ans \subseteq DOMAIN certs /\ lost \in 0..MaxLost
+    /\ rebound \in [Machines -> 0..Len(certs)] /\ rebindCrl \in [Machines -> 0..Len(crls)]
 
 Init ==
     /\ now = 0
-    /\ certs = [i \in Machines |-> [m |-> i, iss |-> 0, exp |-> CertLife, root |-> 1, forged |-> FALSE, key |-> 1]]
+    /\ certs = [i \in Machines |-> [m |-> i, iss |-> 0, exp |-> CertLife, root |-> 1, forged |-> FALSE, key |-> 1, from |-> 0]]
     /\ cur = [m \in Machines |-> m]
     /\ revokedAt = [m \in Machines |-> -1]
     /\ crls = <<[this |-> 0, next |-> CrlLife, rev |-> {}]>>
@@ -118,6 +134,7 @@ Init ==
     /\ keys = [m \in Machines |-> 1]
     /\ want = [m \in Machines |-> 0]
     /\ reqs = {} /\ ans = {} /\ lost = 0
+    /\ rebound = [m \in Machines |-> 0] /\ rebindCrl = [m \in Machines |-> 0]
 
 \* Time passes; each verifier's timer ends sessions whose certificate
 \* expired or whose CRL lapsed (fail closed).
@@ -151,9 +168,10 @@ Live(a, m) == IF Mutant = "install-stale-answer" THEN a ELSE {i \in a : certs[i]
 Pending(m) ==
     \/ \E r \in reqs : r.m = m /\ r.key = want[m]
     \/ \E i \in ans : certs[i].m = m /\ certs[i].key = want[m]
-\* (A loss grants one key more: the bound never stops a retry.)
+\* (A loss grants one key more, and so does a rebind (its key): the bound
+\* never stops a retry.)
 Request(m) ==
-    /\ keys[m] < MaxKeys + lost
+    /\ keys[m] < MaxKeys + lost + IF rebound[m] > 0 THEN 1 ELSE 0
     /\ IF Mutant = "no-retry" THEN want[m] = 0 ELSE want[m] = 0 \/ ~Pending(m)
     /\ NotExpired(cur[m], now)
     /\ Due(m, cur[m])
@@ -162,7 +180,7 @@ Request(m) ==
     /\ reqs' = reqs \cup {[m |-> m, from |-> cur[m], key |-> keys[m] + 1,
                            ok |-> Mutant # "check-at-request" \/ Unrevoked(m)]}
     /\ ans' = Live(ans, m)
-    /\ UNCHANGED <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, lost>>
+    /\ UNCHANGED <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, lost, rebound, rebindCrl>>
 
 \* The issuer reads a request and decides under its lock, as of now: it
 \* refuses a revoked name and an expired certificate, and renews only a
@@ -176,10 +194,11 @@ Issue(r) ==
     /\ IF Mutant = "check-at-request" THEN r.ok
        ELSE Mutant = "renew-revoked" \/ Unrevoked(r.m)
     /\ NotExpired(r.from, now)
-    /\ certs' = Append(certs, [m |-> r.m, iss |-> now, exp |-> now + CertLife, root |-> root, forged |-> FALSE, key |-> r.key])
+    /\ Mutant = "renew-rebound" \/ ~Retired(r.from)
+    /\ certs' = Append(certs, [m |-> r.m, iss |-> now, exp |-> now + CertLife, root |-> root, forged |-> FALSE, key |-> r.key, from |-> r.from])
     /\ reqs' = reqs \ {r}
     /\ ans' = ans \cup {Len(certs) + 1}
-    /\ UNCHANGED <<now, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, lost>>
+    /\ UNCHANGED <<now, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, lost, rebound, rebindCrl>>
 
 \* Under renew-forged the issuer also renews a forged certificate the
 \* attacker presents, into the current root.
@@ -198,7 +217,7 @@ Install(m, i) ==
     /\ cur' = [cur EXCEPT ![m] = i]
     /\ want' = [want EXCEPT ![m] = 0]
     /\ ans' = Live(ans, m)
-    /\ UNCHANGED <<now, certs, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, reqs, lost>>
+    /\ UNCHANGED <<now, certs, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, reqs, lost, rebound, rebindCrl>>
 
 \* The relay loses a request or an answer.
 Lose ==
@@ -206,7 +225,7 @@ Lose ==
     /\ lost' = lost + 1
     /\ \/ \E r \in reqs : reqs' = reqs \ {r} /\ ans' = ans
        \/ \E i \in ans : ans' = ans \ {i} /\ reqs' = reqs
-    /\ UNCHANGED <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want>>
+    /\ UNCHANGED <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, rebound, rebindCrl>>
 
 \* The owner revokes m; the issuer signs a CRL listing all of m's serials
 \* at once and the issuer pushes it (Fetch).
@@ -216,6 +235,25 @@ Revoke(m) ==
     /\ crls' = Append(crls, [this |-> now, next |-> now + CrlLife,
                              rev |-> Last.rev \cup IF Mutant = "revoke-current-only" THEN {cur[m]} ELSE SerialsOf(m)])
     /\ UNCHANGED <<now, certs, cur, seen, maxSeen, vroot, root, stolen, evil, sess>> /\ UNCHANGED rt
+
+\* The owner's rebind token redeemed by m's new machine (its new relay
+\* machine id): one log entry certifies the new machine for a new key and
+\* retires every earlier serial of m; the CRL then signed lists them (under
+\* rebind-keeps-serials it does not). The new machine holds the new
+\* certificate; whatever the old one waited for is dead (its requests stay
+\* in the relay's mailbox). One rebind per machine (state bound).
+Rebind(m) ==
+    /\ MaxRebinds > 0 /\ Unrevoked(m) /\ rebound[m] = 0
+    /\ certs' = Append(certs, [m |-> m, iss |-> now, exp |-> now + CertLife, root |-> root, forged |-> FALSE, key |-> keys[m] + 1, from |-> 0])
+    /\ rebound' = [rebound EXCEPT ![m] = Len(certs)]
+    /\ crls' = Append(crls, [this |-> now, next |-> now + CrlLife,
+                             rev |-> Last.rev \cup IF Mutant = "rebind-keeps-serials" THEN {} ELSE SerialsOf(m)])
+    /\ rebindCrl' = [rebindCrl EXCEPT ![m] = Len(crls) + 1]
+    /\ cur' = [cur EXCEPT ![m] = Len(certs) + 1]
+    /\ keys' = [keys EXCEPT ![m] = keys[m] + 1]
+    /\ want' = [want EXCEPT ![m] = 0]
+    /\ ans' = Live(ans, m)
+    /\ UNCHANGED <<now, revokedAt, seen, maxSeen, vroot, root, stolen, evil, sess, reqs, lost>>
 
 \* The issuer re-signs the CRL before its NextUpdate.
 Republish ==
@@ -254,7 +292,7 @@ Steal ==
 Forge(m, g) ==
     /\ g \in stolen
     /\ Forged < MaxForged
-    /\ certs' = Append(certs, [m |-> m, iss |-> now, exp |-> now + CertLife, root |-> g, forged |-> TRUE])
+    /\ certs' = Append(certs, [m |-> m, iss |-> now, exp |-> now + CertLife, root |-> g, forged |-> TRUE, from |-> 0])
     /\ UNCHANGED <<now, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess>> /\ UNCHANGED rt
 
 \* The owner rotates with the recovery key; the new root certifies a new
@@ -286,7 +324,7 @@ TakeRoot(v) ==
 Next ==
     \/ Tick
     \/ \E v \in Verifiers, i \in DOMAIN certs : Admit(v, i)
-    \/ \E m \in Machines : Request(m) \/ Revoke(m)
+    \/ \E m \in Machines : Request(m) \/ Revoke(m) \/ Rebind(m)
     \/ \E r \in reqs : Issue(r)
        \* (one disjunct for coverage: IssueForged is mutant-only)
        \/ \E i \in DOMAIN certs : IssueForged(i)
@@ -322,6 +360,21 @@ RevocationBound ==
 \* its serials, renewed ones included).
 RevokedMachineRefused ==
     \A s \in sess : certs[s.c].forged \/ certs[s.c].m \notin RevokedSeen(s.v)
+
+\* CrlLife after a rebind, no verifier holds a session of a serial it
+\* retired (the old machine's disk), whatever the relay delivered.
+RebindBound ==
+    \A s \in sess : ~Retired(s.c) \/ now < crls[rebindCrl[certs[s.c].m]].this + CrlLife
+
+\* Once v has taken the rebind's CRL (or a later one), v holds no session
+\* of a retired serial.
+RetiredRefused ==
+    \A s \in sess : ~Retired(s.c) \/ maxSeen[s.v] < rebindCrl[certs[s.c].m]
+
+\* The issuer renews no serial a rebind retired: every certificate of m
+\* issued after its rebind is the rebind's or renews a current one.
+NoRenewOfRetired ==
+    \A i \in DOMAIN certs : certs[i].forged \/ certs[i].from = 0 \/ Retired(i) \/ ~Retired(certs[i].from)
 
 \* No session outlives its certificate.
 NoExpiredSession == \A s \in sess : NotExpired(s.c, now)
@@ -363,5 +416,8 @@ WitnessFailClosed == \A v \in Verifiers : crls[seen[v]].next > now
 WitnessForgedSession == \A s \in sess : ~certs[s.c].forged
 WitnessRotated == \A v \in Verifiers : vroot[v] = 1
 WitnessSessionAfterRotation == \A s \in sess : certs[s.c].root = 1
+WitnessRebound == \A m \in Machines : rebound[m] = 0
+WitnessSessionAfterRebind == \A s \in sess : rebound[certs[s.c].m] = 0 \/ Retired(s.c)
+WitnessRetiredHeld == \A s \in sess : ~Retired(s.c)
 WitnessRetried == \A m \in Machines : keys[m] <= 2 \/ lost = 0
 =============================================================================

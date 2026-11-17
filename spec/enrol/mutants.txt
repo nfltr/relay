@@ -19,6 +19,11 @@ no-reissue-on-rotation MachinesFollowRotation
 check-at-request NoRenewAfterRevoke
 install-stale-answer MachineHoldsItsKey
 no-retry MachinesFollowRotation EnrolLoss.cfg
+# a rebind (nfltr docs/decisions/org-rebind-2026-11-17.md): the CRL it
+# signs lists none of the name's earlier serials; the issuer renews one.
+rebind-keeps-serials RetiredRefused Rebind.cfg
+rebind-keeps-serials RebindBound Rebind.cfg
+renew-rebound NoRenewOfRetired Rebind.cfg
 # Join.tla (the join by token, Join.cfg): burn-name and new-key-per-join
 # are the code before 2026-11-15 (a lost or late answer burnt the name);
 # pin-root-only refused a root the pinned recovery key certifies.

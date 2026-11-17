@@ -4,7 +4,8 @@
 # spec-enrol.sh ci|check|live|mutants|witnesses|coverage|fixtures|traces|trace F: the TLA+ model of
 # organisation certificates' lifecycle: renewal, revocation, root rotation
 # (spec/enrol/README.md).
-#   check     TLC on spec/enrol/Enrol.cfg: every invariant; Join.cfg: the
+#   check     TLC on spec/enrol/Enrol.cfg: every invariant; Rebind.cfg:
+#             the same with a rebind; Join.cfg: the
 #             join by token (Join.tla); RevokePush.cfg: a revoke's events
 #             and backstops (RevokePush.tla).
 #   live      TLC on spec/enrol/EnrolLive.cfg: the temporal properties;
@@ -36,7 +37,7 @@ export CICACHE_STAGE
 trap 'st=$?; "$cicache" end "$CICACHE_STAGE" $st || st=1; rm -rf "$work"; exit $st' EXIT
 dir=spec/enrol
 temporal="TakesEffect MachinesFollowRotation"
-witnesses="WitnessRenewed WitnessRevokeSeen WitnessFailClosed WitnessForgedSession WitnessRotated WitnessSessionAfterRotation WitnessRetried@EnrolLoss.cfg
+witnesses="WitnessRenewed WitnessRevokeSeen WitnessFailClosed WitnessForgedSession WitnessRotated WitnessSessionAfterRotation WitnessRetried@EnrolLoss.cfg WitnessRebound@Rebind.cfg WitnessSessionAfterRebind@Rebind.cfg WitnessRetiredHeld@Rebind.cfg
 WitnessRetriedJoin@Join.cfg WitnessReissued@Join.cfg WitnessJoinedAfterLoss@Join.cfg WitnessJoinedAfterRotation@Join.cfg WitnessRefusedOther@Join.cfg WitnessRefusedEvil@Join.cfg
 WitnessCutByPush@RevokePush.cfg WitnessServeBackstop@RevokePush.cfg WitnessFollowBackstop@RevokePush.cfg WitnessHeldAfterRevoke@RevokePush.cfg"
 
@@ -104,16 +105,23 @@ witnesses() {
 
 coverage() {
 	# EvilRotate and IssueForged are mutant-only steps, never taken under
-	# "none"; Lose only in EnrolLoss.cfg (MaxLost 1).
+	# "none"; Lose only in EnrolLoss.cfg (MaxLost 1), Rebind only in
+	# Rebind.cfg (MaxRebinds 1).
 	tlc Enrol.cfg -coverage 1 >"$work/cov.out" 2>&1 || { tail -20 "$work/cov.out"; return 1; }
 	grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out"
-	if grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out" | grep -v -e '^<EvilRotate' -e '^<IssueForged' -e '^<Lose' | grep -qE ': 0:|: 0$'; then
+	if grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out" | grep -v -e '^<EvilRotate' -e '^<IssueForged' -e '^<Lose' -e '^<Rebind' | grep -qE ': 0:|: 0$'; then
 		echo "coverage: an action is never taken"
 		return 1
 	fi
 	tlc EnrolLoss.cfg -coverage 1 >"$work/cov.out" 2>&1 || { tail -20 "$work/cov.out"; return 1; }
 	if grep -E '^<Lose line' "$work/cov.out" | grep -qE ': 0:|: 0$'; then
 		echo "coverage: Lose is never taken in EnrolLoss.cfg"
+		return 1
+	fi
+	tlc Rebind.cfg -coverage 1 >"$work/cov.out" 2>&1 || { tail -20 "$work/cov.out"; return 1; }
+	if grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out" | grep -v -e '^<EvilRotate' -e '^<IssueForged' -e '^<Lose' -e '^<Forge' | grep -qE ': 0:|: 0$'; then
+		grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out"
+		echo "coverage: an action is never taken in Rebind.cfg"
 		return 1
 	fi
 	# InstallForged: mutant any-root only.
@@ -136,7 +144,7 @@ trace() {
 	t=$work/$(basename "$1")
 	cat "$1" >"$t"
 	[ -s "$t" ] || { echo "$1: no lines"; return 0; }
-	printf 'CONSTANTS\n    TraceFile = "%s"\nINIT Init\nNEXT Next\nINVARIANTS\n    Conforms\n    NoRenewAfterRevoke\n    OneKeyPerToken\n    NoRetiredKeyRevived\n    RefusedOnlyForCause\n    ForgedOnlyUnderStolenRoot\n    RevokedMachineRefused\n    RevocationBound\n    NoExpiredSession\n    TraceDone\n' "$t" >"$t.cfg"
+	printf 'CONSTANTS\n    TraceFile = "%s"\nINIT Init\nNEXT Next\nINVARIANTS\n    Conforms\n    NoRenewAfterRevoke\n    OneKeyPerToken\n    NoRetiredKeyRevived\n    RefusedOnlyForCause\n    ForgedOnlyUnderStolenRoot\n    NoRenewOfRetired\n    RetiredRefused\n    RevokedMachineRefused\n    RevocationBound\n    NoExpiredSession\n    TraceDone\n' "$t" >"$t.cfg"
 	(cd $dir && "$java" -cp "$jar" tlc2.TLC -workers 1 -noGenerateSpecTE -deadlock \
 		-metadir "$t.states" -config "$t.cfg" TraceEnrol.tla) >"$t.out" 2>&1 || true
 	if grep -q '^Error: Invariant TraceDone is violated' "$t.out"; then
@@ -216,12 +224,12 @@ traces() {
 }
 
 case ${1:-} in
-check) run Enrol.cfg && run Join.cfg && run RevokePush.cfg ;;
+check) run Enrol.cfg && run Rebind.cfg && run Join.cfg && run RevokePush.cfg ;;
 live) run EnrolLive.cfg && run EnrolLoss.cfg ;;
 mutants) mutants ;;
 witnesses) witnesses ;;
 coverage) coverage ;;
-ci) run Enrol.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && run RevokePush.cfg && mutants && witnesses && fixtures ;;
+ci) run Enrol.cfg && run Rebind.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && run RevokePush.cfg && mutants && witnesses && fixtures ;;
 fixtures) fixtures ;;
 traces) traces ;;
 trace) trace "$2" ;;

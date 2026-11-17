@@ -30,6 +30,9 @@ after a rotation) is `Join.tla`.
 | MachineHoldsItsKey | a machine with no request outstanding holds a certificate of the key it made last | `install-stale-answer` (the machine installs an answer for an older key: one the relay kept or replayed) |
 | SessionsOnTrustedRoot | every session is under the root its verifier trusts; a rotation ends the stolen root's sessions | `keep-old-root` |
 | RootsAreOwners | a verifier trusts only roots the owner made (a rotation needs the recovery key) | `rotate-by-primary` |
+| RebindBound | CrlLife after a rebind no verifier holds a session of a serial it retired (the old machine id's certificates), whatever CRLs the relay delivered | `rebind-keeps-serials` (the rebind's CRL lists none of the name's earlier serials) |
+| RetiredRefused | once a verifier took the rebind's CRL, it holds no session of a retired serial | `rebind-keeps-serials` |
+| NoRenewOfRetired | the issuer renews no serial a rebind retired (the old disk's renewal request, still in the relay's mailbox) | `renew-rebound` |
 | TakesEffect (LiveSpec) | every revoke reaches every verifier | `push-only` (no backstop read: a lost push is never made good) |
 | MachinesFollowRotation (LiveSpec) | every machine still enrolled moves to the new root (or its certificate lapses visibly) | `no-reissue-on-rotation` (renewal by time only), `no-retry` (a machine whose request or answer the relay lost never asks again) |
 
@@ -38,7 +41,11 @@ Witnesses (each must be violated, the state reachable): `WitnessRenewed`,
 `WitnessForgedSession` (before the rotation reaches it, a verifier does
 admit a certificate forged under the stolen root: the bound the design
 states, not a property it claims), `WitnessRotated`,
-`WitnessSessionAfterRotation`, `WitnessRetried` (a machine asks again with a new key after a loss).
+`WitnessSessionAfterRotation`, `WitnessRetried` (a machine asks again with a new key after a loss),
+`WitnessRebound`, `WitnessSessionAfterRebind` (the new machine id's
+certificate admitted), `WitnessRetiredHeld` (before the rebind's CRL
+reaches it, a verifier does hold a session of a retired serial: the bound
+RebindBound states).
 
 ## `Enrol.tla`
 
@@ -52,6 +59,7 @@ states, not a property it claims), `WitnessRotated`,
 | Install | the machine installs an answer for the key it made last (`orgmachine.Install`: any other is refused) |
 | Lose | the relay loses a request or an answer (bounded by MaxLost) |
 | Revoke | `nfltr org revoke <name>`: one CRL listing every unexpired serial of the name |
+| Rebind | `nfltr org token --rebind <name> --machine-id <new>` redeemed by the new machine (`orgpki.Enrol` of a rebind token: one `rebound` log entry certifying it and retiring the name's earlier serials, nfltr `docs/decisions/org-rebind-2026-11-17.md`); the CRL signed then lists them; `Renew` refuses a retired serial. Its authority (only the operator's token, only its name) is `enrol.pv` query 11 |
 | Republish | the issuer re-signs the CRL before its NextUpdate |
 | Take | a verifier takes a newer CRL and re-checks its sessions |
 | Replay | the relay delivers an older CRL |
@@ -159,13 +167,15 @@ copies), and a stat poll (a poll). The watcher covers every writer.
 two root generations, MaxKeys 4, no losses: 280785 states), `EnrolLive.cfg`
 (the same under LiveSpec), `EnrolLoss.cfg` (the relay loses one request or
 answer, no forgeries, LiveSpec and every invariant: 162030 states;
-`no-retry` and `WitnessRetried` run on its constants), `Join.cfg`
+`no-retry` and `WitnessRetried` run on its constants), `Rebind.cfg`
+(Enrol.cfg with one rebind and no forgeries: 150556 states; the rebind's
+mutants and witnesses run on its constants), `Join.cfg`
 (Join.tla, every invariant: 7475 states), every line of
 `mutants.txt`, every witness, and the trace fixtures. Losses are a config
 of their own because they multiply Enrol.cfg's states tenfold (MaxLost 1
 there: 1.46M states). `coverage`: `-coverage 1`, fails on an action never
 taken (EvilRotate and IssueForged aside, mutant-only steps; Lose in
-EnrolLoss.cfg; Join.cfg's, InstallForged aside).
+EnrolLoss.cfg; Rebind in Rebind.cfg; Join.cfg's, InstallForged aside).
 
 ## Traces
 

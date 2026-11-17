@@ -63,6 +63,8 @@ free skRec: skey [private].            (* the recovery key, offline *)
 free skIss: skey [private].            (* the issuer *)
 
 event TokenMade(bitstring, mname).
+event RebindTokenMade(bitstring, mname).
+event Rebound(bitstring, mname, pkey).
 event Enrolled(bitstring, mname, pkey).
 event Reissued(bitstring, mname, pkey).
 event Holds(mname, pkey).              (* an honest machine made this key for its name *)
@@ -100,6 +102,22 @@ let Redeem(t: bitstring, n: mname, g: group) =
     event Reissued(t, nn, k2);
     event Issued(nn, k2, s2, ep_now, g);
     out(c, sign(leaf(nn, k2, s2, ep_now, g), skIss))).
+
+(* A rebind (nfltr docs/decisions/org-rebind-2026-11-17.md; RFC 7030
+   simplereenroll): the owner's single-use rebind token names an enrolled
+   name and the new relay machine id; the machine of that id redeems it
+   as an enrolment (the HMAC binds its key), and the issuer certifies the
+   token's name, never the request's (mutant rebind-any-name), retiring
+   the name's earlier serials (spec/enrol/Enrol.tla Rebind). *)
+let RebindRedeem(t: bitstring, n: mname, g: group) =
+  new s: bitstring;
+  in(c, (nr: mname, k: pkey, m: bitstring));
+  if m = hmac(t, (nr, k)) then
+  let nn = n in                        (* NOT:rebind-any-name *)
+  let nn = nr in                       (* ONLY:rebind-any-name *)
+  event Rebound(t, nn, k);
+  event Issued(nn, k, s, ep_now, g);
+  out(c, sign(leaf(nn, k, s, ep_now, g), skIss)).
 
 (* web: its token delivered by the fleet's provisioning (cloud-init, a
    k8s secret, MDM), not by the relay. *)
@@ -216,7 +234,10 @@ query k: pkey; event(RotatedTo(k)) ==> event(RecoverySigned(k)).
 query k: pkey; event(TrustsIssuer(k)) ==> event(IssuerCertified(k)).
 (* 10. a token answered again certifies only the key it enrolled *)
 query t: bitstring, n: mname, k: pkey; event(Reissued(t, n, k)) ==> event(Enrolled(t, n, k)).
-(* 11-16. witnesses (1, 7, 6, 8, 9, 10 not vacuous): web reached; a
+(* 11. a rebind token rebinds only the enrolled name it was made for (6
+   for a rebind: a leaked rebind token moves its own name, never another) *)
+query t: bitstring, n: mname, k: pkey; event(Rebound(t, n, k)) ==> event(RebindTokenMade(t, n)).
+(* 12-18. witnesses (1, 7, 6, 8, 9, 10, 11 not vacuous): web reached; a
    client admitted; the leaked token's own name enrolled by whoever
    redeems it first (the stated residual: one name, once, and web's
    provisioning then fails visibly); a rotation; an issuer trusted after
@@ -227,10 +248,14 @@ query t: bitstring, k: pkey; event(Enrolled(t, new1, k)).
 query k: pkey; event(RotatedTo(k)).
 query k: pkey; event(TrustsIssuer(k)).
 query t: bitstring, k: pkey; event(Reissued(t, web, k)).
+query t: bitstring, n: mname, k: pkey; event(Rebound(t, n, k)).
 
 process
   Setup |
   (new tw: bitstring; event TokenMade(tw, web); (Redeem(tw, web, g_db) | WebMachine(tw))) |
   (new t1: bitstring; event TokenMade(t1, new1); out(c, t1); Redeem(t1, new1, g_other)) |   (* NOT:reusable-token *)
   (new t1: bitstring; event TokenMade(t1, new1); out(c, t1); !Redeem(t1, new1, g_other)) |  (* ONLY:reusable-token *)
+  (* mallory's rebind token, leaked: its holder moves mallory (enrolled,
+     its key the attacker's already), once *)
+  (new tr: bitstring; event RebindTokenMade(tr, mallory); out(c, tr); RebindRedeem(tr, mallory, g_other)) |
   (!Renew) | (!Client) | (!Service) | (!RotClient)

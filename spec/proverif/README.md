@@ -846,7 +846,8 @@ closed, rotation) is `spec/enrol/Enrol.tla`. Code: `org/orgpki` (issuer, profile
 | 8 | a rotation is taken only when the recovery key signed it | holds |
 | 9 | after the rotation, only issuers the new root certified are trusted | holds |
 | 10 | a token answered again (its answer lost, or late) certifies only the key it enrolled | holds |
-| 11-16 | witnesses: web reached; a client admitted; the leaked token's own name enrolled by whoever redeems it first (the residual: one new name, once, and the real machine's enrolment then fails visibly); a rotation; an issuer trusted after it; web's token answered again | attack (reachable), as they must |
+| 11 | a rebind token (nfltr `docs/decisions/org-rebind-2026-11-17.md`) rebinds only the enrolled name it was made for | holds |
+| 12-18 | witnesses: web reached; a client admitted; the leaked token's own name enrolled by whoever redeems it first (the residual: one new name, once, and the real machine's enrolment then fails visibly); a rotation; an issuer trusted after it; web's token answered again; mallory's leaked rebind token redeemed (the same residual: its own name, once) | attack (reachable), as they must |
 
 Mutants: `no-chain-check` (an issuer certificate not checked against the
 root: 1, 2, 4, 7 fail), `no-name-check` (1, 2, 4), `no-expiry-check` (3),
@@ -856,7 +857,10 @@ root: 1, 2, 4, 7 fail), `no-name-check` (1, 2, 4), `no-expiry-check` (3),
 from the request: 2, 4, 5, 6), `token-in-request` (the token itself sent
 through the relay, which redeems it first: 2), `no-group-check` (7),
 `rotate-by-primary` (8, 9), `keep-old-root` (9), `reissue-any-key` (a
-token answered again for any key: 10). The join's root check is
+token answered again for any key: 10), `rebind-any-name` (a rebind token
+moves the name the request gives: 2, 4, 11). A rebind retiring the name's
+earlier serials, and the issuer refusing to renew one, is
+`spec/enrol/Enrol.tla` `Rebind` (`Rebind.cfg`). The join's root check is
 `RotClient`'s: a machine joining with pins made before a rotation takes the
 root the pinned recovery key certifies (8); the join's retries, the revoke
 and a renewal since are `spec/enrol/Join.tla`.
