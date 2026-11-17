@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net/netip"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -493,5 +494,32 @@ func TestPathEventNamesThePeer(t *testing.T) {
 	c.onPath(agent.PathEvent{Path: agent.PathDirect, Peer: peer})
 	if got.Kind != "path" || got.Path != agent.PathDirect || got.Peer != peer {
 		t.Fatalf("event %+v, want a direct path event naming %s", got, peer)
+	}
+}
+
+// deadlineCtx is a context whose deadline has passed while its Done and
+// Err do not tell it yet: the instant a connection deadline set to the
+// context's (nf1Upgrade's SetDeadline) fires before the context's own
+// timer marks it done.
+type deadlineCtx struct{ context.Context }
+
+func (deadlineCtx) Deadline() (time.Time, bool) { return time.Now().Add(-time.Millisecond), true }
+
+// An attempt cut by a connection deadline equal to the open bound, while a
+// refusal is held, ends with that refusal (not_found), not the cut
+// attempt's i/o timeout (unreachable), whichever of the two timers fires
+// first (TestNF1Address flake in nfltr's connect conformance, lane IDFLAKE).
+func TestHoldDeadlineCutsAHeldAttempt(t *testing.T) {
+	offline := &Error{Code: CodeNotFound, Reason: relayv1.ErrorReason_ERROR_REASON_AGENT_OFFLINE.String()}
+	n := 0
+	err := hold(deadlineCtx{context.Background()}, true, heldReasons, func() error {
+		n++
+		if n == 1 {
+			return offline
+		}
+		return &Error{Code: CodeUnreachable, Err: os.ErrDeadlineExceeded}
+	})
+	if e, ok := errors.AsType[*Error](err); !ok || e.Code != CodeNotFound || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("hold = %v, want the held not_found wrapping the deadline", err)
 	}
 }

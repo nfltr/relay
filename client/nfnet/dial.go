@@ -333,6 +333,19 @@ var nf1HeldReasons = map[string]bool{
 	relayv1.ErrorReason_ERROR_REASON_DIRECTORY_UNAVAILABLE.String(): true,
 }
 
+// ended is ctx's error, or context.DeadlineExceeded once its deadline has
+// passed: a connection deadline set to ctx's (nf1Upgrade) can cut an
+// attempt before ctx's own timer marks it done.
+func ended(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if dl, ok := ctx.Deadline(); ok && !time.Now().Before(dl) {
+		return context.DeadlineExceeded
+	}
+	return nil
+}
+
 // hold runs open until its answer is not one to hold for: a reason in
 // reasons (the agent offline, or unknown: the relay does not tell them
 // apart; a relay that cannot read its directory), a relay that
@@ -345,7 +358,7 @@ var nf1HeldReasons = map[string]bool{
 func hold(ctx context.Context, again bool, reasons map[string]bool, open func() error) error {
 	var held *Error // the last refusal held for
 	last := func() error {
-		held.Err = errors.Join(held.Err, ctx.Err())
+		held.Err = errors.Join(held.Err, ended(ctx))
 		return held
 	}
 	for {
@@ -355,7 +368,7 @@ func hold(ctx context.Context, again bool, reasons map[string]bool, open func() 
 		switch {
 		case again && ok && (reasons[e.Reason] || e.Unopened):
 			held = e
-		case err != nil && held != nil && ctx.Err() != nil:
+		case err != nil && held != nil && ended(ctx) != nil:
 			return last() // ctx cut an attempt while held
 		default:
 			return err
