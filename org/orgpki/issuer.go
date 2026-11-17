@@ -72,6 +72,7 @@ type tokenRec struct {
 	machineID string
 	dev       Device
 	expires   time.Time
+	rebind    bool // MakeRebindToken's: moves an enrolled name to machineID
 }
 
 type certRec struct {
@@ -86,6 +87,7 @@ type nameRec struct {
 	dev       Device
 	revoked   bool
 	serials   []string  // in issue order
+	retired   int       // serials[:retired]: retired by a rebind (the name's earlier machine id), listed in every CRL until they expire
 	authUntil time.Time // enrolled by sign-in: renews by itself until then (AuthLife); zero: by a code, until revoked
 }
 
@@ -198,12 +200,15 @@ func (i *Issuer) apply(e Entry) error {
 		i.cert, i.crlDue = c, true
 		return err
 	case ActToken:
-		i.tokens[e.Token] = &tokenRec{name: e.Name, groups: e.Groups, machineID: e.MachineID, dev: Device{e.Person, e.App}, expires: e.NotAfter}
-	case ActIssued, ActRenewed:
+		i.tokens[e.Token] = &tokenRec{name: e.Name, groups: e.Groups, machineID: e.MachineID, dev: Device{e.Person, e.App}, expires: e.NotAfter, rebind: e.Rebind}
+	case ActIssued, ActRenewed, ActRebound:
 		n := i.names[e.Name]
 		if n == nil {
 			n = &nameRec{groups: e.Groups, machineID: e.MachineID, dev: Device{e.Person, e.App}}
 			i.names[e.Name] = n
+		}
+		if e.Act == ActRebound { // Enrol.tla Rebind: one entry certifies the new id and retires the rest
+			n.retired, n.machineID, i.crlDue = len(n.serials), e.MachineID, true
 		}
 		n.serials = append(n.serials, e.Serial)
 		if !e.AuthUntil.IsZero() {
@@ -349,15 +354,53 @@ func (i *Issuer) MakeDeviceToken(name string, groups []string, machineID string,
 	if i.deniedDev(dev) {
 		return "", fmt.Errorf("%w: %s or %s is revoked", ErrRefused, dev.Person, dev.App)
 	}
+	return i.newToken(Entry{Time: now, Act: ActToken, Name: name, Groups: slices.Clone(groups), MachineID: machineID, Person: dev.Person, App: dev.App, NotAfter: now.Add(ttl)})
+}
+
+// MakeRebindToken makes a single-use rebind token: it moves name, enrolled
+// and not revoked, to machineID (a new relay machine id) with its groups
+// (nfltr docs/decisions/org-rebind-2026-11-17.md; RFC 7030
+// simplereenroll, authorised by the operator's token, not the old
+// certificate). The machine of that id redeems it with Enrol; the answer
+// retires every earlier serial of the name (Enrol.tla Rebind).
+func (i *Issuer) MakeRebindToken(name, machineID string, ttl time.Duration, now time.Time) (string, error) {
+	if err := ValidLabel("name", name); err != nil {
+		return "", err
+	}
+	if err := validMachineID(machineID); err != nil || machineID == "" {
+		return "", fmt.Errorf("a rebind names the new machine id: %q: %v", machineID, err)
+	}
+	if ttl <= 0 || ttl > IssuerLife {
+		return "", fmt.Errorf("token lifetime %s: more than 0 and at most %s", ttl, IssuerLife)
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	n := i.names[name]
+	switch {
+	case n == nil:
+		return "", fmt.Errorf("%w: %s is not enrolled; a rebind token is for an enrolled name (nfltr org token for a new one)", ErrRefused, name)
+	case n.revoked:
+		return "", fmt.Errorf("%w: %s is revoked", ErrRefused, name)
+	case n.machineID == machineID:
+		return "", fmt.Errorf("%w: %s has machine id %s already", ErrRefused, name, machineID)
+	case !n.authUntil.IsZero():
+		return "", fmt.Errorf("%w: %s was enrolled by sign-in: it signs in again", ErrRefused, name)
+	}
+	return i.newToken(Entry{Time: now, Act: ActToken, Name: name, Groups: slices.Clone(n.groups), MachineID: machineID, Person: n.dev.Person, App: n.dev.App, NotAfter: now.Add(ttl), Rebind: true})
+}
+
+// newToken commits e (an ActToken entry) under a fresh token id and
+// returns the token. Callers hold mu.
+func (i *Issuer) newToken(e Entry) (string, error) {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {
 		return "", err
 	}
-	id := base64.RawURLEncoding.EncodeToString(raw)
-	if err := i.commit(Entry{Time: now, Act: ActToken, Token: id, Name: name, Groups: slices.Clone(groups), MachineID: machineID, Person: dev.Person, App: dev.App, NotAfter: now.Add(ttl)}); err != nil {
+	e.Token = base64.RawURLEncoding.EncodeToString(raw)
+	if err := i.commit(e); err != nil {
 		return "", err
 	}
-	return tokenPrefix + i.orgID + "." + id + "." + base64.RawURLEncoding.EncodeToString(i.tokenSecret(id)), nil
+	return tokenPrefix + i.orgID + "." + e.Token + "." + base64.RawURLEncoding.EncodeToString(i.tokenSecret(e.Token)), nil
 }
 
 // parseToken splits a token into its organisation's id, its id and its
@@ -463,6 +506,9 @@ func (i *Issuer) Enrol(req EnrolRequest, now time.Time) ([]byte, error) {
 		return nil, i.refuse(refusal, "CSR: "+err.Error())
 	}
 	pub := cr.PublicKey.(ed25519.PublicKey)
+	if t.rebind {
+		return i.rebind(t, req.TokenID, pub, refusal, now)
+	}
 	// A token is for a name not enrolled, so after its first redemption
 	// it answers only the key it enrolled (enrol.pv 5, 6).
 	if n := i.names[t.name]; n != nil {
@@ -477,6 +523,40 @@ func (i *Issuer) Enrol(req EnrolRequest, now time.Time) ([]byte, error) {
 		appTraceLine(map[string]any{"ev": "code", "o": i.orgID, "n": t.name, "u": t.dev.Person, "a": t.dev.App, "tok": req.TokenID, "k": orgid.KeyFingerprint(pub), "t": now.Unix()})
 	}
 	return der, err
+}
+
+// rebind redeems a rebind token (Enrol.tla Rebind, enrol.pv query 11):
+// the certificate carries the token's name, groups and new machine id; its
+// first redemption retires every earlier serial of the name in the same
+// log entry. Asked again for the key it rebound (a lost answer), the token
+// is answered again as an enrolment token is (Join.tla Issue); any other
+// key, a revoked name, or a name rebound by another token since is
+// refused. Callers hold mu.
+func (i *Issuer) rebind(t *tokenRec, tokenID string, pub ed25519.PublicKey, refusal Entry, now time.Time) ([]byte, error) {
+	n := i.names[t.name]
+	if n == nil || n.revoked {
+		return nil, i.refuse(refusal, t.name+" is not enrolled or is revoked")
+	}
+	redeemed := slices.ContainsFunc(n.serials, func(sn string) bool { return i.certs[sn].token == tokenID })
+	if redeemed {
+		last := i.certs[n.serials[len(n.serials)-1]]
+		if last.token != tokenID || last.key != orgid.KeyFingerprint(pub) {
+			traceLine(map[string]any{"ev": "refuse", "o": i.orgID, "n": t.name, "from": "", "tok": tokenID, "k": orgid.KeyFingerprint(pub), "why": "enrolled", "t": now.Unix()})
+			return nil, i.refuse(refusal, "the rebind token was redeemed")
+		}
+		return i.issue(ActIssued, t.name, t.groups, t.machineID, t.dev, pub, tokenID, "", now)
+	}
+	der, err := i.issue(ActRebound, t.name, t.groups, t.machineID, t.dev, pub, tokenID, "", now)
+	if err == nil {
+		traceLine(map[string]any{"ev": "rebind", "o": i.orgID, "n": t.name, "s": n.serials[len(n.serials)-1], "t": now.Unix()})
+	}
+	return der, err
+}
+
+// isRetired: serial sn of n was retired by a rebind.
+func (n *nameRec) isRetired(sn string) bool {
+	k := slices.Index(n.serials, sn)
+	return k >= 0 && k < n.retired
 }
 
 // Renew re-certifies a machine under the current issuer for a new key. It
@@ -508,6 +588,10 @@ func (i *Issuer) Renew(req RenewRequest, now time.Time) ([]byte, error) {
 	if n.revoked {
 		i.traceRefused(sn, cur, "revoked", now)
 		return nil, i.refuse(refusal, rec.name+" is revoked")
+	}
+	if n.isRetired(sn) { // Enrol.tla NoRenewOfRetired (mutant renew-rebound): the old machine id's disk
+		i.traceRefused(sn, cur, "rebound", now)
+		return nil, i.refuse(refusal, rec.name+" moved to another machine id (rebind): this certificate is retired")
 	}
 	if !n.authUntil.IsZero() && now.After(n.authUntil) { // AppEnrol.tla Renew (mutant renew-ignores-auth)
 		i.traceRefused(sn, cur, "other", now)
@@ -679,10 +763,11 @@ func (i *Issuer) CRL(now time.Time) ([]byte, error) {
 	}
 	var listed []x509.RevocationListEntry
 	for _, n := range i.names {
-		if !n.revoked {
-			continue
+		sns := n.serials[:n.retired] // Enrol.tla Rebind (mutant rebind-keeps-serials)
+		if n.revoked {
+			sns = n.serials
 		}
-		for _, sn := range n.serials {
+		for _, sn := range sns {
 			if !now.Before(i.certs[sn].notAfter) {
 				continue
 			}

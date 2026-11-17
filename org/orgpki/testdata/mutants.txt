@@ -11,7 +11,7 @@
 # verifier's callers, orgmachine).
 no-name-constraint | profile.go | 		PermittedDNSDomainsCritical: true, PermittedDNSDomains: []string{orgid.Domain(orgID)}, |  | TestForgedNameRefused
 renew-expired | issuer.go | 	if !now.Before(rec.notAfter) { | 	if false { | TestExpiredRefused
-revoke-current-only | issuer.go | 		for _, sn := range n.serials { | 		for _, sn := range n.serials[len(n.serials)-1:] { | TestRevokedRefused
+revoke-current-only | issuer.go | 			sns = n.serials | 			sns = n.serials[len(n.serials)-1:] | TestRevokedRefused
 renew-revoked | issuer.go | 	if n.revoked { | 	if false { | TestRevokedRefused
 reusable-token | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if last == nil { | TestReusedTokenRefused
 # Join.tla Issue: a redeemed token answers again only its own key, of a
@@ -71,3 +71,8 @@ signin-skips-deny | signin.go | 	if i.deniedDev(dev) { // AppEnrol.tla EnrolSSO,
 reauth-any-user | signin.go | 		case n.dev != dev: // AppEnrol.tla Reauth (mutant reauth-any-user) | 		case false: | TestSignInOnlyForItsPersonNotRevoked
 signin-takes-code-key | signin.go | 		case n.authUntil.IsZero(): | 		case false: | TestSignInOnlyForItsPersonNotRevoked
 renew-ignores-auth | issuer.go | 	if !n.authUntil.IsZero() && now.After(n.authUntil) { // AppEnrol.tla Renew (mutant renew-ignores-auth) | 	if false { | TestSignInRenewalEndsWithAuthLife
+# A rebind (spec/enrol/Enrol.tla Rebind; nfltr docs/decisions/org-rebind-2026-11-17.md):
+rebind-keeps-serials | issuer.go | 		sns := n.serials[:n.retired] // Enrol.tla Rebind (mutant rebind-keeps-serials) | 		sns := n.serials[:0] | TestRebindRetiresTheOldID
+renew-rebound | issuer.go | 	if n.isRetired(sn) { // Enrol.tla NoRenewOfRetired (mutant renew-rebound): the old machine id's disk | 	if false { | TestRebindRetiresTheOldID
+rebind-keeps-id | issuer.go | 			n.retired, n.machineID, i.crlDue = len(n.serials), e.MachineID, true | 			n.retired, i.crlDue = len(n.serials), true | TestRebindRetiresTheOldID
+rebind-reusable | issuer.go | 	if redeemed { | 	if _ = redeemed; false { | TestRebindTokenRules

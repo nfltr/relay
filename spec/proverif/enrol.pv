@@ -24,6 +24,11 @@
    HMAC are ideal. Time is two epochs: ep_now (the verifier's clock) and
    ep_old (anything that has expired, a CRL past its NextUpdate).
 
+   Bindings (org/orgpki rebind_test.go TestRebindModelBindings, one row
+   each: the field changed in the honest request, as a relay can):
+     BIND:rebind.mac  the new machine's key is bound to the rebind token by its HMAC (org/orgpki Enrol)
+     BIND:rebind.name the certificate names the token's name, never the request's (org/orgpki rebind)
+
    The code: org/orgpki (README "Code map"); every query
    it enforces has a test there, and testdata/mutants.txt plants the
    mutants below in the Go code (make test-go-mutants). *)

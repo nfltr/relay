@@ -28,6 +28,7 @@ const (
 	ActToken       = "token"        // Token, Name, Groups, MachineID, Person, App, NotAfter (the token's expiry)
 	ActIssued      = "issued"       // Name, Groups, MachineID, Person, App, Serial, Key, Digest, NotAfter, Token; by sign-in IdP, Subject, ClientID, AuthUntil
 	ActRenewed     = "renewed"      // as issued; From: the serial it renews
+	ActRebound     = "rebound"      // as issued, by a rebind token: MachineID the name's new one; every earlier serial of Name retired
 	ActRefused     = "refused"      // Reason; Token or Serial when known
 	ActRevoked     = "revoked"      // Name; or Person or App: every name of it, and no enrolment of it from now
 	ActCRL         = "crl"          // Number, NotAfter (its NextUpdate)
@@ -53,6 +54,7 @@ type Entry struct {
 	Key       string      `json:"key,omitempty"`
 	Digest    string      `json:"digest,omitempty"`
 	Token     string      `json:"token,omitempty"`
+	Rebind    bool        `json:"rebind,omitempty"` // a token: a rebind token (MakeRebindToken)
 	NotAfter  time.Time   `json:"not_after,omitzero"`
 	Number    int64       `json:"number,omitempty"`
 	Reason    string      `json:"reason,omitempty"`

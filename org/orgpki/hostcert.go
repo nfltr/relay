@@ -46,6 +46,8 @@ func (i *Issuer) HostCert(leafDER []byte, now time.Time) ([]byte, error) {
 		return nil, fmt.Errorf("%w: the certificate is not in the issuer's log", ErrRefused)
 	case i.names[rec.name].revoked:
 		return nil, fmt.Errorf("%w: %s is revoked", ErrRefused, rec.name)
+	case i.names[rec.name].isRetired(hex.EncodeToString(leaf.SerialNumber.Bytes())):
+		return nil, fmt.Errorf("%w: %s moved to another machine id: the certificate is retired", ErrRefused, rec.name)
 	case !now.Before(rec.notAfter):
 		return nil, fmt.Errorf("%w: the certificate expired", ErrRefused)
 	}
