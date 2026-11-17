@@ -17,7 +17,10 @@ import (
 
 	"github.com/nfltr/relay/client/agent"
 	"github.com/nfltr/relay/client/nf1"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/agentservices"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/status"
 )
 
 // Caller is who opened an accepted session, as the relay authenticated it
@@ -250,10 +253,28 @@ func listenError(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return &Error{Code: CodeUnreachable, Message: "Listen: not registered with the relay within ctx: " + err.Error(), Err: err}
 	}
+	if unauthenticated(err) { // the relay's typed refusal: no credential it accepts (nf1.anon off)
+		return &Error{Code: CodeAuth, Reason: relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED.String(), Message: "Listen: the relay refused the agent: " + err.Error(), Err: err}
+	}
 	if code := CodeOf(err); code != CodeUnreachable && code != 0 {
 		return &Error{Code: code, Message: "Listen: " + err.Error(), Err: err}
 	}
 	return &Error{Code: CodeAuth, Message: "Listen: the relay refused the agent: " + err.Error(), Err: err}
+}
+
+// unauthenticated reports whether err is a gRPC status whose ErrorInfo
+// reason is ERROR_REASON_UNAUTHENTICATED.
+func unauthenticated(err error) bool {
+	s, ok := status.FromError(err)
+	if !ok || err == nil {
+		return false
+	}
+	for _, d := range s.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetReason() == relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED.String() {
+			return true
+		}
+	}
+	return false
 }
 
 // watch ends the listener's queue when its agent ended by itself (a final
