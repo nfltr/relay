@@ -130,7 +130,7 @@ func TestDirectGroupDialGoesDirectToItsInstance(t *testing.T) {
 	t.Cleanup(func() { _ = tc.Close() })
 	events := make(chan PathEvent, 16)
 	if err := ds.Run(tc.ConnectionState(), "blob@db", tc.ConnectionState().PeerCertificates[0].Subject.CommonName, "blob", DirectOn,
-		func(e PathEvent) { events <- e }); err != nil {
+		pathSink(events)); err != nil {
 		t.Fatal(err)
 	}
 	echo(t, tc, 2<<20, func() {

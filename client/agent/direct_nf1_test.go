@@ -136,7 +136,7 @@ func (r *nf1Rig) handshake(t *testing.T) (*DirectSession, *tls.Conn) {
 func (r *nf1Rig) run(t *testing.T, ds *DirectSession, tc *tls.Conn) chan PathEvent {
 	t.Helper()
 	events := make(chan PathEvent, 16)
-	if err := ds.RunNF1(tc.ConnectionState(), NF1Route{Addr: r.lis.Address(), Open: r.open}, r.mode, func(e PathEvent) { events <- e }); err != nil {
+	if err := ds.RunNF1(tc.ConnectionState(), NF1Route{Addr: r.lis.Address(), Open: r.open}, r.mode, pathSink(events)); err != nil {
 		t.Fatal(err)
 	}
 	return events

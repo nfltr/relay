@@ -195,7 +195,7 @@ func (r *directRig) session(t *testing.T) (*DirectSession, *tls.Conn, chan PathE
 	t.Helper()
 	ds, tc := r.handshake(t)
 	events := make(chan PathEvent, 16)
-	if err := ds.Run(tc.ConnectionState(), "web", "web", "blob", r.mode, func(e PathEvent) { events <- e }); err != nil {
+	if err := ds.Run(tc.ConnectionState(), "web", "web", "blob", r.mode, pathSink(events)); err != nil {
 		t.Fatal(err)
 	}
 	return ds, tc, events
@@ -227,6 +227,19 @@ func (r *directRig) handshake(t *testing.T) (*DirectSession, *tls.Conn) {
 		}
 	})
 	return ds, tc
+}
+
+// pathSink is a session's path event callback that never blocks it: emit
+// runs under the session's lock (fallback), so a test that stopped reading
+// would deadlock the session's close (TestDirectGroupDialGoesDirectToItsInstance
+// hung CI); an event past the buffer is dropped, after the test's reads.
+func pathSink(events chan PathEvent) func(PathEvent) {
+	return func(e PathEvent) {
+		select {
+		case events <- e:
+		default:
+		}
+	}
 }
 
 func waitPath(t *testing.T, events chan PathEvent, path string) PathEvent {
@@ -401,7 +414,7 @@ func TestDirectUnprovedMoveIsRefusedNotLost(t *testing.T) {
 	r.l.targets.services.direct.detach = 2 * time.Second // the agent's session ends too
 	ds, _ := r.handshake(t)
 	events := make(chan PathEvent, 16)
-	if err := ds.Run(strangerTLS(t), "web", "web", "blob", r.mode, func(e PathEvent) { events <- e }); err != nil {
+	if err := ds.Run(strangerTLS(t), "web", "web", "blob", r.mode, pathSink(events)); err != nil {
 		t.Fatal(err)
 	}
 	if e := waitPath(t, events, PathRelayed); e.Reason != ReasonRefusedToken {

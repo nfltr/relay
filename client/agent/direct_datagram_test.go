@@ -110,7 +110,7 @@ func TestDatagramDirectMovesAndFallsBack(t *testing.T) {
 	roundTrip(t, f, "relayed-1")
 
 	events := make(chan PathEvent, 16)
-	if err := ds.Run(tc.ConnectionState(), "web", "web", r.svc, DirectOn, func(e PathEvent) { events <- e }); err != nil {
+	if err := ds.Run(tc.ConnectionState(), "web", "web", r.svc, DirectOn, pathSink(events)); err != nil {
 		t.Fatal(err)
 	}
 	waitPath(t, events, PathDirect)
