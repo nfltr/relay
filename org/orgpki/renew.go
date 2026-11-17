@@ -42,6 +42,12 @@ type IssuerRenewal struct {
 	Cert    []byte `json:"cert"`     // the new issuer certificate
 	Head    string `json:"head"`     // the request's head
 	RootSig []byte `json:"root_sig"` // the root's checkpoint of Head
+	// Issuers is the root's CRL of issuers re-signed with this renewal
+	// (SignIssuerCRL with no revoke: its NextUpdate the new delegation's
+	// end), when the root's machine holds one; the issuer's machine keeps
+	// it if newer (orgissuer Store.TakeIssuers) and publishes it with the
+	// root (spec/orgmove/OrgHosted.tla Renew, RootCRLCurrent).
+	Issuers []byte `json:"issuers,omitempty"`
 }
 
 func renewalMessage(r IssuerRenewalRequest) []byte {

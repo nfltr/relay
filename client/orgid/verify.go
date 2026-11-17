@@ -87,7 +87,17 @@ func (v *Verifier) verify(c, issuer *x509.Certificate, dnsName string, now time.
 		inter.AddCert(issuer)
 	}
 	opts := x509.VerifyOptions{Roots: roots, Intermediates: inter, DNSName: dnsName, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}
-	return c.Verify(opts)
+	chains, err := c.Verify(opts)
+	if err != nil {
+		return nil, err
+	}
+	// A leaf under an issuer the root's CRL of issuers lists: every check
+	// of one (Check, Issued: a join's or a renewal's answer) refuses it
+	// (OrgHosted.tla Admit, RevokedIssuerRefused).
+	if ch := chains[0]; len(ch) >= 3 && v.issuers != nil && v.issuers.revoked[ch[len(ch)-2].SerialNumber.String()] {
+		return nil, errors.New("the root revoked this issuer (its CRL of issuers)")
+	}
+	return chains, nil
 }
 
 // TakeCRL takes issuer's CRL: signed by an issuer under the trusted root,
@@ -256,9 +266,6 @@ func (v *Verifier) check(leaf, issuer *x509.Certificate, want Peer, now time.Tim
 		return Checked{}, "name", fmt.Errorf("the certificate names %q, not %q", leaf.Subject.CommonName, want.Name)
 	}
 	iss := chains[0][len(chains[0])-2]
-	if v.issuers != nil && v.issuers.revoked[iss.SerialNumber.String()] {
-		return Checked{}, "chain", errors.New("the root revoked this issuer (its CRL of issuers)")
-	}
 	groups := leaf.Subject.OrganizationalUnit
 	if !subset(groups, iss.Subject.OrganizationalUnit) {
 		return Checked{}, "group", fmt.Errorf("groups %v are outside the issuer's policy %v", groups, iss.Subject.OrganizationalUnit)

@@ -17,3 +17,9 @@ finish-deletes-root | bundle.go | 	for _, p := range []string{s.Path(IssuerKeyFi
 root-left-behind-on-return | bundle.go | var tombstoneFiles = []string{"answers", CRLFile, KRLFile, SealedFile, "publish-failing.json", LogFile} | var tombstoneFiles = []string{"answers", CRLFile, KRLFile, SealedFile, "publish-failing.json", "root-org.key", LogFile} | TestRootStaysWithItsOwner
 refuse-own-tombstone | bundle.go | 			if !extendsLog(splitLines(members["org/"+LogFile]), lines) { | 			if true { | TestMoveBackReplacesTheTombstone
 receive-drops-membership | bundle.go | 			if err := os.Rename(s.Path(f), filepath.Join(aside, f)); err != nil && !errors.Is(err, os.ErrNotExist) { | 			if err := os.Rename(dir, aside+f[:0]); err != nil && !errors.Is(err, os.ErrNotExist) { | TestReceiveKeepsTheMachinesMembership
+# The root's record of the issuer certificates it signs elsewhere and the
+# CRL of issuers a renewal's answer carries (spec/orgmove/OrgHosted.tla
+# Renew: sign-forgets, RootCRLCurrent; lane ORGH1R).
+signed-forgets | store.go | 	return orgfiles.Write(s.Path(SignedFile), append(old, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...), 0o600) | 	return orgfiles.Write(s.Path(SignedFile), append(old[:0], pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...), 0o600) | TestStoreKeepsSignedIssuersAndNewerIssuerCRLs
+take-older-issuers | store.go | 		if err == nil && h.Number != nil && h.Number.Cmp(crl.Number) >= 0 { | 		if err == nil && h == nil { | TestStoreKeepsSignedIssuersAndNewerIssuerCRLs
+take-foreign-issuers | store.go | 	if err := crl.CheckSignatureFrom(root); err != nil { | 	if err := error(nil); err != nil { | TestStoreKeepsSignedIssuersAndNewerIssuerCRLs

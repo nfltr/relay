@@ -35,3 +35,6 @@ publish-older-issuers | published.go | 	if held := issuersNumber(rm.Issuers, roo
 # A renewal refused past its sign-in is ErrSignInEnded on the device
 # (spec/appenrol/AppEnrol.tla Renew; the app signs in again).
 sign-in-ended-untyped | orgenrol.go | 			if a.SignInEnded { // a renewal past its sign-in: the device signs in again | 			if false { | TestSignInEndedIsTypedOnTheDevice
+# A join takes the root's CRL of issuers beside the root before it checks
+# the answer (spec/orgmove/OrgHosted.tla Deliver, lane ORGH1R).
+join-skips-issuers | machine.go | 	if rm.Issuers != nil { | 	if false { | TestJoinTakesTheRootsCRLOfIssuers

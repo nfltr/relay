@@ -151,7 +151,7 @@ func Join(ctx context.Context, mb Mailbox, dir string, pins Pins, token string, 
 	if err := orgmachine.Checked(ver, a.Cert, a.Issuer, a.HostCert, key, "", now()); err != nil {
 		return Joined{}, fmt.Errorf("the answer: %w", err)
 	}
-	if err := orgmachine.WriteFiles(dir, orgmachine.Enrolment{Root: rm.Root, Recovery: rm.Recovery, Cert: a.Cert, Issuer: a.Issuer, HostCert: a.HostCert, CRL: cm.CRL, Key: key}); err != nil {
+	if err := orgmachine.WriteFiles(dir, orgmachine.Enrolment{Root: rm.Root, Recovery: rm.Recovery, Cert: a.Cert, Issuer: a.Issuer, HostCert: a.HostCert, CRL: cm.CRL, Issuers: rm.Issuers, Key: key}); err != nil {
 		return Joined{}, err
 	}
 	_ = os.Remove(filepath.Join(dir, JoinKeyFile)) // installed: the machine's key now
@@ -213,6 +213,14 @@ func trust(ctx context.Context, mb Mailbox, orgID string, pins Pins, wait time.D
 	ver, err := orgid.NewVerifier(root, rec, rootPin, pins.Recovery)
 	if err != nil {
 		return nil, nil, rm, cm, err
+	}
+	// The root's CRL of issuers beside it, taken before anything is
+	// checked: a joining machine refuses a revoked issuer (its answer
+	// too) from its first session (OrgHosted.tla Deliver).
+	if rm.Issuers != nil {
+		if err := ver.TakeIssuerCRL(rm.Issuers); err != nil {
+			return nil, nil, rm, cm, fmt.Errorf("the organisation's root: %w", err)
+		}
 	}
 	if data, err = latest(ctx, mb, orgid.CRLMailbox(orgID), min(pollWait, wait)); err == nil && data == nil {
 		err = errNoMessage
@@ -406,7 +414,7 @@ func JoinSignIn(ctx context.Context, mb Mailbox, dir string, pins Pins, orgID, r
 	if err := orgmachine.Checked(ver, a.Cert, a.Issuer, a.HostCert, key, "", now()); err != nil {
 		return nil, fmt.Errorf("the answer: %w", err)
 	}
-	if err := orgmachine.WriteFiles(dir, orgmachine.Enrolment{Root: rm.Root, Recovery: rm.Recovery, Cert: a.Cert, Issuer: a.Issuer, HostCert: a.HostCert, CRL: cm.CRL, Key: key}); err != nil {
+	if err := orgmachine.WriteFiles(dir, orgmachine.Enrolment{Root: rm.Root, Recovery: rm.Recovery, Cert: a.Cert, Issuer: a.Issuer, HostCert: a.HostCert, CRL: cm.CRL, Issuers: rm.Issuers, Key: key}); err != nil {
 		return nil, err
 	}
 	return x509.ParseCertificate(a.Cert)

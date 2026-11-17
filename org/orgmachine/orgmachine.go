@@ -485,6 +485,7 @@ func certPEM(der []byte) []byte {
 // Enrolment is what a machine's enrolment writes into its directory.
 type Enrolment struct {
 	Root, Recovery, Cert, Issuer, CRL []byte // DER
+	Issuers                           []byte // DER: the root's CRL of issuers (nil: none published)
 	HostCert                          []byte // SSH wire form
 	Key                               ed25519.PrivateKey
 }
@@ -500,6 +501,11 @@ func WriteFiles(dir string, e Enrolment) error {
 		data []byte
 	}{{RootFile, certPEM(e.Root)}, {RecoveryFile, certPEM(e.Recovery)}, {CRLFile, e.CRL}} {
 		if err := orgfiles.Write(filepath.Join(dir, f.name), f.data, 0o600); err != nil {
+			return err
+		}
+	}
+	if e.Issuers != nil {
+		if err := orgfiles.Write(filepath.Join(dir, IssuersFile), e.Issuers, 0o600); err != nil {
 			return err
 		}
 	}

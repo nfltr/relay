@@ -898,3 +898,29 @@ func TestOwnerPublishedIssuersKept(t *testing.T) {
 		t.Fatal("the root message lost the owner's CRL of issuers")
 	}
 }
+
+// A join takes the root's CRL of issuers the relay holds beside the root,
+// before it checks the issuer's answer: the new machine keeps it, and
+// refuses an issuer it lists from its first session (OrgHosted.tla
+// Deliver; mutant join-skips-issuers).
+func TestJoinTakesTheRootsCRLOfIssuers(t *testing.T) {
+	f := newFleet(t)
+	root := f.org.root(t)
+	var cert *x509.Certificate
+	f.org.do(t, func(i *orgpki.Issuer, _ *orgissuer.Store) { cert = i.Cert() })
+	none, err := orgpki.SignIssuerCRL(root, f.org.rootKey, nil, nil, f.clk.Now())
+	check(t, err)
+	check(t, PublishIssuers(f.ctx, f.relay, root, none, hang))
+	dir := filepath.Join(t.TempDir(), "first")
+	_, err = Join(f.ctx, f.relay, dir, f.org.pins, f.org.token(t, "web-first", f.clk.Now()), hang, f.clk.Now)
+	check(t, err)
+	if data, err := os.ReadFile(filepath.Join(dir, orgmachine.IssuersFile)); err != nil || !bytes.Equal(data, none) {
+		t.Fatalf("the joined machine does not keep the CRL of issuers: %v", err)
+	}
+	revoked, err := orgpki.SignIssuerCRL(root, f.org.rootKey, none, []*x509.Certificate{cert}, f.clk.Now())
+	check(t, err)
+	check(t, PublishIssuers(f.ctx, f.relay, root, revoked, hang))
+	if _, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "late"), f.org.pins, f.org.token(t, "web-late", f.clk.Now()), hang, f.clk.Now); err == nil {
+		t.Fatal("a join took an answer from an issuer the root revoked")
+	}
+}

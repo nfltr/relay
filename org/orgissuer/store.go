@@ -31,8 +31,9 @@ const (
 	LogFile       = "audit.jsonl"
 	IssuerKeyFile = "issuer.key"
 	CRLFile       = "crl.der"
-	IssuersFile   = "issuers.crl"       // the root's CRL of issuers (orgpki.SignIssuerCRL), once the owner revoked an issuer
-	KRLFile       = "revoked-hosts.krl" // the CRL's OpenSSH KRL (orgpki.HostKRL), 0644
+	IssuersFile   = "issuers.crl"        // the root's CRL of issuers (orgpki.SignIssuerCRL), once the owner revoked an issuer
+	KRLFile       = "revoked-hosts.krl"  // the CRL's OpenSSH KRL (orgpki.HostKRL), 0644
+	SignedFile    = "signed-issuers.pem" // issuer certificates the root here signed for an issuer elsewhere (KeepSigned)
 	PEMIssuer     = "NFLTR ORG ISSUER KEY"
 	PEMRecovery   = "NFLTR ORG RECOVERY KEY"
 )
@@ -235,6 +236,69 @@ func (s *Store) ReadIssuers() ([]byte, error) {
 // (orgpki.SignIssuerCRL); Serve publishes it with the root.
 func (s *Store) WriteIssuers(der []byte) error {
 	return orgfiles.Write(s.Path(IssuersFile), der, 0o600)
+}
+
+// TakeIssuers keeps der, a CRL of issuers root signed (a remote renewal's
+// answer carries the one the root re-signed: orgpki.IssuerRenewal), when
+// it is newer than the one held; an older or equal one changes nothing.
+func (s *Store) TakeIssuers(root *x509.Certificate, der []byte) error {
+	crl, err := x509.ParseRevocationList(der)
+	if err != nil {
+		return fmt.Errorf("CRL of issuers: %w", err)
+	}
+	if err := crl.CheckSignatureFrom(root); err != nil {
+		return fmt.Errorf("CRL of issuers: not the root's: %w", err)
+	}
+	if crl.Number == nil {
+		return errors.New("CRL of issuers: no number")
+	}
+	held, err := s.ReadIssuers()
+	if err != nil {
+		return err
+	}
+	if held != nil {
+		h, err := x509.ParseRevocationList(held)
+		if err == nil && h.Number != nil && h.Number.Cmp(crl.Number) >= 0 {
+			return nil
+		}
+	}
+	return s.WriteIssuers(der)
+}
+
+// KeepSigned records an issuer certificate the root on this machine
+// signed for an issuer elsewhere (`nfltr org issuer sign`: a remote
+// renewal, which this machine's log does not record), so the root's
+// revocation of that issuer lists it too (spec/orgmove/OrgHosted.tla
+// Renew, mutant sign-forgets).
+func (s *Store) KeepSigned(der []byte) error {
+	old, err := os.ReadFile(s.Path(SignedFile)) // #nosec G304 -- the issuer's own file
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return orgfiles.Write(s.Path(SignedFile), append(old, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...), 0o600)
+}
+
+// Signed is the issuer certificates KeepSigned recorded, oldest first.
+func (s *Store) Signed() ([]*x509.Certificate, error) {
+	data, err := os.ReadFile(s.Path(SignedFile)) // #nosec G304 -- the issuer's own file
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var certs []*x509.Certificate
+	for {
+		var b *pem.Block
+		if b, data = pem.Decode(data); b == nil {
+			return certs, nil
+		}
+		c, err := x509.ParseCertificate(b.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", SignedFile, err)
+		}
+		certs = append(certs, c)
+	}
 }
 
 // RevokeMachines revokes, in the issuer of directory dir, every name
