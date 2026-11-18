@@ -46,6 +46,10 @@ type RelayDialer struct {
 
 // tcpDataWindow is the agent's window per session on a data connection:
 // what it queues for one session's target at most (relay tcpDataWindow).
+// A session that may go direct keeps the same window on both of its
+// paths (pathswitch.Config.Window, the direct QUIC stream's window), so
+// one transfer is never bounded at 1 MiB per round trip
+// (TestDirectPathWindowIsTheDataWindow, docs/performance.md).
 const tcpDataWindow = 16 << 20
 
 // tcpDataMaxSessions is how many sessions the relay may have open on one

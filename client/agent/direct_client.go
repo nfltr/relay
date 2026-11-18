@@ -173,7 +173,7 @@ func NewDirectClient(cfg DirectClientConfig) (*DirectClient, error) {
 	}
 	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, anonBound: nf1AnonDirectBound, repunch: directBackoff[0], qadGrace: 250 * time.Millisecond, ended: connEnded, pairs: map[string]*directPair{}, punches: map[string]uint64{},
 		qad: map[string]uint64{}, sessions: map[*DirectSession]struct{}{}}
-	d.node, err = quiclink.New(quiclink.Config{Dial: d.dial, Liveness: link.LivenessFast, Datagrams: true})
+	d.node, err = quiclink.New(quiclink.Config{Dial: d.dial, Liveness: link.LivenessFast, Datagrams: true, Window: tcpDataWindow})
 	if err != nil {
 		_ = ep.Close()
 		return nil, err
@@ -323,7 +323,7 @@ func (d *DirectClient) Start(first net.Conn) *DirectSession {
 	s := &DirectSession{d: d, moved: make(chan struct{}, 1), heard: new(atomic.Bool), direct: make(chan struct{}), gaveUp: make(chan struct{})}
 	s.heard.Store(true) // the session's TLS runs on it
 	s.c = pathswitch.Client(pathStream{Conn: first, sent: &d.relayedSent, recv: &d.relayedRecv}, PathRelayed,
-		pathswitch.Config{OnStreamEnd: s.fallback, Detach: d.detach})
+		pathswitch.Config{OnStreamEnd: s.fallback, Detach: d.detach, Window: tcpDataWindow})
 	s.epoch = s.c.Epoch()
 	s.nc = newPSConn(s.c, first)
 	s.dg = &sessionDatagrams{c: s.c, recv: &d.directRecv}

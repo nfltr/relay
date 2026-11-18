@@ -93,7 +93,7 @@ func newDirectServerOn(ep *DirectEndpoint, org Org, groups []string, modes map[s
 		sessions: map[*directSession]struct{}{}, quic: map[string][]byte{}}
 	var err error
 	d.node, err = quiclink.New(quiclink.Config{Transport: ep.tr, TLS: d.listenTLS(), ServedPeer: d.servedPeer,
-		Liveness: link.LivenessFast, Datagrams: true})
+		Liveness: link.LivenessFast, Datagrams: true, Window: tcpDataWindow})
 	if err != nil {
 		_ = ep.Close()
 		return nil, err
@@ -577,7 +577,7 @@ func startDirect(s net.Conn, d *directServer) (*pathswitch.Conn, net.Conn, error
 	if first == tlsRecordHandshake {
 		return nil, s, nil
 	}
-	var cfg pathswitch.Config
+	cfg := pathswitch.Config{Window: tcpDataWindow}
 	if d != nil {
 		cfg.Detach = d.detach
 	}

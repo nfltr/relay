@@ -153,7 +153,7 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 		}
 		done := d.handshaking()
 		defer done()
-		c := pathswitch.Server(pathStream{Conn: ps}, PathRelayed, pathswitch.Config{Detach: d.detach})
+		c := pathswitch.Server(pathStream{Conn: ps}, PathRelayed, pathswitch.Config{Detach: d.detach, Window: tcpDataWindow})
 		tc := admitNF1(ctx, l, newPSConn(c, s), logger)
 		if tc == nil {
 			c.Abort()
@@ -190,7 +190,7 @@ func serveNF1Anon(ctx context.Context, s, ps net.Conn, p sessionPlan, logger *sl
 	done := d.handshaking()
 	defer done()
 	relayed := pathStream{Conn: ps, end: &streamEnd{}}
-	c := pathswitch.Server(relayed, PathRelayed, pathswitch.Config{Detach: d.detach})
+	c := pathswitch.Server(relayed, PathRelayed, pathswitch.Config{Detach: d.detach, Window: tcpDataWindow})
 	tap := &detachTap{Conn: newPSConn(c, s)}
 	gone := make(chan struct{})
 	lost := sync.OnceFunc(func() { tap.detached.Store(true); close(gone); c.Abort() })
