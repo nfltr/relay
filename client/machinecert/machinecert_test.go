@@ -63,9 +63,10 @@ func TestRenewalLoopJitter(t *testing.T) {
 	}
 
 	clock := nb
-	var waits []time.Duration
+	var waits []time.Duration // slept before each renewal (timers of MaxSleep at most)
+	var slept time.Duration
 	after := func(d time.Duration) <-chan time.Time {
-		waits = append(waits, d)
+		slept += d
 		clock = clock.Add(d)
 		ch := make(chan time.Time, 1)
 		ch <- clock
@@ -80,6 +81,7 @@ func TestRenewalLoopJitter(t *testing.T) {
 		Jitter: func() float64 { j := jitters[0]; jitters = append(jitters[1:], j); return j },
 		After:  after,
 		Renew: func(_ context.Context, cur *Cert) (*Cert, error) {
+			waits, slept = append(waits, slept), 0
 			renewals++
 			if renewals == 2 || renewals == 3 { // two failures, then on
 				return nil, &RefusedError{Status: http.StatusServiceUnavailable}
@@ -222,5 +224,50 @@ func TestKeyFileOwnerOnly(t *testing.T) {
 	}
 	if _, err := LoadKey(path); err == nil {
 		t.Fatal("a world-readable key file loaded")
+	}
+}
+
+// TestRenewalLoopRenewsOnTimeAfterTheHostSlept: Go's timers run on the
+// monotonic clock, which stands still while the host sleeps (a laptop, a
+// Docker Desktop VM on one), while a certificate's lifetime is wall
+// clock. One timer for the whole wait woke that much late: a 24 h
+// certificate's 8 h margin went in a night (incident 2026-11-18). No timer
+// is longer than MaxSleep, so the renewal comes at most that long after
+// its wall-clock time.
+func TestRenewalLoopRenewsOnTimeAfterTheHostSlept(t *testing.T) {
+	nb := time.Unix(1_800_000_000, 0)
+	clock, slept := nb.Add(time.Hour), false
+	after := func(d time.Duration) <-chan time.Time {
+		if d > MaxSleep {
+			t.Errorf("a %v timer: a host that sleeps meanwhile wakes it that much late", d)
+		}
+		clock = clock.Add(d)
+		if !slept { // the host sleeps 14 h under the first timer
+			clock, slept = clock.Add(14*time.Hour), true
+		}
+		ch := make(chan time.Time, 1)
+		ch <- clock
+		return ch
+	}
+	var renewedAt time.Time
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	err := Loop{
+		Now:    func() time.Time { return clock },
+		Jitter: func() float64 { return 0 },
+		After:  after,
+		Renew: func(context.Context, *Cert) (*Cert, error) {
+			renewedAt = clock
+			cancel()
+			return fakeCert(t, clock), nil
+		},
+		Save: func(*Cert) error { return nil },
+	}.Run(ctx, fakeCert(t, nb))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	due := RenewAt(nb, nb.Add(day), 0)
+	if renewedAt.Before(due) || renewedAt.After(due.Add(MaxSleep)) {
+		t.Fatalf("renewed at %v after issue, want %v (+ at most %v)", renewedAt.Sub(nb), due.Sub(nb), MaxSleep)
 	}
 }

@@ -31,6 +31,13 @@ const (
 	RetryMax = 30 * time.Minute
 )
 
+// MaxSleep bounds one timer of the loop: it reads the clock again at least
+// this often. Go's timers run on the monotonic clock, which stands still
+// while the host sleeps (a laptop, a Docker Desktop VM on one), and a
+// certificate's lifetime is wall clock: one timer for the whole wait woke
+// as late as the host slept (guard TestRenewalLoopRenewsOnTimeAfterTheHostSlept).
+const MaxSleep = time.Minute
+
 // Run renews cur at RenewAt (a new jitter each time) and again for each
 // certificate it gets, until ctx ends (nil) or the relay refuses for good
 // (a final RefusedError: enrol again) or the certificate expired unrenewed.
@@ -45,16 +52,23 @@ func (l Loop) Run(ctx context.Context, cur *Cert) error {
 	if after == nil {
 		after = time.After
 	}
-	wait := func(d time.Duration) bool {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-after(max(d, 0)):
-			return true
+	// wait until the wall-clock time until (Round(0): no monotonic
+	// reading, so Sub is wall clock), MaxSleep at most per timer.
+	wait := func(until time.Time) bool {
+		until = until.Round(0)
+		for {
+			select {
+			case <-ctx.Done():
+				return false
+			case <-after(min(max(until.Sub(now()), 0), MaxSleep)):
+			}
+			if !now().Before(until) {
+				return true
+			}
 		}
 	}
 	for {
-		if !wait(RenewAt(cur.Leaf.NotBefore, cur.Leaf.NotAfter, jitter()).Sub(now())) {
+		if !wait(RenewAt(cur.Leaf.NotBefore, cur.Leaf.NotAfter, jitter())) {
 			return nil
 		}
 		for backoff := RetryMin; ; backoff = min(2*backoff, RetryMax) {
@@ -73,7 +87,7 @@ func (l Loop) Run(ctx context.Context, cur *Cert) error {
 			if left <= 0 {
 				return errors.Join(errors.New("machinecert: the certificate expired unrenewed"), err)
 			}
-			if !wait(min(backoff, left)) {
+			if !wait(now().Add(min(backoff, left))) {
 				return nil
 			}
 		}
