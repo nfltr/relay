@@ -354,6 +354,7 @@ CONSTANTS
     Offered <- TraceOffered
     Prflx <- TracePrflx
     Spoofed <- TraceSpoofed
+    Trickled = {}
     Peer <- TracePeer
     Rogue = {}
     Lan <- TraceLan
@@ -371,6 +372,7 @@ INVARIANTS
     OneConnection
     DirectIfWorks
     PreferLan
+    NoWait
     TraceNotDone
 CFG
 	META=$work/states-$(basename "$1") tlc "$cfg" TraceDirectPunch.tla >"$1.out" 2>&1 || true
@@ -711,10 +713,10 @@ mutants)
 	model=DirectPunch
 	# Peer-reflexive candidates (design, lane NATSYM): each failure the punch
 	# prevents, put in.
-	for m in no-tag no-cap no-cert-check keep-loser return-early no-bound first-wins give-up-at-bound; do
+	for m in no-tag no-cap no-cert-check keep-loser return-early no-bound first-wins give-up-at-bound wait-qad; do
 		expect DP:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
 	done
-	for w in W_PrflxWon W_OfferedWon W_Relayed W_RogueRefused W_LoserClosed W_LanReplaced W_NonLanWon; do
+	for w in W_PrflxWon W_OfferedWon W_Relayed W_RogueRefused W_LoserClosed W_LanReplaced W_NonLanWon W_TrickledWon W_LanBeforeQAD; do
 		expect witness:DP-$w -e "s/^    TypeOK\$/    $w/"
 	done
 	cfg=

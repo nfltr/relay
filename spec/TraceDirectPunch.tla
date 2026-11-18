@@ -13,7 +13,9 @@
    came up are the peer's (the certificate check passed), no rogue (a
    failure maps to the bound or a win), the LAN addresses the code
    classified (each line's lan), no Reach (which address would have
-   answered is not in a trace), MaxCands the code's 8. Accepted
+   answered is not in a trace), MaxCands the code's 8; a candidate the
+   agent trickled on the control session is logged as a tagged Learn, so
+   its address is one of Prflx (Trickled is empty). Accepted
    when TLC reaches the trace's end: TraceNotDone is then violated
    (scripts/spec.sh ptraces). *)
 EXTENDS Json, DirectPunch, TLC, Sequences

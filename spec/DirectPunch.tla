@@ -29,7 +29,12 @@
    - a LAN path first: a connection to a LAN address replaces a non-LAN
      winner, and the LAN dials outlive a non-LAN win by a grace
      (lanGrace) in which a LAN probe is still learned; the rest by
-     measured handshake RTT (the first up among those dialled together).
+     measured handshake RTT (the first up among those dialled together);
+   - no dial waits for the address check (trickle, lane TRICKLE; RFC 8838):
+     the offered candidates are dialled from the punch's start, and the
+     agent's reflexive address, which its relay's address check (QAD)
+     answers later or never, comes as one more candidate on the control
+     session (Trickled), dialled as a learned one.
 
    Below this module (assumed): who answers at an address is the TLS
    certificate check (relay spec/proverif/e2ee_tcp.pv, BIND:direct.cert);
@@ -43,6 +48,7 @@ CONSTANTS
     Offered,   \* the candidates the agent's offer named
     Prflx,     \* addresses the agent's probes may leave from (its fresh mappings)
     Spoofed,   \* addresses an off-path sender puts on untagged probes
+    Trickled,  \* candidates the agent sends on the control session after its offer (its QAD answer)
     Peer,      \* addresses where the agent answers (its certificate)
     Rogue,     \* addresses where someone else answers (refused)
     Lan,       \* the private (LAN) addresses among Addrs
@@ -51,7 +57,7 @@ CONSTANTS
     Bound,     \* the punch's bound, in ticks
     Mutant     \* "none" or the failure put back (scripts/spec.sh mutants)
 
-Addrs == Offered \cup Prflx \cup Spoofed
+Addrs == Offered \cup Prflx \cup Spoofed \cup Trickled
 None == "none"
 
 VARIABLES
@@ -60,9 +66,10 @@ VARIABLES
     won,      \* the kept connection's address, or None
     t,        \* ticks since the punch began
     state,    \* "punching" | "returned"
-    settled   \* the LAN grace after a non-LAN win ended
+    settled,  \* the LAN grace after a non-LAN win ended
+    qad       \* the agent's address check ended (answered or timed out)
 
-vars == <<dial, probes, won, t, state, settled>>
+vars == <<dial, probes, won, t, state, settled, qad>>
 
 Dialled == {a \in Addrs : dial[a] # "idle"}
 Up == {a \in Addrs : dial[a] = "up"}
@@ -75,24 +82,46 @@ Grace == won # None /\ won \notin Lan /\ ~settled /\ Mutant # "first-wins"
 Beats(a) == won # None /\ won \notin Lan /\ a \in Lan /\ Mutant # "first-wins"
 
 Init ==
-    /\ dial = [a \in Addrs |-> IF a \in Offered THEN "dialing" ELSE "idle"]
+    \* Mutant wait-qad: the offered candidates wait for the address check
+    \* (the bug: a silent QAD port held every punch for its 3 s timeout).
+    /\ dial = [a \in Addrs |-> IF a \in Offered /\ Mutant # "wait-qad" THEN "dialing" ELSE "idle"]
     /\ probes = {}
     /\ won = None
     /\ t = 0
     /\ state = "punching"
     /\ settled = FALSE
+    /\ qad = FALSE
 
 \* The agent probes the client's candidates from one of its mappings.
 AgentProbe(a) ==
     /\ state = "punching" /\ t < Bound
     /\ probes' = probes \cup {[src |-> a, tagged |-> TRUE]}
-    /\ UNCHANGED <<dial, won, t, state, settled>>
+    /\ UNCHANGED <<dial, won, t, state, settled, qad>>
+
+\* The agent's address check ends: answered or timed out (it may take
+\* the whole punch or never answer: no fairness). Mutant wait-qad: only
+\* now are the offered candidates dialled.
+QADEnd ==
+    /\ ~qad
+    /\ qad' = TRUE
+    /\ dial' = IF Mutant = "wait-qad" /\ state = "punching"
+               THEN [a \in Addrs |-> IF a \in Offered THEN "dialing" ELSE dial[a]]
+               ELSE dial
+    /\ UNCHANGED <<probes, won, t, state, settled>>
+
+\* The agent trickles its reflexive candidate on the control session once
+\* its address check answered: authenticated by that session's TLS as a
+\* tagged probe is by its tag, read as one (Learn).
+AgentTrickle(a) ==
+    /\ state = "punching" /\ qad
+    /\ probes' = probes \cup {[src |-> a, tagged |-> TRUE]}
+    /\ UNCHANGED <<dial, won, t, state, settled, qad>>
 
 \* Anyone sends a probe without the tag from an address of its choosing.
 SpoofProbe(a) ==
     /\ state = "punching"
     /\ probes' = probes \cup {[src |-> a, tagged |-> FALSE]}
-    /\ UNCHANGED <<dial, won, t, state, settled>>
+    /\ UNCHANGED <<dial, won, t, state, settled, qad>>
 
 \* The client reads a probe: a tagged one from an address it does not
 \* dial yet is a candidate, dialled within the cap, before the bound and
@@ -106,14 +135,14 @@ Learn(p) ==
           /\ (Cardinality(Dialled) < MaxCands \/ Mutant = "no-cap")
        THEN dial' = [dial EXCEPT ![p.src] = "dialing"]
        ELSE UNCHANGED dial
-    /\ UNCHANGED <<won, t, state, settled>>
+    /\ UNCHANGED <<won, t, state, settled, qad>>
 
 \* A dial's handshake passes the certificate check.
 DialUp(a) ==
     /\ dial[a] = "dialing"
     /\ (a \in Peer \/ (Mutant = "no-cert-check" /\ a \in Rogue))
     /\ dial' = [dial EXCEPT ![a] = "up"]
-    /\ UNCHANGED <<probes, won, t, state, settled>>
+    /\ UNCHANGED <<probes, won, t, state, settled, qad>>
 
 \* A dial fails: someone else answered (refused), or the punch's
 \* contexts ended it: at the bound, or once a connection won (a LAN dial
@@ -123,7 +152,7 @@ DialFail(a) ==
     /\ (a \in Rogue \/ t = Bound \/ (won # None /\ ~(Grace /\ a \in Lan)))
     /\ ~(Mutant = "no-cert-check" /\ a \in Rogue)
     /\ dial' = [dial EXCEPT ![a] = "failed"]
-    /\ UNCHANGED <<probes, won, t, state, settled>>
+    /\ UNCHANGED <<probes, won, t, state, settled, qad>>
 
 \* The first connection up is kept, and a LAN one replaces a non-LAN
 \* winner (the old winner is then a loser); the dials still running are
@@ -132,7 +161,7 @@ Win(a) ==
     /\ state = "punching" /\ dial[a] = "up" /\ a # won
     /\ (won = None \/ Beats(a))
     /\ won' = a
-    /\ UNCHANGED <<dial, probes, t, state, settled>>
+    /\ UNCHANGED <<dial, probes, t, state, settled, qad>>
 
 \* Another connection that came up is closed (not one that beats the
 \* winner: it wins instead). Mutant give-up-at-bound: at the bound with no winner,
@@ -142,7 +171,7 @@ CloseLoser(a) ==
     /\ ((won # None /\ ~Beats(a)) \/ (Mutant = "give-up-at-bound" /\ won = None /\ t = Bound))
     /\ Mutant # "keep-loser"
     /\ dial' = [dial EXCEPT ![a] = "closed"]
-    /\ UNCHANGED <<probes, won, t, state, settled>>
+    /\ UNCHANGED <<probes, won, t, state, settled, qad>>
 
 \* The grace ends (lanGrace after the non-LAN win). Assumed: a LAN
 \* handshake that will pass ends within it (a working LAN dial is not
@@ -151,7 +180,7 @@ Settle ==
     /\ Grace
     /\ \A a \in Lan \cap Reach : dial[a] # "dialing"
     /\ settled' = TRUE
-    /\ UNCHANGED <<dial, probes, won, t, state>>
+    /\ UNCHANGED <<dial, probes, won, t, state, qad>>
 
 \* The clock, until a winner (and through the grace). Assumed: a working
 \* path's handshake ends before the bound (no tick past a Reach dial).
@@ -160,7 +189,7 @@ Tick ==
     /\ \A a \in Reach : dial[a] # "dialing"
     /\ Mutant # "no-bound"
     /\ t' = t + 1
-    /\ UNCHANGED <<dial, probes, won, state, settled>>
+    /\ UNCHANGED <<dial, probes, won, state, settled, qad>>
 
 \* The punch returns: won (a LAN connection, or the grace ended), or at
 \* its bound; once no dial of it runs (mutant return-early: as soon as
@@ -170,11 +199,13 @@ Return ==
     /\ ((won # None /\ ~Grace) \/ t = Bound)
     /\ (Running = {} \/ Mutant = "return-early")
     /\ state' = "returned"
-    /\ UNCHANGED <<dial, probes, won, t, settled>>
+    /\ UNCHANGED <<dial, probes, won, t, settled, qad>>
 
 Next ==
     \/ \E a \in Prflx : AgentProbe(a)
     \/ \E a \in Spoofed : SpoofProbe(a)
+    \/ QADEnd
+    \/ \E a \in Trickled : AgentTrickle(a)
     \/ \E p \in probes : Learn(p)
     \/ \E a \in Addrs : DialUp(a) \/ DialFail(a) \/ Win(a) \/ CloseLoser(a)
     \/ Settle
@@ -198,9 +229,15 @@ TypeOK ==
     /\ t \in 0..Bound
     /\ state \in {"punching", "returned"}
     /\ settled \in BOOLEAN
+    /\ qad \in BOOLEAN
 
-\* A dialled address is an offered one or a tagged probe's source.
-OnlyTagged == Dialled \subseteq Offered \cup Prflx
+\* A dialled address is an offered one, a tagged probe's source or a
+\* trickled one.
+OnlyTagged == Dialled \subseteq Offered \cup Prflx \cup Trickled
+
+\* No dial waits for the address check: every offered candidate is
+\* dialled from the punch's start (trickle).
+NoWait == \A a \in Offered : dial[a] # "idle"
 
 DialBound == Cardinality(Dialled) <= MaxCands
 
@@ -231,4 +268,6 @@ W_RogueRefused == ~(\E a \in Rogue : dial[a] = "failed")
 W_LoserClosed == ~(\E a \in Addrs : dial[a] = "closed")
 W_LanReplaced == ~(state = "returned" /\ won \in Lan /\ \E a \in Addrs \ Lan : dial[a] = "closed")
 W_NonLanWon == ~(state = "returned" /\ won \in Peer \ Lan)
+W_TrickledWon == ~(state = "returned" /\ won \in Trickled)
+W_LanBeforeQAD == ~(state = "returned" /\ won \in Lan /\ ~qad)
 =============================================================================

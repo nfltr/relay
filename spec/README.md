@@ -1058,7 +1058,23 @@ off-path untagged sender; three dials at most; a bound of two ticks).
 | `OneConnection` | once the punch returned, its only connection is the kept one | `return-early` |
 | `DirectIfWorks` | a punch that returned relayed dialled no working candidate and closed no connection | `give-up-at-bound` |
 | `PreferLan` | a punch that returned on a non-LAN connection dialled no working LAN candidate | `first-wins` |
+| `NoWait` | every offered candidate is dialled from the punch's start, whatever the address check (trickle) | `wait-qad` |
 | `Ends` (liveness) | every punch returns | `no-bound`, `keep-loser` |
+
+Trickle (lane TRICKLE, 2026-11-18; nfltr
+`docs/decisions/direct-paths-2026-11-11.md` "Trickle"; ICE trickle, RFC
+8838): neither end waits for its relay's address check (QAD, up to 3 s
+when the relay's UDP port is silent) or its port mapping (up to 500 ms)
+before its first candidates line: the host candidates go at once, and a
+reflexive or mapped candidate follows on the control session as one more
+`{"candidates":[...]}` line when it arrives. The client reads the agent's
+later lines as learned candidates (`AgentTrickle`, then `Learn`: the
+control session's TLS authenticates them as a probe's tag does); the
+agent probes the client's later ones. `QADEnd` is the agent's check
+ending (answered or timed out, not fair: it may never); the bug before
+it is mutant `wait-qad` (the offered candidates dialled only once the
+check ended: a silent port held each anonymous session's first byte for
+about 3 s).
 
 `PreferLan` holds only for a LAN path whose handshake ends within the
 grace (`Reach`): a LAN path that connects after the grace, or after the
@@ -1076,12 +1092,15 @@ unchanged and the model with it.
 
 Witnesses (each violated): `W_PrflxWon`, `W_OfferedWon`, `W_Relayed`,
 `W_RogueRefused`, `W_LoserClosed`, `W_LanReplaced` (a LAN connection
-replaced a non-LAN winner), `W_NonLanWon`. TLC 2026-11-16 (`-coverage 1`):
-1,304 distinct states, depth 16, every action taken.
+replaced a non-LAN winner), `W_NonLanWon`, `W_TrickledWon` (the trickled
+reflexive candidate won), `W_LanBeforeQAD` (a LAN path won while the
+address check still ran). TLC 2026-11-18 (`-coverage 1`): 6,264 distinct
+states, depth 18, every action taken.
 
 | action | Go |
 |---|---|
 | `AgentProbe` | `directServer.control`: `DirectEndpoint.probe` with `probeTag` |
+| `QADEnd`, `AgentTrickle` | `DirectEndpoint.gather` (the slow sources), `sendLate` at the agent; `DirectSession.punch`'s `readLate` feeding the learned channel |
 | `SpoofProbe`, `Learn` | `DirectEndpoint.readProbes` (the tag's waiter), `DirectEndpoint.punch` (the learned case) |
 | `DialUp`, `DialFail` | `quiclink.Punch` per dial, `punchTLS`'s certificate check |
 | `Win`, `CloseLoser`, `Settle`, `Return`, `Tick` | `DirectEndpoint.punch` (first wins, a LAN one replaces a non-LAN winner, the others closed, the LAN grace, returns once no dial runs), `dialPair`'s 5 s bound |
