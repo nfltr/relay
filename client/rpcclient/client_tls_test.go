@@ -22,11 +22,11 @@ import (
 	"google.golang.org/grpc/peer"
 )
 
-// certRelay records the client certificate and API key an AgentTunnel came
+// certRelay records the client certificate and token an AgentTunnel came
 // with.
 type certRelay struct {
 	registeringRelay
-	got chan [2]string // [client certificate CN, x-api-key]
+	got chan [2]string // [client certificate CN, x-nfltr-token]
 }
 
 func (r *certRelay) AgentTunnel(s grpc.BidiStreamingServer[pb.TunnelFrame, pb.TunnelFrame]) error {
@@ -36,8 +36,8 @@ func (r *certRelay) AgentTunnel(s grpc.BidiStreamingServer[pb.TunnelFrame, pb.Tu
 			cn = ti.State.PeerCertificates[0].Subject.CommonName
 		}
 	}
-	if md, ok := grpcmd.FromIncomingContext(s.Context()); ok && len(md.Get("x-api-key")) > 0 {
-		key = md.Get("x-api-key")[0]
+	if md, ok := grpcmd.FromIncomingContext(s.Context()); ok && len(md.Get("x-nfltr-token")) > 0 {
+		key = md.Get("x-nfltr-token")[0]
 	}
 	r.got <- [2]string{cn, key}
 	return r.registeringRelay.AgentTunnel(s)
@@ -62,7 +62,7 @@ func selfSigned(t *testing.T, cn string) tls.Certificate {
 
 // WithClientTLS dials over TLS with the caller's configuration (a machine
 // certificate from GetClientCertificate, read at each handshake) and
-// authenticates by the certificate alone: no API key is sent.
+// authenticates by the certificate alone: no token is sent.
 func TestDialWithClientTLSPresentsTheCertificate(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -86,6 +86,6 @@ func TestDialWithClientTLSPresentsTheCertificate(t *testing.T) {
 	}
 	defer a.Close() //nolint:errcheck
 	if got := <-r.got; got != [2]string{"m-1", ""} {
-		t.Fatalf("relay saw (certificate CN, API key) = %q, want the certificate and no key", got)
+		t.Fatalf("relay saw (certificate CN, token) = %q, want the certificate and no key", got)
 	}
 }

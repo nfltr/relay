@@ -544,15 +544,15 @@ func (a *agent) connectOnce(ctx context.Context, since time.Time, attempts int) 
 		return nil, nil, nil, nil, err
 	}
 
-	// Attach outgoing metadata: API key + advertised route names + labels + capabilities.
+	// Attach outgoing metadata: token + advertised route names + labels + capabilities.
 	md := metadata.Pairs(a.metadata...)
-	key, err := a.apiKey()
+	key, err := a.token()
 	if err != nil {
 		_ = conn.Close()
 		return nil, nil, nil, nil, err
 	}
 	if key != "" {
-		md.Set("x-api-key", key)
+		md.Set("x-nfltr-token", key)
 	}
 	if a.name != "" {
 		md.Set("x-agent-id", a.name)
@@ -673,19 +673,19 @@ func isRetryableError(err error) bool {
 	return false
 }
 
-// apiKey is the credential the agent presents now: APIKeyFile's content,
-// read now, else APIKey.
-func (a *agent) apiKey() (string, error) {
-	if a.cfg.APIKeyFile == "" {
-		return a.cfg.APIKey, nil
+// token is the credential the agent presents now: TokenFile's content,
+// read now, else Token.
+func (a *agent) token() (string, error) {
+	if a.cfg.TokenFile == "" {
+		return a.cfg.Token, nil
 	}
-	b, err := os.ReadFile(a.cfg.APIKeyFile)
+	b, err := os.ReadFile(a.cfg.TokenFile)
 	if err != nil {
 		return "", fmt.Errorf("agent: read the credential file: %w", err)
 	}
 	key := strings.TrimSpace(string(b))
 	if key == "" || strings.ContainsAny(key, " \t\r\n") {
-		return "", fmt.Errorf("agent: %s: want one credential", a.cfg.APIKeyFile)
+		return "", fmt.Errorf("agent: %s: want one credential", a.cfg.TokenFile)
 	}
 	return key, nil
 }

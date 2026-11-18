@@ -5,6 +5,7 @@ package nfnet_test
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log"
@@ -21,7 +22,7 @@ import (
 func Example_echo() {
 	cfg := nfnet.Config{
 		Relay: "nfltr.xyz:443", AgentRelay: "grpc.nfltr.xyz:443",
-		Agent: "echo", APIKey: os.Getenv("NFLTR_API_KEY"),
+		Agent: "echo", ClientCert: machineCert,
 	}
 	if len(os.Args) < 2 {
 		return
@@ -85,4 +86,11 @@ func ExampleCodeOf() {
 	// Output:
 	// 1 usage
 	// true
+}
+
+// machineCert is this machine's certificate (nfltr config login, or
+// machinecert): here a PEM pair beside the program.
+func machineCert() (*tls.Certificate, error) {
+	c, err := tls.LoadX509KeyPair("machine.crt", "machine.key")
+	return &c, err
 }

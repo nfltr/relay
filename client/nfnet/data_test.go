@@ -174,7 +174,7 @@ func TestResetErrorTypesTheCut(t *testing.T) {
 func TestClientCertReachesTheRelay(t *testing.T) {
 	r := newDataRelay(t, true)
 	cfg := r.config(true)
-	cfg.APIKey, cfg.ClientCert = "", r.org.cli.Certificate
+	cfg.Token, cfg.ClientCert = "", r.org.cli.Certificate
 	c, err := dial(t, dialer(t, cfg), web("echo"), DialOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,7 @@ func TestClientCertReachesTheRelay(t *testing.T) {
 	_ = c.Close()
 
 	refusing := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.TLS == nil || len(req.TLS.PeerCertificates) == 0 || req.Header.Get("X-API-Key") != "" {
+		if req.TLS == nil || len(req.TLS.PeerCertificates) == 0 || req.Header.Get("Authorization") != "" {
 			t.Errorf("the relay got no certificate, or a key")
 		}
 		http.Error(w, "machine revoked", http.StatusUnauthorized)

@@ -30,7 +30,7 @@ func TestListenUsage(t *testing.T) {
 		"org without groups":  {func(c *Config) { c.Org = r.web }, "chat", ListenOptions{}},
 		"no relay":            {func(c *Config) { c.Relay = "" }, "chat", ListenOptions{}},
 	} {
-		cfg := Config{Relay: "127.0.0.1:1", Agent: "chat", APIKey: "key", Plaintext: true}
+		cfg := Config{Relay: "127.0.0.1:1", Agent: "chat", Token: "key", Plaintext: true}
 		tc.cfg(&cfg)
 		l, err := Listen(t.Context(), cfg, tc.svc, tc.o)
 		if l != nil {
@@ -40,7 +40,7 @@ func TestListenUsage(t *testing.T) {
 	}
 }
 
-// An address served with no credential (no APIKey, no ClientCert) is
+// An address served with no credential (no Token, no ClientCert) is
 // served anonymously: its answer signs a1 beside d1, so it needs direct
 // paths (DirectOff: CodeUsage, a udp service too, whose direct paths are
 // not served yet); with a credential it is not (nfltr
@@ -56,7 +56,7 @@ func TestListenAnonymous(t *testing.T) {
 		t.Fatalf("no credential: %v, anonymous %v", err, svc.NF1 != nil && svc.NF1.Anonymous())
 	}
 	keyed := anon
-	keyed.APIKey = "key"
+	keyed.Token = "key"
 	if svc, err := listenService(keyed, "chat", ListenOptions{Address: addr, Direct: DirectOn}); err != nil || svc.NF1.Anonymous() {
 		t.Fatalf("with a key: %v, anonymous %v", err, svc.NF1.Anonymous())
 	}

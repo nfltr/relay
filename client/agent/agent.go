@@ -18,8 +18,7 @@
 //	a := agent.New(agent.Config{
 //	    ServerAddr: "rpc.example.com:443",
 //	    AgentID:      "my-service-01",
-//	    APIKey:     os.Getenv("NFLTR_API_KEY"),
-//	    TLS:        true,
+//	    TLSConfig:  machineTLS, // this machine's certificate (machinecert)
 //	    Routes: []agent.Route{
 //	        {Backend: "http://localhost:8080"}, // default
 //	    },
@@ -62,7 +61,7 @@ type Route struct {
 }
 
 // Config holds all parameters needed to connect to the relay.
-// All fields have safe zero values; only AgentID and one of (APIKey / TLSConfig)
+// All fields have safe zero values; only AgentID and one of (Token / TLSConfig)
 // are required for a minimal deployment.
 type Config struct {
 	// ServerAddr is the host:port of the relay's gRPC endpoint.
@@ -80,17 +79,19 @@ type Config struct {
 	// Default (nil): [{Backend: "http://localhost:8080"}]
 	Routes []Route
 
-	// APIKey is the plaintext API key sent in gRPC metadata (x-api-key).
-	// Use one of APIKey or TLSConfig (mTLS); both may be set simultaneously.
-	APIKey string
+	// Token is a token a provider of the relay authenticates (an OIDC
+	// token, a custom provider's), sent in gRPC metadata (x-nfltr-token).
+	// A machine uses TLSConfig with its machine certificate instead.
+	// Use one of Token or TLSConfig (mTLS); both may be set simultaneously.
+	Token string
 
-	// APIKeyFile, when set, names a file holding the credential, read again
-	// at every connection attempt and used instead of APIKey: a short-lived
+	// TokenFile, when set, names a file holding the credential, read again
+	// at every connection attempt and used instead of Token: a short-lived
 	// token another process rewrites before it expires (an OIDC token from
 	// the organization's IdP) is taken on the next reconnect after the relay
 	// ended the connection at the old token's expiry. The agent never
 	// refreshes a token itself.
-	APIKeyFile string
+	TokenFile string
 
 	// TLS enables one-way TLS for the gRPC connection when set to true.
 	// Ignored when TLSConfig is provided.

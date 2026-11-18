@@ -20,9 +20,9 @@ func TestAgentCloseReturnsInEveryState(t *testing.T) {
 		name  string
 		setup func(t *testing.T) Agent
 	}{
-		{"never connected", func(*testing.T) Agent { return New(Config{AgentID: "x", APIKey: "k", Logger: quiet}) }},
+		{"never connected", func(*testing.T) Agent { return New(Config{AgentID: "x", Token: "k", Logger: quiet}) }},
 		{"connect failed: unreachable", func(t *testing.T) Agent {
-			a := New(Config{ServerAddr: "127.0.0.1:1", AgentID: "x", APIKey: "k", Retries: 1, RetryWait: 1, Logger: quiet})
+			a := New(Config{ServerAddr: "127.0.0.1:1", AgentID: "x", Token: "k", Retries: 1, RetryWait: 1, Logger: quiet})
 			if a.Connect(context.Background()) == nil {
 				t.Fatal("Connect to nothing succeeded")
 			}
@@ -32,7 +32,7 @@ func TestAgentCloseReturnsInEveryState(t *testing.T) {
 			f := &fakeRelay{connected: make(chan struct{}, 4)}
 			addr, stop := startFakeRelay(t, "127.0.0.1:0", f)
 			t.Cleanup(stop)
-			a := New(Config{ServerAddr: addr, AgentID: "x", APIKey: "k", Retries: 1, Logger: quiet},
+			a := New(Config{ServerAddr: addr, AgentID: "x", Token: "k", Retries: 1, Logger: quiet},
 				WithConnected(func(Connection) (*Tunnel, error) { return nil, errors.New("no") }))
 			if a.Connect(context.Background()) == nil {
 				t.Fatal("Connect succeeded")
@@ -43,7 +43,7 @@ func TestAgentCloseReturnsInEveryState(t *testing.T) {
 			f := &fakeRelay{connected: make(chan struct{}, 4)}
 			addr, stop := startFakeRelay(t, "127.0.0.1:0", f)
 			t.Cleanup(stop)
-			a := New(Config{ServerAddr: addr, AgentID: "x", APIKey: "k", Retries: 1, Logger: quiet})
+			a := New(Config{ServerAddr: addr, AgentID: "x", Token: "k", Retries: 1, Logger: quiet})
 			if err := a.Connect(context.Background()); err != nil {
 				t.Fatal(err)
 			}
@@ -54,7 +54,7 @@ func TestAgentCloseReturnsInEveryState(t *testing.T) {
 			f := &fakeRelay{connected: make(chan struct{}, 4)}
 			addr, stop := startFakeRelay(t, "127.0.0.1:0", f)
 			t.Cleanup(stop)
-			a := New(Config{ServerAddr: addr, AgentID: "x", APIKey: "k", Retries: 1, Logger: quiet})
+			a := New(Config{ServerAddr: addr, AgentID: "x", Token: "k", Retries: 1, Logger: quiet})
 			if err := a.Connect(context.Background()); err != nil {
 				t.Fatal(err)
 			}

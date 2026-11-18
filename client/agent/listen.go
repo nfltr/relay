@@ -14,7 +14,7 @@ import (
 // to serve with http.Serve:
 //
 //	ln, err := agent.Listen(ctx, agent.Config{
-//	    ServerAddr: "rpc.example.com:443", AgentID: "my-app", APIKey: key, TLS: true,
+//	    ServerAddr: "rpc.example.com:443", AgentID: "my-app", TLSConfig: machineTLS,
 //	})
 //	if err != nil {
 //	    log.Fatal(err)

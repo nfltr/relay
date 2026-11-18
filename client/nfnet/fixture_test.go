@@ -87,7 +87,7 @@ func newDataRelay(t *testing.T, useTLS bool) *dataRelay {
 	t.Helper()
 	r := &dataRelay{late: make(chan int64, 8), muxes: make(chan *dataplane.Mux, 8), opens: make(chan *pb.TCPData, 64), org: newRelayOrg(t)}
 	r.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if req.Header.Get("X-API-Key") != "key" && (req.TLS == nil || len(req.TLS.PeerCertificates) == 0) {
+		if req.Header.Get("Authorization") != "Bearer key" && (req.TLS == nil || len(req.TLS.PeerCertificates) == 0) {
 			http.Error(w, "authentication required", http.StatusUnauthorized)
 			return
 		}
@@ -145,7 +145,7 @@ func (r *dataRelay) addr() string { return r.srv.Listener.Addr().String() }
 
 // config is a Config for the stand-in: key "key", the relay pinned.
 func (r *dataRelay) config(useTLS bool) Config {
-	cfg := Config{Relay: r.addr(), APIKey: "key", Plaintext: !useTLS}
+	cfg := Config{Relay: r.addr(), Token: "key", Plaintext: !useTLS}
 	if useTLS {
 		cfg.RelayTLS = relaytrust.WithPin(&tls.Config{ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12}, relaytrust.Fingerprint(r.srv.Certificate().Raw))
 	}

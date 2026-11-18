@@ -10,7 +10,7 @@ import (
 )
 
 // OutgoingMetadata is a small builder for gRPC outgoing request metadata. It
-// lets CLI callers attach headers (API keys, agent identity, labels, etc.) to
+// lets CLI callers attach headers (tokens, agent identity, labels, etc.) to
 // a context without importing google.golang.org/grpc/metadata directly.
 type OutgoingMetadata struct {
 	md metadata.MD

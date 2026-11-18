@@ -28,10 +28,10 @@ type Config struct {
 	// Agent is Listen's agent name (a DNS label): its sessions' targets
 	// are <agent>/<service>. Required by Listen, unused by Dial.
 	Agent string
-	// APIKey authenticates to the relay; ClientCert instead presents an
+	// Token authenticates to the relay; ClientCert instead presents an
 	// account machine certificate, read per handshake (a renewal swaps it).
 	// One of them, never both (NewDialer refuses both).
-	APIKey     string
+	Token      string
 	ClientCert func() (*tls.Certificate, error)
 	// Org is this machine's organisation identity (orgid.Load): set, every
 	// session is end-to-end encrypted in organisation mode
@@ -82,8 +82,8 @@ type DialOptions struct {
 
 func (c Config) check() error {
 	switch {
-	case c.APIKey != "" && c.ClientCert != nil:
-		return usage("Config: APIKey and ClientCert both set: the relay takes one credential")
+	case c.Token != "" && c.ClientCert != nil:
+		return usage("Config: Token and ClientCert both set: the relay takes one credential")
 	case c.Plaintext && c.ClientCert != nil:
 		return usage("Config: a ClientCert needs TLS to the relay (Plaintext set)")
 	}

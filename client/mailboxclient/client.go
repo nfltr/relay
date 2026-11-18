@@ -69,10 +69,12 @@ const (
 	ShareMember = "member"
 )
 
-// Client calls the relay with an account credential.
+// Client calls the relay with a credential: a machine certificate
+// through HTTP's TLS config, or Token, a bearer token a provider of the
+// relay authenticates (e.g. OIDC).
 type Client struct {
 	ProxyURL string
-	APIKey   string
+	Token    string
 	// Share, when set (ShareHolder, ShareMember), declares every call's
 	// mailbox shared: a broadcast (its holder appends, every machine of
 	// the account pulls) or a drop box (every machine appends, its holder
@@ -89,7 +91,7 @@ type SenderKind int
 
 const (
 	SenderUnspecified   = SenderKind(mailboxv1.SenderKind_SENDER_KIND_UNSPECIFIED)
-	SenderAPIKey        = SenderKind(mailboxv1.SenderKind_SENDER_KIND_API_KEY)
+	SenderMachine       = SenderKind(mailboxv1.SenderKind_SENDER_KIND_MACHINE)
 	SenderSession       = SenderKind(mailboxv1.SenderKind_SENDER_KIND_SESSION)
 	SenderWebhook       = SenderKind(mailboxv1.SenderKind_SENDER_KIND_WEBHOOK)
 	SenderLoopbackTrust = SenderKind(mailboxv1.SenderKind_SENDER_KIND_LOOPBACK_TRUST)
@@ -168,8 +170,8 @@ func (c Client) call(ctx context.Context, method, path string, in, out proto.Mes
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if c.APIKey != "" {
-		req.Header.Set("X-Api-Key", c.APIKey)
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	if c.Share != "" {
 		req.Header.Set(shareHeader, c.Share)

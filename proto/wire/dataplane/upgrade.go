@@ -17,9 +17,10 @@ import (
 )
 
 // A client (tcp-connect) turns a TLS connection to the relay's HTTP port
-// into a data connection with an HTTP/1.1 upgrade: the API key in the
-// request is its credential, and a link hello (version 2, no credential:
-// the request carried it) follows the 101. Clients before nfltr v2.0.0
+// into a data connection with an HTTP/1.1 upgrade: the request's bearer
+// token, else the TLS client certificate, is its credential, and a link
+// hello (version 2, no credential: the request carried it) follows the
+// 101. Clients before nfltr v2.0.0
 // asked for "nfdp/1" (link version 1 without a hello), which a relay of
 // this package answers with 426 (OldUpgradeToken).
 const (
@@ -63,12 +64,12 @@ func ParseWindow(s string) (int, error) {
 const E2EEPolicyHeader = "X-Nfltr-E2EE-Policy"
 
 // Upgrade asks the relay at host (nc: TLS done, or plain TCP to a
-// plaintext relay) to make nc a data connection, with apiKey as the
+// plaintext relay) to make nc a data connection, with token (a bearer; "": the TLS client certificate) as the
 // credential and window as this side's window, and binds the link; ctx
 // bounds the whole exchange. It returns the relay's 101 header too
 // (AnswerHeader, E2EEPolicyHeader).
-func Upgrade(ctx context.Context, nc net.Conn, host, apiKey string, window int) (*Mux, http.Header, error) {
-	hdr, err := RequestUpgrade(nc, host, apiKey)
+func Upgrade(ctx context.Context, nc net.Conn, host, token string, window int) (*Mux, http.Header, error) {
+	hdr, err := RequestUpgrade(nc, host, token)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -84,11 +85,14 @@ func Upgrade(ctx context.Context, nc net.Conn, host, apiKey string, window int) 
 // with ClientConfig: a link.Pool's Dial (one data connection more when one
 // carries its most sessions) does this, the Pool the link. nc's deadline
 // bounds it.
-func RequestUpgrade(nc net.Conn, host, apiKey string) (http.Header, error) {
+func RequestUpgrade(nc net.Conn, host, token string) (http.Header, error) {
 	req := "GET " + UpgradePath + " HTTP/1.1\r\nHost: " + host +
 		"\r\nConnection: Upgrade\r\nUpgrade: " + UpgradeToken +
-		"\r\nX-API-Key: " + apiKey +
-		"\r\n" + agentwire.GenerationKey + ": " + strconv.Itoa(agentwire.Generation) + "\r\n\r\n"
+		"\r\n" + agentwire.GenerationKey + ": " + strconv.Itoa(agentwire.Generation) + "\r\n"
+	if token != "" {
+		req += "Authorization: Bearer " + token + "\r\n"
+	}
+	req += "\r\n"
 	if _, err := nc.Write([]byte(req)); err != nil {
 		return nil, err
 	}

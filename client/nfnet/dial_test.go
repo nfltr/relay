@@ -129,7 +129,7 @@ func TestRelayTunnelsTypedOpens(t *testing.T) {
 		t.Fatalf("a draining relay: %+v, want Unopened and no reason", e)
 	}
 	bad := r.config(true)
-	bad.APIKey = "bad"
+	bad.Token = "bad"
 	_, err = dial(t, dialer(t, bad), web("echo"), DialOptions{})
 	wantCode(t, "refused key", err, CodeAuth, "")
 	if p, err := d.E2EEPolicy(context.Background()); err != nil || p != "allow" {
@@ -405,7 +405,7 @@ func TestDialHoldsUntilContext(t *testing.T) {
 // so is a certificate to a plaintext relay.
 func TestConfigRefusesKeyAndCert(t *testing.T) {
 	cert := func() (*tls.Certificate, error) { return &tls.Certificate{}, nil }
-	for _, cfg := range []Config{{APIKey: "k", ClientCert: cert}, {ClientCert: cert, Plaintext: true}} {
+	for _, cfg := range []Config{{Token: "k", ClientCert: cert}, {ClientCert: cert, Plaintext: true}} {
 		if _, err := NewDialer(cfg); CodeOf(err) != CodeUsage {
 			t.Errorf("%+v: %v, want usage", cfg, err)
 		}

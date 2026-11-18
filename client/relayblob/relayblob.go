@@ -33,8 +33,10 @@ const Attempts = 5
 type Client struct {
 	// BaseURL is the relay's HTTP base (https://host[:port]).
 	BaseURL string
-	// APIKey is the owner credential.
-	APIKey       string
+	// Token, when set, is a bearer token a provider of the relay
+	// authenticates (e.g. OIDC); a machine presents its certificate through
+	// HTTP's TLS config instead.
+	Token        string
 	HTTP         *http.Client
 	PartBytes    int64
 	StallTimeout time.Duration
@@ -96,8 +98,8 @@ func (c *Client) newRequest(ctx context.Context, method, url string, body io.Rea
 	if err != nil {
 		return nil, err
 	}
-	if c.APIKey != "" {
-		req.Header.Set("X-Api-Key", c.APIKey)
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	return req, nil
 }

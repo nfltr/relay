@@ -146,7 +146,7 @@ func TestUpgrade(t *testing.T) {
 		t.Fatalf("101 header %v: want the answer and policy headers", hdr)
 	}
 	req := <-reqs
-	if !IsUpgrade(req) || IsOldUpgrade(req) || req.URL.Path != UpgradePath || req.Header.Get("X-API-Key") != "key" ||
+	if !IsUpgrade(req) || IsOldUpgrade(req) || req.URL.Path != UpgradePath || req.Header.Get("Authorization") != "Bearer key" ||
 		agentwire.ParseGeneration(req.Header.Values(agentwire.GenerationKey)) != agentwire.Generation {
 		t.Fatalf("upgrade request %s %s %v", req.Method, req.URL, req.Header)
 	}

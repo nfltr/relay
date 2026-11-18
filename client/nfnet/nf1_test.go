@@ -189,7 +189,7 @@ func TestDirectStatsCountNF1Sessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d := dialer(t, Config{Relay: "relay.example:443", APIKey: "k"})
+	d := dialer(t, Config{Relay: "relay.example:443", Token: "k"})
 	if _, ok := d.DirectStats(); ok {
 		t.Fatal("stats before any session asked for a direct path")
 	}

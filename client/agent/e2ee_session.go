@@ -15,13 +15,11 @@ import (
 	"net/netip"
 	"net/textproto"
 	"net/url"
-	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nfltr/relay/client/internal/bytequeue"
-	"github.com/nfltr/relay/proto/wire/agentwire"
 	"golang.org/x/net/http/httpguts"
 )
 
@@ -383,14 +381,5 @@ func setEdgeForwarded(h http.Header, host string, client netip.Addr) {
 	if client.IsValid() {
 		h.Set("X-Forwarded-For", client.String())
 		h.Set("X-Real-Ip", client.String())
-	}
-	// A relay's key is for the relay, never a service: removed here as the
-	// relay removes it on the paths it reads.
-	if vals := h["Authorization"]; slices.ContainsFunc(vals, agentwire.RelayKeyAuthorization) {
-		if vals = slices.DeleteFunc(slices.Clone(vals), agentwire.RelayKeyAuthorization); len(vals) > 0 {
-			h["Authorization"] = vals
-		} else {
-			h.Del("Authorization")
-		}
 	}
 }

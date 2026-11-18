@@ -73,7 +73,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "bad body", http.StatusBadRequest)
 			return
 		}
-		reply(&mailboxv1.AppendMessageResponse{Seq: s.Put(name, mailboxv1.SenderKind_SENDER_KIND_API_KEY, s.Owner, in.GetPayload()), Owner: s.Owner})
+		reply(&mailboxv1.AppendMessageResponse{Seq: s.Put(name, mailboxv1.SenderKind_SENDER_KIND_MACHINE, s.Owner, in.GetPayload()), Owner: s.Owner})
 	case "messages:pull":
 		var in mailboxv1.PullMessagesRequest
 		_ = protojson.Unmarshal(body, &in)

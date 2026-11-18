@@ -63,7 +63,7 @@ func TestDialReturnsOnceTheRelayRegisteredTheAgent(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	r := &registeringRelay{delay: 300 * time.Millisecond}
-	a, err := Dial(ctx, serveRelay(t, r), WithAgentID("x"), WithAPIKey("k"), WithTLS(false))
+	a, err := Dial(ctx, serveRelay(t, r), WithAgentID("x"), WithToken("k"), WithTLS(false))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +72,7 @@ func TestDialReturnsOnceTheRelayRegisteredTheAgent(t *testing.T) {
 		t.Fatal("Dial returned before the relay registered the agent")
 	}
 
-	_, err = Dial(ctx, serveRelay(t, &registeringRelay{refuse: true}), WithAgentID("x"), WithAPIKey("k"), WithTLS(false))
+	_, err = Dial(ctx, serveRelay(t, &registeringRelay{refuse: true}), WithAgentID("x"), WithToken("k"), WithTLS(false))
 	if FatalClass(err) != FatalAuth {
 		t.Fatalf("refused Dial: err = %v, want FatalAuth", err)
 	}

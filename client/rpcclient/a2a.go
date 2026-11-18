@@ -16,7 +16,7 @@
 //
 // Client side (initiating calls):
 //
-//	agent, _ := rpcclient.Dial(ctx, "relay:9090", rpcclient.WithAgentID("agent-a"), rpcclient.WithAPIKey(key))
+//	agent, _ := rpcclient.Dial(ctx, "relay:9090", rpcclient.WithAgentID("agent-a"), rpcclient.WithToken(key))
 //	defer agent.Close()
 //
 //	// Unary call
@@ -34,7 +34,7 @@
 //
 // Server side (handling incoming calls):
 //
-//	agent, _ := rpcclient.Dial(ctx, "relay:9090", rpcclient.WithAgentID("agent-b"), rpcclient.WithAPIKey(key))
+//	agent, _ := rpcclient.Dial(ctx, "relay:9090", rpcclient.WithAgentID("agent-b"), rpcclient.WithToken(key))
 //	agent.Handle(func(stream rpcclient.ServerStream) error {
 //	    for {
 //	        data, err := stream.Recv()
@@ -302,16 +302,16 @@ func Dial(ctx context.Context, target string, opts ...DialOption) (*Agent, error
 	// ── Authentication ──────────────────────────────────────────────────
 	var streamCtx context.Context
 	switch {
-	case do.apiKey != "":
-		// Preferred: server-generated API key. The server derives the AgentID
+	case do.token != "":
+		// A provider's token. The server derives the AgentID
 		// from its key store — the agent cannot forge its own identity.
-		streamCtx = grpcmd.NewOutgoingContext(ctx, grpcmd.Pairs("x-api-key", do.apiKey))
+		streamCtx = grpcmd.NewOutgoingContext(ctx, grpcmd.Pairs("x-nfltr-token", do.token))
 	case do.clientCert != "" || do.clientTLS != nil:
 		// mTLS: the TLS handshake already authenticates the agent.
 		streamCtx = ctx
 	default:
 		_ = conn.Close()
-		return nil, fmt.Errorf("rpcclient: no authentication configured — use WithAPIKey() or WithClientCert()")
+		return nil, fmt.Errorf("rpcclient: no authentication configured — use WithToken() or WithClientCert()")
 	}
 
 	// ── Fleet Labels ────────────────────────────────────────────────────

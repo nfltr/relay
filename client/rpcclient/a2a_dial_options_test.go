@@ -10,15 +10,15 @@ import (
 	"google.golang.org/grpc/keepalive"
 )
 
-// TestDial_RequiresAPIKeyOrClientCert: Dial authenticates only with an API
-// key (x-api-key) or a client certificate, the two credentials the relay's
+// TestDial_RequiresTokenOrClientCert: Dial authenticates only with a
+// token (x-nfltr-token) or a client certificate, the two credentials the relay's
 // gRPC port reads; anything else is refused before a stream opens.
-func TestDial_RequiresAPIKeyOrClientCert(t *testing.T) {
+func TestDial_RequiresTokenOrClientCert(t *testing.T) {
 	_, err := Dial(t.Context(), "127.0.0.1:1", WithAgentID("agent-a"))
 	if err == nil {
 		t.Fatal("Dial without credentials succeeded")
 	}
-	want := "rpcclient: no authentication configured — use WithAPIKey() or WithClientCert()"
+	want := "rpcclient: no authentication configured — use WithToken() or WithClientCert()"
 	if err.Error() != want {
 		t.Fatalf("Dial error = %q, want %q", err, want)
 	}

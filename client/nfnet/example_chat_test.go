@@ -20,7 +20,7 @@ import (
 // other; lines from stdin go to the peer, the peer's to stdout. On a
 // machine enrolled in an organisation (nfltr org join) the session is end
 // to end encrypted by its certificates and only machines of group friends
-// may connect; otherwise it is a plain session of the account's key.
+// may connect; otherwise it is a plain session of the account.
 //
 //	chat serve                 # prints: dial me as chat/chat
 //	chat laptop.chat/chat      # from another machine of the account
@@ -28,7 +28,7 @@ import (
 func Example_chat() {
 	cfg := nfnet.Config{
 		Relay: "nfltr.xyz:443", AgentRelay: "grpc.nfltr.xyz:443",
-		Agent: "chat", APIKey: os.Getenv("NFLTR_API_KEY"),
+		Agent: "chat", ClientCert: machineCert,
 	}
 	if org, err := orgid.Load(orgid.DefaultDir()); err == nil {
 		cfg.Org = org // enrolled: end to end, by organisation certificate
@@ -74,7 +74,7 @@ func Example_chatAddress() {
 	if os.Args[1] == "serve-address" {
 		l, _, err := nf1.Mint("nfltr.xyz") // keep the key to serve the same address again (nf1.NewListener)
 		check(err)
-		cfg := nfnet.Config{Relay: "nfltr.xyz:443", AgentRelay: "grpc.nfltr.xyz:443", Agent: "chat", APIKey: os.Getenv("NFLTR_API_KEY")}
+		cfg := nfnet.Config{Relay: "nfltr.xyz:443", AgentRelay: "grpc.nfltr.xyz:443", Agent: "chat", ClientCert: machineCert}
 		ln, err := nfnet.Listen(ctx, cfg, "chat", nfnet.ListenOptions{Address: l})
 		check(err)
 		defer ln.Close() //nolint:errcheck

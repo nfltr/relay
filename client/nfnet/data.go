@@ -159,7 +159,7 @@ func (d *Dialer) dialData(ctx context.Context) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	key := d.cfg.APIKey
+	key := d.cfg.Token
 	if !d.cfg.Plaintext {
 		cfg := d.relayTLS(d.cfg.Relay)
 		if d.cfg.ClientCert != nil {

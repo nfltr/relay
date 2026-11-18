@@ -26,7 +26,7 @@ type agentOptions struct {
 
 type dialOptions struct {
 	agentID           string
-	apiKey            string                      // server-generated API key for agent authentication (preferred)
+	token             string                      // a token a provider of the relay authenticates (x-nfltr-token)
 	a2aE2EE           bool                        // transparently encrypt A2A payloads end to end
 	a2aPairingKeyFile string                      // with a2aE2EE: authenticate handshakes with this pairing key
 	a2aKeyring        A2AE2EEKeyring              // with a2aE2EE: authenticate handshakes with these keys
@@ -48,14 +48,15 @@ func WithAgentID(agentID string) DialOption {
 	return func(o *dialOptions) { o.agentID = agentID }
 }
 
-// WithAPIKey provides a server-generated API key for agent authentication.
+// WithToken provides a token a provider of the relay authenticates (an
+// OIDC token, a custom provider's); a machine uses WithClientCert.
 // This is the preferred auth method. The server derives the agent's AgentID
 // from its key store so the agent identity cannot be forged.
-// When set, the key is sent as "x-api-key" gRPC metadata. WithAgentID is
+// When set, the token is sent as "x-nfltr-token" gRPC metadata. WithAgentID is
 // still required for client-side logging/routing but the server-side
 // identity comes from the key store.
-func WithAPIKey(key string) DialOption {
-	return func(o *dialOptions) { o.apiKey = key }
+func WithToken(key string) DialOption {
+	return func(o *dialOptions) { o.token = key }
 }
 
 // WithA2AE2EE transparently encrypts A2A request and response payloads end
@@ -129,7 +130,7 @@ func WithTLS(enable bool) DialOption {
 // WithClientCert configures mTLS client authentication. When set, the agent
 // presents a client certificate to the server during the TLS handshake; a
 // relay running the mTLS identity provider (security.mtls) maps it to the
-// agent's owner and id by its configured rules, so no API key is needed.
+// agent's owner and id by its configured rules, so no token is needed.
 //
 // - certFile: path to PEM-encoded client certificate
 // - keyFile:  path to PEM-encoded client private key
@@ -146,7 +147,7 @@ func WithClientCert(certFile, keyFile, caFile string) DialOption {
 // WithClientTLS dials over TLS with cfg, which presents the agent's client
 // certificate (a machine certificate the caller renews: GetClientCertificate
 // is asked at each handshake) and verifies the relay. The certificate
-// authenticates the agent; with WithAPIKey as well the relay takes the key.
+// authenticates the agent; with WithToken as well the relay takes the key.
 func WithClientTLS(cfg *tls.Config) DialOption {
 	return func(o *dialOptions) {
 		o.clientTLS = cfg

@@ -29,8 +29,9 @@ The modules are versioned on their own: tags `proto/vX.Y.Z`,
 
 ## Quick start: expose a local service
 
-You need an account API key for the relay (for the hosted relay: sign in at
-nfltr.xyz and create one, or run `nfltr login`).
+You need a machine certificate for the relay: `nfltr config login` enrols
+this machine (or enrol from code with `client/machinecert`). Below,
+`machine` is that certificate as a `tls.Certificate`.
 
 ```sh
 go get github.com/nfltr/relay/client@latest
@@ -41,8 +42,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"log"
-	"os"
 
 	"github.com/nfltr/relay/client/agent"
 )
@@ -50,9 +51,8 @@ import (
 func main() {
 	a := agent.New(agent.Config{
 		ServerAddr: "grpc.nfltr.xyz:443",
-		TLS:        true,
 		AgentID:    "my-service-01",
-		APIKey:     os.Getenv("NFLTR_API_KEY"),
+		TLSConfig:  &tls.Config{Certificates: []tls.Certificate{machine}},
 		Routes:     []agent.Route{{Backend: "http://localhost:8080"}},
 	})
 	if err := a.Connect(context.Background()); err != nil {
@@ -81,9 +81,8 @@ backend, `agent.Listen` connects the agent and returns a `net.Listener`:
 ```go
 ln, err := agent.Listen(ctx, agent.Config{
 	ServerAddr: "grpc.nfltr.xyz:443",
-	TLS:        true,
 	AgentID:    "my-service-01",
-	APIKey:     os.Getenv("NFLTR_API_KEY"),
+	TLSConfig:  &tls.Config{Certificates: []tls.Certificate{machine}},
 })
 if err != nil {
 	log.Fatal(err)

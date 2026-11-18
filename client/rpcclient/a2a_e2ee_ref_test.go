@@ -94,7 +94,7 @@ func TestDialTakesTheRelaysRef(t *testing.T) {
 		if tc.told != "" {
 			r.header.Set(agentwire.AgentRefKey, tc.told)
 		}
-		a, err := Dial(ctx, serveRelay(t, r), WithAgentID("node-m1"), WithAPIKey("k"), WithTLS(false))
+		a, err := Dial(ctx, serveRelay(t, r), WithAgentID("node-m1"), WithToken("k"), WithTLS(false))
 		if err != nil {
 			t.Fatal(err)
 		}

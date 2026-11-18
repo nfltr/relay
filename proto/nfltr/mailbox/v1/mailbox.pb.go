@@ -40,8 +40,9 @@ type SenderKind int32
 const (
 	// Never set on a stored envelope.
 	SenderKind_SENDER_KIND_UNSPECIFIED SenderKind = 0
-	// An API key (or agent credential) of the owner's account.
-	SenderKind_SENDER_KIND_API_KEY SenderKind = 1
+	// A machine of the owner (its certificate or a token a provider
+	// authenticated as it). Wire number 1 is kept: stored envelopes keep it.
+	SenderKind_SENDER_KIND_MACHINE SenderKind = 1
 	// A signed-in dashboard (OAuth) session of the owner.
 	SenderKind_SENDER_KIND_SESSION SenderKind = 2
 	// A webhook of the owner; sender is the webhook id.
@@ -54,14 +55,14 @@ const (
 var (
 	SenderKind_name = map[int32]string{
 		0: "SENDER_KIND_UNSPECIFIED",
-		1: "SENDER_KIND_API_KEY",
+		1: "SENDER_KIND_MACHINE",
 		2: "SENDER_KIND_SESSION",
 		3: "SENDER_KIND_WEBHOOK",
 		4: "SENDER_KIND_LOOPBACK_TRUST",
 	}
 	SenderKind_value = map[string]int32{
 		"SENDER_KIND_UNSPECIFIED":    0,
-		"SENDER_KIND_API_KEY":        1,
+		"SENDER_KIND_MACHINE":        1,
 		"SENDER_KIND_SESSION":        2,
 		"SENDER_KIND_WEBHOOK":        3,
 		"SENDER_KIND_LOOPBACK_TRUST": 4,
@@ -1959,7 +1960,7 @@ const file_nfltr_mailbox_v1_mailbox_proto_rawDesc = "" +
 	"\n" +
 	"SenderKind\x12\x1b\n" +
 	"\x17SENDER_KIND_UNSPECIFIED\x10\x00\x12\x17\n" +
-	"\x13SENDER_KIND_API_KEY\x10\x01\x12\x17\n" +
+	"\x13SENDER_KIND_MACHINE\x10\x01\x12\x17\n" +
 	"\x13SENDER_KIND_SESSION\x10\x02\x12\x17\n" +
 	"\x13SENDER_KIND_WEBHOOK\x10\x03\x12\x1e\n" +
 	"\x1aSENDER_KIND_LOOPBACK_TRUST\x10\x04*]\n" +

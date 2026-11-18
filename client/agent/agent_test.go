@@ -315,7 +315,7 @@ func TestForwardRequest_404(t *testing.T) {
 
 func TestNew_AgentID(t *testing.T) {
 	t.Helper()
-	a := New(Config{AgentID: "test-agent-01", APIKey: "key"})
+	a := New(Config{AgentID: "test-agent-01", Token: "key"})
 	if a.AgentID() != "test-agent-01" {
 		t.Errorf("AgentID = %q", a.AgentID())
 	}
@@ -323,7 +323,7 @@ func TestNew_AgentID(t *testing.T) {
 
 func TestNew_DoneNotClosedBeforeConnect(t *testing.T) {
 	t.Helper()
-	a := New(Config{AgentID: "x", APIKey: "k"})
+	a := New(Config{AgentID: "x", Token: "k"})
 	select {
 	case <-a.Done():
 		t.Error("Done closed before Connect")
@@ -333,7 +333,7 @@ func TestNew_DoneNotClosedBeforeConnect(t *testing.T) {
 
 func TestAgent_Close_BeforeConnect(t *testing.T) {
 	t.Helper()
-	a := New(Config{AgentID: "x", APIKey: "k"})
+	a := New(Config{AgentID: "x", Token: "k"})
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -351,7 +351,7 @@ func TestAgent_Connect_Unreachable(t *testing.T) {
 	a := New(Config{
 		ServerAddr: "localhost:19999", // nothing listening
 		AgentID:    "agent-x",
-		APIKey:     "key",
+		Token:      "key",
 		Retries:    2,
 		RetryWait:  1, // 1s between retries so test stays fast
 	})
@@ -366,7 +366,7 @@ func TestAgent_Connect_Unreachable(t *testing.T) {
 
 func TestWithLabels_Option(t *testing.T) {
 	t.Helper()
-	a := New(Config{AgentID: "x", APIKey: "k"},
+	a := New(Config{AgentID: "x", Token: "k"},
 		WithLabels(map[string]string{"pool": "payments", "region": "us-east"}),
 	)
 	if a.AgentID() != "x" {

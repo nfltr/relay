@@ -75,8 +75,9 @@ service MailboxService {
 enum SenderKind {
   // Never set on a stored envelope.
   SENDER_KIND_UNSPECIFIED = 0;
-  // An API key (or agent credential) of the owner's account.
-  SENDER_KIND_API_KEY = 1;
+  // A machine of the owner (its certificate or a token a provider
+  // authenticated as it). Wire number 1 is kept: stored envelopes keep it.
+  SENDER_KIND_MACHINE = 1;
   // A signed-in dashboard (OAuth) session of the owner.
   SENDER_KIND_SESSION = 2;
   // A webhook of the owner; sender is the webhook id.

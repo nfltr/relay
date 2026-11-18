@@ -47,7 +47,7 @@ func TestCloseWaitsForStreamCalls(t *testing.T) {
 	defer srv.Stop()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	a, err := Dial(ctx, lis.Addr().String(), WithAgentID("held-send"), WithAPIKey("k"), WithTLS(false))
+	a, err := Dial(ctx, lis.Addr().String(), WithAgentID("held-send"), WithToken("k"), WithTLS(false))
 	if err != nil {
 		t.Fatal(err)
 	}

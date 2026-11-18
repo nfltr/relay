@@ -42,7 +42,7 @@ type ListenOptions struct {
 	Direct DirectMode
 	// Address serves the service under this capability address
 	// (nf1.Mint, nf1.NewListener): whoever holds the address may open it;
-	// no AllowGroups, Publish or Plain. With no credential (Config.APIKey,
+	// no AllowGroups, Publish or Plain. With no credential (Config.Token,
 	// ClientCert) it is served anonymously: direct paths only (Direct
 	// required), its sessions failing CodeDirectRequired where none forms.
 	Address *nf1.Listener
@@ -162,11 +162,11 @@ func listenService(cfg Config, service string, o ListenOptions) (agent.Service, 
 			return s, usage("Listen: an Address admits whoever holds it: no AllowGroups, Publish or Plain")
 		}
 		s.E2EE, s.NF1, s.Direct = agentservices.E2EEOn, o.Address, o.Direct
-		if cfg.APIKey == "" && cfg.ClientCert == nil {
+		if cfg.Token == "" && cfg.ClientCert == nil {
 			// no credential: served anonymously, its relay carrying
 			// signalling only (nfltr docs/decisions/nf1-anon-2026-11-16.md)
 			if o.Direct == DirectOff {
-				return s, usage("Listen: an address served with no account (no APIKey or ClientCert) takes direct paths only: Direct on (datagram services: not yet)")
+				return s, usage("Listen: an address served with no account (no Token or ClientCert) takes direct paths only: Direct on (datagram services: not yet)")
 			}
 			l, err := o.Address.WithAnonymous()
 			if err != nil {
@@ -201,7 +201,7 @@ func agentConfig(cfg Config) (agent.Config, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	a := agent.Config{ServerAddr: addr, AgentID: cfg.Agent, APIKey: cfg.APIKey, TCPTunnel: true, Routes: []agent.Route{},
+	a := agent.Config{ServerAddr: addr, AgentID: cfg.Agent, Token: cfg.Token, TCPTunnel: true, Routes: []agent.Route{},
 		Retries: 1 << 30, // until Listen's ctx ends, or a final refusal
 		// Close refuses the sessions waiting and resets the accepted: the
 		// agent's connection carries those answers before it ends

@@ -110,8 +110,8 @@ func TestReconnectStopsOnFatalClasses(t *testing.T) {
 		err  error
 		hint string
 	}{
-		"auth":          {status.Error(codes.Unauthenticated, "bad key"), "API key"},
-		"permission":    {status.Error(codes.PermissionDenied, "no"), "API key"},
+		"auth":          {status.Error(codes.Unauthenticated, "bad key"), "machine certificate"},
+		"permission":    {status.Error(codes.PermissionDenied, "no"), "machine certificate"},
 		"version":       {status.Error(codes.FailedPrecondition, agentwire.ClientGenerationTooOld), "update"},
 		"relay too old": {status.Error(codes.FailedPrecondition, agentwire.RelayTooOld), "update"},
 		"config":        {status.Error(codes.InvalidArgument, "bad"), "configuration"},

@@ -70,7 +70,7 @@ func FatalClass(err error) Fatal {
 func (f Fatal) Hint() string {
 	switch f {
 	case FatalAuth:
-		return "the relay refused the credential: check the API key and its permissions"
+		return "the relay refused the credential: check the machine certificate (or token) and its permissions"
 	case FatalVersion:
 		return "this client and the relay are incompatible: update the client (or the relay)"
 	case FatalConfig:

@@ -49,7 +49,7 @@ func TestDialSendsTheProcessInstanceID(t *testing.T) {
 	defer cancel()
 	var ids []string
 	for range 2 {
-		a, err := Dial(ctx, lis.Addr().String(), WithAgentID("node-x"), WithAPIKey("k"), WithTLS(false))
+		a, err := Dial(ctx, lis.Addr().String(), WithAgentID("node-x"), WithToken("k"), WithTLS(false))
 		if err != nil {
 			t.Fatal(err)
 		}

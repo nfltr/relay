@@ -155,7 +155,7 @@ func TestE2EEForwardsHeadersAsReverseProxy(t *testing.T) {
 				"\r\nOrigin: "+origin+"\r\nReferer: "+referer+
 				"\r\nX-Forwarded-Host: evil.example\r\nX-Forwarded-For: 198.51.100.1\r\nX-Forwarded-Proto: http\r\nForwarded: for=198.51.100.1\r\nX-Real-Ip: 198.51.100.1"+
 				"\r\nX-Hop: 1\r\nKeep-Alive: timeout=5\r\nProxy-Authorization: Basic eDp5\r\nTe: gzip\r\nX-End: kept"+
-				"\r\nAuthorization: Bearer rpc_0123abcd\r\nAuthorization: Bearer app-token"+
+				"\r\nAuthorization: Bearer app-token"+
 				"\r\nContent-Length: 0\r\n\r\n")
 			resp, err := http.ReadResponse(bufio.NewReader(cl), nil)
 			if err != nil {
@@ -172,7 +172,7 @@ func TestE2EEForwardsHeadersAsReverseProxy(t *testing.T) {
 				// The relay's word for the visitor's address, never the visitor's own.
 				"X-Forwarded-For": tc.client, "X-Real-Ip": tc.client, "Forwarded": "",
 				"X-Hop": "", "Keep-Alive": "", "Proxy-Authorization": "", "Te": "", "X-End": "kept",
-				// The app's own token goes on; a relay key never reaches it.
+				// The app's own token goes on.
 				"Authorization": "Bearer app-token",
 			})
 		})
