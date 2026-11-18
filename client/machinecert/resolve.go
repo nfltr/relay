@@ -1,9 +1,6 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
-// Package agentaddr looks up the machine id of a machine name of the
-// caller's account through the relay (GET /api/v1/machines/resolve):
-// organisation names, the hub's machine pins.
 package machinecert
 
 import (
