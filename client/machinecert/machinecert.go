@@ -9,6 +9,21 @@
 // rotates to a new key with the current key's proof (Client.Rotate). The
 // certificate is a TLS client certificate for the relay (Cert.TLS); the
 // relay knows the machine by the one URI SAN spiffe://<domain>/m/<id>.
+//
+// The certificate files: `nfltr config login` saves the key (machine.key,
+// 0600; or KeyEnv) and the certificate with what the relay answered
+// (machine.json, 0600: Saved) in the nfltr config directory (KeyPath,
+// CertPath, Load, Saved.Store). Every program that talks to the relay as
+// this machine (nfltr's CLI and agents, nfltr-send, your own) reads them
+// through Credential: ForRelay loads the pair once per process and
+// directory, Credential.Run renews it in place with Loop (each new
+// connection presents the newest; a renewal never writes over a pair
+// `nfltr config login` put in the directory since), and the credential is
+// presented on gRPC (RelayTLS, TLSConfig) and on HTTP (Transport,
+// HTTPClient). The relay authenticates the machine from the certificate
+// alone; a refused certificate ends the command with ErrRefused
+// (Credential.Refusal). Machines resolves a machine name of the caller's
+// account to its id (GET /api/v1/machines/resolve).
 package machinecert
 
 import (
