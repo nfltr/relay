@@ -345,7 +345,7 @@ func (d *directServer) nf1ListenTLS(hello *tls.ClientHelloInfo) (*tls.Config, er
 	if !isNF1SNI(hello.ServerName) {
 		return nil, nil
 	}
-	s := d.findBy(func(s *directSession) bool { return s.nf1 != nil && s.sni == hello.ServerName })
+	s := d.findBy(func(s *directSession) bool { return s.nf1 != nil && s.sni == hello.ServerName && !s.ended.Load() })
 	if s == nil {
 		return nil, errors.New("nf1 direct path: no session asked for this name")
 	}

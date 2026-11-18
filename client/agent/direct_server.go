@@ -5,6 +5,7 @@ package agent
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"crypto/hmac"
 	"crypto/tls"
@@ -72,6 +73,9 @@ type directSession struct {
 	// revoke is a udp service's association on the session (setDirect):
 	// a revocation tells its flows why before the session ends.
 	revoke atomic.Pointer[dgram.Server]
+	// ended: its Conn is done; it answers re-attaches until it is
+	// forgotten (registerSession), and takes no new direct connection
+	ended atomic.Bool
 }
 
 // newDirectServer starts the listener on a new endpoint.
@@ -204,12 +208,25 @@ func (d *directServer) registerSession(s *directSession) *directSession {
 	d.mu.Unlock()
 	go func() {
 		<-s.c.Done()
-		d.mu.Lock()
-		delete(d.sessions, s)
-		d.mu.Unlock()
+		// Ended, it stays findable for the detach bound: a client whose
+		// path died or moved before this end's last ACK and FIN (or its
+		// ABORT) re-attaches, and Attach answers it (left: count and FIN;
+		// reset: ABORT; link spec/DirectPath.tla RLeftAnswer, SLeftAnswer)
+		// instead of a stranger's reset that leaves the client
+		// re-attaching until its own bound (TestDirectEndedSessionStaysFindable).
+		s.ended.Store(true)
+		time.AfterFunc(cmp.Or(d.detach, directDetach), func() {
+			d.mu.Lock()
+			delete(d.sessions, s)
+			d.mu.Unlock()
+		})
 	}()
 	return s
 }
+
+// directDetach is a session's detach bound when the server sets none
+// (pathswitch's default).
+const directDetach = 30 * time.Second
 
 // handshaking counts a framed session's TLS handshake until the returned
 // func (idempotent), called after register: the client's TLS 1.3
