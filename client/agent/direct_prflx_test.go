@@ -11,8 +11,6 @@ import (
 	"net/netip"
 	"testing"
 	"time"
-
-	"github.com/nfltr/quic-go"
 )
 
 // symmetricQAD answers QAD as qadServer does, but answers lie to the source
@@ -23,11 +21,7 @@ func symmetricQAD(t *testing.T, victim *net.UDPAddr, lie string) string {
 	t.Helper()
 	o := newTestOrg(t)
 	cert := o.machine(t, "relay", nil, time.Hour, false)
-	ln, err := quic.ListenAddr("127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{QADALPN}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
+	ln := qadListen(t, cert)
 	go func() {
 		for {
 			q, err := ln.Accept(context.Background())

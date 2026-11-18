@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"github.com/nfltr/link/pathswitch"
-	"github.com/nfltr/quic-go"
 	"github.com/nfltr/relay/client/internal/modelbind"
 )
 
@@ -35,11 +34,7 @@ func lyingQAD(t *testing.T, addr string) string {
 	t.Helper()
 	o := newTestOrg(t)
 	cert := o.machine(t, "relay", nil, time.Hour, false)
-	ln, err := quic.ListenAddr("127.0.0.1:0", &tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{QADALPN}}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = ln.Close() })
+	ln := qadListen(t, cert)
 	go func() {
 		for {
 			q, err := ln.Accept(context.Background())

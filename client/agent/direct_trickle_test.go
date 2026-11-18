@@ -5,6 +5,7 @@ package agent
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"net"
 	"net/netip"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nfltr/link/peerlink/quiclink"
+	"github.com/nfltr/quic-go"
 )
 
 // Trickle (nfltr docs/decisions/direct-paths-2026-11-11.md "Trickle",
@@ -29,6 +31,27 @@ func silentUDP(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = pc.Close() })
 	return pc.LocalAddr().String()
+}
+
+// qadListen is a test relay's QAD listener on loopback. Its own
+// Transport, closed at cleanup with every connection: a single-use
+// listener (quic.ListenAddr) closed while a QAD connection is still open
+// keeps its read loop running (quic-go stops it only when its last
+// handler is gone at the listener's close), and a trickled QAD may still
+// run when the test ends.
+func qadListen(t *testing.T, cert tls.Certificate) *quic.Listener {
+	t.Helper()
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &quic.Transport{Conn: pc}
+	ln, err := tr.Listen(&tls.Config{Certificates: []tls.Certificate{cert}, NextProtos: []string{QADALPN}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close(); _ = tr.Close(); _ = pc.Close() })
+	return ln
 }
 
 // TestDirectSilentQADDelaysNoPunch: both ends' relay QAD is silent; the

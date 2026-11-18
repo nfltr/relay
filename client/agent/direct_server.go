@@ -437,11 +437,13 @@ func (d *directServer) control(c net.Conn, relay *qadTarget, agent string, modeO
 		return enc.Encode(directOffer{Error: reasonOff})
 	}
 	offer := directOffer{Agent: agent}
+	ctx, cancel := context.WithCancel(context.Background()) // the exchange's: its slow candidates have no reader after it
+	defer cancel()
 	slow := []func() []netip.AddrPort{d.ep.mappedSource}
 	if relay != nil {
 		offer.QAD = relay.addr
 		slow = append(slow, func() []netip.AddrPort {
-			a, err := d.ep.QAD(context.Background(), relay.addr, relay.tls)
+			a, err := d.ep.QAD(ctx, relay.addr, relay.tls)
 			if err != nil {
 				d.logger.Info("direct path: qad", "error", err)
 				return nil
