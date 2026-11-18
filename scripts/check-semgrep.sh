@@ -14,7 +14,9 @@
 # once into ${SEMGREP_RULES_CACHE} (Semgrep Rules License v1.0: used, not
 # redistributed, so not checked in); the scan runs with --network none and
 # --metrics=off. Needs docker. SEMGREP_JSON (read this saved report instead
-# of running the tool) is for reuse of one run. ~2 min.
+# of running the tool) is for reuse of one run. ~2 min. -j 1: semgrep's taint
+# fixpoint limit is process CPU time, so more jobs cut functions short and drop
+# their findings depending on load (scripts/sast-baseline.py fails on any cut).
 set -euo pipefail
 
 IMAGE="semgrep/semgrep:1.180.0@sha256:529ee8a277ec8adc5b534d7c74eea0a47e9de21d62852b6ba7ac6ba9566845c3" # 2026-10-07
@@ -45,7 +47,7 @@ else
     [[ "${got}" == "${RULES_SHA256}" ]] || { echo "FAIL: ${RULES} rules sha256 ${got}, want ${RULES_SHA256}" >&2; exit 1; }
     docker run --rm --network none -v "${ROOT}:/src:ro" -v "${RULES}/go:/rules:ro" -w /src "${IMAGE}" \
         semgrep scan --metrics=off --disable-version-check --config /rules --no-git-ignore --timeout 0 --include '*.go' \
-        --json --quiet >"${out}"
+        -j 1 --json --quiet >"${out}"
     [[ -z "${SEMGREP_REPORT:-}" ]] || cp "${out}" "${SEMGREP_REPORT}"
 fi
 python3 - "${out}" <<'EOF'

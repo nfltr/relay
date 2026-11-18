@@ -17,6 +17,13 @@ line, a trailing "# <snippet>" for reviewers). check fails (exit 1) on a finding
 whose key is not in the baseline (new) and on a baseline key no longer reported
 (stale: the finding was fixed or its line changed, so the baseline shrinks with
 `update`).
+
+semgrep stops a function's taint fixpoint after 0.2 s of process CPU time
+(Limits_semgrep.taint_FIXPOINT_TIMEOUT, Sys.time: every domain's CPU, so with
+-j N each function gets about 0.2/N s) and drops its findings without an error,
+listing the cut only under time.fixpoint_timeouts. check-semgrep.sh runs -j 1,
+which has none; a semgrep report with a cut, or without that field, fails naming
+the files, since a stale or missing finding there means nothing.
 """
 import collections
 import hashlib
@@ -56,6 +63,15 @@ def keys(tool, report, root):
     return out, snippets
 
 
+def semgrep_cut(report):
+    """Files whose semgrep analysis was cut short (see the module doc)."""
+    timeouts = (report.get("time") or {}).get("fixpoint_timeouts")
+    if timeouts is None:
+        raise SystemExit("FAIL: semgrep report has no time.fixpoint_timeouts: "
+                         "cannot tell whether the analysis is complete")
+    return sorted({t["location"]["path"] for t in timeouts})
+
+
 def read_baseline(path):
     c = collections.Counter()
     if os.path.exists(path):
@@ -86,6 +102,12 @@ def main(argv):
     mode, tool, report_path, baseline_path, root = argv[1:]
     with open(report_path, encoding="utf-8") as f:
         report = json.load(f)
+    cut = semgrep_cut(report) if tool == "semgrep" else []
+    if cut:
+        print(f"FAIL: semgrep cut its taint analysis short (fixpoint timeout) in {len(cut)} "
+              f"files, so their findings are unknown (run semgrep with -j 1): {' '.join(cut)}",
+              file=sys.stderr)
+        return 1
     got, snippets = keys(tool, report, root)
     if mode == "update":
         write_baseline(baseline_path, tool, got, snippets)
@@ -119,7 +141,8 @@ def self_test():
             {"rule_id": "G304", "file": os.path.join(d, "a", "x.go"), "line": "5"},
         ]}
         semgrep = {"results": [{"check_id": "go.lang.security.audit.dangerous-exec-command",
-                                "path": "a/x.go", "start": {"line": 6}}]}
+                                "path": "a/x.go", "start": {"line": 6}}],
+                   "time": {"fixpoint_timeouts": []}}
         rep, base = os.path.join(d, "r.json"), os.path.join(d, "base.txt")
 
         def run(mode, tool, report):
@@ -146,6 +169,16 @@ def self_test():
         with open(os.path.join(d, "a", "x.go"), "w") as f:
             f.write("package a\n\n// moved\nfunc f() {\n\tos.ReadFile(q)\n\tos.ReadFile(p)\n}\n")
         assert run("check", "gosec", moved) == 1, "an edited flagged line must be re-triaged"
+        # A semgrep fixpoint timeout fails check and update, and so does a report
+        # that cannot say whether it had one.
+        cut = dict(semgrep, time={"fixpoint_timeouts": [{"location": {"path": "a/x.go"}}]})
+        assert run("check", "semgrep", cut) == 1, "a fixpoint timeout must fail check"
+        assert run("update", "semgrep", cut) == 1, "a fixpoint timeout must fail update"
+        try:
+            run("check", "semgrep", {"results": []})
+            raise AssertionError("a report without time.fixpoint_timeouts must fail")
+        except SystemExit:
+            pass
     print("sast-baseline self-test ok")
     return 0
 
