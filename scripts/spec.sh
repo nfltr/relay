@@ -58,6 +58,7 @@ jar=$(echo "$tools" | sed -n 2p)
 work=$(mktemp -d)
 # TLC runs go through scripts/cicache.sh: kept only when this script passes.
 cicache=$PWD/scripts/cicache.sh
+[ -x "$cicache" ] || { echo "spec.sh: $cicache missing or not executable" >&2; exit 2; }
 CICACHE_STAGE=$("$cicache" begin || true)
 export CICACHE_STAGE
 trap 'st=$?; "$cicache" end "$CICACHE_STAGE" $st || st=1; rm -rf "$work"; exit $st' EXIT
