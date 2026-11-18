@@ -1,7 +1,7 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
-package machinecert
+package machinecred
 
 import (
 	"bytes"
@@ -18,6 +18,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/nfltr/relay/client/machinecert"
 )
 
 // syncBuf is a log buffer the renewal goroutine writes while the test reads.
@@ -39,8 +41,8 @@ func TestRenewalFailureIsLoggedWithTheTimeLeft(t *testing.T) {
 	}))
 	defer relay.Close()
 	dir := t.TempDir()
-	key, _ := NewKey()
-	if err := SaveKey(KeyPath(dir), key); err != nil {
+	key, _ := machinecert.NewKey()
+	if err := machinecert.SaveKey(machinecert.KeyPath(dir), key); err != nil {
 		t.Fatal(err)
 	}
 	u, _ := url.Parse("spiffe://nfltr.xyz/m/m-aaaa")
@@ -50,12 +52,12 @@ func TestRenewalFailureIsLoggedWithTheTimeLeft(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, err := ParseCert(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	cert, err := machinecert.ParseCert(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	cert.MachineID = "m-aaaa"
-	if err := (&Saved{Cert: *cert, RelayHost: "127.0.0.1", BaseURL: relay.URL}).Store(dir); err != nil {
+	if err := (&machinecert.Saved{Cert: *cert, RelayHost: "127.0.0.1", BaseURL: relay.URL}).Store(dir); err != nil {
 		t.Fatal(err)
 	}
 	c := load(dir)

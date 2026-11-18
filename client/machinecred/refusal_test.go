@@ -1,7 +1,7 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
-package machinecert
+package machinecred
 
 import (
 	"errors"

@@ -1,7 +1,7 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
-package machinecert_test
+package machinecred_test
 
 import (
 	"context"
@@ -10,7 +10,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/nfltr/relay/client/machinecert"
+	"github.com/nfltr/relay/client/machinecred"
 )
 
 // A program talking to the relay as this machine: the certificate
@@ -20,14 +20,14 @@ import (
 func ExampleForRelay() {
 	home, _ := os.UserConfigDir()
 	dir := filepath.Join(home, "nfltr")
-	cred := machinecert.ForRelay(dir, "grpc.nfltr.xyz:443")
+	cred := machinecred.ForRelay(dir, "grpc.nfltr.xyz:443")
 	if cred == nil {
 		fmt.Println("this machine is not enrolled with that relay: run `nfltr config login`")
 		return
 	}
 	ctx := context.Background()
 	cred.Run(ctx, slog.Default()) // renews until ctx ends
-	self, err := machinecert.Machines("https://nfltr.xyz", cred.HTTPClient())(ctx, "")
+	self, err := machinecred.Machines("https://nfltr.xyz", cred.HTTPClient())(ctx, "")
 	if err != nil {
 		fmt.Println(cred.Refusal(err)) // ErrRefused when the relay refused the certificate
 		return

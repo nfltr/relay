@@ -1,7 +1,7 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
-package machinecert
+package machinecred
 
 import (
 	"bytes"
@@ -15,25 +15,27 @@ import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/nfltr/relay/client/machinecert"
 )
 
 // enrolPair saves a key and a certificate of machine id in dir, as
 // `nfltr config login` does; it returns the key and a renewal of the same
 // machine (a new certificate for the same key).
-func enrolPair(t *testing.T, dir, id string) (*ecdsa.PrivateKey, *Cert) {
+func enrolPair(t *testing.T, dir, id string) (*ecdsa.PrivateKey, *machinecert.Cert) {
 	t.Helper()
-	key, _ := NewKey()
-	if err := SaveKey(KeyPath(dir), key); err != nil {
+	key, _ := machinecert.NewKey()
+	if err := machinecert.SaveKey(machinecert.KeyPath(dir), key); err != nil {
 		t.Fatal(err)
 	}
-	s := Saved{Cert: *leafFor(t, key, id, 1), RelayHost: "127.0.0.1", BaseURL: "https://127.0.0.1"}
+	s := machinecert.Saved{Cert: *leafFor(t, key, id, 1), RelayHost: "127.0.0.1", BaseURL: "https://127.0.0.1"}
 	if err := s.Store(dir); err != nil {
 		t.Fatal(err)
 	}
 	return key, leafFor(t, key, id, 2)
 }
 
-func leafFor(t *testing.T, key *ecdsa.PrivateKey, id string, serial int64) *Cert {
+func leafFor(t *testing.T, key *ecdsa.PrivateKey, id string, serial int64) *machinecert.Cert {
 	t.Helper()
 	u, _ := url.Parse("spiffe://nfltr.xyz/m/" + id)
 	tmpl := &x509.Certificate{SerialNumber: big.NewInt(serial), NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), URIs: []*url.URL{u}}
@@ -41,7 +43,7 @@ func leafFor(t *testing.T, key *ecdsa.PrivateKey, id string, serial int64) *Cert
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := ParseCert(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	c, err := machinecert.ParseCert(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,11 +53,11 @@ func leafFor(t *testing.T, key *ecdsa.PrivateKey, id string, serial int64) *Cert
 
 func files(t *testing.T, dir string) []byte {
 	t.Helper()
-	k, err := os.ReadFile(KeyPath(dir))
+	k, err := os.ReadFile(machinecert.KeyPath(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
-	c, err := os.ReadFile(CertPath(dir))
+	c, err := os.ReadFile(machinecert.CertPath(dir))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +97,7 @@ func TestRenewalSavesItsOwnPair(t *testing.T) {
 	if err := c.save(next, slog.New(slog.DiscardHandler)); err != nil {
 		t.Fatal(err)
 	}
-	s, err := Load(dir)
+	s, err := machinecert.Load(dir)
 	if err != nil || s.Leaf.SerialNumber.Cmp(next.Leaf.SerialNumber) != 0 {
 		t.Fatalf("saved = %v, %v; want the renewal", s, err)
 	}
@@ -107,7 +109,7 @@ func TestRenewalWithKeyEnvNeverWritesOverAnotherMachinesCertificate(t *testing.T
 	dir := t.TempDir()
 	_, next := enrolPair(t, dir, "m-aaaa")
 	c := load(dir)
-	t.Setenv(KeyEnv, c.KeyPEM())
+	t.Setenv(machinecert.KeyEnv, c.KeyPEM())
 	enrolPair(t, dir, "m-bbbb")
 	before := files(t, dir)
 	if err := c.save(next, slog.New(slog.DiscardHandler)); err != nil {

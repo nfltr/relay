@@ -1,7 +1,20 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
-package machinecert
+// Package machinecred presents a machine's certificate to the relay
+// (client/machinecert holds the key, the certificate and the files
+// `nfltr config login` saves). Every program that talks to the relay as
+// this machine (nfltr's CLI and agents, nfltr-send, your own) reads them
+// through Credential: ForRelay loads the pair once per process and
+// directory, Credential.Run renews it in place with machinecert.Loop (each
+// new connection presents the newest; a renewal never writes over a pair
+// `nfltr config login` put in the directory since), and the credential is
+// presented on gRPC (RelayTLS, TLSConfig) and on HTTP (Transport,
+// HTTPClient). The relay authenticates the machine from the certificate
+// alone; a refused certificate ends the command with ErrRefused
+// (Credential.Refusal). Machines resolves a machine name of the caller's
+// account to its id (GET /api/v1/machines/resolve).
+package machinecred
 
 import (
 	"context"
@@ -19,6 +32,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nfltr/relay/client/machinecert"
 	"github.com/nfltr/relay/client/relayoutage"
 	"github.com/nfltr/relay/client/relaytrust"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
@@ -33,16 +47,16 @@ import (
 // holds one for the relay presents only it (chosen once at start, never
 // switched to the key at run time: a fallback would let a revoked machine
 // keep working on its key). Run renews it in place (at 2/3 of its
-// lifetime, +-10 %: Loop), so each new connection presents the
+// lifetime, +-10 %: machinecert.Loop), so each new connection presents the
 // newest. A refused certificate (revoked, rotated away, expired) ends the
 // command with ErrRefused. No new state machine: renewal is
-// Loop (relay-server spec/MachineAuth.tla Renew).
+// machinecert.Loop (relay-server spec/MachineAuth.tla Renew).
 type Credential struct {
 	key      *ecdsa.PrivateKey
 	dir      string
-	host, id string // the relay's host and the machine: never change
-	name     string // the machine's name in its account, as loaded
-	s        *Saved // the certificate as last saved; Run's goroutine only
+	host, id string             // the relay's host and the machine: never change
+	name     string             // the machine's name in its account, as loaded
+	s        *machinecert.Saved // the certificate as last saved; Run's goroutine only
 	cur      atomic.Pointer[tls.Certificate]
 	refused  atomic.Bool // the renewal was refused for good
 	running  atomic.Bool // Run started the renewal
@@ -116,10 +130,10 @@ func Forget() {
 func ForRelay(dir, server string) *Credential {
 	credsMu.Lock()
 	defer credsMu.Unlock()
-	c, ok := creds[CertPath(dir)]
+	c, ok := creds[machinecert.CertPath(dir)]
 	if !ok {
 		c = load(dir)
-		creds[CertPath(dir)] = c
+		creds[machinecert.CertPath(dir)] = c
 	}
 	if c == nil || !sameRelay(c.host, server) {
 		return nil
@@ -141,11 +155,11 @@ func For(dir, server string, useTLS, ownCert bool) *Credential {
 // whose host is host; a hosted relay's gRPC host is its HTTP host with
 // "grpc." in front (proxyurl.RelayHTTPAddr).
 func sameRelay(host, server string) bool {
-	return strings.TrimPrefix(host, "grpc.") == strings.TrimPrefix(RelayHost(server), "grpc.")
+	return strings.TrimPrefix(host, "grpc.") == strings.TrimPrefix(machinecert.RelayHost(server), "grpc.")
 }
 
 func load(dir string) *Credential {
-	s, err := Load(dir)
+	s, err := machinecert.Load(dir)
 	if err != nil {
 		return nil
 	}
@@ -161,26 +175,26 @@ func load(dir string) *Credential {
 
 // loadKey is $NFLTR_MACHINE_KEY when set, else dir's machine.key.
 func loadKey(dir string) (*ecdsa.PrivateKey, error) {
-	v := os.Getenv(KeyEnv)
+	v := os.Getenv(machinecert.KeyEnv)
 	if v == "" {
-		return LoadKey(KeyPath(dir))
+		return machinecert.LoadKey(machinecert.KeyPath(dir))
 	}
 	blk, _ := pem.Decode([]byte(v))
 	if blk == nil {
-		return nil, errors.New(KeyEnv + ": not PEM")
+		return nil, errors.New(machinecert.KeyEnv + ": not PEM")
 	}
 	k, err := x509.ParsePKCS8PrivateKey(blk.Bytes)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", KeyEnv, err)
+		return nil, fmt.Errorf("%s: %w", machinecert.KeyEnv, err)
 	}
 	ek, ok := k.(*ecdsa.PrivateKey)
 	if !ok {
-		return nil, errors.New(KeyEnv + ": not an ECDSA key")
+		return nil, errors.New(machinecert.KeyEnv + ": not an ECDSA key")
 	}
 	return ek, nil
 }
 
-// KeyPEM is the machine key as KeyEnv carries it: what a node hands the
+// KeyPEM is the machine key as machinecert.KeyEnv carries it: what a node hands the
 // agent processes it launches.
 func (c *Credential) KeyPEM() string {
 	der, err := x509.MarshalPKCS8PrivateKey(c.key)
@@ -270,16 +284,16 @@ func RenewHTTP() *http.Client {
 }
 
 func (c *Credential) renew(ctx context.Context, logger *slog.Logger) {
-	client := &Client{BaseURL: c.s.BaseURL, HTTP: RenewHTTP()}
-	loop := Loop{
-		Renew: func(ctx context.Context, cur *Cert) (*Cert, error) {
+	client := &machinecert.Client{BaseURL: c.s.BaseURL, HTTP: RenewHTTP()}
+	loop := machinecert.Loop{
+		Renew: func(ctx context.Context, cur *machinecert.Cert) (*machinecert.Cert, error) {
 			next, err := client.Renew(ctx, cur, c.key)
 			if err != nil { // each attempt, hours ahead of the expiry (guard TestRenewalFailureIsLoggedWithTheTimeLeft)
 				logger.Warn("machine certificate renewal failed", "machine", c.id, "error", err, "expires_in", time.Until(cur.NotAfter).Truncate(time.Second), "not_after", cur.NotAfter)
 			}
 			return next, err
 		},
-		Save: func(next *Cert) error { return c.save(next, logger) },
+		Save: func(next *machinecert.Cert) error { return c.save(next, logger) },
 	}
 	if err := loop.Run(ctx, &c.s.Cert); err != nil && ctx.Err() == nil {
 		c.refused.Store(true)
@@ -296,7 +310,7 @@ func (c *Credential) renew(ctx context.Context, logger *slog.Logger) {
 // is kept in memory only, and logged.
 // ponytail: check then rename, not a lock; login racing a renewal within
 // that window is the residue.
-func (c *Credential) save(next *Cert, logger *slog.Logger) error {
+func (c *Credential) save(next *machinecert.Cert, logger *slog.Logger) error {
 	s := *c.s
 	s.Cert = *next
 	if err := c.ownsDir(); err != nil {
@@ -312,23 +326,23 @@ func (c *Credential) save(next *Cert, logger *slog.Logger) error {
 }
 
 // ownsDir: the directory's key (when this process loaded it from there,
-// not KeyEnv) and its certificate are still this process's key's.
+// not machinecert.KeyEnv) and its certificate are still this process's key's.
 func (c *Credential) ownsDir() error {
-	if os.Getenv(KeyEnv) == "" {
-		k, err := LoadKey(KeyPath(c.dir))
+	if os.Getenv(machinecert.KeyEnv) == "" {
+		k, err := machinecert.LoadKey(machinecert.KeyPath(c.dir))
 		if err != nil {
 			return err
 		}
 		if !k.Equal(c.key) {
-			return errors.New(KeyPath(c.dir) + " is another key")
+			return errors.New(machinecert.KeyPath(c.dir) + " is another key")
 		}
 	}
-	s, err := Load(c.dir)
+	s, err := machinecert.Load(c.dir)
 	if err != nil {
 		return err
 	}
 	if pub, ok := s.Leaf.PublicKey.(*ecdsa.PublicKey); !ok || !pub.Equal(&c.key.PublicKey) {
-		return errors.New(CertPath(c.dir) + " is another machine's certificate (" + s.MachineID + ")")
+		return errors.New(machinecert.CertPath(c.dir) + " is another machine's certificate (" + s.MachineID + ")")
 	}
 	return nil
 }
