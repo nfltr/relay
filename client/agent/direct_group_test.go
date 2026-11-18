@@ -6,6 +6,7 @@ package agent
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -29,8 +30,10 @@ type groupRig struct {
 	d      *DirectClient
 	client testMachine
 	mu     sync.Mutex
-	picks  [][]string // each group open's exclude
-	routes []string   // each reserved-service open's agent
+	picks  [][]string     // each group open's exclude
+	routes []string       // each reserved-service open's agent
+	closed bool           // opens refused: the test ended (close)
+	served sync.WaitGroup // each open's accept, awaited after every other cleanup
 }
 
 func newGroupRig(t *testing.T) *groupRig {
@@ -38,6 +41,7 @@ func newGroupRig(t *testing.T) *groupRig {
 	o := newTestOrg(t)
 	qad, target := qadServer(t), echoTarget(t)
 	g := &groupRig{inst: map[string]*linkSessions{}, client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}}
+	t.Cleanup(g.served.Wait) // first registered, so it runs last: the instances are drained and every session's stream closed by then
 	for _, m := range []string{"web-1", "web-2"} {
 		table, err := NewServiceTable([]Service{{Name: "blob", Kind: agentservices.TCP, Target: target, E2EE: agentservices.E2EEOn,
 			Org: o.agentOrg(o.machine(t, m, []string{"db"}, time.Hour, false)), AllowGroups: []string{"db"}, Group: "db", Direct: DirectOn}})
@@ -97,16 +101,40 @@ func (g *groupRig) open(t *testing.T, machine, target string) (net.Conn, error) 
 	if l == nil {
 		return nil, fmt.Errorf("no machine %q", machine)
 	}
-	s, c := sessionPair(t)
 	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: target, E2Ee: true, Answer: true})
 	if err != nil {
 		return nil, err
 	}
-	go l.accept("", h, s)
+	g.mu.Lock()
+	if g.closed {
+		g.mu.Unlock()
+		return nil, errors.New("the test ended")
+	}
+	s, c := sessionPair(t)
+	g.served.Go(func() { l.accept("", h, s) })
+	g.mu.Unlock()
 	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
 		return nil, fmt.Errorf("answer %v, %v", a, err)
 	}
 	return c, nil
+}
+
+// end ends ds (its TLS tc closed, or reset when there is none) and waits
+// until it is over, then refuses every later open: a session left running
+// re-attached after its test, beside the next test (reading the package's
+// e2eeHeaderTimeout, which TestE2EESessionBoundsHandshakeAndHeaders sets).
+// It runs before the test's cleanups: the agents still answer, so a
+// re-attach that carries the session's end succeeds.
+func (g *groupRig) end(ds *DirectSession, tc *tls.Conn) {
+	if tc != nil {
+		_ = tc.Close()
+	} else {
+		ds.c.Abort()
+	}
+	<-ds.Done()
+	g.mu.Lock()
+	g.closed = true
+	g.mu.Unlock()
 }
 
 // TestDirectGroupDialGoesDirectToItsInstance: a session of blob@db that
@@ -121,13 +149,15 @@ func TestDirectGroupDialGoesDirectToItsInstance(t *testing.T) {
 		t.Fatal(err)
 	}
 	ds := g.d.Start(first)
+	var tc *tls.Conn
+	defer func() { g.end(ds, tc) }()
 	cfg := g.d.punchTLS(&directPair{machine: "web-2"})
 	BindServiceTLS(cfg, GroupALPN("blob", "db"))
-	tc := tls.Client(ds.Conn(), cfg)
-	if err := tc.HandshakeContext(t.Context()); err != nil {
+	c := tls.Client(ds.Conn(), cfg)
+	if err := c.HandshakeContext(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = tc.Close() })
+	tc = c
 	events := make(chan PathEvent, 16)
 	if err := ds.Run(tc.ConnectionState(), "blob@db", tc.ConnectionState().PeerCertificates[0].Subject.CommonName, "blob", DirectOn,
 		pathSink(events)); err != nil {
