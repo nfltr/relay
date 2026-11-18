@@ -14,21 +14,26 @@ package agent
 // relayed stream starts with a TLS record (no) or a pathswitch frame (yes).
 
 import (
+	"bufio"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/nfltr/link/pathswitch"
+	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/quic-go"
 )
 
@@ -111,6 +116,7 @@ type DirectEndpoint struct {
 	pm       portMap                   // the gateway's mapping of the socket (direct_portmap.go)
 	lan      func(netip.AddrPort) bool // tests: which candidates are LAN ones (nil: isLAN)
 	noHost   bool                      // tests: no host candidates (the reflexive one only)
+	hosts    []netip.AddrPort          // tests: the host candidates (nil: the interfaces')
 	grace    time.Duration             // tests: the LAN grace (0: lanGrace)
 }
 
@@ -167,9 +173,92 @@ func (e *DirectEndpoint) QAD(ctx context.Context, addr string, tc *tls.Config) (
 	return e.candidate(string(b))
 }
 
+// gather is this end's candidates, trickled (RFC 8838; nfltr
+// docs/decisions/direct-paths-2026-11-11.md "Trickle", spec/DirectPunch.tla
+// NoWait): first the host candidates at once (with none, the first slow
+// source's answer), late each later slow source's answer as it comes (the
+// relay's address check, up to 3 s; the port mapping, up to 500 ms),
+// closed once every source ended. first is empty only when every source
+// ended with none; it leaves room for one candidate per slow source
+// within MaxCandidates.
+func (e *DirectEndpoint) gather(slow ...func() []netip.AddrPort) (first []netip.AddrPort, late <-chan []netip.AddrPort) {
+	ch := make(chan []netip.AddrPort, len(slow))
+	var wg sync.WaitGroup
+	for _, f := range slow {
+		wg.Go(func() {
+			if a := f(); len(a) > 0 {
+				ch <- a
+			}
+		})
+	}
+	go func() { wg.Wait(); close(ch) }()
+	// Room kept for the slow ones, which once led the list: a machine
+	// with many interface addresses still sends its reflexive one.
+	first = e.hostCandidates()
+	first = first[:min(len(first), quiclink.MaxCandidates-len(slow))]
+	for len(first) == 0 {
+		a, ok := <-ch
+		if !ok {
+			break
+		}
+		first = a
+	}
+	return compactCandidates(first), ch
+}
+
+// mappedSource is the port mapping as a slow source of gather.
+func (e *DirectEndpoint) mappedSource() []netip.AddrPort {
+	if a := <-e.mapping(); a.IsValid() {
+		return []netip.AddrPort{a}
+	}
+	return nil
+}
+
+// sendLate writes late's candidates on a control exchange, one
+// directCandidates line each, none sent before (sent: the first line's),
+// MaxCandidates in all; it ends with late or the first failed write (the
+// exchange ended).
+func sendLate(w io.Writer, sent []netip.AddrPort, late <-chan []netip.AddrPort) {
+	enc := json.NewEncoder(w)
+	sent = slices.Clone(sent)
+	for as := range late {
+		var out directCandidates
+		for _, a := range as {
+			if !slices.Contains(sent, a) && len(sent) < quiclink.MaxCandidates {
+				sent = append(sent, a)
+				out.Candidates = append(out.Candidates, a.String())
+			}
+		}
+		if len(out.Candidates) > 0 && enc.Encode(out) != nil {
+			return
+		}
+	}
+}
+
+// readLate reads the peer's later candidates lines on a control exchange
+// and hands each new candidate to add, until r ends.
+func (e *DirectEndpoint) readLate(r *bufio.Reader, add func(netip.AddrPort)) {
+	for {
+		var c directCandidates
+		if readJSONLine(r, &c) != nil {
+			return
+		}
+		as, err := e.candidates(c.Candidates)
+		if err != nil {
+			return
+		}
+		for _, a := range as {
+			add(a)
+		}
+	}
+}
+
 // hostCandidates are this machine's interface addresses on the socket's
 // port (DirectOn only): global and private unicast, no loopback.
 func (e *DirectEndpoint) hostCandidates() []netip.AddrPort {
+	if e.hosts != nil {
+		return e.hosts
+	}
 	ua, ok := e.pc.LocalAddr().(*net.UDPAddr)
 	if !ok || e.noHost {
 		return nil

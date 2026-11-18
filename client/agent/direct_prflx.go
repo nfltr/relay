@@ -80,7 +80,7 @@ type probeWaiters struct {
 // listen registers tag: the sources of probes carrying it arrive on the
 // channel (at most quiclink.MaxCandidates queued, the rest dropped) until
 // stop.
-func (e *DirectEndpoint) listen(tag []byte) (<-chan netip.AddrPort, func()) {
+func (e *DirectEndpoint) listen(tag []byte) (chan netip.AddrPort, func()) {
 	w := &e.probes
 	w.once.Do(func() { go e.readProbes() })
 	ch := make(chan netip.AddrPort, quiclink.MaxCandidates)

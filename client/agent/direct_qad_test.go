@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -97,7 +98,8 @@ func TestDirectAgentOnTwoRelaysOffersTheArrivingOnes(t *testing.T) {
 }
 
 // controlOffer runs a control exchange's first half through l: the
-// agent's offer for blob.
+// agent's offer for blob, with its later candidates (trickle) up to the
+// relay's answer (the first loopback one: no host candidate is).
 func (r *directRig) controlOffer(t *testing.T, l *linkSessions) directOffer {
 	t.Helper()
 	r.mu.Lock()
@@ -120,8 +122,16 @@ func (r *directRig) controlOffer(t *testing.T, l *linkSessions) directOffer {
 	if err := json.NewEncoder(tc).Encode(directRequest{Service: "blob"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := readJSONLine(bufio.NewReader(io.LimitReader(tc, 8<<10)), &o); err != nil {
+	br := bufio.NewReader(io.LimitReader(tc, 8<<10))
+	if err := readJSONLine(br, &o); err != nil {
 		t.Fatal(err)
+	}
+	for !slices.ContainsFunc(o.Candidates, func(c string) bool { return strings.HasPrefix(c, "127.") }) {
+		var late directCandidates
+		if err := readJSONLine(br, &late); err != nil {
+			t.Fatalf("offer %v: no relay answer trickled: %v", o.Candidates, err)
+		}
+		o.Candidates = append(o.Candidates, late.Candidates...)
 	}
 	return o
 }

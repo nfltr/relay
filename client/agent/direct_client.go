@@ -534,13 +534,10 @@ func (s *DirectSession) punch(p *directPair) string {
 	if err != nil {
 		return ReasonNoQAD
 	}
-	mapped := s.d.ep.mapping()
-	mine := s.d.reflexive(ctx, offer.QAD)
-	if a := <-mapped; a.IsValid() {
-		mine = append(mine, a)
-	}
-	mine = append(mine, s.d.ep.hostCandidates()...)
-	mine = compactCandidates(mine)
+	// Trickle: the candidates known now go at once, the slow ones (this
+	// end's address check, its port mapping) follow as they come; the
+	// agent's later ones join the punch as learned candidates.
+	mine, late := s.d.ep.gather(func() []netip.AddrPort { return s.d.reflexive(ctx, offer.QAD) }, s.d.ep.mappedSource)
 	if len(mine) == 0 {
 		return ReasonNoQAD
 	}
@@ -555,6 +552,13 @@ func (s *DirectSession) punch(p *directPair) string {
 	if enc.Encode(out) != nil {
 		return ReasonWithheld
 	}
+	go sendLate(tc, mine, late)
+	go s.d.ep.readLate(r, func(a netip.AddrPort) {
+		select {
+		case learned <- a:
+		default:
+		}
+	})
 	p.cands = theirs
 	p.refused.Store(false)
 	if p.nf1 != nil {

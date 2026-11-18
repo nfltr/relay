@@ -437,21 +437,21 @@ func (d *directServer) control(c net.Conn, relay *qadTarget, agent string, modeO
 		return enc.Encode(directOffer{Error: reasonOff})
 	}
 	offer := directOffer{Agent: agent}
-	var cands []netip.AddrPort
-	mapped := d.ep.mapping()
+	slow := []func() []netip.AddrPort{d.ep.mappedSource}
 	if relay != nil {
 		offer.QAD = relay.addr
-		if a, err := d.ep.QAD(context.Background(), relay.addr, relay.tls); err == nil {
-			cands = append(cands, a)
-		} else {
-			d.logger.Info("direct path: qad", "error", err)
-		}
+		slow = append(slow, func() []netip.AddrPort {
+			a, err := d.ep.QAD(context.Background(), relay.addr, relay.tls)
+			if err != nil {
+				d.logger.Info("direct path: qad", "error", err)
+				return nil
+			}
+			return []netip.AddrPort{a}
+		})
 	}
-	if a := <-mapped; a.IsValid() {
-		cands = append(cands, a)
-	}
-	cands = append(cands, d.ep.hostCandidates()...)
-	cands = compactCandidates(cands)
+	// Trickle: the offer goes with what is known now, the slow candidates
+	// follow as they come (gather, sendLate).
+	cands, late := d.ep.gather(slow...)
 	if len(cands) == 0 {
 		return enc.Encode(directOffer{Error: reasonNoAddr})
 	}
@@ -461,6 +461,7 @@ func (d *directServer) control(c net.Conn, relay *qadTarget, agent string, modeO
 	if err := enc.Encode(offer); err != nil {
 		return err
 	}
+	go sendLate(c, cands, late)
 	var theirs directCandidates
 	if err := readJSONLine(r, &theirs); err != nil {
 		return err
@@ -471,20 +472,41 @@ func (d *directServer) control(c net.Conn, relay *qadTarget, agent string, modeO
 	}
 	// The punch: datagrams toward the client's mappings open this end's
 	// NAT while the client's QUIC Initials arrive; their tag lets the
-	// client dial where they came from (direct_prflx.go).
+	// client dial where they came from (direct_prflx.go). The client's
+	// later candidates are probed as they come, then with the rest.
 	tag := probeTag(c)
 	done := make(chan struct{})
-	go func() { _, _ = io.Copy(io.Discard, r); close(done) }() // the client closes once punched
-	for _, wait := range []time.Duration{0, 200 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second} {
+	more := make(chan netip.AddrPort, quiclink.MaxCandidates)
+	go func() { // the client closes once punched
+		d.ep.readLate(r, func(a netip.AddrPort) {
+			select {
+			case more <- a:
+			default:
+			}
+		})
+		_, _ = io.Copy(io.Discard, r)
+		close(done)
+	}()
+	waits := []time.Duration{0, 200 * time.Millisecond, 500 * time.Millisecond, time.Second, 2 * time.Second}
+	tick := time.After(waits[0])
+	for i := 0; ; {
 		select {
 		case <-done:
 			return nil
-		case <-time.After(wait):
+		case a := <-more:
+			if !slices.Contains(peer, a) && len(peer) < quiclink.MaxCandidates {
+				peer = append(peer, a)
+				_ = d.ep.probe([]netip.AddrPort{a}, tag)
+			}
+		case <-tick:
+			_ = d.ep.probe(peer, tag)
+			if i++; i < len(waits) {
+				tick = time.After(waits[i])
+			} else {
+				tick = nil
+			}
 		}
-		_ = d.ep.probe(peer, tag)
 	}
-	<-done
-	return nil
 }
 
 // readJSONLine reads one line of r into v.

@@ -1123,6 +1123,7 @@ states, depth 18, every action taken.
 | `AgentProbe` (when) | client/agent/direct_server.go |
 | `Learn` (listen), `Tick` (bound) | client/agent/direct_client.go |
 | `Offered` (the mapped candidate) | client/agent/direct_portmap.go |
+| `QADEnd`, `AgentTrickle`, `NoWait` (gather, sendLate, readLate) | client/agent/direct.go |
 
 | trace recorder | client/agent/trace_punch_on.go |
 
