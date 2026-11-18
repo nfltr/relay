@@ -10,3 +10,4 @@ handover-to-anyone HolderKeeps
 refuse-own-tombstone MoveCompletes OrgHoldsLive.cfg
 refuse-finished-tombstone MoveCompletes OrgHoldsLive.cfg
 finish-early FinishAfterPublish
+holder-read RootReadable

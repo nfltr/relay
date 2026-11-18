@@ -76,6 +76,7 @@ which may take a vacant hold once and is revoked by the owner).
 | HolderKeeps (action) | a serving issuer's hold is neither taken nor vacated by another machine | `handover-to-anyone` |
 | OldCannotWrite | once its send ran, the old machine holds nothing | `old-keeps-writing`, `release-without-fence` |
 | FinishAfterPublish | finish deletes the moved keys only after the other machine published | `finish-early` |
+| RootReadable | the root box is never a drop box: the issuer's read-back before a publish is a member's, so on a fresh relay it makes the broadcast members read (relay-server `spec/Reach.tla` KindOf) | `holder-read` (relay org v0.1.3 to v0.1.6: no machine could join an organisation made on a fresh relay) |
 | MoveCompletes (LiveSpec) | a bundle in flight ends with its machine serving, holding the box and publishing (or moving it on) | `old-keeps-writing`, `release-without-fence`, `refuse-own-tombstone`, `refuse-finished-tombstone` (the VM wrapper's receive before) |
 
 | Action | code |
@@ -88,10 +89,10 @@ which may take a vacant hold once and is revoked by the owner).
 | XTake, Revoke | another machine's holder declaration on a vacant hold; the relay's release of a revoked holder |
 | EarlyRelease, XRelease | mutants only (`release-without-fence`, `handover-to-anyone`); coverage skips them |
 
-`OrgHolds.cfg` (a move, a move back and a move onto the finished tombstone, X once): 293 states;
+`OrgHolds.cfg` (a fresh relay or a published root; a move, a move back and a move onto the finished tombstone, X once): 385 states;
 `OrgHoldsLive.cfg` the same under LiveSpec. Mutants in `holds-mutants.txt`;
 witnesses `WitnessMoved`, `WitnessMovedBack`, `WitnessBackUnpublished`,
-`WitnessTakenVacant`, `WitnessLateWrite`, `WitnessFinished`, `WitnessReturnToFinished`. Not traced
+`WitnessTakenVacant`, `WitnessLateWrite`, `WitnessFinished`, `WitnessReturnToFinished`, `WitnessReadFirst`. Not traced
 yet (gap: the holds are relay state; the move's own recorder covers the
 fence, send and import).
 
@@ -180,7 +181,7 @@ two configs, its mutants, witnesses and coverage.
 | the issuer directory's lock orders every act and the fence (`orgissuer.Lock`); the log is synced before an act takes effect (`Store.Sink`) | Fence, the acts | `org/orgissuer/store.go` |
 | the old host is honest when it fences: a copy of its keys taken before (a disk image, malware) is a stolen issuer, bounded by the issuer certificate's 30 days | OldCannotIssue | the threat model: an issuer key is a key the owner protects |
 | the move completes within the fresh CRL's life (1 h), or the fleet fails closed until it does | MoveCompletes (untimed here) | the design: a move is the owner at both machines |
-| a shared mailbox's hold is decided by the mailbox service in one statement per touch; a release vacates only the caller's own hold | OrgHolds SvcWrite, Release, XTake | relay-server `spec/Reach.tla` (GiveUp, ReleaseOnlyOwn), `internal/application/mailbox/scope.go` |
+| a shared mailbox's hold is decided by the mailbox service in one statement per touch; a release vacates only the caller's own hold; its kind (broadcast or drop box) is set by its first declared touch and never changes | OrgHolds SvcRead, SvcWrite, Release, XTake | relay-server `spec/Reach.tla` (GiveUp, ReleaseOnlyOwn), `internal/application/mailbox/scope.go` |
 | a running issuer service holds the serve lock (`flock`) for as long as it may publish; the lock is released when its process ends | OrgHolds Lock | `orgenrol/issuer.go` (`Run`), `org/internal/orgfiles` |
 | the owner revokes a machine that takes a vacant hold (denial of service is outside the threat model) | OrgHolds Revoke (fair) | the mailbox service: a vacant hold is taken by the first holder declaration |
 

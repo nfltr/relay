@@ -57,7 +57,7 @@ holds_spec() {
 	spec=OrgHolds
 	actprops="HolderKeeps"
 	mfile=holds-mutants.txt
-	witnesses="WitnessMoved WitnessMovedBack WitnessBackUnpublished WitnessTakenVacant WitnessLateWrite WitnessFinished WitnessReturnToFinished"
+	witnesses="WitnessMoved WitnessMovedBack WitnessBackUnpublished WitnessTakenVacant WitnessLateWrite WitnessFinished WitnessReturnToFinished WitnessReadFirst"
 	covskip="EarlyRelease|XRelease"
 }
 # OrgHosted.tla: SelfRenew and AutoActivate are taken only under a mutant.

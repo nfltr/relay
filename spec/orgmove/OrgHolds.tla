@@ -11,7 +11,16 @@
 \* machine is refused the holder's ops. One box stands for the four here:
 \* the issuer touches them all the same way. Members' reads do not depend
 \* on the hold (relay-server spec/Reach.tla SharedReadableByMembers) and
-\* are not modelled.
+\* are not modelled, but the kind of the root box is: the relay makes a
+\* shared mailbox a broadcast or a drop box at its first declared touch
+\* (a holder's append or a member's pull: broadcast; a holder's pull or
+\* ack: drop box; relay-server spec/Reach.tla KindOf) and never changes
+\* it. Members read the root (the join, the keeper), so it must be a
+\* broadcast: the issuer reads it back before it publishes (a newer CRL
+\* of issuers the owner's machine published) as a member reads it. A
+\* fresh relay holds no box yet (Init's kind None). Mutant holder-read
+\* (relay org v0.1.3 to v0.1.6): that read declared the hold, so on a
+\* fresh relay the root became a drop box and no machine could join.
 \*
 \* The design: `nfltr org move send` gives the holds up (the `release`
 \* declaration: a holder's release vacates its own hold, anyone else's
@@ -56,18 +65,21 @@ VARIABLES
     moves,   \* fences so far
     wrote,   \* wrote[h]: h's issuer published since it began serving (finish's guard reads the relay's CRL)
     early,   \* history: a finish before the other machine published
-    bad      \* X's acts so far
+    bad,     \* X's acts so far
+    kind     \* the root box at the relay: None (not made yet), "broadcast" or "dropbox"
 
-vars == <<org, svc, step, hold, bundle, moves, wrote, early, bad>>
+vars == <<org, svc, step, hold, bundle, moves, wrote, early, bad, kind>>
 
+\* A fresh relay (no box yet) or one A has published to.
 Init ==
+    /\ kind \in {None, "broadcast"}
     /\ org = [h \in Iss |-> IF h = A THEN "serving" ELSE "none"]
     /\ svc = [h \in Iss |-> "off"]
     /\ step = [h \in Iss |-> "idle"]
-    /\ hold = A
+    /\ hold = IF kind = None THEN None ELSE A
     /\ bundle = None
     /\ moves = 0
-    /\ wrote = [h \in Iss |-> h = A]
+    /\ wrote = [h \in Iss |-> h = A /\ kind # None]
     /\ early = FALSE
     /\ bad = 0
 
@@ -81,6 +93,7 @@ TypeOK ==
     /\ wrote \in [Iss -> BOOLEAN]
     /\ early \in BOOLEAN
     /\ bad \in 0..MaxBad
+    /\ kind \in {None, "broadcast", "dropbox"}
 
 ----------------------------------------------------------------------------
 \* The issuer service (orgenrol.Service.Run): it holds the serve lock while
@@ -91,12 +104,20 @@ TypeOK ==
 SvcStart(h) ==
     /\ org[h] = "serving" /\ svc[h] = "off" /\ step[h] = "idle"
     /\ svc' = [svc EXCEPT ![h] = "on"]
-    /\ UNCHANGED <<org, step, hold, bundle, moves, wrote, early, bad>>
+    /\ UNCHANGED <<kind, org, step, hold, bundle, moves, wrote, early, bad>>
 
+\* The read also reads the root back as a member (orgenrol readRoot): on
+\* a fresh relay that makes the box a broadcast, vacant. Mutant
+\* holder-read: the read declares the hold (a drop box, held by h).
 SvcRead(h) ==
     /\ svc[h] = "on" /\ org[h] = "serving"
     /\ svc' = [svc EXCEPT ![h] = "pending"]
-    /\ UNCHANGED <<org, step, hold, bundle, moves, wrote, early, bad>>
+    /\ IF Mutant = "holder-read"
+       THEN /\ kind' = IF kind = None THEN "dropbox" ELSE kind
+            /\ hold' = IF hold = None THEN h ELSE hold
+       ELSE /\ kind' = IF kind = None THEN "broadcast" ELSE kind
+            /\ UNCHANGED hold
+    /\ UNCHANGED <<org, step, bundle, moves, wrote, early, bad>>
 
 \* The publish (mailbox append with the holder declaration): accepted when
 \* h holds the box or it is vacant (the declaration takes it), refused
@@ -109,6 +130,7 @@ SvcRead(h) ==
 SvcWrite(h) ==
     /\ svc[h] = "pending"
     /\ svc' = [svc EXCEPT ![h] = "on"]
+    /\ kind' = IF kind = None THEN "broadcast" ELSE kind
     /\ IF hold \in {h, None}
        THEN /\ hold' = h
             /\ wrote' = [wrote EXCEPT ![h] = TRUE]
@@ -119,7 +141,7 @@ SvcWrite(h) ==
 SvcStop(h) ==
     /\ svc[h] = "on" /\ org[h] # "serving"
     /\ svc' = [svc EXCEPT ![h] = "off"]
-    /\ UNCHANGED <<org, step, hold, bundle, moves, wrote, early, bad>>
+    /\ UNCHANGED <<kind, org, step, hold, bundle, moves, wrote, early, bad>>
 
 ----------------------------------------------------------------------------
 \* nfltr org move send on h (orgissuer.Send, then orgcli): the fence under
@@ -133,19 +155,19 @@ Fence(h) ==
     /\ org' = [org EXCEPT ![h] = "fenced"]
     /\ step' = [step EXCEPT ![h] = "fenced"]
     /\ moves' = moves + 1
-    /\ UNCHANGED <<svc, hold, bundle, wrote, early, bad>>
+    /\ UNCHANGED <<kind, svc, hold, bundle, wrote, early, bad>>
 
 EarlyRelease(h) ==
     /\ Mutant = "release-without-fence"
     /\ org[h] = "serving" /\ step[h] = "idle" /\ hold = h
     /\ hold' = None
-    /\ UNCHANGED <<org, svc, step, bundle, moves, wrote, early, bad>>
+    /\ UNCHANGED <<kind, org, svc, step, bundle, moves, wrote, early, bad>>
 
 Lock(h) ==
     /\ step[h] = "fenced"
     /\ svc[h] = "off" \/ Mutant = "old-keeps-writing"
     /\ step' = [step EXCEPT ![h] = "locked"]
-    /\ UNCHANGED <<org, svc, hold, bundle, moves, wrote, early, bad>>
+    /\ UNCHANGED <<kind, org, svc, hold, bundle, moves, wrote, early, bad>>
 
 \* The release keeps a hold that is not h's (its postcondition: h holds
 \* nothing), so a send run again, or one after X took the vacant hold,
@@ -155,7 +177,7 @@ Release(h) ==
     /\ hold' = IF hold = h /\ Mutant # "release-without-fence" THEN None ELSE hold
     /\ step' = [step EXCEPT ![h] = "sent"]
     /\ bundle' = Other(h)
-    /\ UNCHANGED <<org, svc, moves, wrote, early, bad>>
+    /\ UNCHANGED <<kind, org, svc, moves, wrote, early, bad>>
 
 \* nfltr org move receive on h: a machine with no organisation, its
 \* finished tombstone, or (the move back) its fenced tombstone with the
@@ -173,7 +195,7 @@ Import(h) ==
     /\ step' = [step EXCEPT ![h] = "idle"]
     /\ wrote' = [wrote EXCEPT ![h] = FALSE]
     /\ bundle' = None
-    /\ UNCHANGED <<svc, hold, moves, early, bad>>
+    /\ UNCHANGED <<kind, svc, hold, moves, early, bad>>
 
 \* nfltr org move finish on h: deletes the moved keys once the relay holds
 \* a CRL past the fence's (the other machine published). Mutant
@@ -183,28 +205,32 @@ Finish(h) ==
     /\ wrote[Other(h)] \/ Mutant = "finish-early"
     /\ org' = [org EXCEPT ![h] = "finished"]
     /\ early' = (early \/ ~wrote[Other(h)])
-    /\ UNCHANGED <<svc, step, hold, bundle, moves, wrote, bad>>
+    /\ UNCHANGED <<kind, svc, step, hold, bundle, moves, wrote, bad>>
 
 ----------------------------------------------------------------------------
 \* X, another machine of the account: its holder declaration takes a vacant
 \* hold; the owner revokes it and the relay vacates its holds. Mutant
 \* handover-to-anyone: X's release vacates a hold that is not X's.
 
+\* X's take is a holder's append (on a fresh relay it makes the broadcast);
+\* X's holder pull of a box not yet made would make it a drop box: denial
+\* of service, outside the threat model, not modelled.
 XTake ==
     /\ hold = None /\ bad < MaxBad
     /\ hold' = X /\ bad' = bad + 1
+    /\ kind' = IF kind = None THEN "broadcast" ELSE kind
     /\ UNCHANGED <<org, svc, step, bundle, moves, wrote, early>>
 
 XRelease ==
     /\ Mutant = "handover-to-anyone"
     /\ hold \in Iss /\ bad < MaxBad
     /\ hold' = None /\ bad' = bad + 1
-    /\ UNCHANGED <<org, svc, step, bundle, moves, wrote, early>>
+    /\ UNCHANGED <<kind, org, svc, step, bundle, moves, wrote, early>>
 
 Revoke ==
     /\ hold = X
     /\ hold' = None
-    /\ UNCHANGED <<org, svc, step, bundle, moves, wrote, early, bad>>
+    /\ UNCHANGED <<kind, org, svc, step, bundle, moves, wrote, early, bad>>
 
 Next ==
     \/ \E h \in Iss :
@@ -236,6 +262,9 @@ OldCannotWrite == \A h \in Iss : (org[h] # "serving" /\ step[h] = "sent") => hol
 \* vacated by any other machine (an action property).
 HolderKeeps == [][\A h \in Iss : (hold = h /\ org[h] = "serving") => hold' = h]_vars
 
+\* Members can read the root: it is never a drop box.
+RootReadable == kind # "dropbox"
+
 \* finish deletes the moved keys only after the other machine published.
 FinishAfterPublish == ~early
 
@@ -253,4 +282,6 @@ WitnessLateWrite == ~(org[A] = "fenced" /\ svc[A] = "pending" /\ hold = A)
 WitnessFinished == ~(org[A] = "finished" /\ hold = B)
 \* The third move: a bundle on its way to B's finished tombstone.
 WitnessReturnToFinished == ~(bundle = B /\ org[B] = "finished")
+\* A fresh relay: the issuer's read made the root a broadcast before its first publish.
+WitnessReadFirst == ~(kind = "broadcast" /\ hold = None /\ ~wrote[A] /\ moves = 0)
 =============================================================================
