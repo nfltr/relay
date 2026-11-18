@@ -5,7 +5,7 @@ go 1.27.2
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/nfltr/relay/client v0.22.4
+	github.com/nfltr/relay/client v0.23.0
 	github.com/stripe/krl v0.0.0-20250403164848-fcf8101b2f53
 	golang.org/x/crypto v0.57.0
 	golang.org/x/sys v0.48.0
@@ -14,7 +14,7 @@ require (
 require (
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0 // indirect
-	github.com/nfltr/relay/proto v0.20.3 // indirect
+	github.com/nfltr/relay/proto v0.21.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/oauth2 v0.38.0 // indirect
 	golang.org/x/text v0.42.0 // indirect

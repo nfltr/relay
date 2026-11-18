@@ -30,10 +30,10 @@ github.com/nfltr/link/peerlink/quiclink v0.5.23 h1:IPIMDJtVZN2XU9HFoqbeJ11Bz0qWD
 github.com/nfltr/link/peerlink/quiclink v0.5.23/go.mod h1:+p1lGYdfQSA3NPMTM3yI/EdFyvnvKONw802zDwk+Lks=
 github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261112202211-40e0a2570e52 h1:y3Vhg7vmt+JPeDoPm2gwPgXVCWOWCf/YlzlHFo9MhNM=
 github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261112202211-40e0a2570e52/go.mod h1:KlJwkQMVhFf/rlYdkm18TkxbgyKn1UO4AtWyo/hOj10=
-github.com/nfltr/relay/client v0.22.4 h1:gRCPJ7CImNxPkwGiEGfXtldkw/9cxfdTi6aCjBGpnE4=
-github.com/nfltr/relay/client v0.22.4/go.mod h1:BR5C4b84PatbpcBs60YZBi3gpwx8xr4nY/+bLkeSLeI=
-github.com/nfltr/relay/proto v0.20.3 h1:vaDE2tx0Rw7aMAFW2ns93o/qs+pLbF0IibsaZrAucOk=
-github.com/nfltr/relay/proto v0.20.3/go.mod h1:YK2dpSdomQ2Xi0XpWreitMunRSSIRDEXGJ6etBg5oxQ=
+github.com/nfltr/relay/client v0.23.0 h1:DBiexSE/7qXCCk6cyNm3kZwVmDJ80oOUFeH+b5a6lrI=
+github.com/nfltr/relay/client v0.23.0/go.mod h1:LGWdtT5Mxa9Q1OOY+CR8Q+UnXbgs8R7h+lZ9jhG32eU=
+github.com/nfltr/relay/proto v0.21.0 h1:XwL+SOhsaZkwPaf2SBZn8O561QI7to+mqmLiXvD7Wjs=
+github.com/nfltr/relay/proto v0.21.0/go.mod h1:YK2dpSdomQ2Xi0XpWreitMunRSSIRDEXGJ6etBg5oxQ=
 github.com/stripe/krl v0.0.0-20250403164848-fcf8101b2f53 h1:+t8tvRqwYsJyN2t9/ZA0D96X9RfN/iFA+uSMX0mOdsA=
 github.com/stripe/krl v0.0.0-20250403164848-fcf8101b2f53/go.mod h1:O9y/I0HmAEvcQpoIHFDetkNJBBJr4UN/zjL5qvJjAfU=
 go.opentelemetry.io/auto/sdk v1.2.1 h1:jXsnJ4Lmnqd11kwkBV2LgLoFMZKizbCi5fNZ/ipaZ64=
