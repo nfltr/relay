@@ -285,6 +285,9 @@ type Keeper struct {
 	// package's defaults (tests shorten them).
 	Now                                func() time.Time
 	AnswerWait, RetryWait, FollowEvery time.Duration
+	// WakeEvery bounds the wait for the renewal: the keeper reads the
+	// clock again at least this often (zero: wakeEvery).
+	WakeEvery time.Duration
 }
 
 func (k Keeper) defaults() Keeper {
@@ -300,8 +303,17 @@ func (k Keeper) defaults() Keeper {
 	if k.FollowEvery <= 0 {
 		k.FollowEvery = FollowEvery
 	}
+	if k.WakeEvery <= 0 {
+		k.WakeEvery = wakeEvery
+	}
 	return k
 }
+
+// wakeEvery bounds one timer of the wait for the renewal: timers run on
+// the monotonic clock, which stands still while the host sleeps, and the
+// certificate's lifetime is wall clock (guard
+// TestKeeperRenewsOnTimeAfterTheHostSlept).
+const wakeEvery = time.Minute
 
 // Run keeps the machine until ctx ends; it returns once its follows did.
 func (k Keeper) Run(ctx context.Context) {
@@ -326,7 +338,7 @@ func (k Keeper) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		changed := m.Changed()
 		if d := m.RenewDue(k.Now()).Sub(k.Now()); d > 0 {
-			t := time.NewTimer(d)
+			t := time.NewTimer(min(d, k.WakeEvery))
 			select {
 			case <-ctx.Done():
 			case <-changed: // a rotation, or another process renewed

@@ -924,3 +924,22 @@ func TestJoinTakesTheRootsCRLOfIssuers(t *testing.T) {
 		t.Fatal("a join took an answer from an issuer the root revoked")
 	}
 }
+
+// The host sleeps under the keeper's wait for the renewal (its monotonic
+// clock, which timers run on, stands still; the wall clock moves): the
+// keeper reads the clock again at least every WakeEvery, so it renews when
+// the wall clock reaches 2/3 of the lifetime, not as late as the host
+// slept (incident 2026-11-18: the account certificate's single timer).
+func TestKeeperRenewsOnTimeAfterTheHostSlept(t *testing.T) {
+	f := newFleet(t)
+	before := serial(f.m)
+	k := f.keeper()
+	// The machine's own clock: the issuer's stays, so no new CRL wakes
+	// the keeper (a follow would, as in production; this checks the wait).
+	mclk := &clock{t: f.clk.Now()}
+	k.Now, k.WakeEvery = mclk.Now, 10*time.Millisecond
+	keep(t, f.ctx, k)
+	time.Sleep(50 * time.Millisecond) // the keeper waits for the renewal
+	mclk.Add(17 * time.Hour)          // the host slept
+	eventually(t, "renewed after the host slept", func() bool { return serial(f.m) != before })
+}
