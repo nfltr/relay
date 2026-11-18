@@ -137,11 +137,6 @@ check-testknobs:
 test-linkdebug:
 	./scripts/test-linkdebug.sh client proto org
 
-# test-race, then test-linkdebug beside fuzz-short (the CI step).
-.PHONY: test-ci
-test-ci:
-	./scripts/test-ci.sh
-
 # linkvet (github.com/nfltr/link/linkvet at the version scripts/check-linkvet.sh
 # pins) over the non-test code: fails on a finding scripts/linkvet-allow.txt
 # does not list (each entry with a reason) and on a stale entry.

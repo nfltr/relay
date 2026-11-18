@@ -120,8 +120,8 @@ case "${1:-}" in
 maps) check_maps "${2:-HEAD}" ;;
 ci)
 	git rev-parse -q --verify origin/main >/dev/null 2>&1 ||
-		git fetch -q --depth=200 origin main:refs/remotes/origin/main 2>/dev/null || true
-	[ "$(git rev-parse --is-shallow-repository)" = false ] || git fetch -q --deepen=200 origin 2>/dev/null || true
+		git fetch -q --filter=blob:none --depth=200 origin main:refs/remotes/origin/main 2>/dev/null || true
+	[ "$(git rev-parse --is-shallow-repository)" = false ] || git fetch -q --filter=blob:none --deepen=200 origin 2>/dev/null || true
 	if ! git merge-base origin/main HEAD >/dev/null 2>&1; then
 		echo "spec drift: skipped, no common history with origin/main here (the pre-push hook checks main)"
 		exit 0

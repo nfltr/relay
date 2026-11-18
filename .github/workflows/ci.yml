@@ -14,7 +14,42 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  # The long parts as jobs of their own, longest first: make ci
+  # (scripts/ci.sh) starts the jobs in this order, at most one per CPU at
+  # once, in one checkout; each job's steps run in order.
+  # make test is not run: test-race runs the same tests with -race.
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      - run: make test-race
+      - run: make test-linkdebug
+  go-mutants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      - run: make test-go-mutants
+  # The cheap checks (each under a minute) run first, then the ProVerif and
+  # TLC models.
+  static:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -32,8 +67,6 @@ jobs:
       - run: make build
       - run: make vet
       - run: make check-fmt
-      # Fail fast: the cheap checks (each under a minute) run before the long
-      # ones (make test-ci, the ProVerif and TLC models, the Go mutants).
       - run: make check-testknobs
       - run: make check-linkvet
       # the nf1 handshake as js/wasm: reproducible, under its size budget, runs under node
@@ -50,11 +83,7 @@ jobs:
       - run: make spec-bindings
       - run: make check-spec-drift
       - run: make check-spec-actions
-      # test-race, test-linkdebug and fuzz-short side by side; make test
-      # (the same tests without -race) is not run: test-race runs them all.
-      - run: make test-ci
-      # ProVerif is built from source once (scripts/fetch-proverif.sh); its
-      # models take about 14 min, so they run after make test-ci.
+      # ProVerif is built from source once (scripts/fetch-proverif.sh).
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/relay-proverif
@@ -63,4 +92,17 @@ jobs:
       - run: make spec spec-mutants spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-bptraces
       # the organisation issuer's models (spec/enrol, spec/orgmove)
       - run: make spec-enrol-ci spec-orgmove-ci spec-appenrol-ci
-      - run: make test-go-mutants
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      - run: make fuzz-short
