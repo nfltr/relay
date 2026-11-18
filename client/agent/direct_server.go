@@ -396,8 +396,15 @@ func (d *directServer) reattach(s pathStream) {
 	}
 	sess := d.find(o, nil)
 	if sess == nil {
+		// ABORT, not a reset: the client's session is gone here (forgotten
+		// past the detach bound, or this process restarted), so it ends at
+		// once instead of re-attaching until its own bound with its Close
+		// waiting on an END ack (link spec/DirectPath.tla: a gone server
+		// answers an OPEN with ABORT; TestDirectReattachOfForgottenSessionEndsIt).
+		// A direct stream's miss stays a reset (acceptDirect): its
+		// exporter may be another connection's; the fallback lands here.
 		d.logger.Info("direct path: a relayed re-attach no session's token names, refused")
-		_ = s.Reset()
+		pathswitch.Refuse(o)
 		return
 	}
 	if err := sess.c.Attach(o, PathRelayed); err != nil {

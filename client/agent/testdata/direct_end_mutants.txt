@@ -1,0 +1,9 @@
+# Planted bugs of a direct-path session's end at the agent
+# (scripts/go-mutants.sh client/agent/testdata/direct_end_mutants.txt, make
+# test-go-mutants, in make ci): each line "<mutant> | <file> | <exact line
+# text> | <replacement> | <test>". Model: link spec/DirectPath.tla (a
+# server answers a re-attach: RLeftAnswer after its clean end, ABORT once
+# gone); both mutants are past bugs (lanes FLAKEGROUP, DIRECTEND: a
+# client's Close waited 30 s).
+forget-at-done | direct_server.go | 		s.ended.Store(true) | 		d.mu.Lock(); delete(d.sessions, s); d.mu.Unlock(); s.ended.Store(true) | TestDirectEndedSessionStaysFindable
+reset-not-refuse | direct_server.go | 		pathswitch.Refuse(o) | 		_ = o.Epoch | TestDirectReattachOfForgottenSessionEndsIt

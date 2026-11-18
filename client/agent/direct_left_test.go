@@ -23,9 +23,11 @@ func TestDirectEndedSessionStaysFindable(t *testing.T) {
 	d := &directServer{sessions: map[*directSession]struct{}{}, detach: 300 * time.Millisecond}
 	key, qk := []byte("session exporter, 32 bytes long."), []byte("quic exporter, 32 bytes long....")
 	c := pathswitch.Server(pathStream{Conn: nopConn{}}, PathRelayed, pathswitch.Config{Detach: 10 * time.Millisecond})
-	d.register(c, key)
-	c.Abort() // its Done within the 10 ms bound
-	<-c.Done()
+	s := d.register(c, key)
+	c.Abort()             // its Done within the 10 ms bound
+	for !s.ended.Load() { // the registry saw the end
+		time.Sleep(time.Millisecond)
+	}
 	o := pathswitch.Open{Epoch: 2, Token: pathToken(key, roleClient, 2, qk)}
 	if d.find(o, qk) == nil {
 		t.Fatal("the agent forgot the session at its end: its client's re-attach is reset, not answered")
