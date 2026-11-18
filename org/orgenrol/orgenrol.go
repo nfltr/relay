@@ -82,7 +82,7 @@ func answerOf(ctx context.Context, mb Mailbox, orgID string, ids []string, wait 
 	defer cancel()
 	var cursor uint64
 	for {
-		envs, _, err := mb.Pull(ctx, orgpki.AnswersMailbox(orgID), cursor, 0, min(pollWait, wait))
+		envs, _, err := member(mb).Pull(ctx, orgpki.AnswersMailbox(orgID), cursor, 0, min(pollWait, wait))
 		if ctx.Err() != nil {
 			return orgpki.Answer{}, fmt.Errorf("no answer from the organisation's issuer within %s (is the issuer running: nfltr node or nfltr org serve on the issuer's machine?)", wait)
 		}
@@ -112,9 +112,33 @@ func randomID() string {
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
-// latest is the payload of mailbox's newest message, nil when it has none.
+// member is mb declaring a member's calls (mailboxclient.ShareMember):
+// every pull here but the issuer's of the enrol drop box reads a
+// broadcast (the root, the CRL, the answers), and whoever reads it, the
+// issuer too, reads it as a member. The relay makes a shared mailbox a
+// broadcast or a drop box at its first declared touch, for good
+// (relay-server spec/Reach.tla KindOf): a holder's pull of a broadcast not
+// made yet made it a drop box no member reads (the issuer's read-back of
+// the root on a fresh relay, relay org v0.1.3 to v0.1.6:
+// spec/orgmove/OrgHolds.tla RootReadable). A Mailbox that declares nothing
+// (an undeclared mailboxclient.Client, a test's) is returned as it is.
+func member(mb Mailbox) Mailbox {
+	switch c := mb.(type) {
+	case mailboxclient.Client:
+		if c.Share != "" {
+			c.Share = mailboxclient.ShareMember
+		}
+		return c
+	case interface{ Declare(string) Mailbox }: // a test's relay that keeps kinds
+		return c.Declare(mailboxclient.ShareMember)
+	}
+	return mb
+}
+
+// latest is the payload of broadcast mailbox's newest message, nil when it
+// has none, read as a member.
 func latest(ctx context.Context, mb Mailbox, mailbox string, wait time.Duration) ([]byte, error) {
-	envs, _, err := mb.Pull(ctx, mailbox, 0, 0, wait)
+	envs, _, err := member(mb).Pull(ctx, mailbox, 0, 0, wait)
 	if err != nil || len(envs) == 0 {
 		return nil, err
 	}
@@ -132,6 +156,7 @@ func latest(ctx context.Context, mb Mailbox, mailbox string, wait time.Duration)
 // port) redials at once, so a push lands near the mailbox client's ping
 // bound, not retryWait later (TestFollowPullsAgainAtOnceAfterAFailedPull). It returns when ctx ends.
 func follow(ctx context.Context, mb Mailbox, mailbox string, every time.Duration, apply func([]byte) error, retry func() <-chan struct{}, logger *slog.Logger) {
+	mb = member(mb) // a broadcast
 	var cursor uint64
 	var fresh time.Time
 	failed := false

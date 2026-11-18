@@ -106,7 +106,7 @@ SvcStart(h) ==
     /\ svc' = [svc EXCEPT ![h] = "on"]
     /\ UNCHANGED <<kind, org, step, hold, bundle, moves, wrote, early, bad>>
 
-\* The read also reads the root back as a member (orgenrol readRoot): on
+\* The read also reads the root back as a member (orgenrol latest): on
 \* a fresh relay that makes the box a broadcast, vacant. Mutant
 \* holder-read: the read declares the hold (a drop box, held by h).
 SvcRead(h) ==

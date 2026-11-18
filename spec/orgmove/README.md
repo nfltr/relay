@@ -249,6 +249,7 @@ yet (the hosting lanes H2, H3).
 | OrgMove.tla | org/orgenrol/issuer.go |
 | TraceOrgMove.tla | org/orgpki/trace_on.go |
 | OrgHolds.tla | org/orgenrol/issuer.go |
+| OrgHolds.tla | org/orgenrol/orgenrol.go |
 | OrgHolds.tla | org/orgissuer/bundle.go |
 | OrgHosted.tla | client/orgid/verify.go |
 | OrgHosted.tla | org/orgpki/profile.go |

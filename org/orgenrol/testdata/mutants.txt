@@ -38,3 +38,7 @@ sign-in-ended-untyped | orgenrol.go | 			if a.SignInEnded { // a renewal past it
 # A join takes the root's CRL of issuers beside the root before it checks
 # the answer (spec/orgmove/OrgHosted.tla Deliver, lane ORGH1R).
 join-skips-issuers | machine.go | 	if rm.Issuers != nil { | 	if false { | TestJoinTakesTheRootsCRLOfIssuers
+# Every read of a broadcast (the root, the CRL, the answers) is a member's
+# (spec/orgmove/OrgHolds.tla holder-read): the issuer's holder read-back of
+# the root made it a drop box on a fresh relay, and no machine could join.
+holder-read | orgenrol.go | 	envs, _, err := member(mb).Pull(ctx, mailbox, 0, 0, wait) | 	envs, _, err := mb.Pull(ctx, mailbox, 0, 0, wait) | TestIssuerOnAFreshRelayLeavesTheRootReadable
