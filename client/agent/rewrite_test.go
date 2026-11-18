@@ -197,6 +197,7 @@ func TestForwardRoutes(t *testing.T) {
 // A text body over the rewrite cap reaches the visitor whole, unrewritten,
 // with its own length (it was once cut at the cap and ended cleanly).
 func TestResponseBodyOverRewriteCapIsWhole(t *testing.T) {
+	t.Parallel() // waits on timers and peers, not the CPU: overlaps the others
 	const size = maxRewriteBody + 1<<20
 	resp := &http.Response{
 		StatusCode:    http.StatusOK,

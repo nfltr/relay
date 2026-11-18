@@ -225,6 +225,7 @@ func TestNewE2EETLSConfig(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestE2EE_TLSHandshake(t *testing.T) {
+	t.Parallel() // waits on timers and peers, not the CPU: overlaps the others
 	t.Helper()
 
 	cert, fp, err := generateSelfSignedCert("handshake-test")

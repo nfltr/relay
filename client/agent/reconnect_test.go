@@ -141,6 +141,7 @@ func (f *tcpRelay) ConnectTCP(stream grpc.BidiStreamingServer[pb.TCPData, pb.TCP
 // TestAgentTCPTunnelFollowsReconnect: after a reconnect the TCP tunnel
 // runs on the new connection, not the closed one of the cycle before.
 func TestAgentTCPTunnelFollowsReconnect(t *testing.T) {
+	t.Parallel() // waits on timers and peers, not the CPU: overlaps the others
 	f := &tcpRelay{fakeRelay{connected: make(chan struct{}, 1000)}, make(chan struct{}, 1000)}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

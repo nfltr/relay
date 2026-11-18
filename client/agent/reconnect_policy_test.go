@@ -79,6 +79,7 @@ func startScripted(t *testing.T, next func() error) (*scriptedRelay, *agent, con
 
 // Errors the old allow-list ended the agent on redial now.
 func TestReconnectRedialsOnUnfamiliarErrors(t *testing.T) {
+	t.Parallel() // waits on timers and peers, not the CPU: overlaps the others
 	for name, err := range map[string]error{
 		"unknown code":           status.Error(codes.Unknown, "something unfamiliar"),
 		"other failed precond.":  status.Error(codes.FailedPrecondition, "services conflict"),
@@ -106,6 +107,7 @@ func TestReconnectRedialsOnUnfamiliarErrors(t *testing.T) {
 }
 
 func TestReconnectStopsOnFatalClasses(t *testing.T) {
+	t.Parallel() // waits on timers and peers, not the CPU: overlaps the others
 	for name, c := range map[string]struct {
 		err  error
 		hint string

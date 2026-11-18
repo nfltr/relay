@@ -333,6 +333,7 @@ func TestOrgSessionEndsAtUntil(t *testing.T) {
 // refuses ends at once, one it still admits goes on (Enrol.tla
 // RevocationBound, mutant no-cut-on-update).
 func TestOrgSessionCutOnUpdate(t *testing.T) {
+	t.Parallel() // waits on timers and peers, not the CPU: overlaps the others
 	o := newTestOrg(t)
 	org := o.agentOrg(o.machine(t, "web", nil, time.Hour, false))
 	l := orgSessions(t, org, "db")

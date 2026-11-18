@@ -442,6 +442,7 @@ func TestAgentLinkUDPBlocked(t *testing.T) {
 // failed. TCP waits for the redials only when the first refusal came
 // within QUIC's head start; under load it may already race, and win.
 func TestAgentLinkQUICRefusedRedials(t *testing.T) {
+	t.Parallel() // waits on timers and peers, not the CPU: overlaps the others
 	// slow: the refusals outlast QUIC's head start, so TCP races and wins.
 	for name, slow := range map[string]time.Duration{"fast": 0, "slow": quicHeadStart + 50*time.Millisecond} {
 		t.Run(name, func(t *testing.T) { testQUICRefusedRedials(t, slow) })
