@@ -103,10 +103,12 @@ func serveNATPMP(t *testing.T, mapsPort int) *natpmpGateway {
 			_, _ = pc.WriteTo(out, from)
 		}
 	}()
-	discoverGateway = func() (net.IP, error) { return net.IPv4(127, 0, 0, 1), nil }
-	t.Cleanup(func() { discoverGateway = func() (net.IP, error) { return nil, errors.New("tests: no LAN gateway") } })
 	return g
 }
+
+// localGateway: a test endpoint's gateway is 127.0.0.1 (the NAT-PMP
+// server a test serves), set on the endpoint, never in discoverGateway.
+func localGateway() (net.IP, error) { return net.IPv4(127, 0, 0, 1), nil }
 
 func (g *natpmpGateway) lifetimes() []uint32 {
 	g.mu.Lock()
@@ -122,6 +124,7 @@ func (g *natpmpGateway) lifetimes() []uint32 {
 func TestDirectMappedAgentGoesDirect(t *testing.T) {
 	r := newDirectRig(t, directReflexive) // no host candidates
 	ep := r.l.targets.services.direct.ep
+	ep.gateway = localGateway
 	g := serveNATPMP(t, ep.pc.LocalAddr().(*net.UDPAddr).Port)
 	r.l.targets.qad.Store(&qadTarget{addr: symmetricQAD(t, nil, blackhole(t)), tls: &tls.Config{InsecureSkipVerify: true}}) // #nosec G402 -- a test's relay
 	_, tc, events := r.session(t)
@@ -142,6 +145,7 @@ func TestDirectPortMapLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	ep.loopback = true
+	ep.gateway = localGateway
 	g := serveNATPMP(t, ep.pc.LocalAddr().(*net.UDPAddr).Port)
 	for range 2 {
 		a, ok := ep.mapped()
@@ -161,6 +165,7 @@ func TestDirectPortMapLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer other.Close() //nolint:errcheck
+	other.gateway = localGateway
 	for range 2 {
 		if a, ok := other.mapped(); ok {
 			t.Fatalf("refused port mapped to %v", a)
@@ -179,12 +184,11 @@ func TestDirectPortMapSilentGateway(t *testing.T) {
 		t.Fatalf("NAT-PMP port taken: %v", err)
 	}
 	defer pc.Close() //nolint:errcheck
-	discoverGateway = func() (net.IP, error) { return net.IPv4(127, 0, 0, 1), nil }
-	defer func() { discoverGateway = func() (net.IP, error) { return nil, errors.New("tests: no LAN gateway") } }()
 	ep, err := NewDirectEndpoint()
 	if err != nil {
 		t.Fatal(err)
 	}
+	ep.gateway = localGateway
 	defer ep.Close() //nolint:errcheck
 	for i, want := range []time.Duration{portMapBound, 0} {
 		start := time.Now()

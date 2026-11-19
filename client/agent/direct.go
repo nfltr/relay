@@ -118,6 +118,7 @@ type DirectEndpoint struct {
 	noHost   bool                      // tests: no host candidates (the reflexive one only)
 	hosts    []netip.AddrPort          // tests: the host candidates (nil: the interfaces')
 	grace    time.Duration             // tests: the LAN grace (0: lanGrace)
+	gateway  func() (net.IP, error)    // tests: the LAN gateway (nil: discoverGateway, which only init sets)
 }
 
 // NewDirectEndpoint opens the socket on an ephemeral port.

@@ -35,6 +35,9 @@ const (
 )
 
 // discoverGateway is the LAN's default IPv4 gateway (the routing table).
+// Only a test package's init replaces it: a test that serves a gateway sets
+// its endpoint's gateway, since a write here races with an earlier test's
+// endpoint still asking (relay stress-cirelay af430bafa063, -race).
 var discoverGateway = gateway.DiscoverGateway
 
 // portMap is an endpoint's mapping: the gateway that made it and the
@@ -54,7 +57,11 @@ type portMap struct {
 // gateway that never answered is left alone for portMapRetry. ok false:
 // no gateway, no answer, or a refusal.
 func (e *DirectEndpoint) mapped() (netip.AddrPort, bool) {
-	gw, err := discoverGateway()
+	discover := discoverGateway
+	if e.gateway != nil {
+		discover = e.gateway
+	}
+	gw, err := discover()
 	if err != nil || gw.To4() == nil {
 		return netip.AddrPort{}, false
 	}
