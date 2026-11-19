@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"errors"
 	"io"
 	"net"
 	"testing"
@@ -94,5 +95,36 @@ func TestPSConnCloseReportsAnUnackedEnd(t *testing.T) {
 				t.Fatal("Close never returned")
 			}
 		})
+	}
+}
+
+// TestPSConnResetReachesAPeerBeforeExit (lane PIPEMATRIX, nfltr-pipe's
+// reliability matrix: reader-closes-direct): an end that resets and then
+// drops its stream at once (a process that exits after Reset) still
+// resets its peer: Reset returns once the peer has the ABORT (bounded).
+// It returned at once, the ABORT still queued, and the peer read the
+// stream's end as a lost path and waited out its detach bound (30 s)
+// before it failed.
+func TestPSConnResetReachesAPeerBeforeExit(t *testing.T) {
+	for i := range 20 {
+		sc, cc := net.Pipe()
+		cfg := pathswitch.Config{Detach: 20 * time.Second}
+		srv := newPSConn(pathswitch.Server(pathStream{Conn: sc}, PathRelayed, cfg), sc)
+		cli := newPSConn(pathswitch.Client(pathStream{Conn: cc}, PathRelayed, cfg), cc)
+		read := make(chan error, 1)
+		go func() { _, err := io.ReadAll(srv); read <- err }()
+		if _, err := cli.Write([]byte("some")); err != nil {
+			t.Fatal(err)
+		}
+		_ = cli.Reset()
+		_ = cc.Close() // the process is gone
+		select {
+		case err := <-read:
+			if !errors.Is(err, pathswitch.ErrReset) {
+				t.Fatalf("run %d: the peer read %v, want pathswitch.ErrReset", i, err)
+			}
+		case <-time.After(5 * time.Second): // well inside the detach bound
+			t.Fatalf("run %d: the peer did not read the reset within 5 s (it waits for its detach bound)", i)
+		}
 	}
 }

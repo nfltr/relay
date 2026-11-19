@@ -468,8 +468,24 @@ func (c *psConn) LocalAddr() net.Addr  { return c.first.LocalAddr() }
 func (c *psConn) RemoteAddr() net.Addr { return c.first.RemoteAddr() }
 
 // Reset: the session's reset (tlsend.Conn.Reset closes its raw conn
-// without close_notify).
-func (c *psConn) Reset() error { c.Abort(); return nil }
+// without close_notify). It returns once the peer has the ABORT (the
+// session's end), at most psResetBound: a caller that exits right after
+// it still resets its peer, which otherwise read the stream's end as a
+// lost path and failed only at its detach bound
+// (TestPSConnResetReachesAPeerBeforeExit).
+func (c *psConn) Reset() error {
+	c.Abort()
+	t := time.NewTimer(psResetBound)
+	defer t.Stop()
+	select {
+	case <-c.Done():
+	case <-t.C:
+	}
+	return nil
+}
+
+// psResetBound: how long Reset waits for the peer to take the ABORT.
+const psResetBound = 2 * time.Second
 
 func (c *psConn) SetDeadline(t time.Time) error {
 	var nt *time.Timer
