@@ -72,6 +72,7 @@ type Listener struct {
 	drained chan struct{} // closed when conns empties (Shutdown waits)
 	err     error         // the agent's end, once it ended by itself
 	closed  bool
+	shut    chan struct{} // closed when the first Close returned (a later Close waits)
 	ended   chan struct{} // closed when the agent's watcher returned
 }
 
@@ -375,14 +376,20 @@ func (l *Listener) Shutdown(ctx context.Context) error {
 }
 
 // Close ends the agent now: sessions waiting are refused, accepted Conns
-// reset (they ride its link).
+// reset (they ride its link). It returns once they were reset and the
+// agent stopped; a Close while another runs waits for it, so a program
+// may exit after any Close returned (TestCloseWaitsForTheFirstClose).
 func (l *Listener) Close() error {
 	l.mu.Lock()
 	if l.closed {
+		shut := l.shut
 		l.mu.Unlock()
+		<-shut
 		return nil
 	}
 	l.closed = true
+	l.shut = make(chan struct{})
+	defer close(l.shut)
 	conns := make([]*Conn, 0, len(l.conns))
 	for c := range l.conns {
 		conns = append(conns, c)
