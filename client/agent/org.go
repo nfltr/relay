@@ -243,12 +243,13 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 // only a connection that closes: no byte of it is read or written.
 func serveNF1(ctx context.Context, s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	hctx, cancel := context.WithTimeout(ctx, e2eeHeaderTimeout)
-	tc, err := p.nf1.Accept(hctx, s)
+	w, bind := tlsend.Wrap(s) // a target's reset reaches the client as one (TestNF1TargetResetIsResetAtClient)
+	tc, err := p.nf1.Accept(hctx, w)
 	cancel()
 	if err != nil {
 		logger.Debug("nf1: session refused", "error", err)
 		dropTarget(target)
 		return
 	}
-	_ = peerlink.Join(tc, target)
+	_ = peerlink.Join(bind(tc.(*tls.Conn)), target) // Admit's
 }

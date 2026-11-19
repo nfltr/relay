@@ -38,6 +38,7 @@ import (
 	"github.com/nfltr/relay/client/capaddr"
 	"github.com/nfltr/relay/client/dgram"
 	"github.com/nfltr/relay/client/nf1"
+	"github.com/nfltr/relay/client/tlsend"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/dataplane"
 )
@@ -311,24 +312,27 @@ func dialNF1Target(ctx context.Context, p sessionPlan, s net.Conn, logger *slog.
 }
 
 // admitNF1 runs l's TLS, proof and verdict on conn within the header
-// bound: the admitted TLS, or nil with conn closed.
-func admitNF1(ctx context.Context, l *nf1.Listener, conn net.Conn, logger *slog.Logger) *tls.Conn {
+// bound: the admitted TLS, its end checked and its Reset sending no
+// close_notify (tlsend: Join passes a target's reset on as a reset,
+// TestNF1TargetResetIsResetAtClient), or nil with conn closed.
+func admitNF1(ctx context.Context, l *nf1.Listener, conn net.Conn, logger *slog.Logger) *tlsend.Conn {
 	hctx, cancel := context.WithTimeout(ctx, e2eeHeaderTimeout)
 	defer cancel()
 	_ = conn.SetDeadline(time.Now().Add(e2eeHeaderTimeout))
-	tc, err := l.Admit(hctx, conn)
+	w, bind := tlsend.Wrap(conn)
+	tc, err := l.Admit(hctx, w)
 	if err != nil {
 		logger.Debug("nf1: session refused", "error", err)
 		_ = conn.Close()
 		return nil
 	}
 	_ = conn.SetDeadline(time.Time{})
-	return tc
+	return bind(tc)
 }
 
 // join bridges an admitted session to its target; tc nil: the target is
 // closed unused.
-func join(tc *tls.Conn, target net.Conn) {
+func join(tc *tlsend.Conn, target net.Conn) {
 	if tc == nil {
 		dropTarget(target)
 		return
