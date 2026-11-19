@@ -1221,6 +1221,29 @@ periods; TCP's `SO_LINGER`); a second close waiting for the first is
 | `CloserAwait` (the table's stop) | client/agent/services.go |
 | `Close`, `CloserReset`, `CloserAgent`, `CloserTable`, `CloserWait`, `Exit` | client/nfnet/listen.go |
 
+| trace recorder | client/agent/trace_stop_on.go |
+
+### AgentStop traces
+
+`make spec-traces` (nightly): client/agent's stop tests
+(`TestDirectStopsWaitOneGrace`, `TestDirectTargetResetResetsTheSession`,
+`TestDirectStopDrainsThenResets`, `TestStopResetsDirectSessionsBeforeClose`)
+in one process built `-tags relaytrace`, and the fixtures; `make
+spec-stoptraces` (in make ci, about 15 s) the first two (SENDCUT's); every directServer writes
+`agentstop-<pid>-<n>.ndjson` (Register, TargetReset, Abort, Done, Cut,
+StopBegin with whether it drains, DrainEnd with by over or deadline,
+StopReset, StopEnd), checked by `spec/TraceAgentStop.tla`: which call is
+which is TLC's choice, Drain 0 (the calls may overlap), and the clock is
+free (no urgency), so a trace checks the steps' order (a drain ends over
+only when every session ended or was reset; a reset only after the drain;
+a call drains only before any drain ended; a call ends only after every
+session's cut; an ABORT only after a reset) and the timing properties
+stay the tests'. Thirteen traces on the Mac 2026-11-19 (ten from the
+no-drain agent, its two calls overlapping), all accepted. Rejected
+fixtures, one per check: `reject-agentstop-end-before-cut`,
+`-reset-before-drain`, `-second-drain`, `-over-live`, `-abort-unasked`,
+`-unknown-step` (a logged step that maps to no action).
+
 ### Findings (lane STOPSPEC, 2026-11-19)
 
 No new bug: the design holds every invariant, and the three past bugs

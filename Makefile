@@ -161,7 +161,7 @@ stress-race:
 # session tests' A2ASession traces, about 10 s; in make ci); spec-dgtraces
 # another (client/dgram's DatagramAssoc traces; in make ci); spec-bptraces
 # another (client/p2p's browser direct path BrowserPeer traces; in make ci).
-.PHONY: spec spec-mutants spec-traces spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-bptraces spec-proverif spec-bindings
+.PHONY: spec spec-mutants spec-traces spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-stoptraces spec-bptraces spec-proverif spec-bindings
 spec:
 	./scripts/spec.sh check
 spec-mutants:
@@ -183,6 +183,10 @@ spec-ptraces:
 	./scripts/spec.sh ptraces
 spec-bptraces:
 	./scripts/spec.sh bptraces
+# client/agent's SENDCUT stop traces against spec/TraceAgentStop.tla
+# (about 15 s; in make ci; spec-traces runs every stop test and fixture).
+spec-stoptraces:
+	./scripts/spec.sh stoptraces
 # The ProVerif models (spec/proverif/README.md): every line of
 # spec/proverif/expect.txt, mutants included (in make ci).
 spec-proverif: test-cicache test-fetch-tla

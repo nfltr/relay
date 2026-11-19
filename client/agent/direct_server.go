@@ -52,6 +52,7 @@ type directServer struct {
 	pending  int               // framed sessions in their TLS handshake (handshaking)
 	changed  chan struct{}     // closed when one of them ends; nil: none waits
 	stopped  atomic.Bool       // a stop's drain ended: a later stop only resets (stop)
+	tr       stopTracer        // spec/AgentStop.tla's trace (-tags relaytrace)
 }
 
 // qadTarget is a relay's QAD: its agent link's UDP address and TLS.
@@ -81,6 +82,7 @@ type directSession struct {
 	// directCutGrace after that (reset); both made by registerSession
 	cutOnce      sync.Once
 	aborted, cut chan struct{}
+	tr           stopTraceSession // spec/AgentStop.tla's trace (-tags relaytrace)
 }
 
 // reset resets s at its first call (an ABORT on its current path): the
@@ -89,6 +91,7 @@ type directSession struct {
 // same grace, not one of its own (TestDirectStopsWaitOneGrace).
 func (s *directSession) reset() <-chan struct{} {
 	s.cutOnce.Do(func() {
+		s.tr.abort(s.c.Done())
 		s.c.Abort()
 		close(s.aborted)
 		go func() {
@@ -96,8 +99,10 @@ func (s *directSession) reset() <-chan struct{} {
 			defer t.Stop()
 			select {
 			case <-s.c.Done():
+				s.tr.done()
 			case <-t.C:
 			}
+			s.tr.cut()
 			close(s.cut)
 		}()
 	})
@@ -230,11 +235,13 @@ func (d *directServer) register(c *pathswitch.Conn, key []byte) *directSession {
 func (d *directServer) registerSession(s *directSession) *directSession {
 	s.dg = &sessionDatagrams{c: s.c}
 	s.aborted, s.cut = make(chan struct{}), make(chan struct{})
+	d.tr.register(&s.tr)
 	d.mu.Lock()
 	d.sessions[s] = struct{}{}
 	d.mu.Unlock()
 	go func() {
 		<-s.c.Done()
+		s.tr.done()
 		// Ended, it stays findable for the detach bound: a client whose
 		// path died or moved before this end's last ACK and FIN (or its
 		// ABORT) re-attaches, and Attach answers it (left: count and FIN;
@@ -635,23 +642,29 @@ func (d *directServer) stop(ctx context.Context) {
 	if d == nil {
 		return
 	}
-	if !d.stopped.Load() {
+	k, drain := d.tr.begin(func() bool { return !d.stopped.Load() })
+	if drain {
+		deadline := false
 		for _, s := range d.liveSessions() {
 			select {
 			case <-s.c.Done():
+				s.tr.done()
 			case <-s.aborted: // reset already (its target's): nothing to drain
 			case <-ctx.Done():
+				deadline = true
 			}
 		}
-		d.stopped.Store(true)
+		d.tr.drainEnd(k, deadline, func() { d.stopped.Store(true) })
 	}
 	left := d.liveSessions()
+	d.tr.reset(k)
 	for _, s := range left {
 		s.reset()
 	}
 	for _, s := range left {
 		<-s.reset()
 	}
+	d.tr.end(k)
 }
 
 func (d *directServer) liveSessions() []*directSession {

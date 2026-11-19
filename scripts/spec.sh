@@ -48,6 +48,11 @@
 #            process with -tags relaytrace; each caller and callee pair of
 #            each trace checked against spec/TraceA2ASession.tla; each
 #            spec/testdata/reject-a2asession-* fixture rejected (in make ci).
+#   stoptraces  client/agent's SENDCUT stop tests (STOP_TRACE_TESTS) in one
+#            process with -tags relaytrace; each directServer's trace
+#            checked against spec/TraceAgentStop.tla (in make ci; traces
+#            runs every stop test and rejects each
+#            spec/testdata/reject-agentstop-* fixture).
 # COVERAGE=1 adds -coverage 1. Java and tla2tools.jar come from
 # scripts/fetch-tla.sh.
 set -eu
@@ -532,8 +537,83 @@ bprun() {
 	return $fail
 }
 
+# stoptrace FILE: TLC on a recorded AgentStop trace
+# (spec/TraceAgentStop.tla); 0 when accepted. Its TLC output: FILE.out.
+stoptrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    c1 = c1
+    Sessions <- TraceSessions
+    Direct <- TraceSessions
+    Closers = {c1}
+    Drain = 0
+    Grace = 1
+    MaxBytes = 1
+    MaxTime = 6
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    NoSilentLoss
+    NoEarlyReset
+    ExitAfterEnd
+    TraceNotDone
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceAgentStop.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
+# stoprun TESTS [fixtures]: the fixtures (when asked), then client/agent's
+# tests TESTS in one process with the recorder; every directServer's trace
+# checked.
+stoprun() {
+	sgo=$(grep -ohE '"ev": "[A-Za-z]+"|ev\("[A-Za-z]+"\)' client/agent/trace_stop_on.go | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u)
+	for e in $(grep -oE 'E\.ev = "[A-Za-z]+"' spec/TraceAgentStop.tla | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u); do
+		echo "$sgo" | grep -qx "$e" || { echo "spec/TraceAgentStop.tla: event $e is recorded by no trace line of client/agent"; return 1; }
+	done
+	for f in spec/testdata/reject-agentstop-*.ndjson; do
+		[ "${2:-}" = fixtures ] || break
+		cp "$f" "$work/"
+		if stoptrace "$work/$(basename "$f")"; then
+			echo "$f: accepted, want rejected"
+			return 1
+		fi
+		grep -q 'distinct states found' "$work/$(basename "$f").out" || { echo "$f: TLC failed:"; tail -20 "$work/$(basename "$f").out"; return 1; }
+		echo "$f: rejected"
+	done
+	d=$work/stoptraces
+	mkdir -p "$d"
+	(cd client && RELAYTRACE=$d go test -tags relaytrace -count=1 -run "$1" ./agent/) >"$work/stest.out" 2>&1 || {
+		cat "$work/stest.out"
+		return 1
+	}
+	nt=0
+	for f in "$d"/agentstop-*.ndjson; do
+		[ -s "$f" ] || continue
+		nt=$((nt + 1))
+		if stoptrace "$f"; then
+			echo "trace $(basename "$f"): $(wc -l <"$f" | tr -d ' ') lines: accepted"
+		else
+			echo "trace $(basename "$f"): REJECTED"
+			grep -E 'Error|unknown event' "$f.out" | head -5
+			fail=1
+		fi
+	done
+	echo "$nt traces"
+	[ "$nt" -gt 0 ] || fail=1
+	return $fail
+}
+
 fail=0
 cfg=
+# The stop tests traces records: three stops with a dead peer, a target's
+# reset, an nf1 session's drain then reset, an agent without a drain (its
+# two calls together); stoptraces (make ci) the first two (SENDCUT's).
+STOPCI='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession)$'
+STOPTESTS='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession|TestDirectStopDrainsThenResets|TestStopResetsDirectSessionsBeforeClose)$'
 # The punch tests ptraces records: a learned winner, an offered winner, a
 # refused rogue, a re-punch.
 PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectPunchPrefersLAN|TestDirectMappedAgentGoesDirect|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain)$'
@@ -781,6 +861,10 @@ ptraces)
 	prun "${P_TRACE_TESTS:-$PTESTS}" || fail=1
 	exit $fail
 	;;
+stoptraces)
+	stoprun "${STOP_TRACE_TESTS:-$STOPCI}" || fail=1
+	exit $fail
+	;;
 astraces)
 	# The per-push slice: the session tests of the retry, the restart, the
 	# forged unknown, the warm, the revoke, the rotation and the restart
@@ -844,9 +928,10 @@ traces)
 	asrun "${AS_TRACE_TESTS:-^TestA2AE2EE}" || exit 1
 	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || exit 1
 	prun "${P_TRACE_TESTS:-$PTESTS}" || exit 1
+	stoprun "${STOP_TRACE_TESTS:-$STOPTESTS}" fixtures || exit 1
 	bprun "${BP_TRACE_TESTS:-^(TestBrowserDirect|TestBrowserPeerModelBindings)}" || exit 1
 	for f in spec/testdata/reject-*.ndjson; do
-		case $f in *reject-callcredit-* | *reject-calllifecycle-* | *reject-directpunch-* | *reject-browserpeer-*) continue ;; esac
+		case $f in *reject-callcredit-* | *reject-calllifecycle-* | *reject-directpunch-* | *reject-browserpeer-* | *reject-agentstop-*) continue ;; esac
 		cp "$f" "$work/"
 		if trace "$work/$(basename "$f")" 1 2; then
 			echo "$f: accepted, want rejected"
@@ -892,7 +977,7 @@ traces)
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
 	;;
 *)
-	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|ptraces|bptraces|cctraces FILE..." >&2
+	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|ptraces|stoptraces|bptraces|cctraces FILE..." >&2
 	exit 2
 	;;
 esac

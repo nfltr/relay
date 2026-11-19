@@ -89,7 +89,7 @@ jobs:
           path: ~/.cache/relay-proverif
           key: proverif-${{ runner.os }}-${{ hashFiles('scripts/fetch-proverif.sh') }}
       - run: make spec-proverif
-      - run: make spec spec-mutants spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-bptraces
+      - run: make spec spec-mutants spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-stoptraces spec-bptraces
       # the organisation issuer's models (spec/enrol, spec/orgmove)
       - run: make spec-enrol-ci spec-orgmove-ci spec-appenrol-ci
   fuzz:

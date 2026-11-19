@@ -53,7 +53,7 @@ func revokeDatagrams(target net.Conn) bool {
 // datagrams of its session s; any other target, or none, is left as it is.
 func setDirect(target net.Conn, s *directSession) {
 	if q, ok := target.(*QueueConn); ok && s != nil {
-		cut := func() { s.reset() }
+		cut := func() { s.tr.targetReset(); s.reset() }
 		q.cut.Store(&cut)
 	}
 	if t, ok := target.(datagramTarget); ok && s != nil {
