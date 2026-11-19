@@ -2,9 +2,9 @@
 # Copyright 2026 nfltr
 # SPDX-License-Identifier: Apache-2.0
 
-# fetch-tla.sh prints the java to run, the tla2tools.jar and the
-# CommunityModules jar (third line) for the TLA+ models (spec/), each fetched
-# once into $RELAY_TLA_CACHE (default $LINK_TLA_CACHE, else ~/.cache/link-tla,
+# fetch-tla.sh prints the java to run (its heap capped, below), the
+# tla2tools.jar and the CommunityModules jar (third line) for the TLA+
+# models (spec/), each fetched once into $RELAY_TLA_CACHE (default $LINK_TLA_CACHE, else ~/.cache/link-tla,
 # one cache for every nfltr repository) and checked against its pinned sha256.
 # A java on PATH that runs is used as it is; else a pinned Temurin JRE is
 # fetched. Nothing it fetches is committed. The same file in nfltr, link,
@@ -84,6 +84,27 @@ cm=$cache/CommunityModules-deps-202505152026.jar
 get https://github.com/tlaplus/CommunityModules/releases/download/202505152026/CommunityModules-deps.jar \
 	044e8ecdfbca92d51d7eb4469422c2a7da1fe25dc8ad39c4a90e6622d6da4d99 "$cm"
 
-echo "$java"
+# The java printed runs that java with its heap capped: TLC_RAM_PERCENT (25,
+# Java's own default) of CI_MEM_BUDGET_MB (scripts/ci.sh: this make ci job's
+# share of the runner's memory), else of the cgroup's memory.max, else of
+# the machine's, over TLC_JVMS (the JVMs its caller runs at once, 1). Java
+# sizes each JVM by the whole container: four TLCs at once beside two other
+# make ci jobs ran a 5 GiB runner out of memory (lane CIMEM). One wrapper
+# per java in the cache, rewritten (renamed into place) every run.
+w=$cache/java-$(printf '%s' "$java" | cksum | cut -d' ' -f1)
+tmp=$(mktemp "$w.XXXXXX")
+q=$(printf '%s' "$java" | sed "s/'/'\\\\''/g")
+cat >"$tmp" <<EOF
+#!/bin/sh
+# scripts/fetch-tla.sh's java, its heap capped (see there).
+m=\${CI_MEM_BUDGET_MB:-\$(awk '\$1 ~ /^[0-9]+\$/ { print int(\$1 / 1048576) }' /sys/fs/cgroup/memory.max 2>/dev/null)}
+p=\${TLC_RAM_PERCENT:-25} n=\${TLC_JVMS:-1}
+if [ -n "\$m" ]; then h=-Xmx\$((m * p / 100 / n))m; else h=-XX:MaxRAMPercentage=\$((p / n)); fi
+exec '$q' "\$h" "\$@"
+EOF
+chmod 755 "$tmp"
+mv -f "$tmp" "$w"
+
+echo "$w"
 echo "$jar"
 echo "$cm"

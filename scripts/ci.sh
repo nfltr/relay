@@ -28,6 +28,11 @@
 # The jobs run at once, as on GitHub (at most CI_JOBS at a time, default the
 # CPUs this process may use: the cgroup's cpu.max quota, else the online
 # CPUs; CI_JOBS=1 runs them one after another), started in workflow order;
+# under a memory limit (CI_MEM_MB, default the cgroup's memory.max; 0:
+# none) also at most one job per CI_JOB_MEM_MB (3072: relay-server's static
+# job peaked at 2.9 GiB, its deadcode step, and three jobs at once in a
+# 5 GiB runner were OOM-killed, lane CIMEM), each job told its share,
+# CI_MEM_BUDGET_MB (scripts/fetch-tla.sh's java sizes TLC's heap from it);
 # a job's steps run in order, each as GitHub runs it: bash -eo pipefail.
 # Jobs share this checkout, so a job must not change a file another job
 # reads (GitHub gives each job a checkout of its own). Each job's output
@@ -132,6 +137,14 @@ cpus() {
 	getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1
 }
 
+# mem: the MiB this process may use: CI_MEM_MB, else the cgroup's
+# memory.max; empty without a limit.
+mem() {
+	local m
+	if [ -n "${CI_MEM_MB:-}" ]; then echo "$CI_MEM_MB"; return; fi
+	{ read -r m </sys/fs/cgroup/memory.max; } 2>/dev/null && [ "$m" != max ] && echo $((m / 1048576))
+}
+
 # descendants <pid>...: every process below them.
 descendants() {
 	ps -A -o pid= -o ppid= | awk -v roots="$*" '
@@ -164,11 +177,19 @@ job() {
 # at once (at most CI_JOBS), each job's output printed whole in workflow
 # order; exit 1 at the first failure, after stopping the running jobs.
 execute() {
-	local max="${CI_JOBS:-$(cpus)}" t0 tmp n=0 nj=0 next=1 shown=1 running=0 failed=0 k rc secs busy prev="" jb dir cmd
+	local max="${CI_JOBS:-$(cpus)}" mb t0 tmp n=0 nj=0 next=1 shown=1 running=0 failed=0 k rc secs busy prev="" jb dir cmd plan=""
 	local -a name st pid
 	t0=$(date +%s)
 	tmp="$(mktemp -d)" || return 1
 	[ "$max" -ge 1 ] 2>/dev/null || max=1
+	mb=$(mem)
+	if [ "${mb:-0}" -gt 0 ] 2>/dev/null; then
+		k=$((mb / ${CI_JOB_MEM_MB:-3072}))
+		[ "$k" -ge 1 ] || k=1
+		[ "$k" -ge "$max" ] || max=$k
+		export CI_MEM_BUDGET_MB=$((mb / max))
+		plan=" (${mb} MiB, ${CI_MEM_BUDGET_MB} MiB a job)"
+	fi
 	while IFS="$TAB" read -r jb dir cmd; do
 		[ -n "$jb" ] || continue
 		n=$((n + 1))
@@ -179,7 +200,7 @@ execute() {
 	done <<EOF
 $1
 EOF
-	echo "ci: $n steps in $nj jobs, at most $max at once"
+	echo "ci: $n steps in $nj jobs, at most $max at once$plan"
 	while [ "$shown" -le "$nj" ]; do
 		while [ "$failed" = 0 ] && [ "$running" -lt "$max" ] && [ "$next" -le "$nj" ]; do
 			(
@@ -304,7 +325,7 @@ exec_test() {
 	# Three one-second jobs at once take about a second, print in workflow
 	# order whatever order they end in, and number the steps in workflow order.
 	t=$(date +%s)
-	out="$(CI_JOBS=3 execute "$(printf 'a\t.\tsleep 1; echo A1\na\t.\techo A2\nb\t.\tsleep 0.5; echo B1\nc\t.\techo C1; sleep 1\n')")" ||
+	out="$(CI_MEM_MB=0 CI_JOBS=3 execute "$(printf 'a\t.\tsleep 1; echo A1\na\t.\techo A2\nb\t.\tsleep 0.5; echo B1\nc\t.\techo C1; sleep 1\n')")" ||
 		{ printf 'ci.sh exec-test: a passing run failed:\n%s\n' "$out" >&2; rm -rf "$d"; return 1; }
 	[ $(($(date +%s) - t)) -le 2 ] || { echo "ci.sh exec-test: three 1 s jobs at once took $(($(date +%s) - t))s" >&2; rm -rf "$d"; return 1; }
 	if [ "$(printf '%s\n' "$out" | grep -E '^(A|B|C)[0-9]$' | tr '\n' ' ')" != "A1 A2 B1 C1 " ] ||
@@ -315,13 +336,25 @@ exec_test() {
 	fi
 	# CI_JOBS=1 runs the jobs one after another.
 	t=$(date +%s)
-	CI_JOBS=1 execute "$(printf 'a\t.\tsleep 1\nb\t.\tsleep 1\n')" >/dev/null || { echo "ci.sh exec-test: a serial run failed" >&2; rm -rf "$d"; return 1; }
+	CI_MEM_MB=0 CI_JOBS=1 execute "$(printf 'a\t.\tsleep 1\nb\t.\tsleep 1\n')" >/dev/null || { echo "ci.sh exec-test: a serial run failed" >&2; rm -rf "$d"; return 1; }
 	[ $(($(date +%s) - t)) -ge 2 ] || { echo "ci.sh exec-test: CI_JOBS=1 ran jobs at once" >&2; rm -rf "$d"; return 1; }
+	# Under a memory limit: one job per CI_JOB_MEM_MB, each told its share.
+	t=$(date +%s)
+	out="$(CI_MEM_MB=5120 CI_JOB_MEM_MB=3072 CI_JOBS=3 execute "$(printf 'a\t.\tsleep 1; echo A=$CI_MEM_BUDGET_MB\nb\t.\tsleep 1\n')")" ||
+		{ printf 'ci.sh exec-test: a memory-bound run failed:\n%s\n' "$out" >&2; rm -rf "$d"; return 1; }
+	[ $(($(date +%s) - t)) -ge 2 ] && printf '%s\n' "$out" | grep -qx 'ci: 2 steps in 2 jobs, at most 1 at once (5120 MiB, 5120 MiB a job)' &&
+		printf '%s\n' "$out" | grep -qx 'A=5120' ||
+		{ printf 'ci.sh exec-test: 5120 MiB at 3072 MiB a job ran jobs at once:\n%s\n' "$out" >&2; rm -rf "$d"; return 1; }
+	out="$(CI_MEM_MB=6144 CI_JOB_MEM_MB=3072 CI_JOBS=3 execute "$(printf 'a\t.\ttrue\n')")" &&
+		printf '%s\n' "$out" | grep -qx 'ci: 1 steps in 1 jobs, at most 2 at once (6144 MiB, 3072 MiB a job)' &&
+		out="$(CI_MEM_MB=1024 CI_JOB_MEM_MB=3072 CI_JOBS=3 execute "$(printf 'a\t.\ttrue\n')")" &&
+		printf '%s\n' "$out" | grep -qx 'ci: 1 steps in 1 jobs, at most 1 at once (1024 MiB, 1024 MiB a job)' ||
+		{ printf 'ci.sh exec-test: memory plan:\n%s\n' "$out" >&2; rm -rf "$d"; return 1; }
 	# A failing step fails the run at once, the job's later steps and the jobs
 	# not started are not run, a running job is stopped (with its children),
 	# and the failure is the line the runner reports.
 	t=$(date +%s)
-	if out="$(CI_JOBS=2 execute "$(printf 'a\t.\tsleep 2; touch %s/late\nb\t.\techo B1; exit 3\nb\t.\ttouch %s/after\nc\t.\ttouch %s/c\n' "$d" "$d" "$d")")"; then
+	if out="$(CI_MEM_MB=0 CI_JOBS=2 execute "$(printf 'a\t.\tsleep 2; touch %s/late\nb\t.\techo B1; exit 3\nb\t.\ttouch %s/after\nc\t.\ttouch %s/c\n' "$d" "$d" "$d")")"; then
 		printf 'ci.sh exec-test: a failing run passed:\n%s\n' "$out" >&2
 		rm -rf "$d"
 		return 1

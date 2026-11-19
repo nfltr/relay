@@ -22,8 +22,8 @@
 #             the fixtures (make spec-enrol-traces).
 #   trace F   one recorded trace file; ptrace F one RevokePush trace
 #             (<pid>.revokepush, TraceRevokePush.tla).
-# TLC_WORKERS (default 2) caps TLC's threads, TLC_HEAP (default 1g) its
-# heap. Java and tla2tools.jar come from scripts/fetch-tla.sh.
+# TLC_WORKERS (default 2) caps TLC's threads. Java (its heap capped) and
+# tla2tools.jar come from scripts/fetch-tla.sh.
 set -eu
 cd "$(dirname "$0")/.."
 tools=$(scripts/fetch-tla.sh)
@@ -48,7 +48,7 @@ modof() { case ${1:-} in Join*) echo Join ;; RevokePush*) echo RevokePush ;; *) 
 tlc() {
 	cfg_=$1
 	shift
-	(cd $dir && "$cicache" tlc -- "$java" -Xmx"${TLC_HEAP:-1g}" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-2}" \
+	(cd $dir && "$cicache" tlc -- "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-2}" \
 		-noGenerateSpecTE -deadlock -metadir "$work/states-$(basename "$cfg_")" -config "$cfg_" "$@" "${MOD:-$(modof "$cfg_")}.tla")
 }
 

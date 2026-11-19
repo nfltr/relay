@@ -33,8 +33,8 @@
 #             verifier's) checked by TraceOrgHosted.tla; then hfixtures
 #             (in traces).
 #   htrace F  one trace file, by TraceOrgHosted.tla.
-# TLC_WORKERS (default 2) caps TLC's threads, TLC_HEAP (default 1g) its
-# heap. Java and tla2tools.jar come from scripts/fetch-tla.sh.
+# TLC_WORKERS (default 2) caps TLC's threads. Java (its heap capped) and
+# tla2tools.jar come from scripts/fetch-tla.sh.
 set -eu
 cd "$(dirname "$0")/.."
 tools=$(scripts/fetch-tla.sh)
@@ -73,7 +73,7 @@ hosted_spec() {
 tlc() {
 	cfg_=$1
 	shift
-	(cd $dir && "$cicache" tlc -- "$java" -Xmx"${TLC_HEAP:-1g}" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-2}" \
+	(cd $dir && "$cicache" tlc -- "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers "${TLC_WORKERS:-2}" \
 		-noGenerateSpecTE -deadlock -metadir "$work/states-$(basename "$cfg_")" -config "$cfg_" "$@" $spec.tla)
 }
 
