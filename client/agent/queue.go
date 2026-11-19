@@ -129,6 +129,8 @@ func (q *SessionQueue) enter(ctx context.Context, caller *pb.CallerIdentity) (ne
 	}
 	e := &queued{taken: make(chan struct{})}
 	e.user, e.agentEnd = newQueuePipe()
+	e.user.cs = newCloseSync() // undecided until the session's goroutine joins or drops it
+	e.agentEnd.cs = e.user.cs
 	e.user.caller = Session{caller: caller}
 	q.pending = append(q.pending, e)
 	q.changed()
@@ -196,6 +198,11 @@ type QueueConn struct {
 	// when Join's copy toward it reads the reset, which a write to a
 	// killed peer's full window keeps it from (TestDirectTargetResetResetsTheSession)
 	cut *atomic.Pointer[func()]
+	// cs, shared by both ends: the delivery of Accept's conn's end, when
+	// its session reports one (joinTarget); its Close waits for it. The
+	// agent's end (agentSide) decides there is none at its first use.
+	cs        *closeSync
+	agentSide bool
 }
 
 // pipeDir is one direction of a QueueConn pair.
@@ -218,9 +225,10 @@ func (d *pipeDir) changed() {
 
 func newQueuePipe() (user, agentEnd *QueueConn) {
 	a, b := newPipeDir(), newPipeDir()
-	cut := new(atomic.Pointer[func()])
-	user = &QueueConn{r: a, w: b, rd: makePipeDeadline(), wd: makePipeDeadline(), done: make(chan struct{}), cut: cut}
-	agentEnd = &QueueConn{r: b, w: a, rd: makePipeDeadline(), wd: makePipeDeadline(), done: make(chan struct{}), cut: cut}
+	cut, cs := new(atomic.Pointer[func()]), newCloseSync()
+	cs.decide(false) // a bare pipe: nothing reports
+	user = &QueueConn{r: a, w: b, rd: makePipeDeadline(), wd: makePipeDeadline(), done: make(chan struct{}), cut: cut, cs: cs}
+	agentEnd = &QueueConn{r: b, w: a, rd: makePipeDeadline(), wd: makePipeDeadline(), done: make(chan struct{}), cut: cut, cs: cs, agentSide: true}
 	return user, agentEnd
 }
 
@@ -232,6 +240,7 @@ func (c *QueueConn) Done() <-chan struct{} { return c.done }
 func (c *QueueConn) Caller() (Caller, bool) { return c.caller.Caller() }
 
 func (c *QueueConn) Read(b []byte) (int, error) {
+	c.used()
 	d := c.r
 	for {
 		select {
@@ -270,6 +279,7 @@ func (c *QueueConn) Read(b []byte) (int, error) {
 }
 
 func (c *QueueConn) Write(b []byte) (int, error) {
+	c.used()
 	d := c.w
 	n := 0
 	for {
@@ -310,6 +320,7 @@ func (c *QueueConn) Write(b []byte) (int, error) {
 
 // CloseWrite ends this end's writes: the peer reads io.EOF after them.
 func (c *QueueConn) CloseWrite() error {
+	c.used()
 	select {
 	case <-c.done:
 		return net.ErrClosed
@@ -327,43 +338,58 @@ func (c *QueueConn) CloseWrite() error {
 // Close ends both directions: the peer reads io.EOF after this end's
 // bytes (as a TCP target's FIN: a session its client closed whole keeps
 // its tail) and its writes fail. A failure is Reset (dropTarget,
-// resetTarget).
+// resetTarget). On a session that reports its delivery (joinTarget: a
+// direct path's) it returns once the peer acknowledged every byte and the
+// end, link.ErrReset when it could not (closeSync.wait).
 func (c *QueueConn) Close() error {
 	c.end(nil)
-	return nil
+	return c.cs.wait()
 }
 
 // Reset ends the session as failed: the peer reads link.ErrReset, its
-// unread bytes dropped.
+// unread bytes dropped; also during a Close that waits for its session
+// (TestQueueResetCutsAWaitingClose).
 func (c *QueueConn) Reset() error {
 	c.end(link.ErrReset)
 	return nil
 }
 
+// used: the agent's end in use without joinTarget's report (a plain
+// Join): Accept's conn's Close waits for none.
+func (c *QueueConn) used() {
+	if c.agentSide {
+		c.cs.decide(false)
+	}
+}
+
 func (c *QueueConn) end(reset error) {
+	if c.agentSide { // a report not given by now never comes
+		c.cs.decide(false)
+		c.cs.report(link.ErrReset)
+	}
 	c.once.Do(func() {
 		close(c.done)
 		c.rd.set(time.Time{})
 		c.wd.set(time.Time{})
-		for _, d := range []*pipeDir{c.r, c.w} {
-			d.mu.Lock()
-			switch {
-			case reset != nil:
-				if d.err == nil {
-					d.err, d.buf = reset, nil
-				}
-			case d == c.w:
-				d.eof = true
-			default:
-				d.rclosed, d.buf = true, nil
-			}
-			d.changed()
-			d.mu.Unlock()
-		}
-		if f := c.cut.Load(); reset != nil && f != nil {
-			(*f)()
-		}
 	})
+	for _, d := range []*pipeDir{c.r, c.w} {
+		d.mu.Lock()
+		switch {
+		case reset != nil:
+			if d.err == nil {
+				d.err, d.buf = reset, nil
+			}
+		case d == c.w:
+			d.eof = true
+		default:
+			d.rclosed, d.buf = true, nil
+		}
+		d.changed()
+		d.mu.Unlock()
+	}
+	if f := c.cut.Load(); reset != nil && f != nil {
+		(*f)()
+	}
 }
 
 func (c *QueueConn) SetDeadline(t time.Time) error {

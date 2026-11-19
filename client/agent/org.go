@@ -13,7 +13,6 @@ import (
 	"net"
 	"time"
 
-	"github.com/nfltr/link/peerlink"
 	"github.com/nfltr/relay/client/tlsend"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 )
@@ -234,7 +233,7 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 			_ = tc.Reset()
 			dropTarget(target)
 		}, done)
-	_ = peerlink.Join(tc, target)
+	_ = joinTarget(tc, ackerOf(s), target)
 }
 
 // serveNF1 serves a session of a service under a capability address: the
@@ -251,5 +250,5 @@ func serveNF1(ctx context.Context, s, target net.Conn, p sessionPlan, logger *sl
 		dropTarget(target)
 		return
 	}
-	_ = peerlink.Join(bind(tc.(*tls.Conn)), target) // Admit's
+	_ = joinTarget(bind(tc.(*tls.Conn)), ackerOf(s), target) // Admit's
 }

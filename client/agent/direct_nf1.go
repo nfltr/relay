@@ -115,7 +115,7 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 		if target == nil {
 			return
 		}
-		join(admitNF1(ctx, l, ps, logger), target)
+		join(admitNF1(ctx, l, ps, logger), nil, target)
 	case nf1MarkBrowser:
 		if p.browser == nil {
 			_ = s.Close()
@@ -155,7 +155,8 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 		done := d.handshaking()
 		defer done()
 		c := pathswitch.Server(pathStream{Conn: ps}, PathRelayed, pathswitch.Config{Detach: d.detach, Window: tcpDataWindow})
-		tc := admitNF1(ctx, l, newPSConn(c, s), logger)
+		pc := newPSConn(c, s)
+		tc := admitNF1(ctx, l, pc, logger)
 		if tc == nil {
 			c.Abort()
 			dropTarget(target)
@@ -169,7 +170,7 @@ func serveNF1Direct(ctx context.Context, s net.Conn, p sessionPlan, logger *slog
 		}
 		setDirect(target, d.registerSession(&directSession{c: c, key: key, nf1: l, sni: nf1SNI(key)}))
 		done()
-		join(tc, target)
+		join(tc, pc, target)
 	}
 }
 
@@ -225,7 +226,7 @@ func serveNF1Anon(ctx context.Context, s, ps net.Conn, p sessionPlan, logger *sl
 	if q, ok := target.(*QueueConn); ok {
 		target = &anonTarget{QueueConn: q, tap: tap}
 	}
-	join(tc, target)
+	join(tc, ackerOf(tap.Conn), target)
 }
 
 // onPathWithin waits until c is on path, false once d passed, c ended or
@@ -330,14 +331,14 @@ func admitNF1(ctx context.Context, l *nf1.Listener, conn net.Conn, logger *slog.
 	return bind(tc)
 }
 
-// join bridges an admitted session to its target; tc nil: the target is
-// closed unused.
-func join(tc *tlsend.Conn, target net.Conn) {
+// join bridges an admitted session to its target (a: what acknowledges
+// its bytes, joinTarget); tc nil: the target is closed unused.
+func join(tc *tlsend.Conn, a acker, target net.Conn) {
 	if tc == nil {
 		dropTarget(target)
 		return
 	}
-	_ = peerlink.Join(tc, target)
+	_ = joinTarget(tc, a, target)
 }
 
 // nf1ListenTLS is the direct listener's TLS for a connection whose server
