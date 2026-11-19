@@ -1146,3 +1146,87 @@ the trace can break: `reject-directpunch-untagged` (OnlyTagged),
 `-learn-after-win`, `-lan-closed` (a LAN connection closed under a
 non-LAN winner). The Go mutants `prflx-*` in
 `client/agent/testdata/org_mutants.txt` plant the code's bugs.
+
+## AgentStop.tla: an agent's stop, its drain and its grace
+
+Lane STOPSPEC, after lanes SENDCUT (a killed receiver's direct session held
+a `--once` nfltr-send for a 5 s drain and three 5 s graces) and SENDBEST (a
+second `Listener.Close` returned while the first was still resetting). The
+state lives in the SDK: `directServer.stop` and `directSession.reset`
+(client/agent/direct_server.go), the target's reset reaching its direct
+session (`setDirect`, `QueueConn.cut`), the agent's stop sequence
+(connect.go: waitIdle, the primary's and the cycle's end's stops, endTCP),
+`ServiceTable.Close` and nfnet's `Listener.Close`.
+
+Model: sessions relayed or direct (`Direct`); a target writes, closes
+cleanly or resets; a peer delivers, ends at the clean close, answers an
+ABORT, resets, or vanishes (killed) and then answers nothing: the relay
+cuts a relayed one, only the agent's grace or the detach bound a direct
+one. The stop is a signal or `Listener.Close` (its accepted Conns reset,
+the agent stopped, the table's stop; a second Close waits for the first).
+The agent: relayed sessions until they end or `Drain` passes, then the
+primary's `directServer.stop`, then the cycle's end's (at once when there
+is no drain: both together), then the relayed sessions left are reset. A
+`directServer.stop` call: the first drains (until each direct session
+ended or was reset, or the drain passed), each resets the sessions left
+(one ABORT per session) and waits until each ended or `Grace` passed since
+its first reset. Time is a tick; the agent's own steps are urgent, the
+peers' and targets' are not; the clock starts at the stop. `make spec`
+checks `AgentStop.cfg` (one direct and one relayed session, two Closes,
+Drain 1, Grace 2, one byte each; about 0.8 M states) and
+`AgentStopNoDrain.cfg` (Drain 0).
+
+| invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
+|---|---|---|
+| `NoSilentLoss` | a peer sees a clean end only after every committed byte and the target's clean close | `reset-as-close` |
+| `NoEarlyReset` | the stop resets a session its target did not only once the drain passed | `no-drain` |
+| `ResetEndsInGrace` | a session its target reset ends or is cut within one grace of that reset | `no-target-cut` (SENDCUT) |
+| `StopInTime` | the stop ends (the process exits) within the drain and one grace | `grace-per-stop` (SENDCUT, 867a20e) |
+| `ExitAfterEnd` | the process exits only once every session ended or its grace passed since its ABORT | `second-close-returns` (SENDBEST, f09ea5f), `no-grace` |
+| `NoDrainOnReset` (action) | no time passes in a drain once every direct session ended or its target reset it | `no-target-cut`, `drain-waits-reset` (SENDCUT, 04e84d8) |
+
+Witnesses (each violated: the model reaches it): `W_GoneCut` (exit after a
+killed direct peer's grace), `W_FullBound` (the stop takes the whole
+bound), `W_StopReset`, `W_Eof` (every byte and the clean end after the
+stop began), `W_ResetCut`, `W_DrainWaits`, `W_SecondClose`. `Propagate`
+is the `no-target-cut` mutant's step only (never taken in the design);
+every other action is taken (`COVERAGE=1`).
+
+Prior art: the drain is a graceful shutdown's (Go `http.Server.Shutdown`:
+stop taking new work, let the open work end within a bound, then close);
+the grace after an ABORT is a closing endpoint lingering so its last
+control frame is delivered (RFC 9000 10.2, the closing and draining
+periods; TCP's `SO_LINGER`); a second close waiting for the first is
+`sync.Once` semantics for a close that blocks.
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| The relay resets a relayed session's peer when the agent resets it or the agent's link ends, and cuts a relayed session whose peer's connection ended (`RelayCut`, no bound assumed) | relay-core `core/session` (spec relay-core `spec/`), `link` GOAWAY/reset semantics (link `WIRE.md`) |
+| A pathswitch ABORT reaches a live peer, which answers it; a killed peer answers nothing, and the session ends at its detach bound (`DetachEnd`) | link `pathswitch`, link `spec/DirectPath.tla` (`RLeftAnswer`, `SLeftAnswer`) |
+| A peer may be arbitrarily slow (no fairness on peer steps): a slow peer is a vanished one until it answers | QUIC/TCP give no delivery-time bound |
+| Closing a QUIC connection at once drops the ABORTs queued on it (the reason for the grace) | RFC 9000 10.2 |
+| Timers fire at their deadline (Drain, Grace are ticks); the scheduler runs the agent's own steps before time passes | Go `time.Timer`; tests measure the bound (`TestDirectStopsWaitOneGrace`) |
+
+### Code map (AgentStop.tla)
+
+| actions | code |
+|---|---|
+| `CallDrainEnd`, `CallReset`, `CallWaitEnd`, `Cut`, `Abort` | client/agent/direct_server.go |
+| `TargetReset` (a direct session's), `Propagate` | client/agent/datagram_target.go |
+| `TargetReset` (the cut at either end's Reset) | client/agent/queue.go |
+| `Signal`, `PrimaryStart`, `CycleStart`, `CycleEnd` | client/agent/connect.go |
+| `PrimaryStart` (waitIdle), `Drain` | client/agent/move.go |
+| `CloserAwait` (the table's stop) | client/agent/services.go |
+| `Close`, `CloserReset`, `CloserAgent`, `CloserTable`, `CloserWait`, `Exit` | client/nfnet/listen.go |
+
+### Findings (lane STOPSPEC, 2026-11-19)
+
+No new bug: the design holds every invariant, and the three past bugs
+(SENDCUT's target reset and drain, SENDCUT's grace per call, SENDBEST's
+second Close) are mutants it catches. Open (not modelled): a session
+registered after a stop call's snapshot of the sessions (`left`) is not
+reset by that call; a new session starts relayed and rides the agent's
+link, so the relay resets it at the exit, unless it moved to a direct
+path in that window. The model's sessions all exist at the stop.

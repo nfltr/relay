@@ -5,8 +5,8 @@
 # spec.sh check|mutants: the TLA+ models of spec/ (spec/README.md).
 #   check    TLC on spec/SignalConn.cfg, spec/A2ASession.cfg, spec/CallCredit.cfg,
 #            spec/CallCreditBoth.cfg, spec/CallCreditSenders.cfg,
-#            spec/UDPFlow.cfg, spec/UDPFlowLive.cfg, spec/DatagramAssoc*.cfg and
-#            spec/BrowserPeer.cfg:
+#            spec/UDPFlow.cfg, spec/UDPFlowLive.cfg, spec/DatagramAssoc*.cfg,
+#            spec/BrowserPeer.cfg, spec/DirectPunch.cfg and spec/AgentStop*.cfg:
 #            their invariants and liveness
 #            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg,
 #            UDPFlowLarge.cfg).
@@ -539,7 +539,7 @@ cfg=
 PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectPunchPrefersLAN|TestDirectMappedAgentGoesDirect|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain)$'
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch"
+	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch AgentStop AgentStopNoDrain"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	for c in $cfgs; do
 		m=${c%Large}
@@ -547,6 +547,7 @@ check)
 		m=${m%Live}
 		m=${m%Two}
 		m=${m%Move}
+		m=${m%NoDrain}
 		echo "== $c.cfg"
 		st=0
 		tlc $c.cfg $m.tla >"$work/out" 2>&1 || st=$?
@@ -565,8 +566,8 @@ mutants)
 		if tlc "$work/Mutant.cfg" $model.tla >"$work/m.out" 2>&1; then
 			echo "$name: not caught"
 			fail=1
-		elif grep -qE '^Error: (Invariant .* is violated|Temporal propert.* was violated)' "$work/m.out"; then
-			echo "$name: caught: $(grep -m1 -E '^Error: (Invariant|Temporal)' "$work/m.out" | sed 's/^Error: //')"
+		elif grep -qE '^Error: (Invariant .* is violated|Temporal propert.* was violated|Action propert.* is violated)' "$work/m.out"; then
+			echo "$name: caught: $(grep -m1 -E '^Error: (Invariant|Temporal|Action)' "$work/m.out" | sed 's/^Error: //')"
 		else
 			echo "$name: TLC failed:"
 			tail -20 "$work/m.out"
@@ -729,6 +730,26 @@ mutants)
 	for w in W_DoneDC W_DoneWSAfterFail W_Failed W_ReapedAfterCtl; do
 		expect witness:BP-$w -e "s/^    TypeOK\$/    $w/"
 	done
+	model=AgentStop
+	# An agent's stop (lane STOPSPEC): SENDCUT's two halves (a target's
+	# reset did not reach its direct session; the drain waited for a reset
+	# session), SENDCUT's three graces (each stop call its own), SENDBEST's
+	# second Listener.Close returning at once, a stop with no drain, a
+	# reset seen as a clean end, a connection closed at once (no grace).
+	for m in no-target-cut drain-waits-reset grace-per-stop second-close-returns no-drain reset-as-close no-grace; do
+		expect STOP:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
+	done
+	# SENDCUT's target reset also breaks the one-grace bound from the reset.
+	expect STOP:no-target-cut-grace -e 's/Mutant = "none"/Mutant = "no-target-cut"/' -e '/^PROPERTIES$/d' -e '/NoDrainOnReset/d'
+	for w in W_GoneCut W_FullBound W_StopReset W_Eof W_ResetCut W_DrainWaits W_SecondClose; do
+		expect witness:STOP-$w -e "s/^    TypeOK\$/    $w/"
+	done
+	cfg=AgentStopNoDrain
+	# Without a drain the primary's and the cycle's calls run together.
+	for m in grace-per-stop second-close-returns no-grace; do
+		expect STOP0:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
+	done
+	cfg=
 	exit $fail
 	;;
 cltraces)
