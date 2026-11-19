@@ -5,7 +5,6 @@ go 1.27.2
 require (
 	github.com/flynn/noise v1.1.0
 	github.com/jackpal/gateway v1.2.0
-	github.com/jackpal/go-nat-pmp v1.1.0
 	github.com/nfltr/link v0.12.16
 	github.com/nfltr/link/peerlink/quiclink v0.5.23
 	github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261112202211-40e0a2570e52

@@ -12,14 +12,17 @@ package agent
 // authenticate whoever comes through it, as for every candidate.
 
 import (
+	"encoding/binary"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/netip"
+	"os"
 	"sync"
 	"time"
 
 	"github.com/jackpal/gateway"
-	natpmp "github.com/jackpal/go-nat-pmp"
 )
 
 const (
@@ -32,6 +35,9 @@ const (
 	// portMapRetry is how long a gateway that never answered is believed
 	// silent: each control exchange would otherwise wait portMapBound.
 	portMapRetry = 10 * time.Minute
+	// natpmpPort is the gateway's NAT-PMP port (RFC 6886 3.1). A test's
+	// fake gateway binds port 0 and sets the endpoint's natpmp instead.
+	natpmpPort = 5351
 )
 
 // discoverGateway is the LAN's default IPv4 gateway (the routing table).
@@ -94,21 +100,72 @@ func (e *DirectEndpoint) mapping() <-chan netip.AddrPort {
 
 // askMap asks gw to map this endpoint's UDP port for life seconds (0
 // deletes it): the mapped port, then the gateway's external address.
-func (e *DirectEndpoint) askMap(gw net.IP, life int) (netip.AddrPort, error) {
+func (e *DirectEndpoint) askMap(gw net.IP, life uint32) (netip.AddrPort, error) {
 	ua, ok := e.pc.LocalAddr().(*net.UDPAddr)
 	if !ok {
 		return netip.AddrPort{}, net.UnknownNetworkError("udp")
 	}
-	c := natpmp.NewClientWithTimeout(gw, portMapBound)
-	r, err := c.AddPortMapping("udp", ua.Port, ua.Port, life)
+	ip, _ := netip.AddrFromSlice(gw.To4())
+	port := e.natpmp
+	if port == 0 {
+		port = natpmpPort
+	}
+	at := netip.AddrPortFrom(ip, uint16(port))                // #nosec G115 -- a UDP port
+	req := []byte{0, 1, 0, 0}                                 // RFC 6886 3.3: version 0, map UDP, reserved
+	req = binary.BigEndian.AppendUint16(req, uint16(ua.Port)) // #nosec G115 -- a UDP port
+	req = binary.BigEndian.AppendUint16(req, uint16(ua.Port)) // #nosec G115 -- a UDP port
+	req = binary.BigEndian.AppendUint32(req, life)
+	r, err := natpmpAsk(at, req, 16)
 	if err != nil || life == 0 {
 		return netip.AddrPort{}, err
 	}
-	x, err := c.GetExternalAddress()
+	x, err := natpmpAsk(at, []byte{0, 0}, 12) // RFC 6886 3.2: the external address
 	if err != nil {
 		return netip.AddrPort{}, err
 	}
-	return e.candidate(netip.AddrPortFrom(netip.AddrFrom4(x.ExternalIPAddress), r.MappedExternalPort).String())
+	return e.candidate(netip.AddrPortFrom(netip.AddrFrom4([4]byte(x[8:12])), binary.BigEndian.Uint16(r[10:12])).String())
+}
+
+// natpmpAsk sends req to the gateway at and returns its answer, size
+// bytes, resending (RFC 6886 3.1: 250 ms, doubling) within portMapBound.
+// The connected socket hears only the gateway.
+func natpmpAsk(at netip.AddrPort, req []byte, size int) ([]byte, error) {
+	c, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(at))
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close() //nolint:errcheck
+	end := time.Now().Add(portMapBound)
+	b := make([]byte, 16)
+	for wait := 250 * time.Millisecond; time.Now().Before(end); wait *= 2 {
+		d := time.Now().Add(wait)
+		if d.After(end) {
+			d = end
+		}
+		if err := c.SetDeadline(d); err != nil {
+			return nil, err
+		}
+		if _, err := c.Write(req); err != nil {
+			return nil, err
+		}
+		n, err := c.Read(b)
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		switch {
+		case n < 4 || b[0] != 0 || b[1] != req[1]|0x80:
+			return nil, fmt.Errorf("natpmp: unexpected answer % x", b[:n])
+		case binary.BigEndian.Uint16(b[2:4]) != 0:
+			return nil, fmt.Errorf("natpmp: result code %d", binary.BigEndian.Uint16(b[2:4]))
+		case n != size:
+			return nil, fmt.Errorf("natpmp: answer of %d bytes, want %d", n, size)
+		}
+		return b[:n], nil
+	}
+	return nil, errors.New("natpmp: the gateway did not answer")
 }
 
 // unmap deletes a held mapping (RFC 6886 3.4: lifetime 0), once, bounded;

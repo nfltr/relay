@@ -19,11 +19,13 @@ func init() {
 	discoverGateway = func() (net.IP, error) { return nil, errors.New("tests: no LAN gateway") }
 }
 
-// natpmpGateway is a NAT-PMP server (RFC 6886) on 127.0.0.1:5351 that maps
+// natpmpGateway is a NAT-PMP server (RFC 6886) on 127.0.0.1 at its own
+// port (never the fixed 5351, which another test process may hold) that maps
 // only the UDP port mapsPort, through a forwarder that stands for the
 // router's NAT: datagrams to the mapped port reach mapsPort from the
 // forwarder's inside socket, and its answers go back from the mapped port.
 type natpmpGateway struct {
+	port int          // the NAT-PMP server's port
 	ext  *net.UDPAddr // the mapped address
 	mu   sync.Mutex
 	asks []uint32 // each map request's lifetime
@@ -31,9 +33,9 @@ type natpmpGateway struct {
 
 func serveNATPMP(t *testing.T, mapsPort int) *natpmpGateway {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:5351")
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("NAT-PMP port taken: %v", err)
+		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = pc.Close() })
 	outside, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -45,7 +47,7 @@ func serveNATPMP(t *testing.T, mapsPort int) *natpmpGateway {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = outside.Close(); _ = inside.Close() })
-	g := &natpmpGateway{ext: outside.LocalAddr().(*net.UDPAddr)}
+	g := &natpmpGateway{port: pc.LocalAddr().(*net.UDPAddr).Port, ext: outside.LocalAddr().(*net.UDPAddr)}
 	internal := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: mapsPort}
 	var peer sync.Map // the last peer that sent to the mapped port
 	go func() {
@@ -126,6 +128,7 @@ func TestDirectMappedAgentGoesDirect(t *testing.T) {
 	ep := r.l.targets.services.direct.ep
 	ep.gateway = localGateway
 	g := serveNATPMP(t, ep.pc.LocalAddr().(*net.UDPAddr).Port)
+	ep.natpmp = g.port
 	r.l.targets.qad.Store(&qadTarget{addr: symmetricQAD(t, nil, blackhole(t)), tls: &tls.Config{InsecureSkipVerify: true}}) // #nosec G402 -- a test's relay
 	_, tc, events := r.session(t)
 	echo(t, tc, 1<<20, func() {
@@ -147,6 +150,7 @@ func TestDirectPortMapLease(t *testing.T) {
 	ep.loopback = true
 	ep.gateway = localGateway
 	g := serveNATPMP(t, ep.pc.LocalAddr().(*net.UDPAddr).Port)
+	ep.natpmp = g.port
 	for range 2 {
 		a, ok := ep.mapped()
 		if !ok || a.Port() != uint16(g.ext.Port) { // #nosec G115 -- a UDP port
@@ -165,7 +169,7 @@ func TestDirectPortMapLease(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer other.Close() //nolint:errcheck
-	other.gateway = localGateway
+	other.gateway, other.natpmp = localGateway, g.port
 	for range 2 {
 		if a, ok := other.mapped(); ok {
 			t.Fatalf("refused port mapped to %v", a)
@@ -179,16 +183,16 @@ func TestDirectPortMapLease(t *testing.T) {
 // TestDirectPortMapSilentGateway: a gateway that never answers costs one
 // ask its bound, then none for portMapRetry.
 func TestDirectPortMapSilentGateway(t *testing.T) {
-	pc, err := net.ListenPacket("udp", "127.0.0.1:5351") // reads, never answers
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0") // reads, never answers
 	if err != nil {
-		t.Fatalf("NAT-PMP port taken: %v", err)
+		t.Fatal(err)
 	}
 	defer pc.Close() //nolint:errcheck
 	ep, err := NewDirectEndpoint()
 	if err != nil {
 		t.Fatal(err)
 	}
-	ep.gateway = localGateway
+	ep.gateway, ep.natpmp = localGateway, pc.LocalAddr().(*net.UDPAddr).Port
 	defer ep.Close() //nolint:errcheck
 	for i, want := range []time.Duration{portMapBound, 0} {
 		start := time.Now()
