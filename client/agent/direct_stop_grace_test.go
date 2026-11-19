@@ -45,3 +45,36 @@ func TestDirectStopsWaitOneGrace(t *testing.T) {
 	<-s.Done() // its detach bound: nothing left running
 	_ = dead.Close()
 }
+
+// TestDirectTargetResetResetsTheSession (lane SENDCUT): nfnet's
+// Listener.Close resets its accepted Conns, then stops the agent. A
+// session whose direct peer was killed did not hear of that reset: Join's
+// copy toward the peer waited on the peer's window and never read the
+// target's reset, so the session held the agent's drain to its bound and
+// its grace started only after. A target's reset resets its direct session
+// at once, and the drain does not wait for a session already reset: the
+// stop ends one grace after the reset.
+func TestDirectTargetResetResetsTheSession(t *testing.T) {
+	t.Parallel()
+	detach := 2*directCutGrace + time.Second
+	d := &directServer{sessions: map[*directSession]struct{}{}, detach: detach}
+	sc, dead := net.Pipe()
+	go func() { _, _ = io.Copy(io.Discard, dead) }() // the path delivers; the peer never answers
+	s := pathswitch.Server(pathStream{Conn: sc}, PathRelayed, pathswitch.Config{Detach: detach})
+	user, target := newQueuePipe()
+	setDirect(target, d.registerSession(&directSession{c: s}))
+
+	start := time.Now()
+	_ = user.Reset()
+	drain, cancel := context.WithTimeout(t.Context(), directCutGrace+2*time.Second)
+	defer cancel()
+	d.stop(drain)
+	if took := time.Since(start); took > directCutGrace+time.Second {
+		t.Errorf("the stop ended %v after the target's reset, want one grace (%v)", took, directCutGrace)
+	}
+	if _, err := s.Read(make([]byte, 1)); err == nil {
+		t.Error("the session reads on after its target's reset")
+	}
+	<-s.Done()
+	_ = dead.Close()
+}

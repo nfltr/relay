@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/nfltr/link"
@@ -190,6 +191,11 @@ type QueueConn struct {
 	once   sync.Once
 	done   chan struct{}
 	caller Session
+	// cut, shared by both ends, runs at either end's Reset: the direct
+	// session the pair is joined to (setDirect) is reset at once, not only
+	// when Join's copy toward it reads the reset, which a write to a
+	// killed peer's full window keeps it from (TestDirectTargetResetResetsTheSession)
+	cut *atomic.Pointer[func()]
 }
 
 // pipeDir is one direction of a QueueConn pair.
@@ -212,8 +218,9 @@ func (d *pipeDir) changed() {
 
 func newQueuePipe() (user, agentEnd *QueueConn) {
 	a, b := newPipeDir(), newPipeDir()
-	user = &QueueConn{r: a, w: b, rd: makePipeDeadline(), wd: makePipeDeadline(), done: make(chan struct{})}
-	agentEnd = &QueueConn{r: b, w: a, rd: makePipeDeadline(), wd: makePipeDeadline(), done: make(chan struct{})}
+	cut := new(atomic.Pointer[func()])
+	user = &QueueConn{r: a, w: b, rd: makePipeDeadline(), wd: makePipeDeadline(), done: make(chan struct{}), cut: cut}
+	agentEnd = &QueueConn{r: b, w: a, rd: makePipeDeadline(), wd: makePipeDeadline(), done: make(chan struct{}), cut: cut}
 	return user, agentEnd
 }
 
@@ -352,6 +359,9 @@ func (c *QueueConn) end(reset error) {
 			}
 			d.changed()
 			d.mu.Unlock()
+		}
+		if f := c.cut.Load(); reset != nil && f != nil {
+			(*f)()
 		}
 	})
 }

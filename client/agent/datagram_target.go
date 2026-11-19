@@ -52,6 +52,10 @@ func revokeDatagrams(target net.Conn) bool {
 // setDirect gives target's association (a udp service's) the direct
 // datagrams of its session s; any other target, or none, is left as it is.
 func setDirect(target net.Conn, s *directSession) {
+	if q, ok := target.(*QueueConn); ok && s != nil {
+		cut := func() { s.reset() }
+		q.cut.Store(&cut)
+	}
 	if t, ok := target.(datagramTarget); ok && s != nil {
 		t.srv.SetDirect(s.dg)
 		s.revoke.Store(t.srv)

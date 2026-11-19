@@ -77,20 +77,20 @@ type directSession struct {
 	// ended: its Conn is done; it answers re-attaches until it is
 	// forgotten (registerSession), and takes no new direct connection
 	ended atomic.Bool
-	// cut: closed once it ended or directCutGrace after the stop's first
-	// reset of it (reset)
-	cutOnce sync.Once
-	cut     chan struct{}
+	// aborted closes at its first reset, cut once it ended or
+	// directCutGrace after that (reset); both made by registerSession
+	cutOnce      sync.Once
+	aborted, cut chan struct{}
 }
 
-// reset resets s at its first call (an ABORT on its current path); the
-// channel closes once s ended or directCutGrace after that reset: a later
-// stop waits out the same grace, not one of its own
-// (TestDirectStopsWaitOneGrace).
+// reset resets s at its first call (an ABORT on its current path): the
+// stop's, or its target's reset (setDirect). The channel closes once s
+// ended or directCutGrace after that reset: a later stop waits out the
+// same grace, not one of its own (TestDirectStopsWaitOneGrace).
 func (s *directSession) reset() <-chan struct{} {
 	s.cutOnce.Do(func() {
-		s.cut = make(chan struct{})
 		s.c.Abort()
+		close(s.aborted)
 		go func() {
 			t := time.NewTimer(directCutGrace)
 			defer t.Stop()
@@ -229,6 +229,7 @@ func (d *directServer) register(c *pathswitch.Conn, key []byte) *directSession {
 
 func (d *directServer) registerSession(s *directSession) *directSession {
 	s.dg = &sessionDatagrams{c: s.c}
+	s.aborted, s.cut = make(chan struct{}), make(chan struct{})
 	d.mu.Lock()
 	d.sessions[s] = struct{}{}
 	d.mu.Unlock()
@@ -628,7 +629,8 @@ func startDirect(s net.Conn, d *directServer) (*pathswitch.Conn, net.Conn, error
 // more than once (its primary's drain, its cycle's end, ServiceTable.Close):
 // the drain ends at the first, and each session's grace runs once, from
 // its first reset, so a peer that never answers (killed) costs one grace,
-// not one per call (TestDirectStopsWaitOneGrace). d nil: none.
+// not one per call (TestDirectStopsWaitOneGrace); a session its target
+// reset is not drained (TestDirectTargetResetResetsTheSession). d nil: none.
 func (d *directServer) stop(ctx context.Context) {
 	if d == nil {
 		return
@@ -637,6 +639,7 @@ func (d *directServer) stop(ctx context.Context) {
 		for _, s := range d.liveSessions() {
 			select {
 			case <-s.c.Done():
+			case <-s.aborted: // reset already (its target's): nothing to drain
 			case <-ctx.Done():
 			}
 		}
