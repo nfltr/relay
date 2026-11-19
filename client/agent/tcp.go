@@ -4,6 +4,7 @@
 package agent
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -50,7 +51,8 @@ const tcpSessionQueueBytes = 1 << 20
 // tcpSessionStall is how long a gRPC stream's receive loop waits on one
 // session's full queue, without credit, for its target to take anything
 // before it resets that session (the relay's tcpSessionStall).
-var tcpSessionStall = 10 * time.Second
+// A constant: a test passes its own (sessionTargets.stall), never writes this.
+const tcpSessionStall = 10 * time.Second
 
 // tcpRelayBufPool recycles read buffers used by TCP relay goroutines,
 // reducing GC pressure during sustained high-throughput transfers.
@@ -885,9 +887,10 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 				q.Push(frame.Data) // within its credit: never waits
 				continue
 			}
-			if errors.Is(q.PushWithin(frame.Data, tcpSessionStall), bytequeue.ErrStalled) {
+			stall := cmp.Or(targets.stall, tcpSessionStall)
+			if errors.Is(q.PushWithin(frame.Data, stall), bytequeue.ErrStalled) {
 				logger.Warn("tcp tunnel: session reset: its target took none of its bytes",
-					"session", id, "stall", tcpSessionStall)
+					"session", id, "stall", stall)
 				t.resetSession(id, q)
 			}
 		}
@@ -954,6 +957,9 @@ type sessionTargets struct {
 
 	// qad is the QAD of this tunnel's relay, from its agent-link offer (nil: no direct service)
 	qad *atomic.Pointer[qadTarget]
+	// stall: tests' bound on one session's wait in the receive loop (0:
+	// tcpSessionStall).
+	stall time.Duration
 }
 
 // relayQAD is the QAD of the tunnel's relay, nil before (or without) its

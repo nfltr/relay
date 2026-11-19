@@ -117,8 +117,7 @@ func sinkTarget(t *testing.T, n int) (string, <-chan struct{}) {
 // the loop never waits; against a relay without credit the loop waits on
 // the stuck session only for the stall bound, then resets it.
 func TestTCPTunnelStuckTargetDoesNotHoldTheReceiveLoop(t *testing.T) {
-	defer func(d time.Duration) { tcpSessionStall = d }(tcpSessionStall)
-	tcpSessionStall = 300 * time.Millisecond
+	const stall = 300 * time.Millisecond // sessionTargets.stall: the test's short bound
 	for _, credit := range []bool{true, false} {
 		t.Run("credit="+strconv.FormatBool(credit), func(t *testing.T) {
 			st := &fakeRelayStream{in: make(chan *pb.TCPData), stop: make(chan struct{}), closed: map[string]bool{}}
@@ -130,7 +129,7 @@ func TestTCPTunnelStuckTargetDoesNotHoldTheReceiveLoop(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan error, 1)
 			go func() {
-				done <- serveTCPStream(ctx, st, sessionTargets{}, nil, nil, slog.New(slog.DiscardHandler), nil, nil)
+				done <- serveTCPStream(ctx, st, sessionTargets{stall: stall}, nil, nil, slog.New(slog.DiscardHandler), nil, nil)
 			}()
 			defer func() { cancel(); close(st.stop); <-done }()
 			sink, got := sinkTarget(t, 1<<20)

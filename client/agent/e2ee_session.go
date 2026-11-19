@@ -50,7 +50,7 @@ func (t *tcpTunnel) serveE2EE(sessionID string, q *bytequeue.Queue, e2eeCfg *e2e
 		_ = tlsSide.Close()
 		return
 	}
-	serveE2EEConn(tls.Server(tlsSide, e2eeCfg.tlsConfig), backend, e2eeCfg.rewriteHost, client, wrap, t.logger)
+	serveE2EEConn(tls.Server(tlsSide, e2eeCfg.tlsConfig), backend, e2eeCfg.rewriteHost, client, wrap, t.logger, e2eeHeaderTimeout)
 }
 
 // e2eeHeaderTimeout bounds an E2EE session's TLS handshake and the headers of
@@ -58,32 +58,38 @@ func (t *tcpTunnel) serveE2EE(sessionID string, q *bytequeue.Queue, e2eeCfg *e2e
 // requests: the relay's own HTTPS front uses the same bounds
 // (http.server.read_header_timeout, http.server.idle_timeout), and E2EE
 // moves that front to the agent.
-var (
+//
+// Constants, so that no test changes them under another test's sessions
+// (a test's write raced with the reads of a session an earlier test left:
+// relay stress-cirelay 98da990094aa, stress-relayci2-pair dc5a83f80e63,
+// -race); a test that wants a shorter bound passes its own header bound.
+const (
 	e2eeHeaderTimeout = 10 * time.Second
 	e2eeIdleTimeout   = 120 * time.Second
 )
 
 // serveE2EEConn serves one E2EE session's TLS conn on the stream path or the
 // HTTP path (serveE2EE). client is the visitor's address the relay named
-// (zero: none), its requests' X-Forwarded-For.
-func serveE2EEConn(conn *tls.Conn, backend *url.URL, rewriteHost bool, client netip.Addr, wrap func(http.Handler) http.Handler, logger *slog.Logger) {
+// (zero: none), its requests' X-Forwarded-For; header bounds its handshake
+// and each request's headers (e2eeHeaderTimeout but in tests).
+func serveE2EEConn(conn *tls.Conn, backend *url.URL, rewriteHost bool, client netip.Addr, wrap func(http.Handler) http.Handler, logger *slog.Logger, header time.Duration) {
 	host := "" // the client's
 	if rewriteHost {
 		host = backend.Host
 	}
 	// The HTTP path's server sets its own deadlines from here on.
-	_ = conn.SetReadDeadline(time.Now().Add(e2eeHeaderTimeout))
+	_ = conn.SetReadDeadline(time.Now().Add(header))
 	if wrap == nil && backend.Scheme == "http" {
 		if err := conn.Handshake(); err != nil {
 			_ = conn.Close()
 			return
 		}
 		if p := conn.ConnectionState().NegotiatedProtocol; p == "" || p == "http/1.1" {
-			serveE2EEStream(conn, backendAddr(backend), host, client, logger)
+			serveE2EEStream(conn, backendAddr(backend), host, client, logger, header)
 			return
 		}
 	}
-	serveE2EEHTTP(conn, backend, host, client, wrap, logger)
+	serveE2EEHTTP(conn, backend, host, client, wrap, logger, header)
 }
 
 // backendAddr is the backend URL's host:port.
@@ -99,7 +105,7 @@ func backendAddr(u *url.URL) string {
 
 // serveE2EEHTTP serves one TLS conn with net/http and a reverse proxy to
 // backend, inside wrap when set.
-func serveE2EEHTTP(conn *tls.Conn, backend *url.URL, host string, client netip.Addr, wrap func(http.Handler) http.Handler, logger *slog.Logger) {
+func serveE2EEHTTP(conn *tls.Conn, backend *url.URL, host string, client netip.Addr, wrap func(http.Handler) http.Handler, logger *slog.Logger, header time.Duration) {
 	var handler http.Handler = &httputil.ReverseProxy{
 		Transport:  e2eeBackendTransport,
 		BufferPool: e2eeProxyBuffers,
@@ -115,17 +121,18 @@ func serveE2EEHTTP(conn *tls.Conn, backend *url.URL, host string, client netip.A
 		handler = wrap(handler)
 	}
 
-	serveHTTPConn(conn, handler)
+	serveHTTPConn(conn, handler, header)
 }
 
 // serveHTTPConn serves one connection with h until either side closes it.
 // The listener closes once the server is done with the conn, so Serve
-// returns instead of waiting on a second Accept.
-func serveHTTPConn(conn net.Conn, h http.Handler) {
+// returns instead of waiting on a second Accept. header is its
+// ReadHeaderTimeout.
+func serveHTTPConn(conn net.Conn, h http.Handler, header time.Duration) {
 	ln := &singleConnListener{conn: conn, done: make(chan struct{})}
 	server := &http.Server{
 		Handler:           h,
-		ReadHeaderTimeout: e2eeHeaderTimeout,
+		ReadHeaderTimeout: header,
 		IdleTimeout:       e2eeIdleTimeout,
 		ConnState: func(_ net.Conn, state http.ConnState) {
 			if state == http.StateClosed || state == http.StateHijacked {
@@ -152,10 +159,10 @@ const badGateway = "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nCont
 // body) goes over the shared pool of backend connections instead
 // (serveLastRequest): a connection dialed for one request costs a dial,
 // an accept and a TIME_WAIT.
-func serveE2EEStream(client net.Conn, addr, host string, visitor netip.Addr, logger *slog.Logger) {
+func serveE2EEStream(client net.Conn, addr, host string, visitor netip.Addr, logger *slog.Logger, header time.Duration) {
 	defer func() { _ = client.Close() }()
 	br := bufio.NewReader(client)
-	_ = client.SetReadDeadline(time.Now().Add(e2eeHeaderTimeout))
+	_ = client.SetReadDeadline(time.Now().Add(header))
 	req, err := http.ReadRequest(br)
 	if err != nil {
 		return

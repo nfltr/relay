@@ -24,7 +24,7 @@ const HTTPSessionsOnly = "only"
 // serveHTTPSession serves one session's HTTP/1.1 connection with h until
 // the relay or h closes it.
 func (t *tcpTunnel) serveHTTPSession(id string, q *bytequeue.Queue, h http.Handler) {
-	serveHTTPConn(newSessionConn(t, id, q), h)
+	serveHTTPConn(newSessionConn(t, id, q), h, e2eeHeaderTimeout)
 }
 
 // Tunnel is what an agent's TCP streams serve.

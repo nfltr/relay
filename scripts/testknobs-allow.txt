@@ -1,7 +1,5 @@
 # Test files that assign a package-level variable of their package (the knobs rule).
 # Format: <file_test.go>:<var> <reason and follow-up>. A stale entry fails make check-testknobs.
-client/agent/e2ee_session_timeout_test.go:e2eeHeaderTimeout unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
-client/agent/tcp_stuck_target_test.go:tcpSessionStall unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
 client/p2p/p2p_test.go:STUNServer exported SDK variable; follow-up: an option on the constructor
 client/p2p/rtcdata_test.go:RTCWait exported SDK variable; follow-up: an option on the constructor
 client/p2p/rtcdata_test.go:rtcNetworkTypes unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
@@ -9,4 +7,4 @@ client/p2p/stun_conformance_test.go:STUNServer exported SDK variable; follow-up:
 client/p2p/stun_test.go:STUNServer exported SDK variable; follow-up: an option on the constructor
 client/relayoutage/share_client_test.go:ShareClient exported SDK variable; follow-up: an option on the constructor
 client/rpcclient/a2a_handler_heartbeat_test.go:agentHeartbeatInterval unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
-client/agent/direct_portmap_test.go:discoverGateway keeps every test off the machine's real LAN gateway (a NAT-PMP router would map the test's ports) and points the portmap tests at their own; follow-up: a gateway field on DirectEndpoint set by its owner's config
+client/agent/direct_portmap_test.go:discoverGateway its init only: keeps every test off the machine's real LAN gateway (a NAT-PMP router would map the test's ports); a test that serves a gateway sets DirectEndpoint.gateway

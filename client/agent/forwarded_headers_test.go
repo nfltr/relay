@@ -148,7 +148,7 @@ func TestE2EEForwardsHeadersAsReverseProxy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			c1, c2 := tcpPair(t)
 			t.Cleanup(func() { _ = c1.Close() })
-			go serveE2EEConn(tls.Server(c2, cfg.tlsConfig), backend, tc.rewrite, clientAddr(tc.client), tc.wrap, slog.New(slog.DiscardHandler))
+			go serveE2EEConn(tls.Server(c2, cfg.tlsConfig), backend, tc.rewrite, clientAddr(tc.client), tc.wrap, slog.New(slog.DiscardHandler), e2eeHeaderTimeout)
 			cl := tls.Client(c1, clientCfg)
 			_ = cl.SetDeadline(time.Now().Add(10 * time.Second))
 			_, _ = io.WriteString(cl, "POST /form HTTP/1.1\r\nHost: "+publicHost+"\r\nConnection: "+tc.conn+", X-Hop"+

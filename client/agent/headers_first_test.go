@@ -101,7 +101,7 @@ func TestHeadersReachTheVisitorBeforeTheBody(t *testing.T) {
 				backend := heldBodyBackend(t, ct, release)
 				client, server := net.Pipe()
 				t.Cleanup(func() { _ = client.Close() })
-				go serveE2EEStream(server, strings.TrimPrefix(backend.URL, "http://"), "", netip.Addr{}, slog.New(slog.DiscardHandler))
+				go serveE2EEStream(server, strings.TrimPrefix(backend.URL, "http://"), "", netip.Addr{}, slog.New(slog.DiscardHandler), e2eeHeaderTimeout)
 				req, _ := http.NewRequest("GET", "http://backend/", nil)
 				req.Close = last
 				go func() { _ = req.Write(client) }()

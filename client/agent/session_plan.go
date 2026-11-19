@@ -232,7 +232,7 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 	}
 	switch p.kind {
 	case sessionHTTP:
-		serveHTTPConn(s, l.targets.http) // its first response answers the open
+		serveHTTPConn(s, l.targets.http, e2eeHeaderTimeout) // its first response answers the open
 	case sessionE2EE:
 		backend, err := url.Parse(p.backend)
 		if err != nil || p.backend == "" {
@@ -244,7 +244,7 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 			_ = s.Close()
 			return
 		}
-		serveE2EEConn(tls.Server(s, p.e2ee.tlsConfig), backend, p.e2ee.rewriteHost, p.client, p.wrap, l.logger)
+		serveE2EEConn(tls.Server(s, p.e2ee.tlsConfig), backend, p.e2ee.rewriteHost, p.client, p.wrap, l.logger, e2eeHeaderTimeout)
 	case sessionDirect:
 		if a.accept() != nil {
 			_ = s.Close()

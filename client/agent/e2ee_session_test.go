@@ -34,7 +34,7 @@ func streamSession(t *testing.T, backend string) *net.TCPConn {
 		if err != nil {
 			return
 		}
-		serveE2EEStream(c, backend, "backend.local", netip.Addr{}, slog.New(slog.DiscardHandler))
+		serveE2EEStream(c, backend, "backend.local", netip.Addr{}, slog.New(slog.DiscardHandler), e2eeHeaderTimeout)
 	}()
 	c, err := net.Dial("tcp", ln.Addr().String())
 	if err != nil {
@@ -263,11 +263,11 @@ func BenchmarkE2EESessionPaths(b *testing.B) {
 					srv := tls.Server(c2, cfg.tlsConfig)
 					go func() {
 						if path == "http" {
-							serveE2EEHTTP(srv, u, u.Host, netip.Addr{}, nil, tun.logger)
+							serveE2EEHTTP(srv, u, u.Host, netip.Addr{}, nil, tun.logger, e2eeHeaderTimeout)
 							return
 						}
 						_ = srv.Handshake()
-						serveE2EEStream(srv, u.Host, u.Host, netip.Addr{}, tun.logger)
+						serveE2EEStream(srv, u.Host, u.Host, netip.Addr{}, tun.logger, e2eeHeaderTimeout)
 					}()
 					cl := tls.Client(c1, clientCfg)
 					br := bufio.NewReader(cl)

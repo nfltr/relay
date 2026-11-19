@@ -121,8 +121,7 @@ func (g *groupRig) open(t *testing.T, machine, target string) (net.Conn, error) 
 
 // end ends ds (its TLS tc closed, or reset when there is none) and waits
 // until it is over, then refuses every later open: a session left running
-// re-attached after its test, beside the next test (reading the package's
-// e2eeHeaderTimeout, which TestE2EESessionBoundsHandshakeAndHeaders sets).
+// re-attached after its test, beside the next test.
 // It runs before the test's cleanups: the agents still answer, so a
 // re-attach that carries the session's end succeeds.
 func (g *groupRig) end(ds *DirectSession, tc *tls.Conn) {
