@@ -436,32 +436,33 @@ type psConn struct {
 
 func newPSConn(c *pathswitch.Conn, first net.Conn) *psConn { return &psConn{Conn: c, first: first} }
 
-// Close ends this end's direction (END) and returns once the peer
-// acknowledged every byte and the END: a caller that ends the stream under
-// it or exits right after Close loses none of them
-// (TestPSConnCloseDeliversTheTail). When the session fails first, or
-// psCloseBound passes, it resets the session and returns an error: the
+// Close ends this end's reading (a Read waiting on another goroutine
+// returns net.ErrClosed at once: TestPSConnCloseWakesARead) and its
+// direction (END), and returns once the peer acknowledged every byte and
+// the END: a caller that ends the stream under it or exits right after
+// Close loses none of them (TestPSConnCloseDeliversTheTail). When the
+// session fails first, nothing is heard from the peer for
+// pathswitch.Config.Linger (it is gone: TestPSConnCloseGonePeerWithinLinger)
+// or psCloseBound passes, it resets the session and returns an error: the
 // peer may not hold them (TestPSConnCloseReportsAnUnackedEnd). Then, in
-// the background, the peer's end is awaited (crypto/tls sends close_notify
-// above but never ends the stream under it, so each end's Close ends its
-// direction) and pathswitch's clean Close follows; a peer that does not
-// end within the bound gets a reset.
+// the background, pathswitch's Close waits for the peer's end (crypto/tls
+// sends close_notify above but never ends the stream under it, so each
+// end's Close ends its direction; the peer's bytes are taken and dropped
+// meanwhile) and ends the session cleanly, or resets it once the peer is
+// silent for its Linger.
 func (c *psConn) Close() error {
+	_ = c.CloseRead()
 	_ = c.CloseWrite()
 	if !c.WaitAcked(c.Written()+1, psCloseBound) { // +1: the END
 		c.Abort()
 		return fmt.Errorf("close: the peer did not acknowledge the stream's end: %w", pathswitch.ErrReset)
 	}
-	go func() {
-		t := time.AfterFunc(psCloseBound, c.Abort)
-		defer t.Stop()
-		_, _ = io.Copy(io.Discard, c.Conn)
-		_ = c.Conn.Close()
-	}()
+	go func() { _ = c.Conn.Close() }()
 	return nil
 }
 
-// psCloseBound: how long a closed session waits for its peer's end.
+// psCloseBound: how long Close waits for the peer to acknowledge its end
+// while the peer keeps answering.
 const psCloseBound = 30 * time.Second
 
 func (c *psConn) LocalAddr() net.Addr  { return c.first.LocalAddr() }
