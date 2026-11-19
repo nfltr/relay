@@ -52,11 +52,11 @@ type Conn struct {
 	id      string
 	trace   string
 	events  func(Event)
-	answer  chan error // Early: the open's outcome; nil: answered before Dial returned
-	e2ee    bool       // an accepted session the agent ended end-to-end TLS for
-	caller  *Caller    // an accepted session's caller, as the relay named it
-	remote  string     // an accepted session's RemoteAddr: the caller's machine
-	closers []func()   // what ends with the Conn: an nf1 session's data connection, a one-shot Dialer
+	answer  chan error         // Early: the open's outcome; nil: answered before Dial returned
+	e2ee    bool               // an accepted session the agent ended end-to-end TLS for
+	caller  *Caller            // an accepted session's caller, as the relay named it
+	remote  string             // an accepted session's RemoteAddr: the caller's machine
+	closers []func(clean bool) // what ends with the Conn (clean: at its Close): an nf1 session's data connection, a one-shot Dialer
 
 	readMu   sync.Mutex // a link session reads one at a time: net.Conn's concurrent Reads take turns
 	in, out  atomic.Int64
@@ -154,7 +154,7 @@ func (c *Conn) CloseWrite() error { return c.s.CloseWrite() }
 // what the Conn owns.
 func (c *Conn) Close() error {
 	err := c.s.Close()
-	c.end()
+	c.end(true)
 	return err
 }
 
@@ -162,14 +162,14 @@ func (c *Conn) Close() error {
 // end (no close_notify under TLS).
 func (c *Conn) Reset() error {
 	err := c.s.Reset()
-	c.end()
+	c.end(false)
 	return err
 }
 
-func (c *Conn) end() {
+func (c *Conn) end(clean bool) {
 	c.endOnce.Do(func() {
 		for _, f := range c.closers {
-			f()
+			f(clean)
 		}
 		c.emit(Event{Kind: "close", BytesIn: c.in.Load(), BytesOut: c.out.Load(), Err: c.failure.Load()})
 	})

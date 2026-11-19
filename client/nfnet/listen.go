@@ -318,7 +318,7 @@ func (l *Listener) Accept() (net.Conn, error) {
 		c.caller = &cl
 		c.remote = cl.MachineName
 	}
-	c.closers = append(c.closers, func() { l.forget(c) })
+	c.closers = append(c.closers, func(bool) { l.forget(c) })
 	l.mu.Lock()
 	if l.closed {
 		l.mu.Unlock()

@@ -55,7 +55,7 @@ func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, e
 			_ = nf1.AbortDirectRequired(ls) // the agent reads the same reason
 		}
 		_ = ls.Close()
-		d.dropMux(mux)
+		d.dropMux(mux, false)
 		return nil, err
 	}
 	raw, done := net.Conn(ls), ls.Done()
@@ -75,7 +75,7 @@ func (d *Dialer) dialNF1(ctx context.Context, t Target, o DialOptions) (*Conn, e
 	}
 	anon := nf1.Anonymous(hints) // served with no account: direct only
 	c := d.newConn(t, traceOf(ls))
-	c.closers = append(c.closers, func() { d.dropMux(mux) })
+	c.closers = append(c.closers, func(clean bool) { d.dropMux(mux, clean) })
 	if !early {
 		if anon && o.Direct == DirectOff { // not reached: an early dial's answer refuses a1 (nf1.AnswerConn)
 			return fail(directRequired(nf1.ErrDirectRequired))
@@ -153,14 +153,22 @@ func (d *Dialer) nf1Open(ctx context.Context, addr capaddr.Address, wait bool) (
 		}
 	}
 	if err != nil {
-		d.dropMux(mux)
+		d.dropMux(mux, false)
 		return nil, nil, err
 	}
 	return ls, mux, nil
 }
 
-// dropMux ends an nf1 session's data connection.
-func (d *Dialer) dropMux(m *dataplane.Mux) {
+// dropMux ends an nf1 session's data connection: after the session's
+// clean end once every frame buffered on it is written (Drain, at most
+// muxDrain), so the peer reads the session's end, never a cut
+// (TestNF1CloseKeepsWhatWasWritten); else at once.
+func (d *Dialer) dropMux(m *dataplane.Mux, clean bool) {
+	if clean {
+		ctx, cancel := context.WithTimeout(context.Background(), muxDrain)
+		_ = m.Drain(ctx)
+		cancel()
+	}
 	_ = m.Close()
 	d.mu.Lock()
 	delete(d.nf1Muxs, m)
@@ -175,9 +183,14 @@ func (d *Dialer) nf1Relayed(addr capaddr.Address) func(context.Context) (net.Con
 		if err != nil {
 			return nil, err
 		}
-		return muxConn{Session: ls, end: func() { d.dropMux(mux) }}, nil
+		return muxConn{Session: ls, end: func() { d.dropMux(mux, true) }}, nil
 	}
 }
+
+// muxDrain bounds a clean end's drain of its data connection: one round
+// trip to the relay (the GOAWAY's pong) on a live connection; the bound
+// is only against a relay that stopped answering.
+const muxDrain = 5 * time.Second
 
 // muxConn is a session whose Close ends its own data connection.
 type muxConn struct {

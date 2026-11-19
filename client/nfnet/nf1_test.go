@@ -366,3 +366,40 @@ func TestNF1NotServedIsNotHeld(t *testing.T) {
 		}
 	}
 }
+
+// A clean Close ends the session with every byte written before it and
+// the close_notify: the server reads them then EOF, never a reset (lane
+// NFCAT: Close then dropped the data connection at once, cutting the
+// frames still buffered, and a relayed nfltr-pipe end exited 0 while its
+// peer read a reset).
+func TestNF1CloseKeepsWhatWasWritten(t *testing.T) {
+	l, _, err := nf1.Mint("relay.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, srvc, raws := nf1Relay(t, l)
+	c, err := dial(t, dialer(t, cfg), Target{Kind: AddressTarget, Address: l.Address()}, DialOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := <-srvc
+	<-raws
+	defer srv.Close() //nolint:errcheck
+	msg := bytes.Repeat([]byte("x"), 1<<20)
+	done := make(chan error, 1)
+	go func() {
+		if _, err := c.Write(msg); err != nil {
+			done <- err
+			return
+		}
+		done <- c.Close()
+	}()
+	_ = srv.SetReadDeadline(time.Now().Add(10 * time.Second))
+	b, err := io.ReadAll(srv)
+	if err != nil || !bytes.Equal(b, msg) {
+		t.Fatalf("server read %d of %d bytes, %v; want them all then EOF", len(b), len(msg), err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

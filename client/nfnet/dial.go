@@ -59,7 +59,7 @@ func Dial(ctx context.Context, cfg Config, target string) (*Conn, error) {
 		_ = d.Close()
 		return nil, err
 	}
-	c.closers = append(c.closers, func() { _ = d.Close() })
+	c.closers = append(c.closers, func(bool) { _ = d.Close() })
 	return c, nil
 }
 
