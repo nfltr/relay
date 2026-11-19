@@ -92,7 +92,7 @@ func TestPSConnCloseReportsAnUnackedEnd(t *testing.T) {
 				if err == nil {
 					t.Fatal("Close returned nil though the peer acknowledged neither the bytes nor the END")
 				}
-			case <-time.After(psCloseBound + 10*time.Second): // a bound against a hang only
+			case <-time.After(2 * time.Minute): // a bound against a hang only
 				t.Fatal("Close never returned")
 			}
 		})
@@ -165,7 +165,7 @@ func TestPSConnCloseWakesARead(t *testing.T) {
 // TestPSConnCloseGonePeerWithinLinger (lane DIRECTCLOSE): Close whose peer
 // is gone (it reads nothing, answers nothing: a killed agent on a direct
 // path until QUIC's idle timeout) returns its error within
-// pathswitch.Config.Linger, not psCloseBound (30 s).
+// pathswitch.Config.Linger, not psCloseBound (10 min).
 func TestPSConnCloseGonePeerWithinLinger(t *testing.T) {
 	_, cc := net.Pipe() // the peer's end: never read
 	cfg := pathswitch.Config{Detach: time.Minute, Linger: 200 * time.Millisecond}

@@ -462,8 +462,11 @@ func (c *psConn) Close() error {
 }
 
 // psCloseBound: how long Close waits for the peer to acknowledge its end
-// while the peer keeps answering.
-const psCloseBound = 30 * time.Second
+// while the peer keeps answering: a full window (tcpDataWindow, 16 MiB)
+// at 256 kbit/s. A gone peer ends the wait at Linger; a 30 s bound reset
+// a lossy direct session still delivering its tail (lane DIRECTCLOSE:
+// net-100mbit-150ms-loss1-direct, 4 MiB took 33 s).
+const psCloseBound = 10 * time.Minute
 
 func (c *psConn) LocalAddr() net.Addr  { return c.first.LocalAddr() }
 func (c *psConn) RemoteAddr() net.Addr { return c.first.RemoteAddr() }

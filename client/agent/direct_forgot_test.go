@@ -18,7 +18,7 @@ import (
 // restarted) answers its client's relayed re-attach with ABORT
 // (pathswitch.Refuse), so the client's session ends and its Close returns
 // at once. A plain stream reset left the client re-attaching once a second
-// and its Close waiting out psCloseBound (30 s, the tests' own bound).
+// and its Close waiting out psCloseBound (10 min).
 func TestDirectReattachOfForgottenSessionEndsIt(t *testing.T) {
 	d := &directServer{sessions: map[*directSession]struct{}{}, logger: slog.New(slog.DiscardHandler)}
 	key := []byte("session exporter, 32 bytes long.")
