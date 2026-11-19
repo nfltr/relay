@@ -38,14 +38,29 @@
    be slow, which is a vanished peer until it answers). The clock starts
    at the stop: what happened before it is an order of steps, all at
    time 0 (the bounds are from the stop). Mutant puts back
-   one bug each (scripts/spec.sh mutants). *)
+   one bug each (scripts/spec.sh mutants).
+
+   Late sessions (lane STOPGAP): a session of Late registers (Register:
+   registerSession) at any time the agent's link still carries new
+   sessions (before CycleEnd), the stop's included, starts relayed and may
+   move to its direct path (Move: acceptDirect's Attach; never once
+   aborted, an aborted Conn takes no path). Each call resets and waits for
+   the sessions registered at its reset (snap: its left). The link's end
+   resets a late session not moved (the relay resets its peer); one moved
+   is reached only by a call's reset, so one registered once a call's
+   drain ended (stopped) is refused: reset at once and not tabled, so no
+   call waits a grace for it and it never moves (late-unreset: it is
+   tabled unreset, and moves after the last call's snapshot, or a later
+   call waits a fresh grace for it past the stop's bound). A session that begins after the
+   stop began gets no drain of its own (the stop takes no new work). *)
 EXTENDS Integers, FiniteSets
 
-CONSTANTS Sessions, Direct, Closers, Drain, Grace, MaxBytes, MaxTime, Mutant
+CONSTANTS Sessions, Direct, Late, Closers, Drain, Grace, MaxBytes, MaxTime, Mutant
 
-ASSUME Direct \subseteq Sessions /\ Drain \in Nat /\ Grace \in Nat
+ASSUME Direct \subseteq Sessions /\ Late \subseteq Direct /\ Drain \in Nat /\ Grace \in Nat
 ASSUME Mutant \in {"none", "no-target-cut", "drain-waits-reset", "grace-per-stop",
-                   "second-close-returns", "no-drain", "reset-as-close", "no-grace"}
+                   "second-close-returns", "no-drain", "reset-as-close", "no-grace",
+                   "late-unreset"}
 
 Relayed == Sessions \ Direct
 Calls == {"primary", "cycle", "table"}
@@ -70,12 +85,18 @@ VARIABLES
     aborted,  \* directSession.aborted (direct) or the relay's reset (relayed)
     abortAt,  \* when it was first aborted; None: never
     resetAt,  \* when its target reset it; None: never
-    done      \* the session ended (pathswitch Done; relayed: its stream ended)
+    done,     \* the session ended (pathswitch Done; relayed: its stream ended)
+    snap,     \* the sessions each call resets and waits for (stop's left)
+    regd,     \* the session is registered (a Late one: not yet at first)
+    moved,    \* it is on its direct path: the link's end does not reset it
+    newer,    \* the sessions registered after the stop began
+    refused   \* the sessions registered once a drain ended: reset, not tabled
 
-vars == <<now, stopAt, apc, spc, wfrom, stopped, cl, closed, exited,
-          tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt, done>>
-agentVars == <<stopAt, apc, spc, wfrom, stopped, cl, closed, exited>>
-sessVars == <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt, done>>
+lifeVars == <<regd, moved, newer, refused>>
+vars == <<now, stopAt, apc, spc, wfrom, snap, stopped, cl, closed, exited,
+          tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt, done, lifeVars>>
+agentVars == <<stopAt, apc, spc, wfrom, snap, stopped, cl, closed, exited>>
+sessVars == <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt, done, lifeVars>>
 
 TypeOK ==
     /\ now \in 0..MaxTime /\ stopAt \in Times
@@ -90,6 +111,9 @@ TypeOK ==
     /\ pview \in [Sessions -> {"open", "eof", "reset"}]
     /\ aborted \in [Sessions -> BOOLEAN] /\ abortAt \in [Sessions -> Times]
     /\ resetAt \in [Sessions -> Times] /\ done \in [Sessions -> BOOLEAN]
+    /\ snap \in [Calls -> SUBSET Direct]
+    /\ regd \in [Sessions -> BOOLEAN] /\ moved \in [Sessions -> BOOLEAN]
+    /\ newer \subseteq Late /\ refused \subseteq Late
 
 Init ==
     /\ now = 0 /\ stopAt = None /\ apc = "run"
@@ -101,14 +125,18 @@ Init ==
     /\ pview = [s \in Sessions |-> "open"] /\ aborted = [s \in Sessions |-> FALSE]
     /\ abortAt = [s \in Sessions |-> None] /\ resetAt = [s \in Sessions |-> None]
     /\ done = [s \in Sessions |-> FALSE]
+    /\ snap = [k \in Calls |-> {}]
+    /\ regd = [s \in Sessions |-> s \notin Late]
+    /\ moved = [s \in Sessions |-> s \in Direct \ Late]
+    /\ newer = {} /\ refused = {}
 
 \* A session ended, or Grace passed since its first reset: nothing waits
 \* for it any more (directSession.cut).
-Cut(s) == done[s] \/ (aborted[s] /\ now >= abortAt[s] + Grace)
+Cut(s) == ~regd[s] \/ done[s] \/ (aborted[s] /\ now >= abortAt[s] + Grace)
 Deadline == stopAt + Drain
 \* The drain waits no more for s: it ended, or was reset already
 \* (SENDCUT: a target's reset is not drained).
-Over(s) == done[s] \/ (aborted[s] /\ Mutant # "drain-waits-reset")
+Over(s) == ~regd[s] \/ done[s] \/ (aborted[s] /\ Mutant # "drain-waits-reset")
 
 \* abort(S): the sessions of S not yet ended or aborted get their ABORT now.
 Abort(S) ==
@@ -139,7 +167,7 @@ BeginStop == apc' = "stopping" /\ stopAt' = now
 Signal ==
     /\ apc = "run" /\ ~exited
     /\ BeginStop
-    /\ UNCHANGED <<now, spc, wfrom, stopped, cl, closed, exited>> /\ UNCHANGED sessVars
+    /\ UNCHANGED <<now, spc, wfrom, snap, stopped, cl, closed, exited>> /\ UNCHANGED sessVars
 
 \* The primary's: once its relayed sessions ended or Drain passed
 \* (waitIdle), its directServer.stop.
@@ -147,7 +175,7 @@ PrimaryStart ==
     /\ apc # "run" /\ spc["primary"] = "idle"
     /\ \A r \in Relayed : done[r] \/ now >= Deadline
     /\ StartCall("primary")
-    /\ UNCHANGED <<now, stopAt, apc, wfrom, stopped, cl, closed, exited>> /\ UNCHANGED sessVars
+    /\ UNCHANGED <<now, stopAt, apc, wfrom, snap, stopped, cl, closed, exited>> /\ UNCHANGED sessVars
 
 \* The cycle's end's directServer.stop: after the primary returned, or,
 \* without a drain, at once (the cycle returns at the stop, its primary
@@ -156,17 +184,20 @@ CycleStart ==
     /\ apc = "stopping" /\ spc["cycle"] = "idle"
     /\ spc["primary"] = "done" \/ Drain = 0
     /\ StartCall("cycle")
-    /\ UNCHANGED <<now, stopAt, apc, wfrom, stopped, cl, closed, exited>> /\ UNCHANGED sessVars
+    /\ UNCHANGED <<now, stopAt, apc, wfrom, snap, stopped, cl, closed, exited>> /\ UNCHANGED sessVars
+
+\* The link's end: the relayed sessions and the late ones not moved.
+LinkEnds == Relayed \cup {s \in Late : regd[s] /\ ~moved[s]}
 
 CycleEnd ==
     /\ apc = "stopping" /\ spc["cycle"] = "done"
     /\ apc' = "stopped"
-    /\ done' = [s \in Sessions |-> done[s] \/ s \in Relayed]
+    /\ done' = [s \in Sessions |-> done[s] \/ s \in LinkEnds]
     /\ pview' = [s \in Sessions |->
-                   IF s \in Relayed /\ ~done[s] /\ peer[s] = "alive" THEN "reset" ELSE pview[s]]
-    /\ Abort(Relayed)
-    /\ UNCHANGED <<now, stopAt, spc, wfrom, stopped, cl, closed, exited>>
-    /\ UNCHANGED <<tgt, wrote, dlv, peer, resetAt>>
+                   IF s \in LinkEnds /\ ~done[s] /\ peer[s] = "alive" THEN "reset" ELSE pview[s]]
+    /\ Abort(LinkEnds)
+    /\ UNCHANGED <<now, stopAt, spc, wfrom, snap, stopped, cl, closed, exited>>
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, resetAt>> /\ UNCHANGED lifeVars
 
 \* ---- directServer.stop, call k ----
 
@@ -174,23 +205,24 @@ CallDrainEnd(k) ==
     /\ spc[k] = "drain"
     /\ Mutant = "no-drain" \/ now >= Deadline \/ \A s \in Direct : Over(s)
     /\ spc' = [spc EXCEPT ![k] = "reset"] /\ stopped' = TRUE
-    /\ UNCHANGED <<now, stopAt, apc, wfrom, cl, closed, exited>> /\ UNCHANGED sessVars
+    /\ UNCHANGED <<now, stopAt, apc, wfrom, snap, cl, closed, exited>> /\ UNCHANGED sessVars
 
 CallReset(k) ==
     /\ spc[k] = "reset"
-    /\ Abort(Direct)
+    /\ LET left == {s \in Direct : regd[s] /\ s \notin refused} IN
+           Abort(left) /\ snap' = [snap EXCEPT ![k] = left]
     /\ spc' = [spc EXCEPT ![k] = "wait"] /\ wfrom' = [wfrom EXCEPT ![k] = now]
     /\ UNCHANGED <<now, stopAt, apc, stopped, cl, closed, exited>>
-    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, resetAt, done>>
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, resetAt, done>> /\ UNCHANGED lifeVars
 
 CallWaitEnd(k) ==
     /\ spc[k] = "wait"
     /\ CASE Mutant = "grace-per-stop" ->
-              \A s \in Direct : done[s] \/ now >= wfrom[k] + Grace
+              \A s \in snap[k] : done[s] \/ now >= wfrom[k] + Grace
          [] Mutant = "no-grace" -> TRUE
-         [] OTHER -> \A s \in Direct : Cut(s)
+         [] OTHER -> \A s \in snap[k] : Cut(s)
     /\ spc' = [spc EXCEPT ![k] = "done"]
-    /\ UNCHANGED <<now, stopAt, apc, wfrom, stopped, cl, closed, exited>> /\ UNCHANGED sessVars
+    /\ UNCHANGED <<now, stopAt, apc, wfrom, snap, stopped, cl, closed, exited>> /\ UNCHANGED sessVars
 
 \* ---- nfnet's Listener.Close ----
 
@@ -200,66 +232,66 @@ Close(c) ==
        THEN /\ cl' = [cl EXCEPT ![c] = IF Mutant = "second-close-returns" THEN "done" ELSE "wait"]
             /\ UNCHANGED closed
        ELSE /\ cl' = [cl EXCEPT ![c] = "reset"] /\ closed' = TRUE
-    /\ UNCHANGED <<now, stopAt, apc, spc, wfrom, stopped, exited>> /\ UNCHANGED sessVars
+    /\ UNCHANGED <<now, stopAt, apc, spc, wfrom, snap, stopped, exited>> /\ UNCHANGED sessVars
 
 \* Its accepted Conns (the sessions not ended) are reset.
 CloserReset(c) ==
     /\ cl[c] = "reset"
-    /\ TargetReset({s \in Sessions : ~done[s] /\ tgt[s] # "reset"})
+    /\ TargetReset({s \in Sessions : regd[s] /\ ~done[s] /\ tgt[s] # "reset"})
     /\ cl' = [cl EXCEPT ![c] = "agent"]
-    /\ UNCHANGED <<now, stopAt, apc, spc, wfrom, stopped, closed, exited>>
-    /\ UNCHANGED <<wrote, dlv, peer>>
+    /\ UNCHANGED <<now, stopAt, apc, spc, wfrom, snap, stopped, closed, exited>>
+    /\ UNCHANGED <<wrote, dlv, peer>> /\ UNCHANGED lifeVars
 
 CloserAgent(c) ==
     /\ cl[c] = "agent"
     /\ IF apc = "run" THEN BeginStop ELSE UNCHANGED <<apc, stopAt>>
     /\ cl' = [cl EXCEPT ![c] = "await"]
-    /\ UNCHANGED <<now, spc, wfrom, stopped, closed, exited>> /\ UNCHANGED sessVars
+    /\ UNCHANGED <<now, spc, wfrom, snap, stopped, closed, exited>> /\ UNCHANGED sessVars
 
 CloserAwait(c) ==
     /\ cl[c] = "await" /\ apc = "stopped"
     /\ cl' = [cl EXCEPT ![c] = "table"] /\ StartCall("table")
-    /\ UNCHANGED <<now, stopAt, apc, wfrom, stopped, closed, exited>> /\ UNCHANGED sessVars
+    /\ UNCHANGED <<now, stopAt, apc, wfrom, snap, stopped, closed, exited>> /\ UNCHANGED sessVars
 
 CloserTable(c) ==
     /\ cl[c] = "table" /\ spc["table"] = "done"
     /\ cl' = [cl EXCEPT ![c] = "done"]
-    /\ UNCHANGED <<now, stopAt, apc, spc, wfrom, stopped, closed, exited>> /\ UNCHANGED sessVars
+    /\ UNCHANGED <<now, stopAt, apc, spc, wfrom, snap, stopped, closed, exited>> /\ UNCHANGED sessVars
 
 \* A second Close returns once the first one did (l.shut).
 CloserWait(c) ==
     /\ cl[c] = "wait"
     /\ \E d \in Closers : d # c /\ cl[d] = "done"
     /\ cl' = [cl EXCEPT ![c] = "done"]
-    /\ UNCHANGED <<now, stopAt, apc, spc, wfrom, stopped, closed, exited>> /\ UNCHANGED sessVars
+    /\ UNCHANGED <<now, stopAt, apc, spc, wfrom, snap, stopped, closed, exited>> /\ UNCHANGED sessVars
 
 Exit ==
     /\ ~exited
     /\ \/ apc = "stopped" /\ \A c \in Closers : cl[c] = "idle"
        \/ \E c \in Closers : cl[c] = "done"
     /\ exited' = TRUE
-    /\ UNCHANGED <<now, stopAt, apc, spc, wfrom, stopped, cl, closed>> /\ UNCHANGED sessVars
+    /\ UNCHANGED <<now, stopAt, apc, spc, wfrom, snap, stopped, cl, closed>> /\ UNCHANGED sessVars
 
 \* ---- the targets ----
 
-Live(s) == ~done[s] /\ ~aborted[s] /\ ~exited
+Live(s) == regd[s] /\ ~done[s] /\ ~aborted[s] /\ ~exited
 
 Write(s) ==
     /\ Live(s) /\ tgt[s] = "open" /\ wrote[s] < MaxBytes
     /\ wrote' = [wrote EXCEPT ![s] = @ + 1]
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<tgt, dlv, peer, pview, aborted, abortAt, resetAt, done>>
+    /\ UNCHANGED <<tgt, dlv, peer, pview, aborted, abortAt, resetAt, done>> /\ UNCHANGED lifeVars
 
 CloseWrite(s) ==
     /\ Live(s) /\ tgt[s] = "open"
     /\ tgt' = [tgt EXCEPT ![s] = "closed"]
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<wrote, dlv, peer, pview, aborted, abortAt, resetAt, done>>
+    /\ UNCHANGED <<wrote, dlv, peer, pview, aborted, abortAt, resetAt, done>> /\ UNCHANGED lifeVars
 
 AppReset(s) ==
-    /\ ~done[s] /\ ~exited /\ tgt[s] # "reset"
+    /\ regd[s] /\ ~done[s] /\ ~exited /\ tgt[s] # "reset"
     /\ TargetReset({s})
-    /\ UNCHANGED agentVars /\ UNCHANGED <<now, wrote, dlv, peer>>
+    /\ UNCHANGED agentVars /\ UNCHANGED <<now, wrote, dlv, peer>> /\ UNCHANGED lifeVars
 
 \* no-target-cut: Join's copy toward the peer reads the target's reset
 \* only while the peer takes bytes.
@@ -268,7 +300,7 @@ Propagate(s) ==
     /\ ~exited
     /\ Abort({s})
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, resetAt, done>>
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, resetAt, done>> /\ UNCHANGED lifeVars
 
 \* ---- the peers and the relay ----
 
@@ -276,14 +308,14 @@ Deliver(s) ==
     /\ peer[s] = "alive" /\ dlv[s] < wrote[s] /\ ~aborted[s] /\ ~done[s] /\ ~exited
     /\ dlv' = [dlv EXCEPT ![s] = @ + 1]
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<tgt, wrote, peer, pview, aborted, abortAt, resetAt, done>>
+    /\ UNCHANGED <<tgt, wrote, peer, pview, aborted, abortAt, resetAt, done>> /\ UNCHANGED lifeVars
 
 PeerEnd(s) ==
     /\ peer[s] = "alive" /\ tgt[s] = "closed" /\ dlv[s] = wrote[s]
     /\ ~aborted[s] /\ ~done[s] /\ ~exited
     /\ pview' = [pview EXCEPT ![s] = "eof"] /\ done' = [done EXCEPT ![s] = TRUE]
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<tgt, wrote, dlv, peer, aborted, abortAt, resetAt>>
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, aborted, abortAt, resetAt>> /\ UNCHANGED lifeVars
 
 \* The peer received the ABORT and answers it (reset-as-close: the
 \* stop's reset reached it as a clean end).
@@ -292,32 +324,57 @@ PeerAnswer(s) ==
     /\ pview' = [pview EXCEPT ![s] = IF Mutant = "reset-as-close" THEN "eof" ELSE "reset"]
     /\ done' = [done EXCEPT ![s] = TRUE]
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<tgt, wrote, dlv, peer, aborted, abortAt, resetAt>>
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, aborted, abortAt, resetAt>> /\ UNCHANGED lifeVars
 
 PeerReset(s) ==
-    /\ peer[s] = "alive" /\ ~done[s] /\ ~exited
+    /\ regd[s] /\ peer[s] = "alive" /\ ~done[s] /\ ~exited
     /\ done' = [done EXCEPT ![s] = TRUE]
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt>>
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt>> /\ UNCHANGED lifeVars
 
 Vanish(s) ==
-    /\ peer[s] = "alive" /\ ~done[s] /\ ~exited
+    /\ regd[s] /\ peer[s] = "alive" /\ ~done[s] /\ ~exited
     /\ peer' = [peer EXCEPT ![s] = "gone"]
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<tgt, wrote, dlv, pview, aborted, abortAt, resetAt, done>>
+    /\ UNCHANGED <<tgt, wrote, dlv, pview, aborted, abortAt, resetAt, done>> /\ UNCHANGED lifeVars
 
 RelayCut(s) ==
     /\ s \in Relayed /\ peer[s] = "gone" /\ ~done[s] /\ ~exited
     /\ done' = [done EXCEPT ![s] = TRUE]
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt>>
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt>> /\ UNCHANGED lifeVars
 
 \* A direct session whose peer is gone ends at its detach bound.
 DetachEnd(s) ==
     /\ s \in Direct /\ peer[s] = "gone" /\ aborted[s] /\ ~done[s] /\ ~exited
     /\ done' = [done EXCEPT ![s] = TRUE]
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt>>
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt>> /\ UNCHANGED lifeVars
+
+\* ---- late sessions ----
+
+\* A new session registers while the link carries new sessions; once a
+\* call's drain ended it is refused: reset at once and not put in the
+\* table, so no call waits for it (registerSession reads stopped under
+\* the table's lock, stop takes left under it after it set stopped: each
+\* session is in a later call's left or refused).
+Register(s) ==
+    /\ s \in Late /\ ~regd[s] /\ apc # "stopped" /\ ~exited
+    /\ regd' = [regd EXCEPT ![s] = TRUE]
+    /\ newer' = IF stopAt # None THEN newer \cup {s} ELSE newer
+    /\ IF stopped /\ Mutant # "late-unreset"
+       THEN Abort({s}) /\ refused' = refused \cup {s}
+       ELSE UNCHANGED <<aborted, abortAt, refused>>
+    /\ UNCHANGED agentVars /\ UNCHANGED now
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, resetAt, done, moved>>
+
+\* Its peer attaches it to the direct path (acceptDirect).
+Move(s) ==
+    /\ s \in Late /\ regd[s] /\ ~moved[s] /\ ~done[s] /\ ~aborted[s]
+    /\ peer[s] = "alive" /\ ~exited
+    /\ moved' = [moved EXCEPT ![s] = TRUE]
+    /\ UNCHANGED agentVars /\ UNCHANGED now
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt, done, regd, newer, refused>>
 
 \* ---- time ----
 
@@ -335,7 +392,8 @@ Tick ==
 Env ==
     \/ Signal
     \/ \E c \in Closers : Close(c)
-    \/ \E s \in Sessions : Write(s) \/ CloseWrite(s) \/ AppReset(s) \/ Propagate(s)
+    \/ \E s \in Sessions : Register(s) \/ Move(s)
+                          \/ Write(s) \/ CloseWrite(s) \/ AppReset(s) \/ Propagate(s)
                           \/ Deliver(s) \/ PeerEnd(s) \/ PeerAnswer(s) \/ PeerReset(s)
                           \/ Vanish(s) \/ RelayCut(s) \/ DetachEnd(s)
 
@@ -353,7 +411,7 @@ NoSilentLoss == \A s \in Sessions : pview[s] = "eof" => dlv[s] = wrote[s] /\ tgt
 \* The stop resets a session its target did not reset only once the drain
 \* passed: a committed tail gets the drain to arrive.
 NoEarlyReset ==
-    \A s \in Sessions : aborted[s] /\ tgt[s] # "reset" =>
+    \A s \in Sessions : aborted[s] /\ tgt[s] # "reset" /\ s \notin newer =>
         stopAt # None /\ abortAt[s] >= Deadline
 
 \* A session its target reset is cut once one grace passed since that
@@ -372,7 +430,7 @@ ExitAfterEnd == exited => \A s \in Sessions : Cut(s)
 
 \* A reset session is never drained: time does not pass in the drain once
 \* every direct session ended or its target reset it.
-DrainOnlyReset == (\E k \in Calls : spc[k] = "drain") /\ \A s \in Direct : done[s] \/ tgt[s] = "reset"
+DrainOnlyReset == (\E k \in Calls : spc[k] = "drain") /\ \A s \in Direct : ~regd[s] \/ done[s] \/ tgt[s] = "reset"
 NoDrainOnReset == [][Tick => ~DrainOnlyReset]_vars
 
 \* ---- witnesses (each must be violated: scripts/spec.sh mutants) ----
@@ -391,4 +449,8 @@ W_ResetCut == ~(\E s \in Direct : resetAt[s] # None /\ peer[s] = "gone" /\ Cut(s
 W_DrainWaits == ~((\E k \in Calls : spc[k] = "drain") /\ \E s \in Direct : tgt[s] = "reset" /\ ~done[s])
 \* Both Closes return before the process exits.
 W_SecondClose == ~(\A c \in Closers : cl[c] = "done")
+\* A late session moved to its direct path and was reset before the exit.
+W_LateMoved == ~(exited /\ \E s \in Late : moved[s] /\ aborted[s])
+\* A session registered once the drain ended is reset at once.
+W_LateRefused == ~(\E s \in refused : exited)
 =============================================================================

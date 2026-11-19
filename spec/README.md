@@ -1173,8 +1173,14 @@ ended or was reset, or the drain passed), each resets the sessions left
 its first reset. Time is a tick; the agent's own steps are urgent, the
 peers' and targets' are not; the clock starts at the stop. `make spec`
 checks `AgentStop.cfg` (one direct and one relayed session, two Closes,
-Drain 1, Grace 2, one byte each; about 0.8 M states) and
-`AgentStopNoDrain.cfg` (Drain 0).
+Drain 1, Grace 2, one byte each; about 0.8 M states),
+`AgentStopNoDrain.cfg` (Drain 0) and `AgentStopLate.cfg` (lane STOPGAP:
+one session of `Late`, which registers at any time the agent's link still
+carries new sessions, the stop's included, and may move to its direct
+path; one Close; about 25 k states). Each call resets and waits for the
+sessions registered at its reset (`snap`, the code's `left`); the link's
+end resets a late session not moved; one registered once a drain ended is
+refused (reset at once, not tabled).
 
 | invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
 |---|---|---|
@@ -1184,13 +1190,21 @@ Drain 1, Grace 2, one byte each; about 0.8 M states) and
 | `StopInTime` | the stop ends (the process exits) within the drain and one grace | `grace-per-stop` (SENDCUT, 867a20e) |
 | `ExitAfterEnd` | the process exits only once every session ended or its grace passed since its ABORT | `second-close-returns` (SENDBEST, f09ea5f), `no-grace` |
 | `NoDrainOnReset` (action) | no time passes in a drain once every direct session ended or its target reset it | `no-target-cut`, `drain-waits-reset` (SENDCUT, 04e84d8) |
+| `ExitAfterEnd`, `StopInTime` (`AgentStopLate.cfg`) | a session registered once a drain ended does not outlive the exit nor stretch the stop | `late-unreset` (STOPGAP: it moves direct after the last call's `left`, exit; with a session there at the stop, `late-unreset-grace`: a later call waits a fresh grace) |
 
 Witnesses (each violated: the model reaches it): `W_GoneCut` (exit after a
 killed direct peer's grace), `W_FullBound` (the stop takes the whole
 bound), `W_StopReset`, `W_Eof` (every byte and the clean end after the
-stop began), `W_ResetCut`, `W_DrainWaits`, `W_SecondClose`. `Propagate`
+stop began), `W_ResetCut`, `W_DrainWaits`, `W_SecondClose`; on
+`AgentStopLate.cfg` `W_LateMoved` (a late session moved direct and reset
+before the exit) and `W_LateRefused` (one refused, then the exit). `Propagate`
 is the `no-target-cut` mutant's step only (never taken in the design);
-every other action is taken (`COVERAGE=1`).
+every other action is taken (`COVERAGE=1`; `Register` and `Move` on
+`AgentStopLate.cfg`). `NoEarlyReset` does not cover a session registered
+after the stop began (`newer`): the stop takes no new work, so it gets no
+drain of its own. The model's drain waits for every registered session;
+the code's for those registered at its start (a later one is reset at
+the drain's end): an over-approximation that only lengthens the drain.
 
 Prior art: the drain is a graceful shutdown's (Go `http.Server.Shutdown`:
 stop taking new work, let the open work end within a bound, then close);
@@ -1205,6 +1219,7 @@ periods; TCP's `SO_LINGER`); a second close waiting for the first is
 |---|---|
 | The relay resets a relayed session's peer when the agent resets it or the agent's link ends, and cuts a relayed session whose peer's connection ended (`RelayCut`, no bound assumed) | relay-core `core/session` (spec relay-core `spec/`), `link` GOAWAY/reset semantics (link `WIRE.md`) |
 | A pathswitch ABORT reaches a live peer, which answers it; a killed peer answers nothing, and the session ends at its detach bound (`DetachEnd`) | link `pathswitch`, link `spec/DirectPath.tla` (`RLeftAnswer`, `SLeftAnswer`) |
+| The link's end resets a pathswitch session still on its relayed path at the peer, which ends it (`CycleEnd`'s `LinkEnds`); a session moves to a direct path only while not aborted (an aborted Conn takes no path) | relay-core `core/session`; link `pathswitch` (Abort ends the Conn) |
 | A peer may be arbitrarily slow (no fairness on peer steps): a slow peer is a vanished one until it answers | QUIC/TCP give no delivery-time bound |
 | Closing a QUIC connection at once drops the ABORTs queued on it (the reason for the grace) | RFC 9000 10.2 |
 | Timers fire at their deadline (Drain, Grace are ticks); the scheduler runs the agent's own steps before time passes | Go `time.Timer`; tests measure the bound (`TestDirectStopsWaitOneGrace`) |
@@ -1213,7 +1228,7 @@ periods; TCP's `SO_LINGER`); a second close waiting for the first is
 
 | actions | code |
 |---|---|
-| `CallDrainEnd`, `CallReset`, `CallWaitEnd`, `Cut`, `Abort` | client/agent/direct_server.go |
+| `CallDrainEnd`, `CallReset`, `CallWaitEnd`, `Cut`, `Abort`, `Register`, `Move` (acceptDirect's Attach) | client/agent/direct_server.go |
 | `TargetReset` (a direct session's), `Propagate` | client/agent/datagram_target.go |
 | `TargetReset` (the cut at either end's Reset) | client/agent/queue.go |
 | `Signal`, `PrimaryStart`, `CycleStart`, `CycleEnd` | client/agent/connect.go |
@@ -1227,12 +1242,16 @@ periods; TCP's `SO_LINGER`); a second close waiting for the first is
 
 `make spec-traces` (nightly): client/agent's stop tests
 (`TestDirectStopsWaitOneGrace`, `TestDirectTargetResetResetsTheSession`,
-`TestDirectStopDrainsThenResets`, `TestStopResetsDirectSessionsBeforeClose`)
+`TestDirectStopRefusesLateSessions`, `TestDirectStopDrainsThenResets`,
+`TestStopResetsDirectSessionsBeforeClose`)
 in one process built `-tags relaytrace`, and the fixtures; `make
-spec-stoptraces` (in make ci, about 15 s) the first two (SENDCUT's); every directServer writes
+spec-stoptraces` (in make ci, about 15 s) the first three (SENDCUT's, STOPGAP's); every directServer writes
 `agentstop-<pid>-<n>.ndjson` (Register, TargetReset, Abort, Done, Cut,
 StopBegin with whether it drains, DrainEnd with by over or deadline,
-StopReset, StopEnd), checked by `spec/TraceAgentStop.tla`: which call is
+StopReset, StopEnd), checked by `spec/TraceAgentStop.tla` (a Register is AgentStop's, every
+session `Late`, with whether the code refused it, which must be the
+model's: refused once a drain ended, read under the recorder's lock; a StopEnd needs the Cut of every session its StopReset took,
+logged under the table's lock with the snapshot): which call is
 which is TLC's choice, Drain 0 (the calls may overlap), and the clock is
 free (no urgency), so a trace checks the steps' order (a drain ends over
 only when every session ended or was reset; a reset only after the drain;
@@ -1242,7 +1261,8 @@ stay the tests'. Thirteen traces on the Mac 2026-11-19 (ten from the
 no-drain agent, its two calls overlapping), all accepted. Rejected
 fixtures, one per check: `reject-agentstop-end-before-cut`,
 `-reset-before-drain`, `-second-drain`, `-over-live`, `-abort-unasked`,
-`-unknown-step` (a logged step that maps to no action).
+`-late-tabled` (a session registered after a drain ended, not refused:
+`late-unreset`), `-unknown-step` (a logged step that maps to no action).
 
 ### Findings (lane STOPSPEC, 2026-11-19)
 
@@ -1253,3 +1273,17 @@ registered after a stop call's snapshot of the sessions (`left`) is not
 reset by that call; a new session starts relayed and rides the agent's
 link, so the relay resets it at the exit, unless it moved to a direct
 path in that window. The model's sessions all exist at the stop.
+
+### Findings (lane STOPGAP, 2026-11-19)
+
+The open item above is a bug, now fixed. `AgentStopLate.cfg` with the
+code as it was (`late-unreset`) violates `ExitAfterEnd`: a session
+registers after the last call took `left` (the cycle's end's, under a
+signal: a framed session whose TLS handshake ended in that window),
+moves to its direct path before the link ends, and the process exits with no ABORT sent: the peer waits
+out the detach bound (30 s), UDPFIX's symptom. Beside a session there at
+the stop it also violates `StopInTime`: a later call takes it and waits
+a fresh grace past the drain and one grace. Fix: `registerSession`
+refuses a session once a drain ended (`stopped`, read under the table's
+lock; `stop` takes `left` under it): reset at once, not tabled
+(`TestDirectStopRefusesLateSessions`, failing first).

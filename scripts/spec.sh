@@ -547,6 +547,7 @@ CONSTANTS
     c1 = c1
     Sessions <- TraceSessions
     Direct <- TraceSessions
+    Late <- TraceSessions
     Closers = {c1}
     Drain = 0
     Grace = 1
@@ -611,15 +612,16 @@ fail=0
 cfg=
 # The stop tests traces records: three stops with a dead peer, a target's
 # reset, an nf1 session's drain then reset, an agent without a drain (its
-# two calls together); stoptraces (make ci) the first two (SENDCUT's).
-STOPCI='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession)$'
-STOPTESTS='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession|TestDirectStopDrainsThenResets|TestStopResetsDirectSessionsBeforeClose)$'
+# two calls together), a session refused after the drain (STOPGAP);
+# stoptraces (make ci) SENDCUT's two and STOPGAP's.
+STOPCI='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession|TestDirectStopRefusesLateSessions)$'
+STOPTESTS='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession|TestDirectStopRefusesLateSessions|TestDirectStopDrainsThenResets|TestStopResetsDirectSessionsBeforeClose)$'
 # The punch tests ptraces records: a learned winner, an offered winner, a
 # refused rogue, a re-punch.
 PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectPunchPrefersLAN|TestDirectMappedAgentGoesDirect|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain)$'
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch AgentStop AgentStopNoDrain"
+	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch AgentStop AgentStopNoDrain AgentStopLate"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	for c in $cfgs; do
 		m=${c%Large}
@@ -628,6 +630,7 @@ check)
 		m=${m%Two}
 		m=${m%Move}
 		m=${m%NoDrain}
+		m=${m%Late}
 		echo "== $c.cfg"
 		st=0
 		tlc $c.cfg $m.tla >"$work/out" 2>&1 || st=$?
@@ -823,6 +826,17 @@ mutants)
 	expect STOP:no-target-cut-grace -e 's/Mutant = "none"/Mutant = "no-target-cut"/' -e '/^PROPERTIES$/d' -e '/NoDrainOnReset/d'
 	for w in W_GoneCut W_FullBound W_StopReset W_Eof W_ResetCut W_DrainWaits W_SecondClose; do
 		expect witness:STOP-$w -e "s/^    TypeOK\$/    $w/"
+	done
+	cfg=AgentStopLate
+	# A session registered once a drain ended put in the table unreset
+	# (lane STOPGAP): it moves to its direct path after the last call's
+	# sessions were taken and outlives the exit; beside a session there at
+	# the stop, a later call waits a fresh grace for it past the bound.
+	expect STOPLATE:late-unreset -e 's/Mutant = "none"/Mutant = "late-unreset"/'
+	expect STOPLATE:late-unreset-grace -e 's/Mutant = "none"/Mutant = "late-unreset"/' -e 's/^    l1 = l1$/    l1 = l1\n    d1 = d1/' \
+		-e 's/Sessions = {l1}/Sessions = {d1, l1}/' -e 's/Direct = {l1}/Direct = {d1, l1}/' -e 's/MaxBytes = 1/MaxBytes = 0/' -e '/ExitAfterEnd/d'
+	for w in W_LateMoved W_LateRefused; do
+		expect witness:STOPLATE-$w -e "s/^    TypeOK\$/    $w/"
 	done
 	cfg=AgentStopNoDrain
 	# Without a drain the primary's and the cycle's calls run together.
