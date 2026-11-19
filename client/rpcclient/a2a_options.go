@@ -157,8 +157,9 @@ func WithClientTLS(cfg *tls.Config) DialOption {
 
 // WithLabels attaches fleet labels to this agent. Labels are sent as the
 // "x-agent-labels" gRPC header as a JSON object (values may hold , and =) and stored
-// server-side for fleet selector matching. Labels are immutable for the
-// lifetime of the connection; to change them reconnect with new values.
+// server-side for fleet selector matching. They stay for the lifetime of
+// the connection; an UpdateLabels request to RelayAgentID advertises more
+// on top of them without reconnecting (ExampleAgent_updateLabels).
 //
 // Example:
 //

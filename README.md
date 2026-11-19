@@ -90,6 +90,41 @@ if err != nil {
 log.Fatal(http.Serve(ln, handler))
 ```
 
+## Change your own labels
+
+An agent's labels (`rpcclient.WithLabels`, `agent.WithLabels`) are what
+other programs of the account select it by in the presence API. An
+`agent` (HTTP tunnel) calls `SetLabels`, which also carries the set to
+every later connection. An `rpcclient` agent changes them without
+reconnecting: it sends one
+`nfltr.presence.v1.UpdateLabelsRequest` (protojson) to the relay's own
+agent, `rpcclient.RelayAgentID` (`nfltr-relay`). The relay applies it to
+the connection that sent it, never to an agent named in the request, and
+answers the full label set now advertised:
+
+```go
+req, _ := protojson.Marshal(&presencev1.UpdateLabelsRequest{
+	Labels: map[string]string{"status": "busy"},
+	Patch:  true, // merge into the previous update; false replaces it
+})
+reply, err := agent.Invoke(ctx, rpcclient.RelayAgentID, req)
+if err != nil {
+	log.Fatal(err)
+}
+var resp presencev1.UpdateLabelsResponse
+_ = protojson.Unmarshal(reply, &resp) // resp.Labels: the full set
+```
+
+The labels the agent connected with always stay: an update adds to them
+and can neither change nor drop one. A request holds at most 256 labels
+(keys and values at most 256 bytes; an empty key or value is ignored).
+The update ends with the connection: an agent that reconnects starts
+again from its connect-time labels, and an update sent by a connection
+that a newer one of the same agent replaced is refused
+(`InvalidArgument`). `nfltr-relay` is a reserved agent id: streams to it
+end at the relay itself. The full example is
+`ExampleAgent_updateLabels` in [`client/rpcclient`](client/rpcclient).
+
 ## Compatibility
 
 The protocol is additive within a major version. A relay advertises its
