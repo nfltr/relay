@@ -554,6 +554,7 @@ CONSTANTS
     MaxBytes = 1
     MaxTime = 6
     Mutant = "none"
+    CloseWaits = FALSE
 INIT TraceInit
 NEXT TraceNext
 INVARIANTS
@@ -621,7 +622,7 @@ STOPTESTS='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession|T
 PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectPunchPrefersLAN|TestDirectMappedAgentGoesDirect|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain)$'
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch AgentStop AgentStopNoDrain AgentStopLate"
+	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch AgentStop AgentStopNoDrain AgentStopLate AgentStopClose"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	for c in $cfgs; do
 		m=${c%Large}
@@ -837,6 +838,14 @@ mutants)
 		-e 's/Sessions = {l1}/Sessions = {d1, l1}/' -e 's/Direct = {l1}/Direct = {d1, l1}/' -e 's/MaxBytes = 1/MaxBytes = 0/' -e '/ExitAfterEnd/d'
 	for w in W_LateMoved W_LateRefused; do
 		expect witness:STOPLATE-$w -e "s/^    TypeOK\$/    $w/"
+	done
+	cfg=AgentStopClose
+	# An accepted session's Close returned at once (lane DIRECTCLOSE,
+	# PIPEMATRIX defect 1): its program exited 0 and the stop's bounded
+	# drain reset the tail.
+	expect STOPCLOSE:close-returns-early -e 's/Mutant = "none"/Mutant = "close-returns-early"/'
+	for w in W_CloseClean W_CloseErr; do
+		expect witness:STOPCLOSE-$w -e "s/^    TypeOK\$/    $w/"
 	done
 	cfg=AgentStopNoDrain
 	# Without a drain the primary's and the cycle's calls run together.

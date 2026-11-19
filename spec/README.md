@@ -1180,7 +1180,13 @@ carries new sessions, the stop's included, and may move to its direct
 path; one Close; about 25 k states). Each call resets and waits for the
 sessions registered at its reset (`snap`, the code's `left`); the link's
 end resets a late session not moved; one registered once a drain ended is
-refused (reset at once, not tabled).
+refused (reset at once, not tabled). `AgentStopClose.cfg` (lane
+DIRECTCLOSE, PIPEMATRIX defect 1: `AgentStop.cfg` with one Close; about
+1.3 M states) also models the target's Close to its return
+(`CloseWaits`): it waits until the peer took every byte (its end among
+them: TLS close_notify) and returns clean then, or returns an error once
+the session failed or ended first (`CloseReturn`); the other configs
+leave it out (`CloseWaits = FALSE`: no states added).
 
 | invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
 |---|---|---|
@@ -1190,6 +1196,7 @@ refused (reset at once, not tabled).
 | `StopInTime` | the stop ends (the process exits) within the drain and one grace | `grace-per-stop` (SENDCUT, 867a20e) |
 | `ExitAfterEnd` | the process exits only once every session ended or its grace passed since its ABORT | `second-close-returns` (SENDBEST, f09ea5f), `no-grace` |
 | `NoDrainOnReset` (action) | no time passes in a drain once every direct session ended or its target reset it | `no-target-cut`, `drain-waits-reset` (SENDCUT, 04e84d8) |
+| `CloseTruth` (`AgentStopClose.cfg`) | a target's Close returns clean only once its peer took every byte and the END: a program that exits 0 then lost nothing to the stop's later reset | `close-returns-early` (DIRECTCLOSE: an accepted QueueConn's Close returned at once; nfltr-pipe listen exited 0, the stop's 5 s drain then reset the tail: the dialler read a short stream and exited 6) |
 | `ExitAfterEnd`, `StopInTime` (`AgentStopLate.cfg`) | a session registered once a drain ended does not outlive the exit nor stretch the stop | `late-unreset` (STOPGAP: it moves direct after the last call's `left`, exit; with a session there at the stop, `late-unreset-grace`: a later call waits a fresh grace) |
 
 Witnesses (each violated: the model reaches it): `W_GoneCut` (exit after a
@@ -1197,7 +1204,9 @@ killed direct peer's grace), `W_FullBound` (the stop takes the whole
 bound), `W_StopReset`, `W_Eof` (every byte and the clean end after the
 stop began), `W_ResetCut`, `W_DrainWaits`, `W_SecondClose`; on
 `AgentStopLate.cfg` `W_LateMoved` (a late session moved direct and reset
-before the exit) and `W_LateRefused` (one refused, then the exit). `Propagate`
+before the exit) and `W_LateRefused` (one refused, then the exit); on
+`AgentStopClose.cfg` `W_CloseClean` and `W_CloseErr` (a Close returns
+clean; one returns an error). `Propagate`
 is the `no-target-cut` mutant's step only (never taken in the design);
 every other action is taken (`COVERAGE=1`; `Register` and `Move` on
 `AgentStopLate.cfg`). `NoEarlyReset` does not cover a session registered
@@ -1222,6 +1231,7 @@ periods; TCP's `SO_LINGER`); a second close waiting for the first is
 | The link's end resets a pathswitch session still on its relayed path at the peer, which ends it (`CycleEnd`'s `LinkEnds`); a session moves to a direct path only while not aborted (an aborted Conn takes no path) | relay-core `core/session`; link `pathswitch` (Abort ends the Conn) |
 | A peer may be arbitrarily slow (no fairness on peer steps): a slow peer is a vanished one until it answers | QUIC/TCP give no delivery-time bound |
 | Closing a QUIC connection at once drops the ABORTs queued on it (the reason for the grace) | RFC 9000 10.2 |
+| A direct session's `WaitAcked` is true only once the peer holds every byte, and the peer's Read keeps what it took through a later reset (`CloseReturn`'s clean case is `dlv = wrote`); an ABORT or the session's end fails it, silence within `Linger` | link `pathswitch` (`spec/DirectPath.tla` `TakenRead`, `CloseBounded`; `Conn.WaitAcked`) |
 | Timers fire at their deadline (Drain, Grace are ticks); the scheduler runs the agent's own steps before time passes | Go `time.Timer`; tests measure the bound (`TestDirectStopsWaitOneGrace`) |
 
 ### Code map (AgentStop.tla)
@@ -1231,6 +1241,7 @@ periods; TCP's `SO_LINGER`); a second close waiting for the first is
 | `CallDrainEnd`, `CallReset`, `CallWaitEnd`, `Cut`, `Abort`, `Register`, `Move` (acceptDirect's Attach) | client/agent/direct_server.go |
 | `TargetReset` (a direct session's), `Propagate` | client/agent/datagram_target.go |
 | `TargetReset` (the cut at either end's Reset) | client/agent/queue.go |
+| `CloseWrite`, `CloseReturn` (Accept's conn's Close waits for `joinTarget`'s report) | client/agent/queue_close.go |
 | `Signal`, `PrimaryStart`, `CycleStart`, `CycleEnd` | client/agent/connect.go |
 | `PrimaryStart` (waitIdle), `Drain` | client/agent/move.go |
 | `CloserAwait` (the table's stop) | client/agent/services.go |

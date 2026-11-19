@@ -52,15 +52,27 @@
    call waits a grace for it and it never moves (late-unreset: it is
    tabled unreset, and moves after the last call's snapshot, or a later
    call waits a fresh grace for it past the stop's bound). A session that begins after the
-   stop began gets no drain of its own (the stop takes no new work). *)
+   stop began gets no drain of its own (the stop takes no new work).
+
+   A target's Close (lane DIRECTCLOSE, PIPEMATRIX defect 1; CloseWaits):
+   the target's clean close (CloseWrite here: its tail committed, its
+   end among its bytes, as TLS close_notify) waits (ret: wait) until the
+   peer took every byte, or the session failed, and returns clean only
+   in the first case (CloseReturn: joinTarget's WaitAcked). A program
+   exits 0 on a clean return, so the stop's later reset never loses what
+   that return reported delivered (CloseTruth; close-returns-early: an
+   accepted QueueConn's Close returned at once and the stop's bounded
+   drain reset the tail). *)
 EXTENDS Integers, FiniteSets
 
-CONSTANTS Sessions, Direct, Late, Closers, Drain, Grace, MaxBytes, MaxTime, Mutant
+CONSTANTS Sessions, Direct, Late, Closers, Drain, Grace, MaxBytes, MaxTime, Mutant,
+          CloseWaits \* model the target's Close and its return (AgentStopClose.cfg only: its states)
 
 ASSUME Direct \subseteq Sessions /\ Late \subseteq Direct /\ Drain \in Nat /\ Grace \in Nat
+ASSUME CloseWaits \in BOOLEAN
 ASSUME Mutant \in {"none", "no-target-cut", "drain-waits-reset", "grace-per-stop",
                    "second-close-returns", "no-drain", "reset-as-close", "no-grace",
-                   "late-unreset"}
+                   "late-unreset", "close-returns-early"}
 
 Relayed == Sessions \ Direct
 Calls == {"primary", "cycle", "table"}
@@ -90,9 +102,10 @@ VARIABLES
     regd,     \* the session is registered (a Late one: not yet at first)
     moved,    \* it is on its direct path: the link's end does not reset it
     newer,    \* the sessions registered after the stop began
-    refused   \* the sessions registered once a drain ended: reset, not tabled
+    refused,  \* the sessions registered once a drain ended: reset, not tabled
+    ret       \* each target's Close: no (none called), wait, clean, err
 
-lifeVars == <<regd, moved, newer, refused>>
+lifeVars == <<regd, moved, newer, refused, ret>>
 vars == <<now, stopAt, apc, spc, wfrom, snap, stopped, cl, closed, exited,
           tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt, done, lifeVars>>
 agentVars == <<stopAt, apc, spc, wfrom, snap, stopped, cl, closed, exited>>
@@ -114,6 +127,7 @@ TypeOK ==
     /\ snap \in [Calls -> SUBSET Direct]
     /\ regd \in [Sessions -> BOOLEAN] /\ moved \in [Sessions -> BOOLEAN]
     /\ newer \subseteq Late /\ refused \subseteq Late
+    /\ ret \in [Sessions -> {"no", "wait", "clean", "err"}]
 
 Init ==
     /\ now = 0 /\ stopAt = None /\ apc = "run"
@@ -129,6 +143,7 @@ Init ==
     /\ regd = [s \in Sessions |-> s \notin Late]
     /\ moved = [s \in Sessions |-> s \in Direct \ Late]
     /\ newer = {} /\ refused = {}
+    /\ ret = [s \in Sessions |-> "no"]
 
 \* A session ended, or Grace passed since its first reset: nothing waits
 \* for it any more (directSession.cut).
@@ -285,8 +300,23 @@ Write(s) ==
 CloseWrite(s) ==
     /\ Live(s) /\ tgt[s] = "open"
     /\ tgt' = [tgt EXCEPT ![s] = "closed"]
+    /\ ret' = IF CloseWaits THEN [ret EXCEPT ![s] = "wait"] ELSE ret
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<wrote, dlv, peer, pview, aborted, abortAt, resetAt, done>> /\ UNCHANGED lifeVars
+    /\ UNCHANGED <<wrote, dlv, peer, pview, aborted, abortAt, resetAt, done>>
+    /\ UNCHANGED <<regd, moved, newer, refused>>
+
+\* The target's Close returns once the peer took every byte (clean), or
+\* the session failed or ended first (an error): joinTarget's WaitAcked,
+\* which an ABORT or the session's end fails.
+CloseReturn(s) ==
+    /\ ret[s] = "wait"
+    /\ \/ dlv[s] = wrote[s] \/ done[s] \/ aborted[s]
+       \/ Mutant = "close-returns-early"
+    /\ ret' = [ret EXCEPT ![s] =
+                 IF Mutant = "close-returns-early" \/ dlv[s] = wrote[s] THEN "clean" ELSE "err"]
+    /\ UNCHANGED agentVars /\ UNCHANGED now
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt, done>>
+    /\ UNCHANGED <<regd, moved, newer, refused>>
 
 AppReset(s) ==
     /\ regd[s] /\ ~done[s] /\ ~exited /\ tgt[s] # "reset"
@@ -366,7 +396,7 @@ Register(s) ==
        THEN Abort({s}) /\ refused' = refused \cup {s}
        ELSE UNCHANGED <<aborted, abortAt, refused>>
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, resetAt, done, moved>>
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, resetAt, done, moved, ret>>
 
 \* Its peer attaches it to the direct path (acceptDirect).
 Move(s) ==
@@ -374,7 +404,7 @@ Move(s) ==
     /\ peer[s] = "alive" /\ ~exited
     /\ moved' = [moved EXCEPT ![s] = TRUE]
     /\ UNCHANGED agentVars /\ UNCHANGED now
-    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt, done, regd, newer, refused>>
+    /\ UNCHANGED <<tgt, wrote, dlv, peer, pview, aborted, abortAt, resetAt, done, regd, newer, refused, ret>>
 
 \* ---- time ----
 
@@ -393,7 +423,7 @@ Env ==
     \/ Signal
     \/ \E c \in Closers : Close(c)
     \/ \E s \in Sessions : Register(s) \/ Move(s)
-                          \/ Write(s) \/ CloseWrite(s) \/ AppReset(s) \/ Propagate(s)
+                          \/ Write(s) \/ CloseWrite(s) \/ CloseReturn(s) \/ AppReset(s) \/ Propagate(s)
                           \/ Deliver(s) \/ PeerEnd(s) \/ PeerAnswer(s) \/ PeerReset(s)
                           \/ Vanish(s) \/ RelayCut(s) \/ DetachEnd(s)
 
@@ -407,6 +437,10 @@ Spec == Init /\ [][Next]_vars
 \* the target wrote, and only at the target's clean close; any other end
 \* is a reset the peer sees as one.
 NoSilentLoss == \A s \in Sessions : pview[s] = "eof" => dlv[s] = wrote[s] /\ tgt[s] = "closed"
+
+\* A target's Close returns clean only once its peer took every byte and
+\* the end: its program may exit 0 then (PIPEMATRIX defect 1).
+CloseTruth == \A s \in Sessions : ret[s] = "clean" => dlv[s] = wrote[s]
 
 \* The stop resets a session its target did not reset only once the drain
 \* passed: a committed tail gets the drain to arrive.
@@ -451,6 +485,9 @@ W_DrainWaits == ~((\E k \in Calls : spc[k] = "drain") /\ \E s \in Direct : tgt[s
 W_SecondClose == ~(\A c \in Closers : cl[c] = "done")
 \* A late session moved to its direct path and was reset before the exit.
 W_LateMoved == ~(exited /\ \E s \in Late : moved[s] /\ aborted[s])
+\* A target's Close returns clean, and one returns an error.
+W_CloseClean == ~(\E s \in Sessions : ret[s] = "clean")
+W_CloseErr == ~(\E s \in Sessions : ret[s] = "err")
 \* A session registered once the drain ended is reset at once.
 W_LateRefused == ~(\E s \in refused : exited)
 =============================================================================
