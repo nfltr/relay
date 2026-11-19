@@ -275,7 +275,7 @@ func (a *agent) runWithReconnect(
 					err := processStream(ctx, stream, a.cfg.AgentID, a.routes, a.cfg, a.client, a.logger, mv, growth.linkUp, &a.labelUpdates)
 					switch {
 					case waitsForTCPSessions(err):
-						growth.waitIdle(ctx) // its TCP sessions end before the connection closes
+						growth.waitIdleDraining(ctx, a.cfg.Drain) // its TCP sessions end before the connection closes
 					case mv != nil && ctx.Err() == nil && relayLetGo(err):
 						// The relay let this connection go (a leaving
 						// replica that could not move it, a graceful stop):
@@ -288,7 +288,7 @@ func (a *agent) runWithReconnect(
 						case <-time.After(a.moveRetryFor):
 						case <-ctx.Done():
 						}
-						growth.waitIdle(ctx)
+						growth.waitIdleDraining(ctx, a.cfg.Drain)
 					case ctx.Err() != nil:
 						// Stopped: the ConnectHTTP stream ended (the relay
 						// sends this agent nothing new); its TCP sessions

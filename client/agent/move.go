@@ -104,6 +104,23 @@ func (g *tcpStreamGrowth) waitIdle(ctx context.Context) {
 	}
 }
 
+// waitIdleDraining is waitIdle for a connection that ended while it still
+// carries TCP sessions (moved off, taken over, let go): a stop meanwhile
+// (ctx ending: nfltr up's SIGTERM in a rolling update's old pod) drains them
+// for drain, as it does a live connection's (Config.Drain), instead of
+// cutting them at once; without a drain the stop ends the wait. Guards
+// TestWaitIdleDrainsOnStop and nfltr's TestOrgTakeoverKeepsOpenStream.
+func (g *tcpStreamGrowth) waitIdleDraining(ctx context.Context, drain time.Duration) {
+	if drain <= 0 {
+		g.waitIdle(ctx)
+		return
+	}
+	wctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	defer cancel()
+	defer context.AfterFunc(ctx, func() { time.AfterFunc(drain, cancel) })()
+	g.waitIdle(wctx)
+}
+
 // moveConnect opens a move's new connection: one the relay accepted (its
 // headers carry the Welcome; a refused stream ends without), tried every
 // moveRetryEvery for up to moveRetryFor. moveRetryFor also bounds each

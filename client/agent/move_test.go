@@ -528,3 +528,39 @@ func TestCloseEndsEveryConnection(t *testing.T) {
 		stop()
 	}
 }
+
+// TestWaitIdleDrainsOnStop: a stop while a connection that ended (moved
+// off, taken over) still carries a TCP session drains it for Config.Drain,
+// as on a live connection, instead of cutting it at once (lane RECONSTALL:
+// a rolling update's old pod cut its open streams at SIGTERM); the drain
+// bounds the wait; without a drain the stop ends it.
+func TestWaitIdleDrainsOnStop(t *testing.T) {
+	stopped, stop := context.WithCancel(t.Context())
+	stop()
+	g := &tcpStreamGrowth{}
+	g.active.Store(1)
+	done := make(chan struct{})
+	go func() { g.waitIdleDraining(stopped, time.Minute); close(done) }()
+	select {
+	case <-done:
+		t.Fatal("a stop cut the open session at once, want it drained")
+	case <-time.After(moveTCPQuiet + 200*time.Millisecond):
+	}
+	g.active.Store(0)
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the drain did not end once the last session ended")
+	}
+	g.active.Store(1)
+	start := time.Now()
+	g.waitIdleDraining(stopped, 200*time.Millisecond)
+	if d := time.Since(start); d < 200*time.Millisecond || d > 10*time.Second {
+		t.Fatalf("a drain of 200ms with a session open waited %s", d)
+	}
+	start = time.Now()
+	g.waitIdleDraining(stopped, 0)
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("no drain: a stop ended the wait after %s, want at once", d)
+	}
+}
