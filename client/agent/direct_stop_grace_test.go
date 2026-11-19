@@ -78,3 +78,37 @@ func TestDirectTargetResetResetsTheSession(t *testing.T) {
 	<-s.Done()
 	_ = dead.Close()
 }
+
+// TestDirectStopRefusesLateSessions (lane STOPGAP, spec/AgentStop.tla
+// late-unreset): a session registered once a stop's drain ended was put
+// in the table after the stop took its sessions, so no stop reset it; it
+// could move to its direct path and live on at its peer, past the
+// process's exit, until the detach bound (or a later stop waited a fresh
+// grace for it, past the stop's bound). It is refused: reset at once and
+// left out of the table, so no stop waits for it.
+func TestDirectStopRefusesLateSessions(t *testing.T) {
+	t.Parallel()
+	d := &directServer{sessions: map[*directSession]struct{}{}, detach: time.Minute}
+	ended, cancel := context.WithCancel(t.Context())
+	cancel()
+	d.stop(ended) // the primary's: its drain ended
+
+	sc, peer := net.Pipe()
+	go func() { _, _ = io.Copy(io.Discard, peer) }()
+	defer peer.Close() //nolint:errcheck
+	s := pathswitch.Server(pathStream{Conn: sc}, PathRelayed, pathswitch.Config{Detach: time.Minute})
+	ds := d.registerSession(&directSession{c: s})
+	select {
+	case <-ds.aborted:
+	case <-time.After(time.Second):
+		t.Fatal("a session registered after the stop's drain is not reset")
+	}
+	if len(d.liveSessions()) != 0 {
+		t.Error("a refused session is in the table")
+	}
+	start := time.Now()
+	d.stop(ended) // the cycle's end: nothing of its own to wait for
+	if took := time.Since(start); took > directCutGrace/2 {
+		t.Errorf("a later stop took %v for a refused session, want none", took)
+	}
+}

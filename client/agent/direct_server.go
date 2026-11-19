@@ -232,13 +232,26 @@ func (d *directServer) register(c *pathswitch.Conn, key []byte) *directSession {
 	return d.registerSession(&directSession{c: c, key: key})
 }
 
+// registerSession: once a stop's drain ended (stopped), s is refused:
+// reset at once and left out of the table, so it never moves to a direct
+// path no stop resets and no later stop waits a grace for it (lane
+// STOPGAP, spec/AgentStop.tla Register; TestDirectStopRefusesLateSessions).
+// stopped is read under the table's lock and stop takes its sessions
+// under it after setting stopped: each session is in a later stop's
+// sessions or refused.
 func (d *directServer) registerSession(s *directSession) *directSession {
 	s.dg = &sessionDatagrams{c: s.c}
 	s.aborted, s.cut = make(chan struct{}), make(chan struct{})
-	d.tr.register(&s.tr)
 	d.mu.Lock()
-	d.sessions[s] = struct{}{}
+	refused := d.tr.register(&s.tr, d.stopped.Load)
+	if !refused {
+		d.sessions[s] = struct{}{}
+	}
 	d.mu.Unlock()
+	if refused {
+		s.reset()
+		return s
+	}
 	go func() {
 		<-s.c.Done()
 		s.tr.done()
@@ -656,8 +669,10 @@ func (d *directServer) stop(ctx context.Context) {
 		}
 		d.tr.drainEnd(k, deadline, func() { d.stopped.Store(true) })
 	}
-	left := d.liveSessions()
+	d.mu.Lock() // the sessions registered by now: later ones are refused (registerSession)
+	left := slices.Collect(maps.Keys(d.sessions))
 	d.tr.reset(k)
+	d.mu.Unlock()
 	for _, s := range left {
 		s.reset()
 	}

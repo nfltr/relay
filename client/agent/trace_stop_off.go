@@ -9,7 +9,9 @@ type stopTracer struct{}
 
 type stopTraceSession struct{}
 
-func (*stopTracer) register(*stopTraceSession) {}
+func (*stopTracer) register(_ *stopTraceSession, refused func() bool) bool {
+	return refused()
+}
 func (*stopTracer) begin(drain func() bool) (int, bool) {
 	return 0, drain()
 }

@@ -68,12 +68,16 @@ func (t *stopTracer) log(m map[string]any) {
 	t.line(m)
 }
 
-func (t *stopTracer) register(s *stopTraceSession) {
+// register numbers a session and reads whether it is refused, under the
+// lock (the stopped flag is set under it: drainEnd).
+func (t *stopTracer) register(s *stopTraceSession, refused func() bool) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.sessions++
 	s.t, s.id = t, t.sessions
-	t.line(map[string]any{"ev": "Register", "s": s.id})
+	r := refused()
+	t.line(map[string]any{"ev": "Register", "s": s.id, "refused": r})
+	return r
 }
 
 // begin numbers a stop call and reads whether it drains, under the lock.
