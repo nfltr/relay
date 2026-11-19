@@ -122,6 +122,8 @@ root key, so every machine key: forward secrecy of all earlier calls):
 | 19-21 | witnesses: R gets B's response, B's request, B gets R's end, on a handshake | F (reachable) | |
 | 22-24 | the same on a resumed call | F (reachable) | |
 | 25 | response headers are the callee's: the headers R takes on call t are the machine's on t (sealed with its first response, frame type HEADER) | T | `clear-header`, and the mutants that break the frames' keys |
+| 26 | B calling R (a node fetching from its hub, which holds the root): the response B takes on call t under its key id is R's on t, every call (9 the other way). 1-4, 9 and 26 are "a relay cannot read or alter a call between two machines of one owner" (nfltr `docs/decisions/orch-public-app-plan-2026-11-19.md` L1) | T | `mach-resp-clear` (B takes R's response in the clear), `one-key` (R's response is a DATA frame, so a reflected request opens as one), and the mutants that break the frames' keys |
+| 27-28 | witnesses: B takes R's response, on a handshake call and a resumed one | F (reachable; 28 with `sess`) |
 
 Sessions (lane A2ASESS, flag `sess`: the lines without it are wire v2
 with a handshake every call, where 13-18 hold trivially and the resumed

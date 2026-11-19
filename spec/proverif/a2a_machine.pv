@@ -43,7 +43,7 @@
    certificate; nothing here trusts one). Flag leak: phase 2 leaks the root
    key (so every machine key): forward secrecy of what came before.
    Mutants (run.sh flags): drop-psk, drop-txn, skip-revoke, relay-cert,
-   no-target-check, drop-role, and wire v1's findings put back: one-key (F1: one key
+   no-target-check, drop-role, mach-resp-clear, and wire v1's findings put back: one-key (F1: one key
    both ways), clear-end (F2: the end of a stream in the clear).
 
    Sessions (lane A2ASESS, a2a_e2ee_session.go): a keyed handshake leaves
@@ -202,6 +202,8 @@ event MachAccept(bitstring, bitstring, G, G).
 event MachStart(bitstring, bitstring, G).
 event RootAnswer(bitstring, bitstring, bitstring, G, G).
 event MachSendReq(bitstring, bitstring, bitstring).
+event RootSendResp(bitstring, bitstring, bitstring).
+event MachRecvResp(bitstring, bitstring, bitstring, bitstring).
 event RootRecvReq(bitstring, bitstring, bitstring, bitstring).
 event RootFrameAfterRevoke(bitstring, bitstring).
 event RootHandshakeAfterRevoke(bitstring, bitstring).
@@ -278,6 +280,17 @@ query t: bitstring; event(MachRecvEnd(RS, t, mid(nameB, G1))).
    first response, a2aFrameHeader; mutant clear-header: in the clear). *)
 query t: bitstring, k: bitstring, h: bitstring;
   event(RootHeader(t, k, h)) ==> event(MachSendHeader(t, k, h)).
+(* 26 a machine calling R (a node fetching from its hub): the response it
+   takes on call t under key id k is R's on t (9 the other way; every
+   call; mutant mach-resp-clear: the machine takes R's response in the
+   clear). With 1-4 and 9 this is "a relay cannot read or alter a call
+   between the owner's machines" (nfltr
+   docs/decisions/orch-public-app-plan-2026-11-19.md L1). *)
+query v: bitstring, t: bitstring, k: bitstring, x: bitstring;
+  event(MachRecvResp(v, t, k, x)) ==> event(RootSendResp(t, k, x)).
+(* Witnesses (F): B takes R's response, on a handshake call and a resumed one. *)
+query t: bitstring; event(MachRecvResp(HS, t, mid(nameB, G1), rrespTo(mid(nameB, G1)))).
+query t: bitstring; event(MachRecvResp(RS, t, mid(nameB, G1), rrespTo(mid(nameB, G1)))).
 
 (* R calls agent tgt: the key id is the target's machine id at the store's
    generation (a2a_e2ee.go initMessage: For(callee)); nothing the relay or the peer
@@ -412,7 +425,11 @@ let MachInit(m: bitstring, cin: channel, cout: channel) =
   insert bsess(m, k, sess(split1(c2), split2(c2)));   (* ONLY:sess *)
   event MachSendReq(t, k, mreq(m));
   event Seal(split1(c2), N0, t);
-  out(cout, (nameR, (t, FRAME, aenc(split1(c2), N0, ad(t), (DATA, mreq(m)))))).
+  out(cout, (nameR, (t, FRAME, aenc(split1(c2), N0, ad(t), (DATA, mreq(m))))));
+  in(cin, (=t, =FRAME, ct3: bitstring));                                 (* NOT:mach-resp-clear *)
+  let (=DATA, y: bitstring) = adec(back(c2), N0, ad(t), ct3) in          (* NOT:mach-resp-clear *)
+  in(cin, (=t, =FRAME, (=DATA, y: bitstring)));                          (* ONLY:mach-resp-clear *)
+  event MachRecvResp(HS, t, k, y).
 
 (* R answers a machine: the key id must be For(caller), the caller's
    machine (a2a_e2ee.go a2aE2EEAnswerKey), the role machine
@@ -422,6 +439,7 @@ let RootFrame(via: bitstring, src: bitstring, t: bitstring, k: bitstring, kin: k
   in(xDown, (=src, (=t, =FRAME, ct3: bitstring)));
   let (=DATA, z: bitstring) = adec(kin, N0, a, ct3) in
   event RootRecvReq(via, t, k, z);
+  event RootSendResp(t, k, rrespTo(k));
   event Seal(kout, N0, t);
   out(xUp, (src, (t, FRAME, aenc(kout, N0, a, (DATA, rrespTo(k)))))).
 
@@ -510,7 +528,11 @@ let MachResumeInit(m: bitstring, cin: channel, cout: channel) =
   out(cout, (nameR, (t, RESUME, hsid(S), c, rtag(S, t, c))));
   event MachSendReq(t, k, mreq(m));
   event Seal(ki, N0, t);
-  out(cout, (nameR, (t, FRAME, aenc(ki, N0, rad(t), (DATA, mreq(m)))))).
+  out(cout, (nameR, (t, FRAME, aenc(ki, N0, rad(t), (DATA, mreq(m))))));
+  in(cin, (=t, =FRAME, ct3: bitstring));                                 (* NOT:mach-resp-clear *)
+  let (=DATA, y: bitstring) = adec(callk(S, t, c, R2I), N0, rad(t), ct3) in  (* NOT:mach-resp-clear *)
+  in(cin, (=t, =FRAME, (=DATA, y: bitstring)));                          (* ONLY:mach-resp-clear *)
+  event MachRecvResp(RS, t, k, y).
 
 (* R answers a resume: a session it answered by sid, the tag, the window;
    after the revoke none of D's (the lookup checks For/Valid). *)

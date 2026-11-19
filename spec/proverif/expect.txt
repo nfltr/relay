@@ -11,44 +11,46 @@ a2a_today skip-peer-revoke FTTTTFF?FTFFF
 # Every query holds; each mutant fails the ones it targets. With X's hops
 # private ProVerif finds no trace for the first witness (?): it is
 # reachable in the other variants. Without the flag sess every call
-# handshakes (13-18 hold trivially, the resumed witnesses 22-24 read T:
+# handshakes (13-18 hold trivially, the resumed witnesses 22-24 and 28 read T:
 # unreachable); with it a call resumes its pair's session (README
 # "Sessions").
-a2a_machine - TTTTTTTTTTTTTTTTTTFFFTTTT
-a2a_machine honestX TTTTTTTTTTTTTTTTTT?FFTTTT
-a2a_machine honestY TTTTTTTTTTTTTTTTTTFFFTTTT
-a2a_machine honestX,honestY TTTTTTTTTTTTTTTTTT?FFTTTT
-a2a_machine leak TTTTTTTTTTTTTTTTTTFFFTTTT
-a2a_machine drop-psk FFFFFFFFFFTTTFTFFFFFFTTTF
-a2a_machine drop-txn TTTTFFFFFFTTTTTFFFFFFTTTF
-a2a_machine skip-revoke TTTTTTTTTTFFTTTTTTFFFTTTT
-a2a_machine relay-cert FFFFFFFFFFTTTFTFFFFFFTTTF
+a2a_machine - TTTTTTTTTTTTTTTTTTFFFTTTTTFT
+a2a_machine honestX TTTTTTTTTTTTTTTTTT?FFTTTTTFT
+a2a_machine honestY TTTTTTTTTTTTTTTTTTFFFTTTTTFT
+a2a_machine honestX,honestY TTTTTTTTTTTTTTTTTT?FFTTTTTFT
+a2a_machine leak TTTTTTTTTTTTTTTTTTFFFTTTTTFT
+a2a_machine drop-psk FFFFFFFFFFTTTFTFFFFFFTTTFFFT
+a2a_machine drop-txn TTTTFFFFFFTTTTTFFFFFFTTTFFFT
+a2a_machine skip-revoke TTTTTTTTTTFFTTTTTTFFFTTTTTFT
+a2a_machine relay-cert FFFFFFFFFFTTTFTFFFFFFTTTFFFT
 # no-target-check also fails 14: the callee's own ref is the relay's, so
 # only the key id R picks binds its call to the target.
-a2a_machine no-target-check FTTTFTTTFTTTTFTTTTFFFTTTF
+a2a_machine no-target-check FTTTFTTTFTTTTFTTTTFFFTTTFTFT
 # drop-role: the initiator's role out of the prologue; a machine's call to
 # R, returned to that machine told it is R, is answered (7, 16).
-a2a_machine drop-role TTTTTTFTTTTTTTTFTTFFFTTTT
-a2a_machine sess,drop-role TTTTTTFTTTTTTTTFTTFFFFFFT
+a2a_machine drop-role TTTTTTFTTTTTTTTFTTFFFTTTTTFT
+a2a_machine sess,drop-role TTTTTTFTTTTTTTTFTTFFFFFFTTFF
 # wire v1's findings put back: F1 (one key both ways) fails no reflection
 # (9; 7, 8 not proved), F2 (the end in the clear) fails the authenticated end (10).
-a2a_machine one-key TTTTTTT?TTTTTTTT?TFFFTTTT
-a2a_machine clear-end TTTTTTTTTFTTTTTTTFFFFTTTT
+a2a_machine one-key TTTTTTT?TTTTTTTT?TFFFTTTTFFT
+a2a_machine clear-end TTTTTTTTTFTTTTTTTFFFFTTTTTFT
 # Sessions (lane A2ASESS): every query holds with calls resumed; each
 # mutant fails its query: sess-unbound 14, txn-unbound 9 and 16-18,
 # survive-revoke 13, counter-reset 15.
-a2a_machine sess TTTTTTTTTTTTTTTTTTFFFFFFT
-a2a_machine sess,honestX TTTTTTTTTTTTTTTTTT?FFFFFT
-a2a_machine sess,honestY TTTTTTTTTTTTTTTTTTFFFFFFT
-a2a_machine sess,leak TTTTTTTTTTTTTTTTTTFFFFFFT
-a2a_machine sess,sess-unbound TTTTTTTTTTTTTFTTTTFFFFFFT
-a2a_machine sess,txn-unbound TTTTTTTTFTTTTTFFFFFFFFFFF
-a2a_machine sess,survive-revoke TTTTTTTTTTTTFTTTTTFFFFFFT
-a2a_machine sess,counter-reset TTTTTTTTTTTTTTFTTTFFFFFFT
-a2a_machine sess,warm-untyped TTTTFTTTTTTTTTTTTTFFFFFFT
-a2a_machine early-data TTTTTTFTTTTTTTTTTTTFTTTTT
-a2a_machine clear-header TTTTTTTTTTTTTTTTTTFFFTTTF
-a2a_machine sess,clear-header TTTTTTTTTTTTTTTTTTFFFFFFF
+a2a_machine sess TTTTTTTTTTTTTTTTTTFFFFFFTTFF
+a2a_machine sess,honestX TTTTTTTTTTTTTTTTTT?FFFFFTTFF
+a2a_machine sess,honestY TTTTTTTTTTTTTTTTTTFFFFFFTTFF
+a2a_machine sess,leak TTTTTTTTTTTTTTTTTTFFFFFFTTFF
+a2a_machine sess,sess-unbound TTTTTTTTTTTTTFTTTTFFFFFFTTFF
+a2a_machine sess,txn-unbound TTTTTTTTFTTTTTFFFFFFFFFFFFFF
+a2a_machine sess,survive-revoke TTTTTTTTTTTTFTTTTTFFFFFFTTFF
+a2a_machine sess,counter-reset TTTTTTTTTTTTTTFTTTFFFFFFTTFF
+a2a_machine sess,warm-untyped TTTTFTTTTTTTTTTTTTFFFFFFTTFF
+a2a_machine early-data TTTTTTFTTTTTTTTTTTTFTTTTTTFT
+a2a_machine clear-header TTTTTTTTTTTTTTTTTTFFFTTTFTFT
+a2a_machine sess,clear-header TTTTTTTTTTTTTTTTTTFFFFFFFTFF
+a2a_machine mach-resp-clear TTTTTTTTTTTTTTTTTTFFFTTTTFTT
+a2a_machine sess,mach-resp-clear TTTTTTTTTTTTTTTTTTFFFFFFTFTT
 #
 # Part 3: the agent-side E2EE paths (p2p_e2e: p2p; e2ee_tcp, TCP, is
 # Part 4). Queries in README "E2EE paths"; an F on the base line is a finding or a documented limit there.
