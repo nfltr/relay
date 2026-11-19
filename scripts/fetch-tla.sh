@@ -1,26 +1,43 @@
 #!/bin/sh
 # Copyright 2026 nfltr
 # SPDX-License-Identifier: Apache-2.0
-# fetch-tla.sh prints the java to run and the tla2tools.jar for the TLA+
-# model (spec/README.md), each fetched once into $RELAY_TLA_CACHE (default $LINK_TLA_CACHE, else
-# ~/.cache/link-tla) and checked against its pinned sha256. A java on PATH
-# that runs is used as it is; else a pinned Temurin JRE is fetched.
-# Nothing it fetches is committed.
+
+# fetch-tla.sh prints the java to run, the tla2tools.jar and the
+# CommunityModules jar (third line) for the TLA+ models (spec/), each fetched
+# once into $RELAY_TLA_CACHE (default $LINK_TLA_CACHE, else ~/.cache/link-tla,
+# one cache for every nfltr repository) and checked against its pinned sha256.
+# A java on PATH that runs is used as it is; else a pinned Temurin JRE is
+# fetched. Nothing it fetches is committed. The same file in nfltr, link,
+# relay, relay-core and relay-server; its test is scripts/fetch-tla_test.sh.
+#
+# Fetchers run at once (parallel CI jobs, runners sharing one cache): each
+# writes its own mktemp file beside the target, checks the pinned sha256 and
+# renames it into place (rename(2) is atomic, over a good file too), so no
+# fetcher ever sees another's partial download.
 set -eu
 cache=${RELAY_TLA_CACHE:-${LINK_TLA_CACHE:-$HOME/.cache/link-tla}}
 mkdir -p "$cache"
 
-# get URL SHA256 FILE: download URL to FILE unless it is there with SHA256.
-get() {
-	if [ -f "$3" ] && [ "$(shasum -a 256 "$3" | cut -d' ' -f1)" = "$2" ]; then return; fi
-	curl -fsSL --retry 3 -o "$3.part" "$1"
-	got=$(shasum -a 256 "$3.part" | cut -d' ' -f1)
+# have SHA256 FILE: FILE is there with SHA256.
+have() { [ -f "$2" ] && [ "$(shasum -a 256 "$2" | cut -d' ' -f1)" = "$1" ]; }
+
+# keep TMP SHA256 FILE WHAT: rename TMP onto FILE if it has SHA256.
+keep() {
+	got=$(shasum -a 256 "$1" | cut -d' ' -f1)
 	if [ "$got" != "$2" ]; then
-		rm -f "$3.part"
-		echo "fetch-tla: $1: sha256 $got, want $2" >&2
+		rm -f "$1"
+		echo "fetch-tla: $4: sha256 $got, want $2" >&2
 		exit 1
 	fi
-	mv "$3.part" "$3"
+	mv -f "$1" "$3"
+}
+
+# get URL SHA256 FILE: download URL to FILE unless it is there with SHA256.
+get() {
+	if have "$2" "$3"; then return; fi
+	tmp=$(mktemp "$3.XXXXXX")
+	curl -fsSL --retry 3 -o "$tmp" "$1" || { rm -f "$tmp"; exit 1; }
+	keep "$tmp" "$2" "$3" "$1"
 }
 
 # TLA+ tools 1.8.0, master 090e85c of 2026-10-30 (the Json module's
@@ -30,23 +47,18 @@ get() {
 # extension 2026.10.301552 on Open VSX (extension/tools/tla2tools.jar).
 jar=$cache/tla2tools-1.8.0.jar
 jarsum=011267fca25d0752cf18894dd585cd28b96960c112ea8a20b823ea770e7e10cd
-if [ ! -f "$jar" ] || [ "$(shasum -a 256 "$jar" | cut -d' ' -f1)" != "$jarsum" ]; then
+if ! have "$jarsum" "$jar"; then
 	vsix=$cache/tlaplus.vscode-ide-2026.10.301552.vsix
 	get https://open-vsx.org/api/tlaplus/vscode-ide/2026.10.301552/file/tlaplus.vscode-ide-2026.10.301552.vsix \
 		89adb8d05d3136f74a4a33c97ae35b04730cdb3fb551b81d4299ba5b56c3c5a8 "$vsix"
+	tmp=$(mktemp "$jar.XXXXXX")
 	if command -v unzip >/dev/null 2>&1; then
-		unzip -p "$vsix" extension/tools/tla2tools.jar >"$jar.part"
+		unzip -p "$vsix" extension/tools/tla2tools.jar >"$tmp" || { rm -f "$tmp"; exit 1; }
 	else
 		python3 -I -c 'import sys, zipfile; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1]).read(sys.argv[2]))' \
-			"$vsix" extension/tools/tla2tools.jar >"$jar.part"
+			"$vsix" extension/tools/tla2tools.jar >"$tmp" || { rm -f "$tmp"; exit 1; }
 	fi
-	got=$(shasum -a 256 "$jar.part" | cut -d' ' -f1)
-	if [ "$got" != "$jarsum" ]; then
-		rm -f "$jar.part"
-		echo "fetch-tla: $vsix: tla2tools.jar sha256 $got, want $jarsum" >&2
-		exit 1
-	fi
-	mv "$jar.part" "$jar"
+	keep "$tmp" "$jarsum" "$jar" "$vsix: tla2tools.jar"
 fi
 
 java=${JAVA:-java}
@@ -60,9 +72,18 @@ if ! "$java" -version >/dev/null 2>&1; then
 	get "https://github.com/adoptium/temurin21-binaries/releases/download/$jre/$f" "$sum" "$cache/$f"
 	dir=$cache/jre-21.0.13_9
 	if [ ! -d "$dir" ]; then
-		mkdir -p "$dir.part" && tar -xzf "$cache/$f" -C "$dir.part" && mv "$dir.part" "$dir"
+		tmp=$(mktemp -d "$dir.XXXXXX")
+		tar -xzf "$cache/$f" -C "$tmp" || { rm -rf "$tmp"; exit 1; }
+		# Another fetcher's dir landed first: mv moved ours into it, drop it.
+		mv "$tmp" "$dir" && rm -rf "${dir:?}/${tmp##*/}"
 	fi
 	java=$(find "$dir" -path '*/bin/java' -type f | head -1)
 fi
+# CommunityModules (VectorClocks' CausalOrder: the merged hub/node traces).
+cm=$cache/CommunityModules-deps-202505152026.jar
+get https://github.com/tlaplus/CommunityModules/releases/download/202505152026/CommunityModules-deps.jar \
+	044e8ecdfbca92d51d7eb4469422c2a7da1fe25dc8ad39c4a90e6622d6da4d99 "$cm"
+
 echo "$java"
 echo "$jar"
+echo "$cm"

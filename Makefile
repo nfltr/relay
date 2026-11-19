@@ -185,7 +185,7 @@ spec-bptraces:
 	./scripts/spec.sh bptraces
 # The ProVerif models (spec/proverif/README.md): every line of
 # spec/proverif/expect.txt, mutants included (in make ci).
-spec-proverif: test-cicache
+spec-proverif: test-cicache test-fetch-tla
 	./spec/proverif/run.sh
 
 # scripts/cicache.sh, the result cache of the TLC runs, ProVerif models and
@@ -194,6 +194,12 @@ spec-proverif: test-cicache
 .PHONY: test-cicache
 test-cicache:
 	./scripts/cicache_test.sh
+
+# scripts/fetch-tla.sh: concurrent fetchers sharing one cache never see
+# another's partial download; a good cache is used with no fetch.
+.PHONY: test-fetch-tla
+test-fetch-tla:
+	./scripts/fetch-tla_test.sh
 # The models' bindings against the code (spec/proverif/README.md
 # "Bindings"): each BIND id a model lists has a test row that changes that
 # field of an honest message, as a relay can, and requires a refusal; the
