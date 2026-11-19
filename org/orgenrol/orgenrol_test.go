@@ -842,20 +842,22 @@ func TestRootRevocationOfTheIssuerReachesTheMachine(t *testing.T) {
 		check(t, err)
 		check(t, s.WriteIssuers(der))
 	})
+	// Refused and kept: the machine's verifier takes the CRL before
+	// issuers.crl is written, and Changed only follows the write, so a
+	// wake by another change can see the refusal before the file.
 	deadline := time.After(hang)
 	for {
-		if _, err := f.m.CheckServer([]*x509.Certificate{cur, iss}, "web-1", f.clk.Now()); err != nil {
+		_, err := f.m.CheckServer([]*x509.Certificate{cur, iss}, "web-1", f.clk.Now())
+		_, kept := os.Stat(filepath.Join(f.dir, orgmachine.IssuersFile))
+		if err != nil && kept == nil {
 			break
 		}
 		select {
 		case <-changed: // a change, not necessarily this one
 			changed = f.m.Changed()
 		case <-deadline:
-			t.Fatal("the root's CRL of issuers did not reach the machine: it still checks")
+			t.Fatalf("the root's CRL of issuers did not reach the machine: check %v, issuers.crl %v", err, kept)
 		}
-	}
-	if _, err := os.Stat(filepath.Join(f.dir, orgmachine.IssuersFile)); err != nil {
-		t.Fatal(err)
 	}
 }
 
