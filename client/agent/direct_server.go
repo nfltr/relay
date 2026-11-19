@@ -51,6 +51,7 @@ type directServer struct {
 	quic     map[string][]byte // a direct connection's exporter, by its peer name
 	pending  int               // framed sessions in their TLS handshake (handshaking)
 	changed  chan struct{}     // closed when one of them ends; nil: none waits
+	stopped  atomic.Bool       // a stop's drain ended: a later stop only resets (stop)
 }
 
 // qadTarget is a relay's QAD: its agent link's UDP address and TLS.
@@ -76,6 +77,31 @@ type directSession struct {
 	// ended: its Conn is done; it answers re-attaches until it is
 	// forgotten (registerSession), and takes no new direct connection
 	ended atomic.Bool
+	// cut: closed once it ended or directCutGrace after the stop's first
+	// reset of it (reset)
+	cutOnce sync.Once
+	cut     chan struct{}
+}
+
+// reset resets s at its first call (an ABORT on its current path); the
+// channel closes once s ended or directCutGrace after that reset: a later
+// stop waits out the same grace, not one of its own
+// (TestDirectStopsWaitOneGrace).
+func (s *directSession) reset() <-chan struct{} {
+	s.cutOnce.Do(func() {
+		s.cut = make(chan struct{})
+		s.c.Abort()
+		go func() {
+			t := time.NewTimer(directCutGrace)
+			defer t.Stop()
+			select {
+			case <-s.c.Done():
+			case <-t.C:
+			}
+			close(s.cut)
+		}()
+	})
+	return s.cut
 }
 
 // newDirectServer starts the listener on a new endpoint.
@@ -598,29 +624,30 @@ func startDirect(s net.Conn, d *directServer) (*pathswitch.Conn, net.Conn, error
 // ended or ctx (the drain) ends, then resets each left (an ABORT on its
 // current path) and waits for them at most directCutGrace, so the peer
 // ends at once instead of re-attaching to an agent that is gone until its
-// detach bound (TestDirectStopDrainsThenResets). d nil: none.
+// detach bound (TestDirectStopDrainsThenResets). The agent's stop runs it
+// more than once (its primary's drain, its cycle's end, ServiceTable.Close):
+// the drain ends at the first, and each session's grace runs once, from
+// its first reset, so a peer that never answers (killed) costs one grace,
+// not one per call (TestDirectStopsWaitOneGrace). d nil: none.
 func (d *directServer) stop(ctx context.Context) {
 	if d == nil {
 		return
 	}
-	for _, s := range d.liveSessions() {
-		select {
-		case <-s.c.Done():
-		case <-ctx.Done():
+	if !d.stopped.Load() {
+		for _, s := range d.liveSessions() {
+			select {
+			case <-s.c.Done():
+			case <-ctx.Done():
+			}
 		}
+		d.stopped.Store(true)
 	}
 	left := d.liveSessions()
 	for _, s := range left {
-		s.c.Abort()
+		s.reset()
 	}
-	t := time.NewTimer(directCutGrace)
-	defer t.Stop()
 	for _, s := range left {
-		select {
-		case <-s.c.Done():
-		case <-t.C:
-			return
-		}
+		<-s.reset()
 	}
 }
 
