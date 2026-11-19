@@ -632,6 +632,7 @@ check)
 		m=${m%Move}
 		m=${m%NoDrain}
 		m=${m%Late}
+		m=${m%Close}
 		echo "== $c.cfg"
 		st=0
 		tlc $c.cfg $m.tla >"$work/out" 2>&1 || st=$?
