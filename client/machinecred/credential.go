@@ -153,9 +153,10 @@ func For(dir, server string, useTLS, ownCert bool) *Credential {
 
 // sameRelay: server (a gRPC address, an HTTP address or URL) is the relay
 // whose host is host; a hosted relay's gRPC host is its HTTP host with
-// "grpc." in front (proxyurl.RelayHTTPAddr).
+// "grpc." in front (proxyurl.RelayHTTPAddr). host may carry a port: the
+// relay's `enrol-code --dir --relay` writes the gRPC host:port it names.
 func sameRelay(host, server string) bool {
-	return strings.TrimPrefix(host, "grpc.") == strings.TrimPrefix(machinecert.RelayHost(server), "grpc.")
+	return strings.TrimPrefix(machinecert.RelayHost(host), "grpc.") == strings.TrimPrefix(machinecert.RelayHost(server), "grpc.")
 }
 
 func load(dir string) *Credential {
