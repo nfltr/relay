@@ -59,3 +59,40 @@ func TestPSConnCloseDeliversTheTail(t *testing.T) {
 		}
 	}
 }
+
+// TestPSConnCloseReportsAnUnackedEnd (lane PIPEMATRIX, nfltr-pipe's
+// reliability matrix: kill-dialler-75pct-direct): Close returns an error
+// when the session fails before the peer acknowledged every byte and the
+// END. It returned nil whatever WaitAcked said, so an nfltr-pipe listener
+// whose dialler was killed with a quarter of the stream in flight exited 0
+// ("the other side took every byte") once the direct path's liveness ran
+// out. Each case's peer goes before acknowledging anything: it vanishes
+// (its stream closed, no new one within the detach bound) or resets.
+func TestPSConnCloseReportsAnUnackedEnd(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		gone func(srv *psConn, sc net.Conn)
+	}{
+		{"vanished", func(_ *psConn, sc net.Conn) { _ = sc.Close() }},
+		{"reset", func(srv *psConn, _ net.Conn) { _ = srv.Reset() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sc, cc := net.Pipe()
+			cfg := pathswitch.Config{Detach: 200 * time.Millisecond}
+			srv := newPSConn(pathswitch.Server(pathStream{Conn: sc}, PathRelayed, cfg), sc)
+			cli := newPSConn(pathswitch.Client(pathStream{Conn: cc}, PathRelayed, cfg), cc)
+			tc.gone(srv, sc)
+			_, _ = cli.Write([]byte("never acknowledged"))
+			done := make(chan error, 1)
+			go func() { done <- cli.Close() }()
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("Close returned nil though the peer acknowledged neither the bytes nor the END")
+				}
+			case <-time.After(psCloseBound + 10*time.Second): // a bound against a hang only
+				t.Fatal("Close never returned")
+			}
+		})
+	}
+}

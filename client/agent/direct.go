@@ -437,16 +437,21 @@ type psConn struct {
 func newPSConn(c *pathswitch.Conn, first net.Conn) *psConn { return &psConn{Conn: c, first: first} }
 
 // Close ends this end's direction (END) and returns once the peer
-// acknowledged every byte and the END (or the session failed, or
-// psCloseBound passed): a caller that ends the stream under it or exits
-// right after Close loses none of them (TestPSConnCloseDeliversTheTail).
-// Then, in the background, the peer's end is awaited (crypto/tls sends
-// close_notify above but never ends the stream under it, so each end's
-// Close ends its direction) and pathswitch's clean Close follows; a peer
-// that does not end within the bound gets a reset.
+// acknowledged every byte and the END: a caller that ends the stream under
+// it or exits right after Close loses none of them
+// (TestPSConnCloseDeliversTheTail). When the session fails first, or
+// psCloseBound passes, it resets the session and returns an error: the
+// peer may not hold them (TestPSConnCloseReportsAnUnackedEnd). Then, in
+// the background, the peer's end is awaited (crypto/tls sends close_notify
+// above but never ends the stream under it, so each end's Close ends its
+// direction) and pathswitch's clean Close follows; a peer that does not
+// end within the bound gets a reset.
 func (c *psConn) Close() error {
 	_ = c.CloseWrite()
-	c.WaitAcked(c.Written()+1, psCloseBound) // +1: the END
+	if !c.WaitAcked(c.Written()+1, psCloseBound) { // +1: the END
+		c.Abort()
+		return fmt.Errorf("close: the peer did not acknowledge the stream's end: %w", pathswitch.ErrReset)
+	}
 	go func() {
 		t := time.AfterFunc(psCloseBound, c.Abort)
 		defer t.Stop()
