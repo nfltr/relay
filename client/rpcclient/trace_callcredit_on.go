@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/nfltr/relay/proto/pb"
@@ -18,17 +20,20 @@ import (
 // The CallCredit trace (go test -tags relaytrace, RELAYTRACE=<dir>): the
 // rpcclient steps of relay spec/CallCredit.tla of every agent in the
 // process, one NDJSON line each, to <dir>/callcredit-<pid>.ndjson, checked
-// per call and direction by relay spec/TraceCallCredit.tla (spec/README.md
-// "CallCredit traces"). A line names its step (ev), the call's direction
-// (d: "req" the requests, "resp" the responses), the call's transaction id
-// (c) and a window update's count (n). The direction follows from the step
-// and the agent's role in the call (the caller sends requests, the handler
+// per call and direction by relay spec/TraceCallCredit.tla, per call by
+// spec/TraceCallCreditBoth.tla and per call served from several goroutines
+// by spec/TraceCallCreditSenders.tla (spec/README.md "CallCredit traces").
+// A line names its step (ev), the call's direction (d: "req" the requests,
+// "resp" the responses), the call's transaction id (c), a window update's
+// count (n) and the goroutine that logged it (s: CallCreditSenders' sender
+// of a Start or a Send). The direction follows from the step and the
+// agent's role in the call (the caller sends requests, the handler
 // responses), which traceCCOpen records. Each line is written before the
-// step's effect can be seen by the other side (a Send before its frame
-// goes out, a Deliver before its frame is in the call's buffer, a Read
-// before its window update, a Grant before its credit), under ccMu, so the
-// file's order is one the run took. The relay's steps are not logged: TLC
-// chooses them.
+// step's effect can be seen by the other side (a Start before its
+// Credit.Acquire, a Send before its frame goes out, a Deliver before its
+// frame is in the call's buffer, a Read before its window update, a Grant
+// before its credit), under ccMu, so the file's order is one the run took.
+// The relay's steps are not logged: TLC chooses them.
 type ccKey struct {
 	a   *Agent
 	txn string
@@ -62,7 +67,7 @@ func traceCC(a *Agent, ev, txn string, n int) {
 	// delivers and reads; the responses the other way round. Eom and
 	// Cancel are the caller's, of the response direction.
 	d := "resp"
-	if caller == (ev == "Send" || ev == "Grant") {
+	if caller == (ev == "Send" || ev == "Start" || ev == "Grant") {
 		d = "req"
 	}
 	if ev == "Eom" || ev == "Cancel" {
@@ -75,9 +80,21 @@ func traceCC(a *Agent, ev, txn string, n int) {
 		}
 		ccFile = f
 	}
-	if _, err := ccFile.Write(fmt.Appendf(nil, `{"ev":%q,"d":%q,"c":%q,"n":%d}`+"\n", ev, d, txn, n)); err != nil {
+	if _, err := ccFile.Write(fmt.Appendf(nil, `{"ev":%q,"d":%q,"c":%q,"n":%d,"s":%d}`+"\n", ev, d, txn, n, goid())); err != nil {
 		panic(err)
 	}
+}
+
+// goid is the calling goroutine's id, from its stack's first line
+// ("goroutine 42 [running]:"): only the trace needs it.
+func goid() int {
+	var buf [64]byte
+	f := strings.Fields(string(buf[:runtime.Stack(buf[:], false)]))
+	id, err := strconv.Atoi(f[1])
+	if err != nil {
+		panic(err)
+	}
+	return id
 }
 
 // The CallLifecycle trace: the target-side steps of relay

@@ -360,6 +360,7 @@ distinct states, depth 55, about 12 s.
 | `Send`, `Read`, `Eom`, `Cancel`, `End`, `CloseSend` | client/rpcclient/client_stream.go, client/rpcclient/server_stream.go |
 | `Deliver`, `SenderGrant` | client/rpcclient/a2a.go, client/rpcclient/call_credit.go |
 | trace recorder | client/rpcclient/trace_callcredit_on.go |
+| trace checks | spec/TraceCallCredit.tla, spec/TraceCallCreditBoth.tla, spec/TraceCallCreditSenders.tla |
 
 ### CallCreditBoth.tla: both directions at once
 
@@ -437,6 +438,47 @@ trace overflowed the Linux JVM's 1 MiB thread stack, relay-core nightly
 2026-11-05; `Of` is now `SelectSeq`, no recursion). `scripts/spec.sh
 traces` also checks that every step `TraceCallCredit.tla` takes is one
 `traceCC` records.
+
+Both directions and several senders (lane TRACEGAPS, 2026-11-21):
+`make spec-cctraces` (`scripts/spec.sh ccruns`, about 2 min; nightly,
+`spec-traces` runs it) runs client/rpcclient's tests `CCTESTS` (two agents
+over an in-order bridge: `TestFullRoundTrip`, `TestCallCreditBothWaysGrant`
+(requests past `RequestWindow`, responses past `ResponseWindow`),
+`TestCallCreditCallerLeavesStuckHandler` (the caller leaves a call whose
+handler never reads), `TestCallCreditSendersWaitForTheCaller` (two
+goroutines serve one call past its window while the caller reads nothing);
+one agent: `TestConcurrentServerStreamSend`), each in its own process with
+`-tags relaytrace`. Every call of each trace is checked per direction
+(`TraceCallCredit.tla`), both ways (`TraceCallCreditBoth.tla`: a call with
+a caller agent in the run; `NReq` is the trace's count of requests, a call
+the caller left is one of `Ends` with its unread directions stuck, the
+relay pipe `P = 1`, which takes nothing from a relay whose connections
+`Q` hold the whole trace) and, when two or more goroutines logged a
+`Start` for its responses, per sender (`TraceCallCreditSenders.tla`:
+`Senders` and `M` from the trace, written into the config by the script,
+since a definition substituted for a constant is evaluated on every use).
+The recorder logs `Start` (`serverStream.Send` before `Credit.Acquire`;
+a step of no other machine) and each line's goroutine (`s`). Not logged,
+taken by TLC when the next logged step needs them: the relay's steps, a
+receive loop dropping a frame of an ended call (`Deliver` of a gone call:
+never needed by these runs), the caller's Reads in a run with no caller
+agent. `Try` without credit and `Wake` are link.Credit's: rpcclient cannot
+log them in an order the model may take (a Send is logged after its
+`Acquire` returns, so the model's credit may be above the real one at a
+real check that found none), so no trace takes them (`-coverage 1`); link's
+own `spec/TraceCreditWaiters.tla` traces record them under `Credit`'s
+lock. Rejected fixtures: `reject-callcreditboth-req-past-window.ndjson`
+(`CCB:no-credit-req`: a 17th request with 16 unread),
+`reject-callcreditboth-resp-past-window.ndjson` (`CCB:no-credit-resp`: a
+257th response), `reject-callcreditboth-early-grant.ndjson` (a window
+update for 4 requests after 3 reads: `GrantBound`, `Conservation`),
+`reject-callcreditsenders-past-window.ndjson` (two goroutines, 257
+responses with no window update: `Conservation`, the code before lane
+CALLCREDIT), `reject-callcreditsenders-send-unstarted.ndjson` (a Send by
+a goroutine that logged no Start: a step of no sender); each is required
+rejected by its own machine. `CCB:drop-after-eom` and `CCS:one-slot` break
+liveness only (a sender that never sends again): no finite trace shows
+them, the mutants stay the model's (`make spec-mutants`).
 
 ### CallCreditSenders.tla: several senders on one call
 

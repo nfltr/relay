@@ -163,7 +163,7 @@ stress-race:
 # session tests' A2ASession traces, about 10 s; in make ci); spec-dgtraces
 # another (client/dgram's DatagramAssoc traces; in make ci); spec-bptraces
 # another (client/p2p's browser direct path BrowserPeer traces; in make ci).
-.PHONY: spec spec-mutants spec-traces spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-stoptraces spec-bptraces spec-proverif spec-bindings
+.PHONY: spec spec-mutants spec-traces spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-stoptraces spec-bptraces spec-cctraces spec-proverif spec-bindings
 spec:
 	./scripts/spec.sh check
 spec-mutants:
@@ -178,6 +178,11 @@ spec-cltraces:
 	./scripts/spec.sh cltraces
 spec-astraces:
 	./scripts/spec.sh astraces
+# client/rpcclient's two-agent and concurrent-sender calls against
+# spec/TraceCallCredit.tla, TraceCallCreditBoth.tla and
+# TraceCallCreditSenders.tla (about 2 min; nightly: spec-traces runs it).
+spec-cctraces:
+	./scripts/spec.sh ccruns
 # client/dgram's association traces against spec/TraceDatagramAssoc.tla
 # (about 10 s; in make ci).
 spec-dgtraces:

@@ -66,7 +66,10 @@ done
 recorders='enrol/TraceEnrol.tla org/orgpki,client/orgid -
 enrol/TraceRevokePush.tla org/orgenrol -
 orgmove/TraceOrgMove.tla org/orgpki,org/orgissuer -
-appenrol/TraceAppEnrol.tla org/orgpki -'
+appenrol/TraceAppEnrol.tla org/orgpki -
+TraceCallCredit.tla client/rpcclient -
+TraceCallCreditBoth.tla client/rpcclient -
+TraceCallCreditSenders.tla client/rpcclient -'
 set -f # the pathspecs below are git's, not the shell's
 echo "$recorders" | while read -r spec dirs only; do
 	paths=""

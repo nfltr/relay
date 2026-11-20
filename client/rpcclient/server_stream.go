@@ -153,6 +153,7 @@ func (ss *serverStream) Send(data []byte) error {
 
 	// One of the call's credit (the caller's ResponseWindow): a caller
 	// that stops reading holds this handler, never the agent's other calls.
+	traceCC(ss.agent, "Start", ss.txnID, 0)
 	if !ss.agent.serveCredit.Acquire(ss.txnID, 1) {
 		if ss.ctx.Err() != nil {
 			return context.Cause(ss.ctx)

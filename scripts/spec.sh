@@ -23,6 +23,14 @@
 #   cltraces FILE...  each transaction of each recorded CallLifecycle trace
 #            checked against spec/TraceCallLifecycle.tla (relay-core's
 #            two-agent traces: one config, this script's).
+#   ccruns    client/rpcclient's CallCredit tests (CC_TRACE_TESTS, default
+#            CCTESTS: the two-agent bridge and concurrent-sender tests), each
+#            in its own process with -tags relaytrace; each call checked per
+#            direction (TraceCallCredit.tla), both ways
+#            (TraceCallCreditBoth.tla) and, sent from several goroutines,
+#            per sender (TraceCallCreditSenders.tla); each
+#            spec/testdata/reject-callcreditboth-*/-senders-* rejected
+#            (traces runs it too).
 #   cctraces FILE...  each call and direction of each recorded CallCredit
 #            trace (client/rpcclient -tags relaytrace) checked against
 #            spec/TraceCallCredit.tla.
@@ -158,6 +166,158 @@ cctraces() {
 	done
 	echo "$n call directions, $bad rejected"
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
+}
+
+# ccbtrace FILE C: TLC on call C of a recorded CallCredit trace, both
+# directions at once (spec/TraceCallCreditBoth.tla); 0 when accepted. A
+# call the caller left (Cancel) is one of Ends: its directions with no Read
+# are stuck. Its TLC output: FILE.both.C.out.
+ccbtrace() {
+	sreq={} sresp={}
+	if grep -q "\"ev\":\"Cancel\",\"d\":\"[a-z]*\",\"c\":\"$2\"" "$1"; then
+		grep -q "\"ev\":\"Read\",\"d\":\"req\",\"c\":\"$2\"" "$1" || sreq="{\"$2\"}"
+		grep -q "\"ev\":\"Read\",\"d\":\"resp\",\"c\":\"$2\"" "$1" || sresp="{\"$2\"}"
+	fi
+	cfg=$work/$(basename "$1").both.$2.cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Call = "$2"
+    Calls <- TraceCalls
+    StuckReq = $sreq
+    StuckResp = $sresp
+    WReq = 16
+    WResp = 256
+    N <- TraceLen
+    NReq <- TraceNReq
+    P = 1
+    Q <- TraceLen
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    NoHOL
+    BufferBound
+    Conservation
+    GrantBound
+    Ordered
+    TraceNotDone
+CFG
+	META=$work/states-$(basename "$1").both.$2 tlc "$cfg" TraceCallCreditBoth.tla >"$1.both.$2.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.both.$2.out"
+}
+
+# ccstrace FILE C: TLC on the responses of call C of a recorded CallCredit
+# trace, sent from several goroutines (spec/TraceCallCreditSenders.tla); 0
+# when accepted. Its TLC output: FILE.senders.C.out.
+ccstrace() {
+	starts=$(grep "\"ev\":\"Start\",\"d\":\"resp\",\"c\":\"$2\"" "$1" | sed -E 's/.*"s":([0-9]+).*/\1/' | sort | uniq -c)
+	senders=$(echo "$starts" | awk '{print $2}' | paste -sd, -)
+	m=$(echo "$starts" | awk '$1 > m {m = $1} END {print m}')
+	cfg=$work/$(basename "$1").senders.$2.cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Call = "$2"
+    Senders = {$senders}
+    W = 256
+    M = $m
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    Conservation
+    NoStrandedWaiter
+    TraceNotDone
+CFG
+	META=$work/states-$(basename "$1").senders.$2 tlc "$cfg" TraceCallCreditSenders.tla >"$1.senders.$2.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.senders.$2.out"
+}
+
+# ccbstraces FILE: each call of a CallCredit trace against
+# TraceCallCreditBoth.tla, and each call whose responses two or more
+# goroutines started against TraceCallCreditSenders.tla; prints one line
+# each, fails on a rejected one or none.
+ccbstraces() {
+	n=0 bad=0
+	for call in $(sed -E 's/.*"c":"([^"]+)".*/\1/' "$1" | sort -u); do
+		# Both ways: a call whose caller is an agent of the run.
+		if grep -q "\"ev\":\"Send\",\"d\":\"req\",\"c\":\"$call\"" "$1"; then
+			n=$((n + 1))
+			if ccbtrace "$1" "$call"; then
+				echo "trace $(basename "$1") $call both: $(grep -c "\"c\":\"$call\"" "$1") lines: accepted"
+			else
+				bad=$((bad + 1))
+				echo "trace $(basename "$1") $call both: REJECTED"
+				grep -E 'Error|unknown event' "$1.both.$call.out" | head -5
+			fi
+		fi
+		ns=$(grep "\"ev\":\"Start\",\"d\":\"resp\",\"c\":\"$call\"" "$1" | sed -E 's/.*"s":([0-9]+).*/\1/' | sort -u | wc -l | tr -d ' ')
+		[ "$ns" -ge 2 ] || continue
+		n=$((n + 1))
+		if ccstrace "$1" "$call"; then
+			echo "trace $(basename "$1") $call senders ($ns): accepted"
+		else
+			bad=$((bad + 1))
+			echo "trace $(basename "$1") $call senders ($ns): REJECTED"
+			grep -E 'Error|unknown event' "$1.senders.$call.out" | head -5
+		fi
+	done
+	echo "$n checks, $bad rejected"
+	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
+}
+
+# ccrun TESTS: client/rpcclient's two-agent and concurrent-sender tests
+# (TESTS, a -run pattern), each in its own process with -tags relaytrace;
+# every call of each CallCredit trace checked per direction
+# (TraceCallCredit.tla), both ways (TraceCallCreditBoth.tla) and, served
+# from several goroutines, per sender (TraceCallCreditSenders.tla); each
+# spec/testdata/reject-callcreditboth-* and reject-callcreditsenders-*
+# fixture rejected.
+ccrun() {
+	fail=0
+	for f in spec/testdata/reject-callcreditboth-*.ndjson spec/testdata/reject-callcreditsenders-*.ndjson; do
+		cp "$f" "$work/"
+		ccbstraces "$work/$(basename "$f")" >"$work/ccbs.out" || true
+		# The machine the fixture is for is the one that rejects it.
+		want="both: REJECTED"
+		case $f in *senders-*) want="senders (.*): REJECTED" ;; esac
+		grep -qE "$want" "$work/ccbs.out" || {
+			echo "$f: accepted, want rejected"
+			cat "$work/ccbs.out"
+			return 1
+		}
+		for o in "$work/$(basename "$f")".*.out; do
+			grep -q 'distinct states found' "$o" || { echo "$f: TLC failed:"; tail -20 "$o"; return 1; }
+		done
+		echo "$f: rejected"
+	done
+	(cd client && go test -c -tags relaytrace -o "$work/ccrpc.test" ./rpcclient/) || return 1
+	nt=0
+	for t in $("$work/ccrpc.test" -test.list "$1"); do
+		mkdir -p "$work/cctraces/$t"
+		(cd client/rpcclient && RELAYTRACE=$work/cctraces/$t "$work/ccrpc.test" -test.run "^$t\$" -test.count 1) >"$work/cctest.out" 2>&1 || {
+			cat "$work/cctest.out"
+			return 1
+		}
+		for f in "$work/cctraces/$t"/callcredit-*.ndjson; do
+			[ -s "$f" ] || continue
+			mv "$f" "$work/cctraces/$t.ndjson"
+			nt=$((nt + 1))
+			# A run with no caller agent (the test grants by hand) is
+			# CallCreditSenders' only: CallCredit and CallCreditBoth
+			# have the caller's steps.
+			if grep -q '"ev":"Send","d":"req"' "$work/cctraces/$t.ndjson"; then
+				cctraces "$work/cctraces/$t.ndjson" || fail=1
+			fi
+			ccbstraces "$work/cctraces/$t.ndjson" || fail=1
+		done
+	done
+	echo "$nt tests traced"
+	[ "$nt" -gt 0 ] || fail=1
+	return $fail
 }
 
 cltrace() {
@@ -627,6 +787,9 @@ STOPTESTS='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession|T
 PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectPunchPrefersLAN|TestDirectMappedAgentGoesDirect|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain)$'
 # client/agent's tests that move an association direct: their DatagramAssoc
 # traces (BindA, BindC, the direct carriers, PathLoss).
+# The CallCredit tests of client/rpcclient whose two agents (or several
+# senders) give TraceCallCreditBoth.tla and TraceCallCreditSenders.tla runs.
+CCTESTS='^(TestCallCreditBothWaysGrant|TestCallCreditCallerLeavesStuckHandler|TestCallCreditSendersWaitForTheCaller|TestConcurrentServerStreamSend|TestFullRoundTrip)$'
 DGDIRECT='^(TestDatagramDirectMovesAndFallsBack|TestDatagramDirectOnlyOnceTheAgentAttached)$'
 case ${1:-} in
 check)
@@ -930,6 +1093,10 @@ cctraces)
 	done
 	exit $fail
 	;;
+ccruns)
+	ccrun "${CC_TRACE_TESTS:-$CCTESTS}" || fail=1
+	exit $fail
+	;;
 traces)
 	# Every step TraceCallCredit.tla takes is one rpcclient records.
 	ccgo=$(cat client/rpcclient/*.go | grep -v '^//' | grep -ohE 'traceCC\([a-z.]+, "[A-Za-z]+"' | grep -ohE '"[A-Za-z]+"' | sort -u)
@@ -972,6 +1139,7 @@ traces)
 		echo "$f: rejected"
 	done
 	clrun "${CL_TRACE_TESTS:-.}" 1
+	ccrun "${CC_TRACE_TESTS:-$CCTESTS}" || exit 1
 	asrun "${AS_TRACE_TESTS:-^TestA2AE2EE}" || exit 1
 	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || exit 1
 	dgrun "${DG_DIRECT_TESTS:-$DGDIRECT}" "${DG_TRACE_COUNT:-3}" agent || exit 1
@@ -979,7 +1147,7 @@ traces)
 	stoprun "${STOP_TRACE_TESTS:-$STOPTESTS}" fixtures || exit 1
 	bprun "${BP_TRACE_TESTS:-^(TestBrowserDirect|TestBrowserPeerModelBindings)}" || exit 1
 	for f in spec/testdata/reject-*.ndjson; do
-		case $f in *reject-callcredit-* | *reject-calllifecycle-* | *reject-directpunch-* | *reject-browserpeer-* | *reject-agentstop-* | *reject-datagramassoc-*) continue ;; esac
+		case $f in *reject-callcredit-* | *reject-callcreditboth-* | *reject-callcreditsenders-* | *reject-calllifecycle-* | *reject-directpunch-* | *reject-browserpeer-* | *reject-agentstop-* | *reject-datagramassoc-*) continue ;; esac
 		cp "$f" "$work/"
 		if trace "$work/$(basename "$f")" 1 2; then
 			echo "$f: accepted, want rejected"
@@ -1025,7 +1193,7 @@ traces)
 	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
 	;;
 *)
-	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|ptraces|stoptraces|bptraces|cctraces FILE..." >&2
+	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|ptraces|stoptraces|bptraces|ccruns|cctraces FILE..." >&2
 	exit 2
 	;;
 esac
