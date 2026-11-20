@@ -74,19 +74,23 @@ func TestMoveRefusedOutsideThePolicy(t *testing.T) {
 	}
 }
 
-// enrol.pv query 20, BIND:move.id: the relay carrying the honest move
-// request changes its machine id (to one the policy admits): refused, the
-// id is under the key's signature (mutant move-id-unsigned).
+// enrol.pv query 20: each BIND:move.* changes the honest move request the
+// relay carries (to an id the policy admits); refused, the id is under the
+// key's signature (mutant move-id-unsigned).
 func TestMoveModelBindings(t *testing.T) {
-	o := newOrg(t)
-	first, k := o.enrol(t, "web", "db")
-	o.iss.SetMovePolicy(func(string, string) error { return nil }) // the relay's word only
-	req := NewMoveRequest(first.Raw, k, csr(t, newKey(t), "web"), "m-cccccccccccccccccccccccccc")
-	req.MachineID = mid // BIND:move.id
-	if _, err := o.iss.Renew(req, t0.Add(20*time.Hour)); !errors.Is(err, ErrRefused) {
-		t.Fatalf("a move whose id the relay changed: %v, want refused", err)
-	}
-	if got := o.iss.NameOfMachine(mid); got != "" {
-		t.Fatalf("NameOfMachine(%s) = %q: the relay chose the id", mid, got)
+	for b, change := range map[string]func(*RenewRequest){
+		"move.id": func(r *RenewRequest) { r.MachineID = mid },
+	} {
+		o := newOrg(t)
+		first, k := o.enrol(t, "web", "db")
+		o.iss.SetMovePolicy(func(string, string) error { return nil }) // the relay's word only
+		req := NewMoveRequest(first.Raw, k, csr(t, newKey(t), "web"), "m-cccccccccccccccccccccccccc")
+		change(&req)
+		if _, err := o.iss.Renew(req, t0.Add(20*time.Hour)); !errors.Is(err, ErrRefused) {
+			t.Fatalf("BIND:%s changed: %v, want refused", b, err)
+		}
+		if got := o.iss.NameOfMachine(mid); got != "" {
+			t.Fatalf("BIND:%s: NameOfMachine(%s) = %q: the relay chose the id", b, mid, got)
+		}
 	}
 }

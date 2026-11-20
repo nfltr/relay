@@ -127,8 +127,8 @@ func TestReconnectStopsOnFatalClasses(t *testing.T) {
 		err  error
 		hint string
 	}{
-		"auth":          {status.Error(codes.Unauthenticated, "bad key"), "machine certificate"},
-		"permission":    {status.Error(codes.PermissionDenied, "no"), "machine certificate"},
+		"auth":          {status.Error(codes.Unauthenticated, "bad key"), "nfltr config login"},
+		"permission":    {status.Error(codes.PermissionDenied, "no"), "nfltr config login"},
 		"version":       {status.Error(codes.FailedPrecondition, agentwire.ClientGenerationTooOld), "update"},
 		"relay too old": {status.Error(codes.FailedPrecondition, agentwire.RelayTooOld), "update"},
 		"config":        {status.Error(codes.InvalidArgument, "bad"), "configuration"},
@@ -261,7 +261,7 @@ func TestReconnectStopsWhenTheRedialIsRefused(t *testing.T) {
 	case <-time.After(30 * time.Second):
 		t.Fatalf("agent did not stop after %d dials; want it stopped on the refused redial", s.dials.Load())
 	}
-	if err := a.Err(); status.Code(err) != codes.Unauthenticated || !strings.Contains(err.Error(), "machine certificate") {
+	if err := a.Err(); status.Code(err) != codes.Unauthenticated || !strings.Contains(err.Error(), "nfltr config login") {
 		t.Fatalf("Err = %v, want the refusal with its hint", err)
 	}
 	if n := s.dials.Load(); n != 3 {
