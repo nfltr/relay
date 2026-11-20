@@ -331,7 +331,7 @@ func (l *Listener) Admit(ctx context.Context, conn net.Conn) (*tls.Conn, error) 
 // Handshake runs the client's side of steps 1-4 on conn, a session the
 // relay opened toward addr: the TLS stream to the admitted service, or
 // capaddr.ErrPin, ErrRendezvous or ErrTLS (the server is not the address's:
-// exit 7), ErrKind (the address serves datagrams), capaddr.ErrProof (no verdict: the secret refused, exit 10),
+// exit 7), ErrKind (the address serves datagrams), capaddr.ErrProof (the stream ended with no verdict: the secret refused, exit 10),
 // ErrAnswer or a connection error. conn is closed on an error.
 func Handshake(ctx context.Context, conn net.Conn, addr capaddr.Address) (net.Conn, error) {
 	defer bound(ctx, conn)()
@@ -410,8 +410,13 @@ func ClientTLS(ctx context.Context, conn net.Conn, addr capaddr.Address) (*tls.C
 	if _, err := tc.Write(proof[:]); err != nil {
 		return nil, err
 	}
+	// The listener refuses by ending the stream with no verdict; a reset
+	// or a failed connection is no verdict on the secret (a listener that
+	// admits a session and resets it at once: nfltr-pipe's second dial).
 	var v [1]byte
-	if _, err := io.ReadFull(tc, v[:]); err != nil || v[0] != Admitted {
+	if _, err := io.ReadFull(tc, v[:]); err != nil && err != io.EOF {
+		return nil, err
+	} else if err != nil || v[0] != Admitted {
 		return nil, capaddr.ErrProof
 	}
 	return tc, nil

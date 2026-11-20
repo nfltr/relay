@@ -126,3 +126,47 @@ func TestAnonymousEarly(t *testing.T) {
 		t.Fatalf("Err = %v, want ErrDirectRequired", err)
 	}
 }
+
+// resetRead is a client conn whose peer's end reads as a reset, as a
+// relayed or direct session's ABORT does.
+type resetRead struct{ net.Conn }
+
+var errSessionReset = errors.New("session reset")
+
+func (c resetRead) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if err == io.EOF {
+		err = errSessionReset
+	}
+	return n, err
+}
+
+// A session reset after the proof and before the verdict (a listener that
+// admits it and then resets it: nfltr-pipe's second dial) is the reset,
+// not a refused secret: ClientTLS returns the connection's error, never
+// capaddr.ErrProof. The stream's end with no verdict stays the refusal.
+func TestResetBeforeVerdictIsNotARefusal(t *testing.T) {
+	for _, reset := range []bool{true, false} {
+		l, _ := mint(t)
+		c, s := net.Pipe()
+		go func() {
+			defer s.Close() //nolint:errcheck
+			tc := tls.Server(s, l.cfg)
+			if tc.Handshake() == nil {
+				_, _ = io.ReadFull(tc, make([]byte, capaddr.ProofSize))
+			}
+		}()
+		var conn net.Conn = c
+		if reset {
+			conn = resetRead{c}
+		}
+		_, err := ClientTLS(context.Background(), conn, l.Address())
+		_ = c.Close()
+		if reset && (errors.Is(err, capaddr.ErrProof) || !errors.Is(err, errSessionReset)) {
+			t.Errorf("a reset before the verdict: %v, want the reset", err)
+		}
+		if !reset && !errors.Is(err, capaddr.ErrProof) {
+			t.Errorf("the end with no verdict: %v, want capaddr.ErrProof", err)
+		}
+	}
+}

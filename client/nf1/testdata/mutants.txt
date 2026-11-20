@@ -9,3 +9,6 @@ kind-unchecked | nf1.go | 	if hasHint(hints, HintDatagram) != datagram { | 	if f
 # that cannot frame its session for direct paths refuses an a1 answer.
 anon-unframed | nf1.go | 	if Anonymous(hints) { // no framing here: the session could never leave the relay | 	if false { | TestAnonymousHint
 anon-early | early.go | 			if a.err == nil && Anonymous(a.hints) { // an early session is never framed for direct paths | 			if false { | TestAnonymousEarly
+# nfltr-pipe defect 3 (pipe docs/reliability.md): a session reset before
+# the verdict read as the secret refused (exit 10, not the reset's 6).
+reset-is-refusal | nf1.go | 	if _, err := io.ReadFull(tc, v[:]); err != nil && err != io.EOF { | 	if _, err := io.ReadFull(tc, v[:]); false { | TestResetBeforeVerdictIsNotARefusal
