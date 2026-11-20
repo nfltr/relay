@@ -167,7 +167,9 @@ func (s *Server) replies(f *flow) {
 		a := s.a
 		a.mu.Lock()
 		if f.state == stOpen && a.enqueue(frame{typ: frameData, id: f.id, payload: buf[:n]}, f) {
-			traceReplyA(f.id)
+			if a.direct == nil {
+				traceReplyA(f.id) // else its sender's, with its carrier (traceSend)
+			}
 			a.cnt.out.Add(1)
 		}
 		a.mu.Unlock()

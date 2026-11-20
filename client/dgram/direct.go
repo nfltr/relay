@@ -74,11 +74,11 @@ func (a *assoc) setDirect(d Direct, in func(id uint64, p []byte)) {
 // the path has it, since its reply may be read before SendDatagram
 // returns, and uncounted when the path refuses it (nothing left then):
 // TestDatagramAssocDirectCountedBeforeItLeaves.
-func (a *assoc) sendDirect(d Direct, buf *[]byte, f frame) bool {
+func (a *assoc) sendDirect(d Direct, buf *[]byte, f frame, fl *flow) bool {
 	*buf = binary.AppendUvarint((*buf)[:0], f.id)
 	*buf = append(*buf, f.payload...)
 	a.cnt.direct.Add(1)
-	err := d.SendDatagram(*buf)
+	err := traceSend(d, *buf, a.client, fl.src, f.id)
 	if err == nil {
 		return true
 	}
@@ -96,10 +96,12 @@ func (c *Client) directIn(id uint64, p []byte) {
 	a.mu.Lock()
 	f := a.flows[id]
 	if a.err != nil || f == nil || f.state == stClosed {
+		traceRecvDg(true, id, "drop")
 		a.mu.Unlock()
 		a.cnt.closed.Add(1)
 		return
 	}
+	traceRecvDg(true, id, "deliver")
 	f.state = stOpen
 	a.cnt.in.Add(1)
 	f.touch()
@@ -117,9 +119,11 @@ func (s *Server) directIn(id uint64, p []byte) {
 	defer a.mu.Unlock()
 	f := a.flows[id]
 	if a.err != nil || f == nil || f.state != stOpen {
+		traceRecvDg(false, id, "drop")
 		a.cnt.closed.Add(1)
 		return
 	}
+	traceRecvDg(false, id, "deliver")
 	f.touch()
 	select {
 	case f.in <- append([]byte(nil), p...):

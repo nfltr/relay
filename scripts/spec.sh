@@ -27,7 +27,8 @@
 #            trace (client/rpcclient -tags relaytrace) checked against
 #            spec/TraceCallCredit.tla.
 #   dgtraces  client/dgram's traced association tests (DG_TRACE_TESTS,
-#            default TestDatagramAssocTrace, DG_TRACE_COUNT runs, default 3),
+#            default TestDatagramAssocTrace, DG_TRACE_COUNT runs, default 3)
+#            and client/agent's that move direct (DG_DIRECT_TESTS),
 #            each run in its own process with -tags relaytrace, its trace
 #            checked against spec/TraceDatagramAssoc.tla; each
 #            spec/testdata/reject-datagramassoc-* fixture rejected (in make
@@ -333,7 +334,7 @@ CONSTANTS
     R = 1
     B <- TraceLen
     MaxCuts = 0
-    MaxLoss = 0
+    MaxLoss <- TraceLen
     Mutant = "none"
 INIT TraceInit
 NEXT TraceNext
@@ -344,6 +345,7 @@ INVARIANTS
     TableBounded
     NoHOL
     NoReflection
+    NoLostOnMove
     TraceNotDone
 CFG
 	META=$work/states-$(basename "$1") tlc "$cfg" TraceDatagramAssoc.tla >"$1.out" 2>&1 || true
@@ -427,15 +429,17 @@ prun() {
 	return $fail
 }
 
-# dgrun TESTS COUNT: the fixtures, then client/dgram's tests TESTS, each run
-# COUNT times in its own process (one association per trace) with the
-# recorder; every trace checked.
+# dgrun TESTS COUNT [PKG]: the fixtures, then client/PKG's (default dgram;
+# agent: the direct path's) tests TESTS, each run COUNT times in its own
+# process (one association per trace) with the recorder; every trace
+# checked.
 dgrun() {
-	dggo=$(grep -ohE 'ev":"[A-Za-z]+' client/dgram/trace_on.go | sed 's/ev":"//' | sort -u)
+	pkg=${3:-dgram}
+	dggo=$(grep -ohE 'ev":"[A-Za-z]+|"(Bind[AC]|RecvDg[AC])"' client/dgram/trace_on.go client/agent/direct_server.go client/agent/direct_client.go | sed 's/ev":"//' | tr -d '"' | sort -u)
 	for e in $(grep -oE 'E\.ev = "[A-Za-z]+"' spec/TraceDatagramAssoc.tla | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u); do
 		echo "$dggo" | grep -qx "$e" || { echo "spec/TraceDatagramAssoc.tla: event $e is recorded by no trace line of client/dgram"; return 1; }
 	done
-	for f in spec/testdata/reject-datagramassoc-*.ndjson; do
+	for f in $([ "$pkg" = dgram ] && echo spec/testdata/reject-datagramassoc-*.ndjson); do
 		cp "$f" "$work/"
 		if dgtrace "$work/$(basename "$f")"; then
 			echo "$f: accepted, want rejected"
@@ -444,15 +448,15 @@ dgrun() {
 		grep -q 'distinct states found' "$work/$(basename "$f").out" || { echo "$f: TLC failed:"; tail -20 "$work/$(basename "$f").out"; return 1; }
 		echo "$f: rejected"
 	done
-	(cd client && go test -c -tags relaytrace -o "$work/dgram.test" ./dgram/) || return 1
+	(cd client && go test -c -tags relaytrace -o "$work/$pkg.dg.test" "./$pkg/") || return 1
 	nt=0
-	for t in $("$work/dgram.test" -test.list "$1"); do
+	for t in $("$work/$pkg.dg.test" -test.list "$1"); do
 		i=0
 		while [ $i -lt "$2" ]; do
 			i=$((i + 1))
 			d=$work/dgtraces/$t.$i
 			mkdir -p "$d"
-			(cd client/dgram && RELAYTRACE=$d "$work/dgram.test" -test.run "^$t\$" -test.count 1) >"$work/dgtest.out" 2>&1 || {
+			(cd "client/$pkg" && RELAYTRACE=$d "$work/$pkg.dg.test" -test.run "^$t\$" -test.count 1) >"$work/dgtest.out" 2>&1 || {
 				cat "$work/dgtest.out"
 				return 1
 			}
@@ -621,6 +625,9 @@ STOPTESTS='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession|T
 # The punch tests ptraces records: a learned winner, an offered winner, a
 # refused rogue, a re-punch.
 PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectPunchPrefersLAN|TestDirectMappedAgentGoesDirect|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain)$'
+# client/agent's tests that move an association direct: their DatagramAssoc
+# traces (BindA, BindC, the direct carriers, PathLoss).
+DGDIRECT='^(TestDatagramDirectMovesAndFallsBack|TestDatagramDirectOnlyOnceTheAgentAttached)$'
 case ${1:-} in
 check)
 	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch AgentStop AgentStopNoDrain AgentStopLate AgentStopClose TLSEnd"
@@ -894,6 +901,7 @@ bptraces)
 	;;
 dgtraces)
 	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || fail=1
+	dgrun "${DG_DIRECT_TESTS:-$DGDIRECT}" "${DG_TRACE_COUNT:-3}" agent || fail=1
 	exit $fail
 	;;
 ptraces)
@@ -966,11 +974,12 @@ traces)
 	clrun "${CL_TRACE_TESTS:-.}" 1
 	asrun "${AS_TRACE_TESTS:-^TestA2AE2EE}" || exit 1
 	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || exit 1
+	dgrun "${DG_DIRECT_TESTS:-$DGDIRECT}" "${DG_TRACE_COUNT:-3}" agent || exit 1
 	prun "${P_TRACE_TESTS:-$PTESTS}" || exit 1
 	stoprun "${STOP_TRACE_TESTS:-$STOPTESTS}" fixtures || exit 1
 	bprun "${BP_TRACE_TESTS:-^(TestBrowserDirect|TestBrowserPeerModelBindings)}" || exit 1
 	for f in spec/testdata/reject-*.ndjson; do
-		case $f in *reject-callcredit-* | *reject-calllifecycle-* | *reject-directpunch-* | *reject-browserpeer-* | *reject-agentstop-*) continue ;; esac
+		case $f in *reject-callcredit-* | *reject-calllifecycle-* | *reject-directpunch-* | *reject-browserpeer-* | *reject-agentstop-* | *reject-datagramassoc-*) continue ;; esac
 		cp "$f" "$work/"
 		if trace "$work/$(basename "$f")" 1 2; then
 			echo "$f: accepted, want rejected"

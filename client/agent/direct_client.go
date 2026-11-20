@@ -461,6 +461,7 @@ func (s *DirectSession) tryDirect() string {
 	peer, _ := netip.ParseAddrPort(p.q.RemoteAddr().String())
 	heard := new(atomic.Bool)
 	tc.ok = func() {
+		s.dg.traceBind("BindC")
 		heard.Store(true)
 		s.dg.bound(tc) // the agent attached before its token: datagrams go direct from now on
 		s.directOnce.Do(func() { close(s.direct) })

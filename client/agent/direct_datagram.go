@@ -11,6 +11,7 @@ import (
 	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/quic-go"
 	"github.com/nfltr/relay/client/dgram"
+	"github.com/nfltr/relay/client/internal/dgtrace"
 )
 
 // sessionDatagrams is a framed session's direct datagrams (dgram.Direct,
@@ -41,13 +42,28 @@ var _ dgram.Direct = (*sessionDatagrams)(nil)
 func (d *sessionDatagrams) SendDatagram(p []byte) error {
 	cur := d.c.Current()
 	if r := d.ready.Load(); r == nil || *r != cur {
-		return dgram.ErrNotDirect // its far end not bound there (yet): the stream carries it
+		return d.lost(r) // its far end not bound there (yet), or the session left the bound stream: the stream carries it
 	}
 	st, ok := cur.(interface{ SendDatagram([]byte) error })
 	if !ok {
 		return dgram.ErrNotDirect
 	}
-	return st.SendDatagram(p)
+	if err := st.SendDatagram(p); !errors.Is(err, dgram.ErrNotDirect) {
+		return err
+	}
+	return d.lost(d.ready.Load()) // its connection gone
+}
+
+// errLost is a carrier's refusal once its bound path is gone.
+var errLost = errors.Join(dgram.ErrNotDirect, dgtrace.ErrLost)
+
+// lost drops the binding r (nil: none): errLost the first time (the
+// trace's PathLoss: spec/DatagramAssoc.tla), dgram.ErrNotDirect after.
+func (d *sessionDatagrams) lost(r *pathswitch.Stream) error {
+	if r != nil && d.ready.CompareAndSwap(r, nil) {
+		return errLost
+	}
+	return dgram.ErrNotDirect
 }
 
 // bound notes that cur's far end is bound to the session there.

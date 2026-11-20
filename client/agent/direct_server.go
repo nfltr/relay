@@ -395,6 +395,7 @@ func (d *directServer) acceptDirect(peer string, _ []byte, s peerlink.Session) {
 		_ = s.Reset()
 		return
 	}
+	sess.dg.traceBind("BindA")
 	if err := ps.first.send(s); err != nil {
 		_ = s.Reset() // the session's stream ended: it re-attaches or ends
 		return

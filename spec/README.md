@@ -1007,7 +1007,9 @@ only once it took a client's frame on that stream (`aheard`:
 bound (`NoLostOnMove`; the agent's token before its attach lost the
 client's first direct datagram, relay 0424e437). Spill (a datagram too large
 for a packet goes on the stream) is a choice between the two carriers the
-model has, no state of its own.
+model has, no state of its own: `Read`'s and `ReplyA`'s `spill` (lane
+DGRAMTRACE; before, the model sent every datagram of a bound flow direct,
+which the traces of the move test refuted at its 4000-byte datagram).
 
 | actions | code |
 |---|---|
@@ -1020,7 +1022,7 @@ model has, no state of its own.
 | `BindC` (the agent's token checked) | client/agent/direct_client.go `tokenCheck` |
 | the stream, its one sender, `Cut` | client/dgram/assoc.go |
 | framing | client/dgram/frame.go |
-| trace recorder | client/dgram/trace_on.go |
+| trace recorder | client/dgram/trace_on.go (the association's steps; `traceSend`: a datagram's carrier as it is sent), client/agent/trace_dgram_on.go (`BindA`, `BindC`), client/agent/direct_datagram.go (`lost`: `PathLoss`), client/internal/dgtrace/ (the one file) |
 
 ### DatagramAssoc traces
 
@@ -1038,12 +1040,39 @@ must be rejected (`spec/testdata/reject-datagramassoc-*`): a datagram
 delivered after the agent closed its flow, a flow accepted past the
 agent's cap, an open from a source not admitted. The byte budget
 (`AmpBound` in bytes) is the Go test's (`TestDatagramAssocAmpBound`): the
-model counts datagrams. The direct path's steps (`BindA`, `BindC`, `RecvDgC`, `RecvDgA`, the direct
-branches of `Read` and `ReplyA`) are not recorded yet: its Go tests are
-`client/agent`'s `TestDatagramDirectMovesAndFallsBack`,
-`TestDatagramRevokeOnDirect` and `TestDatagramModelBindings`, with the Go
-mutants `direct-ignores-assoc` and `tag-unchecked`
-(`client/agent/testdata/direct_dgram_mutants.txt`).
+model counts datagrams.
+
+The direct path's steps (lane DGRAMTRACE) come from `client/agent`'s tests
+that move an association direct (`DG_DIRECT_TESTS`, default
+`TestDatagramDirectMovesAndFallsBack`: relayed, direct both ways, a spill,
+the direct connection's death and relayed again;
+`TestDatagramDirectOnlyOnceTheAgentAttached`: the attach held), three
+runs each: the agent's attach (`BindA`, after `Attach`, before its token),
+the client's check of that token (`BindC`), each side taking a frame off
+the direct connection (`RecvDgA`, `RecvDgC`, delivered or dropped as the
+model does), the carrier each datagram and reply took (`op`/`out`:
+`direct`, the stream, `spill`; on the stream while bound only spilled or
+after a `PathLoss`), and an end finding its bound path gone (`PathLoss`,
+from the carrier's refusal `dgtrace.ErrLost`: the first end's is the
+model's, the other's changes nothing), under `NoLostOnMove` too. A
+datagram that may go direct is recorded by the association's sender as
+it sends it, the trace's lock held across the send, so its receiver's
+line comes after it. Two more hand-made traces must be rejected, the two
+orders DGRAMBIND fixed: the client binds before the agent attached
+(`reject-datagramassoc-client-binds-first`), the agent replies direct
+before it took a client's frame (`reject-datagramassoc-agent-sends-unheard`);
+each is accepted with its two steps in the right order. Ceiling: the
+recorder orders one flow's steps; a traced run with a direct path and
+several flows in flight at once may record an open-flow datagram (logged
+at its send) after another flow's open (logged as it is queued) that the
+stream carries after it, a false rejection, so `DG_DIRECT_TESTS` run one
+flow at a time. Not traced: `Cut`, `Revoke`, the `Notice`s and `CleanupA`
+(recording stops at the association's end), and `client/agent`'s
+`dgUnit` tests (`TestDatagramRevokeOnDirect`, `TestDatagramModelBindings`,
+`TestDatagramAgentDirectOnceItHeardTheClient`), whose client frames are
+raw ones under any tag, no association's; their Go mutants
+`direct-ignores-assoc`, `tag-unchecked` and `agent-sends-unheard`
+(`client/agent/testdata/direct_dgram_mutants.txt`) cover them.
 
 ## DirectPunch.tla: one punch, with peer-reflexive candidates
 

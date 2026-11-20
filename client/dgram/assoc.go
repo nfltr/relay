@@ -197,7 +197,7 @@ func (a *assoc) send() {
 		a.mu.Unlock()
 		buf = buf[:0]
 		for i, o := range q {
-			if !(o.dg && d != nil && a.sendDirect(d, &dbuf, o.f)) {
+			if !(o.dg && d != nil && a.sendDirect(d, &dbuf, o.f, o.fl)) {
 				buf = appendFrame(buf, o.f)
 			}
 			q[i] = outFrame{}

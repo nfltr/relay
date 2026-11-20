@@ -14,4 +14,7 @@ func traceExpireC(uint64)               {}
 func traceRecvA(string, uint64, string) {}
 func traceReplyA(uint64)                {}
 func traceExpireA(uint64)               {}
+func traceRecvDg(bool, uint64, string)  {}
 func traceEnd()                         {}
+
+func traceSend(d Direct, p []byte, _ bool, _ string, _ uint64) error { return d.SendDatagram(p) }

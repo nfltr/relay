@@ -98,8 +98,8 @@ func (fl *Flow) Send(p []byte) bool {
 		a.flows[f.id] = f
 		a.cnt.flows.Add(1)
 		traceRead(f.src, f.id, "open")
-	} else {
-		traceRead(f.src, f.id, "d")
+	} else if f.state != stOpen || a.direct == nil {
+		traceRead(f.src, f.id, "d") // else its sender's, with its carrier (traceSend)
 	}
 	a.cnt.out.Add(1)
 	f.touch()
