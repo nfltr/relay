@@ -111,12 +111,12 @@ func TestSignalStream_OfferAnswerBeforeCloseSend(t *testing.T) {
 			handlerDone <- err
 			return err
 		}
-		relay, err := RecvSignalServer(stream)
+		again, err := RecvSignalServer(stream)
 		if err != nil {
 			handlerDone <- err
 			return err
 		}
-		if relay.Type != SignalRelay {
+		if again.Type != SignalOffer {
 			err = io.ErrUnexpectedEOF
 			handlerDone <- err
 			return err
@@ -151,8 +151,8 @@ func TestSignalStream_OfferAnswerBeforeCloseSend(t *testing.T) {
 		t.Fatalf("expected session %q, got %q", offer.Session, answer.Session)
 	}
 
-	if err := SendRelay(stream, offer.Session); err != nil {
-		t.Fatalf("SendRelay: %v", err)
+	if err := SendOffer(stream, offer); err != nil {
+		t.Fatalf("second SendOffer: %v", err)
 	}
 	if err := stream.CloseSend(); err != nil {
 		t.Fatalf("CloseSend: %v", err)

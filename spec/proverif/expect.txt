@@ -52,20 +52,7 @@ a2a_machine sess,clear-header TTTTTTTTTTTTTTTTTTFFFFFFFTFF
 a2a_machine mach-resp-clear TTTTTTTTTTTTTTTTTTFFFTTTTFTT
 a2a_machine sess,mach-resp-clear TTTTTTTTTTTTTTTTTTFFFFFFTFTT
 #
-# Part 3: the agent-side E2EE paths (p2p_e2e: p2p; e2ee_tcp, TCP, is
-# Part 4). Queries in README "E2EE paths"; an F on the base line is a finding or a documented limit there.
-p2p_e2e - TTTTFTTTTFFF
-p2p_e2e no-pairing-salt FFTTFFFTTTTT
-p2p_e2e skip-await-confirm TTTFFTTTTFFF
-p2p_e2e old-protocol-plaintext FTTTFTFTTFFF
-p2p_e2e accept-any-dtls TFTTFTTTTFFF
-p2p_e2e sdp-not-sealed TFTTFTTTTFFF
-p2p_e2e fingerprint-not-compared TTTTFFTTTFFF
-p2p_e2e group-key FFFFFTFTFFFF
-p2p_e2e name-unbound TTFTFTTTFFFF
-# lane ROOTNAMEPIN: a root initiator takes the relay's key id (the code
-# before): 7-9 fail
-p2p_e2e relay-kid TTTTFTFFFFFF
+# Part 3: deleted (p2p_e2e, lane P2PDEL).
 #
 # Part 4: TCP sessions end to end encrypted, organisation mode, the only
 # mode (e2ee_tcp; queries in README "e2ee_tcp.pv"; pins deleted, lane

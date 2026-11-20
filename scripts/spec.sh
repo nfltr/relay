@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # spec.sh check|mutants: the TLA+ models of spec/ (spec/README.md).
-#   check    TLC on spec/SignalConn.cfg, spec/A2ASession.cfg, spec/CallCredit.cfg,
+#   check    TLC on spec/A2ASession.cfg, spec/CallCredit.cfg,
 #            spec/CallCreditBoth.cfg, spec/CallCreditSenders.cfg,
 #            spec/UDPFlow.cfg, spec/UDPFlowLive.cfg, spec/DatagramAssoc*.cfg,
 #            spec/BrowserPeer.cfg, spec/DirectPunch.cfg, spec/AgentStop*.cfg and
@@ -12,10 +12,7 @@
 #            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg,
 #            UDPFlowLarge.cfg).
 #   mutants  each bug put back must be caught.
-#   traces   client/p2p's SignalConn tests (TRACE_TESTS) run with -tags
-#            relaytrace; each trace, per direction that wrote, checked
-#            against spec/TraceSignalConn.tla; each spec/testdata/reject-*
-#            fixture rejected, each accept-* fixture accepted; every event
+#   traces   every trace check below with its fixtures; every event
 #            TraceCallCredit.tla takes recorded by client/rpcclient.
 #   cltraces  the CallLifecycle traces of CL_TRACE_TESTS (default: the
 #            stuck-handler test), CL_TRACE_COUNT runs (default 3), checked
@@ -86,33 +83,6 @@ tlc() {
 	[ -z "${COVERAGE:-}" ] || cov="-coverage 1"
 	(cd spec && "$cicache" tlc -- "$java" -XX:+UseParallelGC -cp "$jar" tlc2.TLC -workers 2 $cov \
 		-deadlock -noGenerateSpecTE -metadir "${META:-$work/states}" -config "$c" "$@" "$mod")
-}
-
-# trace FILE W R: TLC on one recorded trace's direction W to R
-# (spec/TraceSignalConn.tla); 0 when accepted. FILE's TLC output: FILE.W.out.
-trace() {
-	cfg=$work/$(basename "$1").$2.cfg
-	cat >"$cfg" <<CFG
-CONSTANTS
-    TraceFile = "$1"
-    W = $2
-    R = $3
-    N <- TraceN
-    MaxBreak = 4
-    MaxStall = 0
-    Replay = TRUE
-    Mutant = "none"
-INIT TraceInit
-NEXT TraceNext
-INVARIANTS
-    NoSilentLoss
-    EndedFinal
-    ReadBound
-    PathOrdered
-    TraceNotDone
-CFG
-	META=$work/states-$(basename "$1").$2 tlc "$cfg" TraceSignalConn.tla >"$1.$2.out" 2>&1 || true
-	grep -q '^Error: Invariant TraceNotDone is violated' "$1.$2.out"
 }
 
 # cctrace FILE D C: TLC on call C's direction D (req, resp) of a recorded
@@ -795,7 +765,7 @@ CCTESTS='^(TestCallCreditBothWaysGrant|TestCallCreditCallerLeavesStuckHandler|Te
 DGDIRECT='^(TestDatagramDirectMovesAndFallsBack|TestDatagramDirectOnlyOnceTheAgentAttached)$'
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch AgentStop AgentStopNoDrain AgentStopLate AgentStopClose TLSEnd"
+	cfgs="CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch AgentStop AgentStopNoDrain AgentStopLate AgentStopClose TLSEnd"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	for c in $cfgs; do
 		m=${c%Large}
@@ -816,7 +786,6 @@ check)
 	;;
 mutants)
 	# expect NAME SED...: $model.cfg (or $cfg.cfg) edited must violate a property.
-	model=SignalConn
 	expect() {
 		name=$1
 		shift
@@ -832,23 +801,6 @@ mutants)
 			fail=1
 		fi
 	}
-	# P1 put back: a joining path carries only later frames.
-	expect P1:no-replay -e 's/Replay = TRUE/Replay = FALSE/'
-	expect P1:no-replay-stall -e 's/Replay = TRUE/Replay = FALSE/' -e '/NoSilentLoss/d'
-	expect one-path -e 's/Mutant = "none"/Mutant = "one-path"/'
-	# M1 (review r2) put back: the relay path's write waits for credit with no bound.
-	expect M1:unbounded-relay -e 's/Mutant = "none"/Mutant = "unbounded-relay"/'
-	expect witness:Stall -e 's/^    NoSilentLoss$/    W_Stall/'
-	expect reorder -e 's/Mutant = "none"/Mutant = "reorder"/'
-	expect witness:PathOrdered -e 's/^    PathOrdered$/    W_PathOrdered/'
-	expect witness:ReadBound -e 's/^    ReadBound$/    W_ReadBound/'
-	expect witness:NoSilentLoss -e 's/^    NoSilentLoss$/    W_NoSilentLoss/'
-	# M2 (review r2) put back: the responder's close sent nothing.
-	expect M2:one-sided -e 's/Mutant = "none"/Mutant = "one-sided"/'
-	expect witness:OneSided -e 's/^    TypeOK$/    W_OneSided/'
-	# L1 (review r2): a path joining a reader that ended.
-	expect L1:revive -e 's/Mutant = "none"/Mutant = "revive"/'
-	expect witness:EndedFinal -e 's/^    EndedFinal$/    W_EndedFinal/'
 	model=CallCredit
 	# The code before lane CALLCREDIT: no per-call credit, the receive loop
 	# waits on a full call buffer (handoff.Stall).
@@ -1148,51 +1100,6 @@ traces)
 	prun "${P_TRACE_TESTS:-$PTESTS}" || exit 1
 	stoprun "${STOP_TRACE_TESTS:-$STOPTESTS}" fixtures || exit 1
 	bprun "${BP_TRACE_TESTS:-^(TestBrowserDirect|TestBrowserPeerModelBindings)}" || exit 1
-	for f in spec/testdata/reject-*.ndjson; do
-		case $f in *reject-callcredit-* | *reject-callcreditboth-* | *reject-callcreditsenders-* | *reject-calllifecycle-* | *reject-directpunch-* | *reject-browserpeer-* | *reject-agentstop-* | *reject-datagramassoc-*) continue ;; esac
-		cp "$f" "$work/"
-		if trace "$work/$(basename "$f")" 1 2; then
-			echo "$f: accepted, want rejected"
-			exit 1
-		elif ! grep -q 'distinct states found' "$work/$(basename "$f").1.out"; then
-			echo "$f: TLC failed:"
-			tail -20 "$work/$(basename "$f").1.out"
-			exit 1
-		fi
-		echo "$f: rejected"
-	done
-	for f in spec/testdata/accept-*.ndjson; do
-		case $f in *accept-callcredit-*) continue ;; esac
-		cp "$f" "$work/"
-		trace "$work/$(basename "$f")" 1 2 || {
-			echo "$f: rejected, want accepted"
-			grep -E 'Error' "$work/$(basename "$f").1.out" | head -5
-			exit 1
-		}
-		echo "$f: accepted"
-	done
-	mkdir -p "$work/traces"
-	tests=${TRACE_TESTS:-'^(TestSignalConnSwitchLosesNothing|TestSignalConnJoiningPathCarriesEarlierFrames)$'}
-	(cd client && RELAYTRACE=$work/traces go test -tags relaytrace -count=1 -run "$tests" ./p2p/) >"$work/test.out" 2>&1 || {
-		cat "$work/test.out"
-		exit 1
-	}
-	n=0 bad=0
-	for t in "$work"/traces/*.ndjson; do
-		for w in 1 2; do
-			grep -q "\"op\":\"write\".*\"sc\":$w[,}]" "$t" || continue
-			n=$((n + 1))
-			if trace "$t" "$w" $((3 - w)); then
-				echo "trace $(basename "$t") $w->$((3 - w)): $(wc -l <"$t" | tr -d ' ') lines: accepted"
-			else
-				bad=$((bad + 1))
-				echo "trace $(basename "$t") $w->$((3 - w)): REJECTED"
-				grep -E 'Error' "$t.$w.out" | head -5
-			fi
-		done
-	done
-	echo "$n traces, $bad rejected"
-	[ "$n" -gt 0 ] && [ "$bad" = 0 ]
 	;;
 *)
 	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|ptraces|stoptraces|bptraces|ccruns|cctraces FILE..." >&2
