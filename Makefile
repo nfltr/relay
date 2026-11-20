@@ -155,7 +155,9 @@ stress-race:
 # The TLA+ models (spec/README.md): spec checks them, spec-mutants checks
 # each bug put back is caught (both in make ci); spec-traces checks the
 # traces the tests record under -tags relaytrace against them, and the
-# issuer's app enrolment traces (spec-appenrol-traces), nightly;
+# issuer's app enrolment, certificate (spec-enrol-traces) and organisation
+# move (spec-orgmove-traces) traces, nightly (CI_NIGHTLY relay=spec-traces;
+# spec-enrol-traces stayed red unscheduled after lane SEAMLESS);
 # spec-cltraces is its per-push slice (the stuck-handler test's CallLifecycle
 # traces, about 10 s; in make ci); spec-astraces another (the A2A E2EE
 # session tests' A2ASession traces, about 10 s; in make ci); spec-dgtraces
@@ -170,6 +172,8 @@ spec-traces:
 	./scripts/spec.sh traces
 	./scripts/spec-appenrol.sh traces
 	./scripts/spec-enrol.sh replicas
+	./scripts/spec-enrol.sh traces
+	./scripts/spec-orgmove.sh traces
 spec-cltraces:
 	./scripts/spec.sh cltraces
 spec-astraces:

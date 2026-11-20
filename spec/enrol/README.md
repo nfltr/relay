@@ -284,7 +284,9 @@ that way and checks each trace (54 traces, 375 lines); with the Go mutant
 `renew-revoked` applied (and orgid's `fail-open`, `accept-older-crl` and
 `no-expiry-check`; orgpki's `burn-name` and `reissue-any-key`), the trace
 check rejects the recorded traces by that mutant's property. `traces/<Invariant>-*.ndjson` are fixtures each rejected by its
-named invariant (`fixtures`, in `ci`). `scripts/check-spec-actions.sh`
+named invariant, `traces/Accepted-*.ndjson` fixtures it must accept (a
+renewal 30 days after the NotAfter: inside SEAMLESS's 90-day grace)
+(`fixtures`, in `ci`). `scripts/check-spec-actions.sh`
 fails when a line kind TraceEnrol reads is no longer written by orgpki or
 orgid.
 

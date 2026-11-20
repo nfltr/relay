@@ -22,7 +22,8 @@
 #             symmetry; nightly in make spec-traces).
 #   coverage  check with -coverage 1; fails on an action never taken.
 #   fixtures  each spec/enrol/traces/<Invariant>-*.ndjson is rejected by
-#             <Invariant> of TraceEnrol.tla (in ci).
+#             <Invariant> of TraceEnrol.tla, each Accepted-*.ndjson accepted
+#             (in ci).
 #   traces    the tests of org/orgpki, orgmachine and orgenrol built -tags
 #             enroltrace, each test's trace checked by TraceEnrol.tla, then
 #             the fixtures (make spec-enrol-traces).
@@ -220,6 +221,15 @@ fixtures() {
 	for f in $dir/traces/*.ndjson $dir/traces/*.revokepush $dir/traces/*.crlcarriers; do
 		case $f in *.revokepush) chk=ptrace ;; *.crlcarriers) chk=ctrace ;; *) chk=trace ;; esac
 		want=$(basename "$f" | cut -d- -f1)
+		if [ "$want" = Accepted ]; then
+			if $chk "$f" >"$work/m.out"; then
+				echo "$(basename "$f"): accepted"
+			else
+				echo "$(basename "$f"): NOT accepted: $(grep -m1 '^Error' "$work/m.out")"
+				echo x >>"$work/ffails"
+			fi
+			continue
+		fi
 		if $chk "$f" >"$work/m.out"; then
 			echo "$(basename "$f"): NOT rejected"
 			echo x >>"$work/ffails"

@@ -56,8 +56,9 @@ InLog == <<E.o, E.from>> \in DOMAIN certs
 From == certs[<<E.o, E.from>>]
 IsRevoked(o, n) == <<o, n>> \in revoked
 \* Enrol.tla Renews: valid, or the name's newest within the grace
-\* (orgpki.RenewGrace, a week in seconds).
-RenewGrace == 604800
+\* (orgpki.RenewGrace, 90 days in seconds since lane SEAMLESS; a week before
+\* it. TestTraceRenewGraceIsOrgpkis keeps the two equal.)
+RenewGrace == 7776000
 Renewable == From.exp > E.t \/ (From.exp + RenewGrace > E.t /\ <<E.o, From.n>> \in DOMAIN newest /\ newest[<<E.o, From.n>>] = E.from)
 RenewOK == InLog /\ From.n = E.n /\ Renewable /\ ~IsRevoked(E.o, E.n)
 \* An enrolment: a token's first is enrol.pv's; answered again (Join.tla
