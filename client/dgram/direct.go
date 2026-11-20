@@ -67,15 +67,19 @@ func (a *assoc) setDirect(d Direct, in func(id uint64, p []byte)) {
 }
 
 // sendDirect sends a datagram frame direct: false when it goes on the
-// stream instead (not direct, or spilled).
+// stream instead (not direct, or spilled). It is counted Direct before
+// the path has it, since its reply may be read before SendDatagram
+// returns, and uncounted when the path refuses it (nothing left then):
+// TestDatagramAssocDirectCountedBeforeItLeaves.
 func (a *assoc) sendDirect(d Direct, buf *[]byte, f frame) bool {
 	*buf = binary.AppendUvarint((*buf)[:0], f.id)
 	*buf = append(*buf, f.payload...)
+	a.cnt.direct.Add(1)
 	err := d.SendDatagram(*buf)
 	if err == nil {
-		a.cnt.direct.Add(1)
 		return true
 	}
+	a.cnt.direct.Add(^uint64(0))
 	if !errors.Is(err, ErrNotDirect) {
 		a.cnt.spills.Add(1)
 	}

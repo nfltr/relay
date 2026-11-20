@@ -687,3 +687,54 @@ func TestDatagramAssocTrace(t *testing.T) {
 		t.Fatal("a refused flow got a reply")
 	}
 }
+
+// countAtSend is a direct path that records, as each datagram leaves, how
+// many the association counts sent direct: a reply can be seen as soon as
+// SendDatagram hands the datagram on, so the count must already hold it.
+type countAtSend struct {
+	c    *Client
+	mu   sync.Mutex
+	err  error // SendDatagram's answer
+	seen []uint64
+}
+
+func (d *countAtSend) SendDatagram([]byte) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.err == nil {
+		d.seen = append(d.seen, d.c.Stats().Direct)
+	}
+	return d.err
+}
+
+func (d *countAtSend) OnDatagram(func([]byte)) {}
+
+// TestDatagramAssocDirectCountedBeforeItLeaves: a datagram sent direct is
+// counted (Stats.Direct) before the direct path has it, and one the path
+// refuses is not counted (lane DGRAMCOUNT: a reply read before the count
+// showed 49 of 50 sent direct).
+func TestDatagramAssocDirectCountedBeforeItLeaves(t *testing.T) {
+	to, _ := echo(t, 1)
+	c, _ := pair(t, Config{}, Config{}, dialUDP(to))
+	d := &countAtSend{c: c, err: ErrNotDirect}
+	c.SetDirect(d)
+	f, in, _ := recvFlow(c)
+	f.Send([]byte("open")) // its O on the stream; the echo: accepted
+	recv(t, in)
+	f.Send([]byte("refused")) // the path refuses it: the stream carries it
+	recv(t, in)
+	if st := c.Stats(); st.Direct != 0 || st.Spills != 0 {
+		t.Fatalf("a datagram the direct path refused counted: %+v", st)
+	}
+	d.mu.Lock()
+	d.err = nil
+	d.mu.Unlock()
+	f.Send([]byte("direct"))
+	waitFor(t, "the direct send", func() bool { return c.Stats().Direct == 1 })
+	d.mu.Lock()
+	seen := d.seen
+	d.mu.Unlock()
+	if len(seen) != 1 || seen[0] != 1 {
+		t.Fatalf("Stats.Direct as the datagram left: %v, want [1]", seen)
+	}
+}
