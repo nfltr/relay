@@ -7,7 +7,7 @@
 # enters this repository's go.mod; offline once it is in the module cache.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-LINKVET_VERSION=v0.1.2-0.20261120064713-f91a915955c4 # link land/LINKV013 until the promote round tags linkvet v0.1.2
+LINKVET_VERSION=v0.1.2-0.20261120073747-6604d6293f19 # link land/LINKV013 until the promote round tags linkvet v0.1.2
 allow=scripts/linkvet-allow.txt
 [ $# -gt 0 ] || set -- ./...
 
