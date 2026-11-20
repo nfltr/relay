@@ -130,7 +130,9 @@ func Accept(ctx context.Context, nc net.Conn, window int, e2eePolicy string) (*M
 	if _, err := nc.Write([]byte(resp)); err != nil {
 		return nil, err
 	}
-	c, _, err := link.Server(ctx, nc, link.Config{Window: window, Auth: link.NoAuth})
+	// Hop: the relay joins its sessions onward, so an end is acknowledged
+	// once the far end took it (link FeatureEndAck), not on the relay's read.
+	c, _, err := link.Server(ctx, nc, link.Config{Window: window, Auth: link.NoAuth, Hop: true})
 	if err != nil {
 		return nil, err
 	}
