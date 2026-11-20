@@ -152,11 +152,18 @@ func (c *Conn) CloseWrite() error { return c.s.CloseWrite() }
 
 // Close ends both directions cleanly (under TLS close_notify first) and
 // what the Conn owns. On a direct path it returns once the peer
-// acknowledged every byte and the end (an accepted Conn's too: a program
-// that exits after a nil Close lost nothing); an error says they may not
-// have arrived.
+// acknowledged every byte and the end, relayed once the relay read them
+// (link Sync: it then delivers them, link spec/RelayedClose.tla), an
+// accepted Conn's too: a program that exits after a nil Close lost
+// nothing; an error says they may not have arrived.
 func (c *Conn) Close() error {
-	err := c.s.Close()
+	var err error
+	if s, ok := c.s.(interface{ CloseWriteSync() error }); ok { // relayed: a link session, or TLS on one
+		err = s.CloseWriteSync()
+	}
+	if e := c.s.Close(); err == nil {
+		err = e
+	}
 	c.end(true)
 	return err
 }

@@ -65,6 +65,19 @@ func (c *Conn) Reset() error {
 	return c.raw.Conn.Close()
 }
 
+// CloseWriteSync is the half close (close_notify), then, on a transport
+// that syncs its end (a relayed link session), its CloseWriteSync: nil
+// once the relay read the close_notify and the end (link Sync).
+func (c *Conn) CloseWriteSync() error {
+	if err := c.Conn.CloseWrite(); err != nil {
+		return err
+	}
+	if s, ok := c.raw.Conn.(interface{ CloseWriteSync() error }); ok {
+		return s.CloseWriteSync()
+	}
+	return nil
+}
+
 // Close is the TLS connection's (close_notify, then the transport's
 // close), or after Reset only the transport's.
 func (c *Conn) Close() error {
