@@ -126,11 +126,10 @@ type Service struct {
 	MachineKey func(machineID, name string, now time.Time) (keyID string, key []byte, err error)
 	// MachineOf, when set, is the machine id of a machine name of the
 	// relay account ("" when it has none): an enrolment whose token's name
-	// is not the request's sender's account machine name is refused
-	// (wrongMachine).
+	// is not the request's sender's account machine name is refused.
 	MachineOf func(ctx context.Context, name string) (string, error)
 	// Now and Wait (one long-poll of the requests): zero is time.Now and
-	// serveWait.
+	// 10 s.
 	Now  func() time.Time
 	Wait time.Duration
 }

@@ -62,7 +62,7 @@ const (
 	maxRelay   = agentservices.MaxRelayHost
 )
 
-// The model's domain-separation tags (labPin, labProof, labRdv) and the
+// The model's domain-separation tags (spec/proverif) and the
 // TLS exporter label (RFC 8446 7.5) of the proof.
 const (
 	tagPin        = "nf1-pin"
@@ -209,7 +209,7 @@ func checkRelay(r string) error {
 	return nil
 }
 
-// Pin is pinOf(sec, pk) = HMAC-SHA256(sec, "nf1-pin" || spki): the
+// Pin is HMAC-SHA256(sec, "nf1-pin" || spki): the
 // server's key keyed by the secret, so whoever sees the key without the
 // secret cannot compute it. spki is the key's DER SubjectPublicKeyInfo (a
 // certificate's RawSubjectPublicKeyInfo).
@@ -332,7 +332,7 @@ func Nonce(sec [SecretSize]byte) [RIDSize]byte {
 	return [RIDSize]byte(m[:RIDSize])
 }
 
-// RIDOf is ridOf(n, pk) = SHA-256("nf1-rid" || n || spki)[:16]: the rid
+// RIDOf is SHA-256("nf1-rid" || n || spki)[:16]: the rid
 // bound to the server's key, so another key cannot claim it without a
 // second preimage (agentservices.RIDOf, which the relay links).
 func RIDOf(n [RIDSize]byte, spki []byte) [RIDSize]byte { return agentservices.RIDOf(n, spki) }

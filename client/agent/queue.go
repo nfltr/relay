@@ -186,7 +186,7 @@ const queuePipeWindow = 64 << 10
 // Read returns io.EOF at the client's half close (or clean end), and
 // link.ErrReset at a cut (the client's reset, the agent's stop, an
 // organisation admission that ended). Deadlines work for both Read and
-// Write; a Write past queuePipeWindow unread bytes waits.
+// Write; a Write past 64 KiB of unread bytes waits.
 type QueueConn struct {
 	r, w   *pipeDir // r: bytes to this end; w: bytes from it
 	rd, wd pipeDeadline
@@ -337,9 +337,8 @@ func (c *QueueConn) CloseWrite() error {
 
 // Close ends both directions: the peer reads io.EOF after this end's
 // bytes (as a TCP target's FIN: a session its client closed whole keeps
-// its tail) and its writes fail. A failure is Reset (dropTarget,
-// resetTarget). On a session that reports its delivery (joinTarget: a
-// direct path's) it returns once the peer acknowledged every byte and the
+// its tail) and its writes fail. A failure is Reset. On a session that
+// reports its delivery (a direct path's) it returns once the peer acknowledged every byte and the
 // end, link.ErrReset when it could not (closeSync.wait).
 func (c *QueueConn) Close() error {
 	c.end(nil)
@@ -361,7 +360,7 @@ func (c *QueueConn) Reset() error {
 
 // EndDelivered (peerlink.EndNotifier): Join's CloseWriteSync of the
 // agent's end onto a relayed agent-link session returned: the relay read
-// every byte and the end (joinTarget).
+// every byte and the end.
 func (c *QueueConn) EndDelivered() {
 	if c.agentSide {
 		c.cs.report(nil)

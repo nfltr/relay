@@ -16,14 +16,14 @@
 //
 // Client side (initiating calls):
 //
-//	agent, _ := rpcclient.Dial(ctx, "relay:9090", rpcclient.WithAgentID("agent-a"), rpcclient.WithToken(key))
-//	defer agent.Close()
+//	a, _ := rpcclient.Dial(ctx, "relay:9090", rpcclient.WithAgentID("agent-a"), rpcclient.WithToken(key))
+//	defer a.Close()
 //
 //	// Unary call
-//	resp, err := agent.Invoke(ctx, "agent-b", []byte("hello"))
+//	resp, err := a.Invoke(ctx, "agent-b", []byte("hello"))
 //
 //	// Streaming call
-//	stream, _ := agent.NewStream(ctx, "agent-b")
+//	stream, _ := a.NewStream(ctx, "agent-b")
 //	stream.Send([]byte("msg1"))
 //	stream.Send([]byte("msg2"))
 //	stream.CloseSend()
@@ -34,8 +34,8 @@
 //
 // Server side (handling incoming calls):
 //
-//	agent, _ := rpcclient.Dial(ctx, "relay:9090", rpcclient.WithAgentID("agent-b"), rpcclient.WithToken(key))
-//	agent.Handle(func(stream rpcclient.ServerStream) error {
+//	a, _ := rpcclient.Dial(ctx, "relay:9090", rpcclient.WithAgentID("agent-b"), rpcclient.WithToken(key))
+//	a.Handle(func(stream rpcclient.ServerStream) error {
 //	    for {
 //	        data, err := stream.Recv()
 //	        if err == io.EOF { break }

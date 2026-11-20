@@ -217,7 +217,7 @@ func buildDialOpts(cfg *options) []grpc.DialOption {
 const maxRecvMessageSize = 8 << 20
 
 // RedialNow makes conn dial its relay now rather than when the channel's own
-// backoff (relayReconnectParams, up to 1 s) ends, for callers that pace their
+// backoff (up to 1 s) ends, for callers that pace their
 // redials themselves (relayoutage.RedialDelay): call it before the attempt.
 // Without it an attempt made during that backoff fails at once with the last
 // dial's error, so a client lagged a relay that was back by up to a second.
@@ -231,7 +231,7 @@ const maxRecvMessageSize = 8 << 20
 // loaded machine. A backoff reset reaches only a backoff in progress, not a
 // dial in flight at the call (started before the relay was back, it fails
 // into a fresh backoff of up to 1.2 s): the reset is repeated every
-// redialRecheck until a dial starts after the call.
+// 250 ms until a dial starts after the call.
 // Guards: TestRedialNowOutlivesADialInFlight, TestRedialNowReachesARelayThatIsBack.
 func RedialNow(ctx context.Context, conn *ClientConn) {
 	w := watchOf(conn)

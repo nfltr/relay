@@ -17,7 +17,7 @@ import (
 )
 
 // RelayDialer opens further connections to the relay for a busy TCP
-// tunnel (tcpStreamGrowth). With neither function the tunnel's further
+// tunnel (as the relay asks, x-nfltr-tcp-streams). With neither function the tunnel's further
 // streams share its gRPC connection.
 type RelayDialer struct {
 	// GRPC opens a gRPC connection for auxiliary ConnectTCP streams.

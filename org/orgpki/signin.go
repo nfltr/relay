@@ -24,7 +24,7 @@ import (
 )
 
 // AuthLife is how long a person's sign-in lets the key it enrolled renew
-// by itself (AppEnrol.tla authUntil; nfltr
+// by itself (spec/appenrol/AppEnrol.tla; nfltr
 // docs/decisions/app-device-identity-2026-11-16.md, open question 1:
 // 30 days). Then the person signs in again on the device (EnrolSignIn
 // with the same key).
@@ -223,7 +223,7 @@ func (i *Issuer) verifyIDToken(ctx context.Context, rule SignInRule, raw string,
 
 // EnrolSignIn enrols the key of req.CSR by a person's sign-in
 // (AppEnrol.tla EnrolSSO, Reauth): the ID token verified against its rule
-// (verifyIDToken, outside the issuer's lock: it may fetch the IdP's keys),
+// (outside the issuer's lock: it may fetch the IdP's keys),
 // its nonce naming the request's two keys, the person and the app not
 // revoked. A key not enrolled gets a fresh name <app>-<n> the issuer picks
 // (never the request's), the token's person and the rule's app and

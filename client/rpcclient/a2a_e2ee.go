@@ -123,7 +123,7 @@ type A2AE2EEKeyring interface {
 	// Machine reports whether this end is a machine (one machine key, no
 	// root key). The handshake binds the initiator's role: a machine
 	// answers root holders only, so a relay that returns a machine's call
-	// to that machine or another agent of it is refused (a2aE2EERole).
+	// to that machine or another agent of it is refused.
 	Machine() bool
 }
 

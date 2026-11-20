@@ -50,7 +50,7 @@ const (
 	// DirectOn: every candidate this machine has: the public (reflexive,
 	// QAD) address, a port-mapped one and the interface addresses (host
 	// candidates). Only the organisation peer of the control session sees
-	// them; the punch keeps a LAN path first (DirectEndpoint.punch).
+	// them; the punch keeps a LAN path first.
 	DirectOn DirectMode = "on"
 )
 

@@ -98,7 +98,7 @@ type rtcSignal struct {
 // WebRTC data channel negotiated over sc, and returns a conn on whichever is
 // ready first (TCP on a LAN, the data channel across NATs); when neither is
 // within RTCWait, the relay stream's data conn. The initiator (the sender)
-// chooses and tells the responder (FrameDataPath), which uses exactly that
+// chooses and tells the responder (a FrameDataPath frame), which uses exactly that
 // connection; the losing paths are closed. forceRelay skips both. sc keeps
 // being read until it ends (late candidates), so the relay stream never
 // stalls.

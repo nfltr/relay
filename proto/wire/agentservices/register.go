@@ -29,7 +29,7 @@ const (
 	tagRegister = "nf1-reg"
 )
 
-// RIDOf is ridOf(n, pk) = SHA-256("nf1-rid" || n || spki)[:16]: the rid
+// RIDOf is SHA-256("nf1-rid" || n || spki)[:16]: the rid
 // bound to the server's key (spki, its DER SubjectPublicKeyInfo), so
 // another key cannot claim it without a second preimage.
 func RIDOf(n [RIDSize]byte, spki []byte) [RIDSize]byte {

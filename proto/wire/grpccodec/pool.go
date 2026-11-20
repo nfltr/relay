@@ -21,7 +21,7 @@ import (
 // has a class per power of two from 1 KiB to 1 MiB and does not zero:
 // gRPC overwrites every byte it hands out (frames are read in full,
 // messages marshalled in full), as with grpc-go's own dirty pool.
-// Buffers over 1 MiB are not pooled (see largeMessageCodec).
+// Buffers over 1 MiB are not pooled (see NewLargeMessage).
 var Pool mem.BufferPool = &dirtyPool{}
 
 const (

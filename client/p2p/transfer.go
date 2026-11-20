@@ -32,7 +32,7 @@ const (
 	FrameDone     FrameType = "done"      // all transfers finished
 	FrameRTC      FrameType = "rtc"       // WebRTC signaling (SDP/ICE) relayed via Text field
 	FrameRTCReady FrameType = "rtc-ready" // browser connected to local WS, ready for WebRTC
-	FrameDataPath FrameType = "path"      // file data path the sender chose (Text: pathWebRTC or pathRelay)
+	FrameDataPath FrameType = "path"      // file data path the sender chose (Text: "webrtc" or PathRelay)
 )
 
 // Frame is the on-wire header for every P2P message.  It is JSON-encoded,
