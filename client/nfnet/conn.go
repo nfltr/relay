@@ -58,7 +58,8 @@ type Conn struct {
 	remote  string             // an accepted session's RemoteAddr: the caller's machine
 	closers []func(clean bool) // what ends with the Conn (clean: at its Close): an nf1 session's data connection, a one-shot Dialer
 
-	readMu   sync.Mutex // a link session reads one at a time: net.Conn's concurrent Reads take turns
+	readMu   sync.Mutex   // a link session reads one at a time: net.Conn's concurrent Reads take turns
+	calls    sync.RWMutex // held shared by each Read and Write until counted: the close event waits for them
 	in, out  atomic.Int64
 	failure  atomic.Pointer[Error]
 	endOnce  sync.Once
@@ -105,6 +106,7 @@ func (c *Conn) Answered(ctx context.Context) error {
 // Read reads the peer's bytes: io.EOF at its half close, a typed *Error at
 // a cut or refusal, os.ErrDeadlineExceeded past a read deadline.
 func (c *Conn) Read(p []byte) (int, error) {
+	c.calls.RLock()
 	c.readMu.Lock()
 	n, err := c.s.Read(p)
 	if n == 0 && err == io.EOF {
@@ -116,6 +118,7 @@ func (c *Conn) Read(p []byte) (int, error) {
 	}
 	c.readMu.Unlock()
 	c.in.Add(int64(n))
+	c.calls.RUnlock()
 	if err != nil {
 		err = c.early(err)
 	}
@@ -138,8 +141,10 @@ func (c *Conn) early(err error) error {
 
 // Write sends p, blocking on the session's credit.
 func (c *Conn) Write(p []byte) (int, error) {
+	c.calls.RLock()
 	n, err := c.s.Write(p)
 	c.out.Add(int64(n))
+	c.calls.RUnlock()
 	if err != nil {
 		err = c.fail(c.early(err))
 	}
@@ -181,6 +186,11 @@ func (c *Conn) end(clean bool) {
 		for _, f := range c.closers {
 			f(clean)
 		}
+		// A Read or Write in flight returns now that the session ended, and
+		// its bytes may have moved: counted before the event
+		// (TestCloseEventCountsInFlightCalls).
+		c.calls.Lock()
+		c.calls.Unlock() //nolint:staticcheck // a barrier: no section
 		c.emit(Event{Kind: "close", BytesIn: c.in.Load(), BytesOut: c.out.Load(), Err: c.failure.Load()})
 	})
 }
