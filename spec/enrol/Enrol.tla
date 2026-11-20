@@ -37,6 +37,7 @@ CONSTANTS
     MaxTime,
     CertLife,     \* a certificate's NotAfter - NotBefore
     RenewBefore,  \* a machine renews this long before NotAfter
+    RenewGrace,   \* the issuer renews a name's newest certificate until this long after its NotAfter
     CrlLife,      \* a CRL's NextUpdate - ThisUpdate: the bound on a revocation the relay withholds
     MaxCrls,      \* CRLs the issuer publishes (state bound)
     MaxRoot,      \* the owner's root generations 1..MaxRoot
@@ -90,6 +91,24 @@ RootOK(v, i) ==
     IF Mutant = "keep-old-root" THEN certs[i].root <= vroot[v] ELSE certs[i].root = vroot[v]
 Fresh(v, t) == Mutant = "fail-open" \/ crls[seen[v]].next > t
 NotExpired(i, t) == certs[i].exp > t
+\* Renewable after its NotAfter (an issuer outage or a machine that was
+\* off through its renewal window): until RenewGrace after it, and only
+\* the name's newest serial (a superseded one's key is retired: enrol.pv
+\* 2, the rotated-out key). Under no-renew-after-expiry (the design
+\* before 2026-11-20) never.
+InGrace(i, t) == certs[i].exp + RenewGrace > t
+Newest(i) == \A j \in SerialsOf(certs[i].m) : j <= i
+\* The machine asks while its certificate is valid or in the grace.
+Renewable(i, t) ==
+    \/ NotExpired(i, t)
+    \/ Mutant # "no-renew-after-expiry" /\ (Mutant = "renew-past-grace" \/ InGrace(i, t))
+\* The issuer renews a valid certificate, or the name's newest within
+\* the grace.
+Renews(i, t) ==
+    \/ NotExpired(i, t)
+    \/ /\ Mutant # "no-renew-after-expiry"
+       /\ Mutant = "renew-past-grace" \/ InGrace(i, t)
+       /\ Mutant = "grace-any-serial" \/ Newest(i)
 \* x509: the CRL lists serials; the verifier looks up the one presented.
 Listed(v, i) == Mutant # "no-crl-check" /\ i \in crls[seen[v]].rev
 Valid(v, i, t) ==
@@ -173,7 +192,7 @@ Pending(m) ==
 Request(m) ==
     /\ keys[m] < MaxKeys + lost + IF rebound[m] > 0 THEN 1 ELSE 0
     /\ IF Mutant = "no-retry" THEN want[m] = 0 ELSE want[m] = 0 \/ ~Pending(m)
-    /\ NotExpired(cur[m], now)
+    /\ Renewable(cur[m], now)
     /\ Due(m, cur[m])
     /\ keys' = [keys EXCEPT ![m] = keys[m] + 1]
     /\ want' = [want EXCEPT ![m] = keys[m] + 1]
@@ -183,7 +202,8 @@ Request(m) ==
     /\ UNCHANGED <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, lost, rebound, rebindCrl>>
 
 \* The issuer reads a request and decides under its lock, as of now: it
-\* refuses a revoked name and an expired certificate, and renews only a
+\* refuses a revoked name, a certificate expired RenewGrace ago or one
+\* expired that is not the name's newest, and renews only a
 \* serial its own log holds (requests carry honest serials; the attacker's
 \* forged one is IssueForged). Under check-at-request it decides by the
 \* state when the request was posted (a revoke while the request sat in
@@ -193,7 +213,7 @@ Issue(r) ==
     /\ r \in reqs
     /\ IF Mutant = "check-at-request" THEN r.ok
        ELSE Mutant = "renew-revoked" \/ Unrevoked(r.m)
-    /\ NotExpired(r.from, now)
+    /\ Renews(r.from, now)
     /\ Mutant = "renew-rebound" \/ ~Retired(r.from)
     /\ certs' = Append(certs, [m |-> r.m, iss |-> now, exp |-> now + CertLife, root |-> root, forged |-> FALSE, key |-> r.key, from |-> r.from])
     /\ reqs' = reqs \ {r}
@@ -376,6 +396,15 @@ RetiredRefused ==
 NoRenewOfRetired ==
     \A i \in DOMAIN certs : certs[i].forged \/ certs[i].from = 0 \/ Retired(i) \/ ~Retired(certs[i].from)
 
+\* A renewal after the NotAfter is of the name's newest serial, within
+\* RenewGrace of its NotAfter (the issuer's log entry: from, iss).
+NoRenewPastGrace ==
+    \A i \in DOMAIN certs : certs[i].forged \/ certs[i].from = 0 \/ certs[i].iss < certs[certs[i].from].exp + RenewGrace
+GraceOnlyNewest ==
+    \A i \in DOMAIN certs : LET f == certs[i].from IN
+        certs[i].forged \/ f = 0 \/ certs[i].iss < certs[f].exp
+        \/ \A j \in DOMAIN certs : (f < j /\ j < i) => (certs[j].m # certs[i].m \/ certs[j].forged)
+
 \* No session outlives its certificate.
 NoExpiredSession == \A s \in sess : NotExpired(s.c, now)
 
@@ -404,6 +433,14 @@ MachineHoldsItsKey == \A m \in Machines : want[m] = 0 => certs[cur[m]].key = key
 
 \* Liveness (LiveSpec): every revoke reaches every verifier, and every
 \* machine still enrolled moves to the new root.
+\* A machine whose certificate expired while the issuer was out of reach
+\* (an outage, or it was off) renews once the issuer answers, without a
+\* restart (LiveSpec; time need not pass), unless the grace ended, it was
+\* revoked, or an answer it never installed superseded it.
+RenewsAfterExpiry ==
+    \A m \in Machines :
+        (Unrevoked(m) /\ ~NotExpired(cur[m], now) /\ InGrace(cur[m], now) /\ Newest(cur[m]))
+            ~> (NotExpired(cur[m], now) \/ ~Unrevoked(m) \/ ~InGrace(cur[m], now) \/ ~Newest(cur[m]))
 TakesEffect == \A m \in Machines, v \in Verifiers : (~Unrevoked(m)) ~> (m \in RevokedSeen(v))
 MachinesFollowRotation ==
     \A m \in Machines, g \in 2..MaxRoot :
@@ -419,5 +456,6 @@ WitnessSessionAfterRotation == \A s \in sess : certs[s.c].root = 1
 WitnessRebound == \A m \in Machines : rebound[m] = 0
 WitnessSessionAfterRebind == \A s \in sess : rebound[certs[s.c].m] = 0 \/ Retired(s.c)
 WitnessRetiredHeld == \A s \in sess : ~Retired(s.c)
+WitnessRenewedAfterExpiry == \A i \in DOMAIN certs : certs[i].from = 0 \/ certs[i].iss < certs[certs[i].from].exp
 WitnessRetried == \A m \in Machines : keys[m] <= 2 \/ lost = 0
 =============================================================================

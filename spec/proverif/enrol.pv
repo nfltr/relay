@@ -21,8 +21,11 @@
    (mallory), a revoked stolen laptop's key (lost), a rotated-out key of
    web whose certificate has expired, the bootstrap token of a machine not
    yet enrolled (new1), and the old root's primary key. Signatures and
-   HMAC are ideal. Time is two epochs: ep_now (the verifier's clock) and
-   ep_old (anything that has expired, a CRL past its NextUpdate).
+   HMAC are ideal. Time is three epochs: ep_now (the verifier's clock),
+   ep_grace (a name's newest certificate, expired less than orgpki
+   RenewGrace ago: the issuer still renews it, no verifier admits it) and
+   ep_old (anything else that has expired, a superseded serial however
+   recent, a CRL past its NextUpdate).
 
    Bindings (org/orgpki rebind_test.go TestRebindModelBindings, one row
    each: the field changed in the honest request, as a relay can):
@@ -48,7 +51,7 @@ reduc forall m: bitstring, k: skey; getmess(sign(m, k)) = m.
 fun hmac(bitstring, bitstring): bitstring.
 
 free web, mallory, lost, new1: mname.
-free ep_old, ep_now: epoch.
+free ep_old, ep_grace, ep_now: epoch.
 free g_db, g_other: group.
 free none, s_lost: bitstring.          (* serials are public *)
 
@@ -77,6 +80,7 @@ event Issued(mname, pkey, bitstring, epoch, group).
 event Revoked(mname).
 event Accepted(mname, pkey, bitstring, epoch).
 event Admitted(mname, pkey).
+event Renewed(mname, epoch).        (* the issuer renewed a certificate of that epoch *)
 event IssuerCertified(pkey).
 event RecoverySigned(pkey).
 event RotatedTo(pkey).
@@ -133,14 +137,16 @@ let WebMachine(t: bitstring) =
   out(c, (web, pk(sk), t)).                        (* ONLY:token-in-request *)
 
 (* Renewal: the current certificate and a CSR for the new key signed with
-   the current one; refused for an expired or revoked certificate. *)
+   the current one; refused for a revoked certificate and an expired one
+   but the name's newest within the grace (spec/enrol/Enrol.tla Renews). *)
 let Renew =
   new s2: bitstring;                   (* before the input: the serial is the issuer's, not a function of the request *)
   in(c, (cert: bitstring, k2: pkey, pop: bitstring));
   let leaf(n, k, s, e, g) = checksign(cert, pk(skIss)) in
-  if e = ep_now then                   (* NOT:renew-expired *)
+  if e = ep_now || e = ep_grace then   (* NOT:renew-expired *)
   if s <> s_lost then                  (* NOT:renew-revoked *)
   if checksign(pop, k) = renewal(k2) then
+  event Renewed(n, e);
   event Issued(n, k2, s2, ep_now, g);
   out(c, sign(leaf(n, k2, s2, ep_now, g), skIss)).
 
@@ -196,6 +202,13 @@ let Setup =
   event Holds(web, pk(sko));
   event Issued(web, pk(sko), so, ep_old, g_db);
   out(c, sign(leaf(web, pk(sko), so, ep_old, g_db), skIss)); out(c, sko);
+  (* web's current certificate, expired within the grace (the machine was
+     off, or the issuer out of reach, through its renewal window): web
+     renews it with its own key, never leaked *)
+  new skg: skey; new sg: bitstring; new skn: skey;
+  event Holds(web, pk(skg)); event Holds(web, pk(skn));
+  event Issued(web, pk(skg), sg, ep_grace, g_db);
+  out(c, (sign(leaf(web, pk(skg), sg, ep_grace, g_db), skIss), pk(skn), sign(renewal(pk(skn)), skg)));
   (* mallory: enrolled, then compromised (not revoked) *)
   new skm: skey; new sm: bitstring;
   event Holds(mallory, pk(skm));
@@ -254,6 +267,8 @@ query k: pkey; event(RotatedTo(k)).
 query k: pkey; event(TrustsIssuer(k)).
 query t: bitstring, k: pkey; event(Reissued(t, web, k)).
 query t: bitstring, n: mname, k: pkey; event(Rebound(t, n, k)).
+(* 19. witness: web's certificate renewed in the grace *)
+query event(Renewed(web, ep_grace)).
 
 process
   Setup |

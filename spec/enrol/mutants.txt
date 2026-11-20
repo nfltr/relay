@@ -19,6 +19,14 @@ no-reissue-on-rotation MachinesFollowRotation
 check-at-request NoRenewAfterRevoke
 install-stale-answer MachineHoldsItsKey
 no-retry MachinesFollowRotation EnrolLoss.cfg
+# renewal after the NotAfter (nfltr docs/decisions/org-renew-after-outage-2026-11-20.md):
+# no-renew-after-expiry is the design before 2026-11-20 (an issuer outage
+# through the last third of the lifetime made the name re-enrol by hand);
+# the issuer renews past the grace, or a superseded serial (an answer the
+# machine never installed: the relay lost it).
+no-renew-after-expiry RenewsAfterExpiry EnrolLive.cfg
+renew-past-grace NoRenewPastGrace
+grace-any-serial GraceOnlyNewest EnrolLoss.cfg
 # a rebind (nfltr docs/decisions/org-rebind-2026-11-17.md): the CRL it
 # signs lists none of the name's earlier serials; the issuer renews one.
 rebind-keeps-serials RetiredRefused Rebind.cfg

@@ -33,10 +33,14 @@ after a rotation) is `Join.tla`.
 | RebindBound | CrlLife after a rebind no verifier holds a session of a serial it retired (the old machine id's certificates), whatever CRLs the relay delivered | `rebind-keeps-serials` (the rebind's CRL lists none of the name's earlier serials) |
 | RetiredRefused | once a verifier took the rebind's CRL, it holds no session of a retired serial | `rebind-keeps-serials` |
 | NoRenewOfRetired | the issuer renews no serial a rebind retired (the old disk's renewal request, still in the relay's mailbox) | `renew-rebound` |
+| NoRenewPastGrace | the issuer renews a certificate after its NotAfter only within RenewGrace of it | `renew-past-grace` |
+| GraceOnlyNewest | ... and only the name's newest serial (a superseded one's key is retired: `enrol.pv` 2) | `grace-any-serial` (EnrolLoss.cfg: the answer the machine never installed is newer) |
+| RenewsAfterExpiry (LiveSpec) | a machine whose certificate expired while the issuer was out of reach renews once it answers, without a restart (or the grace ended, it was revoked, or an answer it never installed superseded it) | `no-renew-after-expiry` (the design before 2026-11-20: the issuer refused every expired certificate, so an outage through the last third of the lifetime needed a new enrolment, nfltr `docs/decisions/org-renew-after-outage-2026-11-20.md`) |
 | TakesEffect (LiveSpec) | every revoke reaches every verifier | `push-only` (no backstop read: a lost push is never made good) |
 | MachinesFollowRotation (LiveSpec) | every machine still enrolled moves to the new root (or its certificate lapses visibly) | `no-reissue-on-rotation` (renewal by time only), `no-retry` (a machine whose request or answer the relay lost never asks again) |
 
 Witnesses (each must be violated, the state reachable): `WitnessRenewed`,
+`WitnessRenewedAfterExpiry` (a renewal from a certificate past its NotAfter),
 `WitnessRevokeSeen`, `WitnessFailClosed` (a verifier whose CRL lapsed),
 `WitnessForgedSession` (before the rotation reaches it, a verifier does
 admit a certificate forged under the stolen root: the bound the design
@@ -53,8 +57,8 @@ RebindBound states).
 |---|---|
 | Tick | time passes; each verifier's timer ends sessions at the certificate's NotAfter and at its CRL's NextUpdate |
 | Admit | a peer presents a certificate (honest, a stolen machine's, or forged); TLS VerifyConnection: chain, name, NotAfter, CRL |
-| Request | the machine (`orgenrol.Keeper`) is due (2/3 of its lifetime, or at once after a rotation), makes a new key and posts a renewal signed by the current one to `org.<org>.enrol`; with an earlier request or answer lost (none pending for its newest key) it asks again with another key |
-| Issue | the issuer (`nfltr org serve`, `orgenrol.Service`) reads a request and decides under its lock as of now: it refuses a revoked name and an expired certificate, renews only a serial its own log holds, and posts the answer to `org.<org>.answers` under the request's id |
+| Request | the machine (`orgenrol.Keeper`) is due (2/3 of its lifetime, or at once after a rotation; its certificate valid or within RenewGrace after its NotAfter), makes a new key and posts a renewal signed by the current one to `org.<org>.enrol`; with an earlier request or answer lost (none pending for its newest key) it asks again with another key |
+| Issue | the issuer (`nfltr org serve`, `orgenrol.Service`) reads a request and decides under its lock as of now: it refuses a revoked name, a certificate expired RenewGrace ago and an expired one that is not the name's newest serial (`orgpki.RenewGrace`), renews only a serial its own log holds, and posts the answer to `org.<org>.answers` under the request's id |
 | IssueForged | mutant `renew-forged` only: the issuer renews a forged certificate the attacker presents |
 | Install | the machine installs an answer for the key it made last (`orgmachine.Install`: any other is refused) |
 | Lose | the relay loses a request or an answer (bounded by MaxLost) |
@@ -221,6 +225,8 @@ fixtures each rejected by its invariant.
 | a verifier's clock is within the skew the lifetimes allow (minutes against CrlLife = 1 h) | Tick | the design |
 | the issuer's log and CRL are written under one lock: a renewal is ordered before or after a revoke | Issue, Revoke | `orgissuer.Lock` |
 | the relay may lose, keep or replay a request or an answer but forge neither: requests are signed by the current key or bound to a token, answers are the issuer's certificates for a key the machine checks | Lose, Install | `spec/proverif/enrol.pv`; `orgmachine.Checked` |
+| the issuer is out of reach for a while (its mailbox or its process down) and the machine may be off: the model does not force time to pass (Tick is not fair), so RenewsAfterExpiry asks renewal to complete once the issuer answers, not before a deadline | Tick, Request, Issue | nfltr `docs/decisions/org-renew-after-outage-2026-11-20.md` (the 2026-11-19 mailbox outage) |
+| a timer may run slower than the wall clock (host sleep): the machine reads the clock again at least every minute | Request | `orgenrol` wakeEvery |
 | the recovery key is never online with the primary | RootsAreOwners | the design |
 | one issuer acts on the log at a time, also across a move to another machine (`nfltr org move`): the old machine acts no more after its fence, the new one continues the same log and CRL Number | Issue, Revoke, Republish | `spec/orgmove/OrgMove.tla` (AtMostOneIssuer, OldCannotIssue, CRLMonotone) |
 | the issuer's own certificate is not modelled: a stolen issuer key mints within its NameConstraints and groups until its NotAfter (30 days), a rotation or the root's CRL of issuers, and a session admitted under it ends at that NotAfter at the latest (`orgid` `Checked.Until`, the chain's earliest NotAfter; `spec/orgmove/OrgHosted.tla` DelegationBound and RevokedIssuerRefused) | (stated bound, not a property) | the threat model: an issuer key is a key the owner protects |
