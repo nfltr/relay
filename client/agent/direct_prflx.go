@@ -237,6 +237,9 @@ func (e *DirectEndpoint) punch(ctx context.Context, cands []netip.AddrPort, lear
 				tr.up(r.a.String(), false)
 				_ = r.q.CloseWithError(quiclink.CodeDone, "another candidate won")
 			}
+			if e.took != nil {
+				e.took(r.a)
+			}
 		}
 	}
 	wonStr := ""

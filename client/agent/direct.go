@@ -118,6 +118,7 @@ type DirectEndpoint struct {
 	noHost   bool                      // tests: no host candidates (the reflexive one only)
 	hosts    []netip.AddrPort          // tests: the host candidates (nil: the interfaces')
 	grace    time.Duration             // tests: the LAN grace (0: lanGrace)
+	took     func(netip.AddrPort)      // tests: a punch's loop took this dial's result (TestDirectPunchPrefersLAN)
 	gateway  func() (net.IP, error)    // tests: the LAN gateway (nil: discoverGateway, which only init sets)
 	natpmp   int                       // tests: the gateway's NAT-PMP port (0: natpmpPort), a fake gateway's own
 }

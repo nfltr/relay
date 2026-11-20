@@ -17,8 +17,9 @@ import (
 )
 
 // gatedConn reads nothing until gate (or stop) closes: a peer whose
-// handshake starts only once another candidate's ended (an event, not a
-// delay: a loaded machine keeps the order).
+// handshake starts only once an event (the punch took another candidate's
+// result: TestDirectPunchPrefersLAN), not a delay: a loaded machine keeps
+// the order.
 type gatedConn struct {
 	net.PacketConn
 	gate, stop <-chan struct{}
@@ -33,9 +34,8 @@ func (c gatedConn) ReadFrom(b []byte) (int, net.Addr, error) {
 }
 
 // quicPeer is a QUIC server on loopback answering quiclink's ALPN that
-// reads once gate closes; the channel it returns closes once a handshake
-// with it ended.
-func quicPeer(t *testing.T, gate <-chan struct{}) (netip.AddrPort, <-chan struct{}) {
+// reads once gate closes.
+func quicPeer(t *testing.T, gate <-chan struct{}) netip.AddrPort {
 	t.Helper()
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
@@ -51,24 +51,26 @@ func quicPeer(t *testing.T, gate <-chan struct{}) (netip.AddrPort, <-chan struct
 	if err != nil {
 		t.Fatal(err)
 	}
-	up := make(chan struct{})
 	go func() {
-		var once sync.Once
 		for {
 			q, err := ln.Accept(context.Background())
 			if err != nil {
 				return
 			}
-			once.Do(func() { close(up) })
 			go func() { <-q.Context().Done() }()
 		}
 	}()
-	return pc.LocalAddr().(*net.UDPAddr).AddrPort(), up
+	return pc.LocalAddr().(*net.UDPAddr).AddrPort()
 }
 
 // TestDirectPunchPrefersLAN: a non-LAN candidate answers first, a LAN one
 // only after it (within the grace): the punch keeps the LAN connection
-// (DirectPunch.tla PreferLan, mutant first-wins); with no LAN candidate the
+// (DirectPunch.tla PreferLan, mutant first-wins). The LAN peer reads
+// nothing until the punch's loop took the non-LAN connection (e.took), so
+// the loop receives the two in that order however the dials' goroutines
+// are scheduled: gated on the non-LAN peer's Accept only, the LAN result
+// could reach the loop first and the Go mutant lan-first-wins passed (box
+// log 20261120T175411Z-relay-83ce2c681111). With no LAN candidate the
 // one up is kept and the punch returns. The grace is set past the test's
 // bound, since PreferLan holds for a LAN path within the grace (the spec's Reach) and a
 // loaded machine stretches a loopback handshake past lanGrace.
@@ -81,8 +83,15 @@ func TestDirectPunchPrefersLAN(t *testing.T) {
 	e.grace = time.Minute
 	open := make(chan struct{})
 	close(open)
-	pub, pubUp := quicPeer(t, open)
-	lan, _ := quicPeer(t, pubUp)
+	pub := quicPeer(t, open)
+	pubTaken := make(chan struct{})
+	var once sync.Once
+	e.took = func(a netip.AddrPort) {
+		if a == pub {
+			once.Do(func() { close(pubTaken) })
+		}
+	}
+	lan := quicPeer(t, pubTaken)
 	e.lan = func(a netip.AddrPort) bool { return a == lan }
 	tc := &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13} // #nosec G402 -- test peers
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -95,6 +104,7 @@ func TestDirectPunchPrefersLAN(t *testing.T) {
 		t.Fatalf("kept %v, want the LAN candidate %v (the non-LAN one is %v)", got, lan, pub)
 	}
 	_ = q.CloseWithError(0, "")
+	e.took = nil
 	e.lan = func(netip.AddrPort) bool { return false }
 	e.grace = time.Millisecond // no LAN candidate: only the grace's wait for a LAN probe
 	// The other peer never answers during the punch: of two non-LAN
@@ -102,8 +112,8 @@ func TestDirectPunchPrefersLAN(t *testing.T) {
 	// goroutine scheduling orders, not the peers' handshakes (a peer gated
 	// on the first one's Accept was kept once on a loaded runner, relay
 	// 8a8ea47); DirectPunch.tla's trace check holds the loop to its model.
-	pub, _ = quicPeer(t, open)
-	other, _ := quicPeer(t, nil)
+	pub = quicPeer(t, open)
+	other := quicPeer(t, nil)
 	q, err = e.punch(ctx, []netip.AddrPort{pub, other}, nil, tc, nil)
 	if err != nil {
 		t.Fatal(err)
