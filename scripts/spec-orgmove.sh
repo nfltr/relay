@@ -209,12 +209,16 @@ otrace() {
 }
 
 # otraces F: each organisation of F with at most two issuer directories
-# (OrgHolds.tla's A and B; more is a restore or a second move elsewhere,
-# outside the model: skipped, counted).
+# (OrgHolds.tla's A and B; more is a restore from a backup, OrgMove.tla
+# Revive, or a second move elsewhere, outside the model: skipped, named).
 otraces() {
 	fail=0
+	# A lock line names its directory only: one no organisation served
+	# (a restore's backup, the move run on it) counts for each.
+	sed -nE 's/.*"d":"([^"]+)".*"o":"[^"]+".*/\1/p' "$1" | sort -u >"$work/odirs"
+	sed -nE 's/.*"d":"([^"]+)","ev":"lock".*/\1/p' "$1" | sort -u | comm -23 - "$work/odirs" >"$work/ldirs"
 	for o in $(sed -nE 's/.*"o":"([^"]+)".*/\1/p' "$1" | sort -u); do
-		nd=$(grep "\"o\":\"$o\"" "$1" | sed -nE 's/.*"d":"([^"]+)".*/\1/p' | sort -u | wc -l | tr -d ' ')
+		nd=$( (grep "\"o\":\"$o\"" "$1" | sed -nE 's/.*"d":"([^"]+)".*/\1/p'; cat "$work/ldirs") | sort -u | wc -l | tr -d ' ')
 		if [ "$nd" -gt 2 ]; then
 			echo "$(basename "$1") $o: $nd directories: skipped"
 			continue
