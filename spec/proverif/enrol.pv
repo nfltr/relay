@@ -188,7 +188,8 @@ let Client =
   let leaf(n, k, s, e, g) = checksign(lcert, ki) in
   if n = x then                        (* NOT:no-name-check *)
   if e = ep_now then                   (* NOT:no-expiry-check *)
-  let crl(ce, r) = checksign(crlm, ki) in
+  let crl(ce, r) = checksign(crlm, ki) in   (* NOT:crl-any-signer *)
+  let crl(ce, r) = getmess(crlm) in        (* ONLY:crl-any-signer *)
   if ce = ep_now then                  (* NOT:stale-crl *)
   if s <> r then                       (* NOT:no-crl-check *)
   event Accepted(x, k, s, e).
@@ -202,7 +203,8 @@ let Service =
   let issuercert(ki) = getmess(icert) in                 (* ONLY:no-chain-check *)
   let leaf(n, k, s, e, g) = checksign(lcert, ki) in
   if e = ep_now then                   (* NOT:no-expiry-check *)
-  let crl(ce, r) = checksign(crlm, ki) in
+  let crl(ce, r) = checksign(crlm, ki) in   (* NOT:crl-any-signer *)
+  let crl(ce, r) = getmess(crlm) in        (* ONLY:crl-any-signer *)
   if ce = ep_now then                  (* NOT:stale-crl *)
   if s <> r then                       (* NOT:no-crl-check *)
   if g = g_db then                     (* NOT:no-group-check *)
