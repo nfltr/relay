@@ -17,9 +17,11 @@ import (
 
 // Moving the issuer (spec/orgmove/OrgMove.tla): the fleet's side.
 
-// moveTo fences and seals the issuer directory dir to a new machine's
-// receive key and imports it there; it returns the new issuer directory.
-func moveTo(t *testing.T, dir, rootPin string, now time.Time) string {
+// moveTo moves the issuer directory dir as nfltr's orgcli moveSend does
+// (spec/orgmove/OrgHolds.tla): the fence sealed to a new machine's receive
+// key, the serve lock once dir's service stopped, the release of mb's
+// holds of organisation orgID, then the import there; it returns the new issuer directory.
+func moveTo(t *testing.T, mb Mailbox, orgID, dir, rootPin string, now time.Time) string {
 	t.Helper()
 	conf := t.TempDir()
 	keyPath := filepath.Join(conf, orgissuer.ReceiveKeyFile)
@@ -27,6 +29,12 @@ func moveTo(t *testing.T, dir, rootPin string, now time.Time) string {
 	check(t, err)
 	sealed, err := orgissuer.Send(filepath.Dir(dir), orgissuer.ReceiveKey{Pub: k.PublicKey()}, now)
 	check(t, err)
+	ctx, cancel := context.WithTimeout(t.Context(), hang)
+	defer cancel()
+	unlock, err := HoldServeLock(ctx, dir)
+	check(t, err)
+	check(t, ReleaseHolds(ctx, mb, orgID))
+	unlock()
 	_, err = orgissuer.Import(conf, keyPath, sealed, rootPin, now)
 	check(t, err)
 	return orgissuer.Dir(conf)
@@ -47,7 +55,7 @@ func TestServiceStopsAtTheFence(t *testing.T) {
 		defer r.mu.Unlock()
 		return len(r.boxes[orgid.CRLMailbox(o.id)]) > 0
 	})
-	moveTo(t, o.dir, o.pins.Root, now)
+	moveTo(t, r, o.id, o.dir, o.pins.Root, now)
 	select {
 	case err := <-errc:
 		if !errors.Is(err, orgpki.ErrMoved) {
@@ -58,13 +66,49 @@ func TestServiceStopsAtTheFence(t *testing.T) {
 	}
 }
 
+// The holds follow the fence (spec/orgmove/OrgHolds.tla, moveTo as nfltr's
+// orgcli moveSend runs it): the fence, the serve lock once the service
+// stopped, the release, then the bundle; the new machine's service
+// publishes. Its trace (-tags enroltrace, ORGMOVETRACE) takes every
+// issuer step of OrgHolds.tla.
+func TestMoveSendReleasesTheHoldsAfterTheService(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	o := newOrg(t, now)
+	r := newRelay()
+	errc := make(chan error, 1)
+	go func() {
+		errc <- Service{Mailbox: r, Dir: o.dir, Logger: quiet(), Now: time.Now, Wait: 50 * time.Millisecond}.Run(t.Context())
+	}()
+	roots := func() uint64 { // the root's appends (each replaces the one before)
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		return r.seq[orgpki.RootMailbox(o.id)]
+	}
+	eventually(t, "the root published", func() bool { return roots() > 0 })
+	before := roots()
+	dir := moveTo(t, r, o.id, o.dir, o.pins.Root, now) // its lock waits for the service to stop
+	if err := <-errc; !errors.Is(err, orgpki.ErrMoved) {
+		t.Fatalf("the service stopped with %v, want ErrMoved", err)
+	}
+	sctx, stop := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() {
+		done <- Service{Mailbox: r, Dir: dir, Logger: quiet(), Now: time.Now, Wait: 50 * time.Millisecond}.Run(sctx)
+	}()
+	eventually(t, "the new machine publishes", func() bool { return roots() > before })
+	stop()
+	if err := <-done; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("the new machine's service: %v", err)
+	}
+}
+
 // FleetUnderServingIssuer, TokenOnce: after the move the fleet needs no
 // action: a machine renews with the moved issuer, and a token made before
 // the move, posted while nobody served, is redeemed by the new machine.
 func TestFleetRenewsWithTheMovedIssuer(t *testing.T) {
 	f := newFleet(t)
 	tok := f.org.token(t, "web-2", f.clk.Now())
-	dir := moveTo(t, f.org.dir, f.org.pins.Root, f.clk.Now())
+	dir := moveTo(t, f.relay, f.org.id, f.org.dir, f.org.pins.Root, f.clk.Now())
 	joined := make(chan error, 1)
 	go func() {
 		_, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "machine"), f.org.pins, tok, hang, f.clk.Now)

@@ -38,3 +38,12 @@ func traceCarry(string, any, []byte, time.Time, bool, error) {}
 func traceJoinRoot(string, Pins, *x509.Certificate, *x509.Certificate, bool)  {}
 func traceJoinStart(string, string, string, crypto.PublicKey, string, string) {}
 func traceJoinEnd(string, string, string, string, orgpki.Answer)              {}
+
+// traceHold, traceHoldWrite and traceHoldEnd record the issuer's steps of
+// spec/orgmove/OrgHolds.tla (README "Traces"): a service's start, its
+// read under the directory's lock, the round's publishes, its end (stop
+// at the fence, or exit), the move's serve lock and release; checked by
+// TraceOrgHolds.tla, built only with -tags enroltrace.
+func traceHold(string, string, string)   {}
+func traceHoldWrite(string, string, int) {}
+func traceHoldEnd(string, string, error) {}

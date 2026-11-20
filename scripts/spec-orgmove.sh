@@ -191,6 +191,53 @@ htrace() {
 
 # fixtures [hosted]: each fixture rejected by its invariant (TraceOrgMove.tla,
 # or with hosted TraceOrgHosted.tla's of traces/hosted).
+# otrace F ORG: organisation ORG's issuer steps in F (<pid>.holds),
+# checked by TraceOrgHolds.tla; 0 when accepted.
+otrace() {
+	t=$work/$(basename "$1").$2
+	cat "$1" >"$t"
+	printf 'CONSTANTS\n    TraceFile = "%s"\n    Org = "%s"\n    MaxMoves = 3\n    MaxBad = 0\n    Mutant = "none"\nINIT TraceInit\nNEXT TraceNext\nINVARIANTS\n    TypeOK\n    OldCannotWrite\n    RootReadable\n    FinishAfterPublish\n    TraceNotDone\n' "$t" "$2" >"$t.cfg"
+	(cd $dir && "$java" -cp "$jar" tlc2.TLC -workers 1 -noGenerateSpecTE -deadlock \
+		-metadir "$t.states" -config "$t.cfg" TraceOrgHolds.tla) >"$t.out" 2>&1 || true
+	if grep -q '^Error: Invariant TraceNotDone is violated' "$t.out"; then
+		echo "$(basename "$1") $2: $(grep -c "\"o\":\"$2\"" "$t") lines: accepted"
+		return 0
+	fi
+	grep -m1 '^Error' "$t.out" || tail -20 "$t.out"
+	echo "$(basename "$1") $2: REJECTED"
+	return 1
+}
+
+# otraces F: each organisation of F with at most two issuer directories
+# (OrgHolds.tla's A and B; more is a restore or a second move elsewhere,
+# outside the model: skipped, counted).
+otraces() {
+	fail=0
+	for o in $(sed -nE 's/.*"o":"([^"]+)".*/\1/p' "$1" | sort -u); do
+		nd=$(grep "\"o\":\"$o\"" "$1" | sed -nE 's/.*"d":"([^"]+)".*/\1/p' | sort -u | wc -l | tr -d ' ')
+		if [ "$nd" -gt 2 ]; then
+			echo "$(basename "$1") $o: $nd directories: skipped"
+			continue
+		fi
+		otrace "$1" "$o" || fail=1
+	done
+	return $fail
+}
+
+# ofixtures: each traces/holds/<Invariant>-*.holds (organisation "O") is
+# no behaviour of OrgHolds.tla (a mutant's run), each Accepted-*.holds one.
+ofixtures() {
+	: >"$work/ofails"
+	for f in $dir/traces/holds/*.holds; do
+		if otrace "$f" O >"$work/m.out"; then
+			case $(basename "$f") in Accepted-*) echo "$(basename "$f"): accepted" ;; *) echo "$(basename "$f"): NOT rejected"; echo x >>"$work/ofails" ;; esac
+		else
+			case $(basename "$f") in Accepted-*) echo "$(basename "$f"): NOT accepted"; echo x >>"$work/ofails" ;; *) echo "$(basename "$f"): rejected" ;; esac
+		fi
+	done
+	[ ! -s "$work/ofails" ]
+}
+
 fixtures() {
 	: >"$work/ffails"
 	sub= chk=trace
@@ -231,6 +278,21 @@ traces() {
 	echo "events: $(cat "$work"/unit/*/*.ndjson 2>/dev/null | sed -E 's/.*"ev":"([a-z]+)".*/\1/' | sort | uniq -c | tr -s ' ' | tr '\n' ' ')"
 	echo "$n traces, $(wc -l <"$work/fails" | tr -d ' ') failed"
 	fixtures || echo x >>"$work/fails"
+	# OrgHolds.tla: orgenrol's issuer steps (<pid>.holds); a step no
+	# trace takes is a test gap.
+	no=0
+	for f in "$work"/unit/*/*.holds; do
+		[ -f "$f" ] || continue
+		no=$((no + 1))
+		otraces "$f" >"$work/t.out" || { echo "$f"; cat "$work/t.out"; echo x >>"$work/fails"; }
+		grep skipped "$work/t.out" || true
+	done
+	cat "$work"/unit/*/*.holds 2>/dev/null | sed -E 's/.*"ev":"write","n":0.*/write-none/; s/.*"ev":"([a-z]+)".*/\1/' | sort | uniq -c >"$work/ocov"
+	echo "$no OrgHolds traces: $(tr -s ' ' <"$work/ocov" | tr '\n' ' ')"
+	for want in start read write write-none stop exit lock release; do
+		grep -q " $want\$" "$work/ocov" || { echo "coverage: no OrgHolds trace takes $want"; echo x >>"$work/fails"; }
+	done
+	ofixtures || echo x >>"$work/fails"
 	htraces || echo x >>"$work/fails"
 	[ ! -s "$work/fails" ]
 }
@@ -271,7 +333,7 @@ repeat) run OrgMoveRepeat.cfg ;;
 mutants) mutants ;;
 witnesses) witnesses ;;
 coverage) coverage ;;
-ci) run OrgMove.cfg && run OrgMoveLive.cfg && mutants && witnesses && coverage && fixtures &&
+ci) run OrgMove.cfg && run OrgMoveLive.cfg && mutants && witnesses && coverage && fixtures && ofixtures &&
 	holds_spec && run OrgHolds.cfg && run OrgHoldsLive.cfg && mutants && witnesses && coverage &&
 	hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage && fixtures hosted &&
 	spec=OrgMove && restore_spec && run OrgMoveRestore.cfg && mutants && witnesses && coverage ;;

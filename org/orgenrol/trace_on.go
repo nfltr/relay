@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -169,6 +170,51 @@ func joinLine(l map[string]any) {
 	traceMu.Lock()
 	defer traceMu.Unlock()
 	f, err := os.OpenFile(filepath.Join(out, strconv.Itoa(os.Getpid())+".ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		panic(err)
+	}
+}
+
+// The issuer's steps of spec/orgmove/OrgHolds.tla, to <pid>.holds under
+// ORGMOVETRACE, checked by TraceOrgHolds.tla, one line each under traceMu
+// ({"ev", "o": the organisation, "d": the issuer directory, "n": a
+// round's publishes}): start (Run took the serve lock), read (maintain's
+// read, under the directory's lock), write (the round's end: n publishes
+// landed since its read), stop (Run returned at the fence, ErrMoved) or
+// exit (any other return), lock (HoldServeLock took the serve lock: "o"
+// unknown there) and release (ReleaseHolds gave the holds up: "d"
+// unknown there). An end is logged before the serve lock is released, a
+// lock after it is taken, so their order is the run's.
+func traceHold(ev, org, dir string) { holdLine(map[string]any{"ev": ev, "o": org, "d": dir}) }
+
+func traceHoldWrite(org, dir string, n int) {
+	holdLine(map[string]any{"ev": "write", "o": org, "d": dir, "n": n})
+}
+
+func traceHoldEnd(org, dir string, err error) {
+	ev := "exit"
+	if errors.Is(err, orgpki.ErrMoved) {
+		ev = "stop"
+	}
+	traceHold(ev, org, dir)
+}
+
+func holdLine(l map[string]any) {
+	out := os.Getenv("ORGMOVETRACE")
+	if out == "" {
+		return
+	}
+	b, err := json.Marshal(l)
+	if err != nil {
+		panic(err)
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	f, err := os.OpenFile(filepath.Join(out, strconv.Itoa(os.Getpid())+".holds"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		panic(err)
 	}

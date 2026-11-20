@@ -86,7 +86,7 @@ func TestRestoreFromABackupBehindThePublishedCRL(t *testing.T) {
 	der, err := PublishedRevocationList(t.Context(), r, root, clk.Now())
 	check(t, err)
 	check(t, orgissuer.Restore(backup, der, clk.Now()))
-	stopNew := serve(t.Context(), moveTo(t, filepath.Join(backup, "org"), o.pins.Root, clk.Now()))
+	stopNew := serve(t.Context(), moveTo(t, r, o.id, filepath.Join(backup, "org"), o.pins.Root, clk.Now()))
 	t.Cleanup(stopNew)
 
 	clk.Add(15 * time.Hour) // web-1's certificate of the day after the backup is due

@@ -116,9 +116,9 @@ which may take a vacant hold once and is revoked by the owner).
 `OrgHolds.cfg` (a fresh relay or a published root; a move, a move back and a move onto the finished tombstone, X once): 385 states;
 `OrgHoldsLive.cfg` the same under LiveSpec. Mutants in `holds-mutants.txt`;
 witnesses `WitnessMoved`, `WitnessMovedBack`, `WitnessBackUnpublished`,
-`WitnessTakenVacant`, `WitnessLateWrite`, `WitnessFinished`, `WitnessReturnToFinished`, `WitnessReadFirst`. Not traced
-yet (gap: the holds are relay state; the move's own recorder covers the
-fence, send and import).
+`WitnessTakenVacant`, `WitnessLateWrite`, `WitnessFinished`, `WitnessReturnToFinished`, `WitnessReadFirst`. The
+issuer's steps are traced (`TraceOrgHolds.tla`, "Traces"); the hold itself
+is the relay's (relay-server `spec/Reach.tla`).
 
 ## `OrgHosted.tla`: the opt-in hosted issuer (verifier side and the root's CRL of issuers built, lane ORGH1; the hosting itself is design)
 
@@ -258,6 +258,35 @@ abstracts a host to its issuer directory); orgenrol
 `spec/proverif/orgmove.pv`) are orgissuer's `TestOrgMoveModelBindings`
 (`make spec-bindings`).
 
+`OrgHolds.tla`'s issuer steps are recorded by `org/orgenrol` under the
+same `ORGMOVETRACE` (`trace_on.go`, `<pid>.holds`, one line each under one
+lock): `start` (`Service.Run` took the serve lock), `read` (`maintain`'s
+read under the directory's lock), `write` (the round's end, `n` its
+publishes since the read), `stop` (`Run` returned at the fence) or `exit`
+(any other return; both logged before the serve lock is freed), `lock`
+(`HoldServeLock` took it) and `release` (`ReleaseHolds`). The orgenrol
+tests' move helper runs the move as nfltr's orgcli `moveSend` does (fence,
+serve lock, release, import; `TestMoveSendReleasesTheHoldsAfterTheService`
+then serves the new machine). `TraceOrgHolds.tla` checks each
+organisation's lines (its first directory A, the other B) as a behaviour
+of `OrgHolds.tla` with TypeOK, OldCannotWrite, RootReadable and
+FinishAfterPublish: Fence and Import (orgissuer's, `TraceOrgMove.tla`'s
+lines), Finish (nfltr's orgcli) and XTake, Revoke (the relay's) are TLC's,
+taken only when the next line needs them; a round that published nothing
+and an `exit` are the trace's own steps; a line of another kind stops the
+trace. `traces` checks every `.holds` trace (an organisation of more than
+two directories, a restore's, is outside the model and skipped, named),
+fails when no trace takes each line kind and a round that published
+nothing, then the fixtures `traces/holds/<Invariant>-*.holds` (each a
+mutant's run the design rejects: `old-keeps-writing`, a lock while the
+service runs; `release-without-fence`; orgenrol's `serve-after-fence`, a
+read after the stop; `Known-unmapped-step`) and `Accepted-*.holds` (also
+in `ci`). Not traced: the hold (relay state), so `HolderKeeps`
+(`handover-to-anyone`), `RootReadable` (`holder-read`: the read's
+declaration) and `FinishAfterPublish` (`finish-early`: nfltr's orgcli) have
+no rejected trace here; an answer's post (the `answers` box) is no `write`
+line.
+
 `OrgHosted.tla`'s verifier side has its own trace check,
 `TraceOrgHosted.tla`, over the lines relay client `orgid`'s verifier
 writes under `ENROLTRACE` (the files `spec/enrol/TraceEnrol.tla` checks
@@ -289,6 +318,7 @@ yet (the hosting lanes H2, H3).
 | OrgHolds.tla | org/orgenrol/issuer.go |
 | OrgHolds.tla | org/orgenrol/orgenrol.go |
 | OrgHolds.tla | org/orgissuer/bundle.go |
+| TraceOrgHolds.tla | org/orgenrol/trace_on.go |
 | OrgHosted.tla | client/orgid/verify.go |
 | OrgHosted.tla | org/orgpki/profile.go |
 | OrgHosted.tla | org/orgpki/renew.go |

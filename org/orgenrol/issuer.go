@@ -86,6 +86,9 @@ func HoldServeLock(ctx context.Context, dir string) (unlock func(), err error) {
 	for {
 		unlock, err := orgfiles.TryLock(filepath.Join(dir, serveLock))
 		if !errors.Is(err, orgfiles.ErrLocked) {
+			if err == nil {
+				traceHold("lock", "", dir)
+			}
 			return unlock, err
 		}
 		select {
@@ -108,6 +111,7 @@ func ReleaseHolds(ctx context.Context, mb Mailbox, orgID string) error {
 			return fmt.Errorf("%s: %w", name, err)
 		}
 	}
+	traceHold("release", orgID, "")
 	return nil
 }
 
@@ -148,6 +152,9 @@ type service struct {
 	// The CRL last put on the relay's copy, and when (putCopy).
 	copyCRL []byte
 	copyAt  time.Time
+	// pubs: the round's publishes since its read, -1 before it read
+	// (the OrgHolds trace's write line).
+	pubs int
 	// failingSince: the first of the current run of failed maintain
 	// rounds (zero while they succeed; maintained).
 	failingSince time.Time
@@ -159,7 +166,7 @@ const rootEvery = 24 * time.Hour
 
 // Run serves until ctx ends; ErrServing when another process serves Dir,
 // orgpki.ErrMoved once the directory's log ends in a move's fence.
-func (c Service) Run(ctx context.Context) error {
+func (c Service) Run(ctx context.Context) (err error) {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
@@ -184,11 +191,17 @@ func (c Service) Run(ctx context.Context) error {
 	if err := s.with(func(iss *orgpki.Issuer, _ *orgissuer.Store) error { s.org = iss.OrgID(); return nil }); err != nil {
 		return err
 	}
+	traceHold("start", s.org, c.Dir)
+	defer func() { traceHoldEnd(s.org, c.Dir, err) }() // before unlock: the lock is free after it
 	wake, stopWatch := watchDir(c.Dir, logger)
 	defer stopWatch()
 	var cursor uint64
 	for ctx.Err() == nil {
+		s.pubs = -1
 		err := s.maintain(ctx, c.Now())
+		if s.pubs >= 0 {
+			traceHoldWrite(s.org, c.Dir, s.pubs)
+		}
 		if errors.Is(err, orgpki.ErrMoved) {
 			return err // the organisation moved to another machine (nfltr org move send)
 		}
@@ -521,6 +534,8 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 		}
 		rootCert, root, rec, crl, issuer = iss.Root(), iss.Root().Raw, iss.Recovery().Raw, der, iss.Cert().Raw
 		traceRead(s.Dir, der) // under the lock (RevokePush.tla Read)
+		traceHold("read", s.org, s.Dir)
+		s.pubs = 0
 		return nil
 	})
 	if err != nil {
@@ -548,6 +563,7 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 		if err := s.publish(ctx, orgpki.RootMailbox(s.org), orgpki.RootMessage{Root: root, Recovery: rec, Issuers: issuers}); err != nil {
 			return fmt.Errorf("root: %w", err)
 		}
+		s.pubs++
 		s.pubRoot, s.pubRootAt = slices.Concat(root, issuers), now
 	}
 	if crlErr != nil {
@@ -557,6 +573,7 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 		if err := s.publish(ctx, orgid.CRLMailbox(s.org), orgid.CRLMessage{CRL: crl, Issuer: issuer}); err != nil {
 			return fmt.Errorf("CRL: %w", err)
 		}
+		s.pubs++
 		tracePublish(s.Dir, crl)
 		s.pubCRL, s.pubCRLIssuer = crl, issuer
 	}

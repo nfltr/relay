@@ -45,8 +45,9 @@ RootBad ==
 \* only when it keeps none), and names the first run's request.
 StartBad ==
     CASE JK \in DOMAIN runs -> {"diverged"}
-      [] JK \in DOMAIN kept -> (IF kept[JK].k # E.k THEN {"new-key-per-join"} ELSE {})
-                               \cup (IF kept[JK].first # E.first THEN {"diverged"} ELSE {})
+      \* a new key comes with a new first request (the key file's)
+      [] JK \in DOMAIN kept -> IF kept[JK].k # E.k THEN {"new-key-per-join"}
+                               ELSE IF kept[JK].first # E.first THEN {"diverged"} ELSE {}
       [] OTHER -> IF E.first # E.run THEN {"diverged"} ELSE {}
 
 \* Install: the answer to this run's request or the first run's, for the

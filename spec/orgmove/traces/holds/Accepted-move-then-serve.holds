@@ -1,0 +1,12 @@
+{"d":"/a","ev":"start","o":"O"}
+{"d":"/a","ev":"read","o":"O"}
+{"d":"/a","ev":"write","n":2,"o":"O"}
+{"d":"/a","ev":"read","o":"O"}
+{"d":"/a","ev":"write","n":0,"o":"O"}
+{"d":"/a","ev":"stop","o":"O"}
+{"d":"/a","ev":"lock","o":""}
+{"d":"","ev":"release","o":"O"}
+{"d":"/b","ev":"start","o":"O"}
+{"d":"/b","ev":"read","o":"O"}
+{"d":"/b","ev":"write","n":2,"o":"O"}
+{"d":"/b","ev":"exit","o":"O"}

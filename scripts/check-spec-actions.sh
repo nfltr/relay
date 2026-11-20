@@ -67,6 +67,7 @@ recorders='enrol/TraceEnrol.tla org/orgpki,client/orgid -
 enrol/TraceRevokePush.tla org/orgenrol -
 enrol/TraceJoin.tla org/orgenrol -
 orgmove/TraceOrgMove.tla org/orgpki,org/orgissuer -
+orgmove/TraceOrgHolds.tla org/orgenrol -
 appenrol/TraceAppEnrol.tla org/orgpki -
 TraceCallCredit.tla client/rpcclient -
 TraceCallCreditBoth.tla client/rpcclient -
