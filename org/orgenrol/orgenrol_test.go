@@ -969,8 +969,11 @@ func TestKeeperRenewsAfterAnIssuerOutagePastExpiry(t *testing.T) {
 		return down
 	}
 	f.relay.mu.Unlock()
-	keep(t, f.ctx, f.keeper())
+	// The clock moves before the keeper starts: a keeper that read it first
+	// waits WakeEvery (real time) for a renewal 12 h ahead (red on the box,
+	// 20261120T064830Z and 20261120T075002Z).
 	f.clk.Add(orgpki.MachineLife + time.Hour) // the outage outlasts the certificate
+	keep(t, f.ctx, f.keeper())
 	eventually(t, "the keeper asks while the issuer is down", func() bool { return appends.Load() > 2 })
 	if serial(f.m) != before {
 		t.Fatal("renewed while the issuer was down")
