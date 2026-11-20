@@ -1,14 +1,6 @@
 Incompatible changes:
-- ./grpcclient.DialThrough: removed
-- ./grpcclient.ExplainTLS: removed
-- package github.com/nfltr/relay/client/relayblob: removed
-- ./rpcclient.NewOutgoingMetadata: removed
-- ./rpcclient.OutgoingMetadata: removed
-- ./machinecert.RenewAt: removed
-- ./agent.SpliceUpgrade: removed
-- ./agent.SplitRoute: removed
-- ./agent.TargetURL: removed
-- ./agent.UpgradeVisitor: removed
+- ./machinecred.(*Credential).Run: changed from func(context.Context, *log/slog.Logger) to func(context.Context, *log/slog.Logger) func()
+- ./machinecred.Credential: old is comparable, new is not
 - ./p2p.AddDirectPath: removed
 - ./p2p.AnnounceConn: removed
 - ./p2p.AwaitConn: removed
@@ -88,15 +80,17 @@ Incompatible changes:
 - ./p2p.SignalSelect: removed
 - ./p2p.TCPDirect: removed
 - ./p2p.TCPPath: removed
+- ./relaytrust.Install: removed
+- ./relayoutage.ShareClient: changed from var to func
+- ./agent.SpliceUpgrade: removed
+- ./agent.SplitRoute: removed
+- ./agent.TargetURL: removed
+- ./agent.UpgradeVisitor: removed
+- ./machinecert.RenewAt: removed
+- ./grpcclient.DialThrough: removed
+- ./grpcclient.ExplainTLS: removed
+- ./rpcclient.NewOutgoingMetadata: removed
+- ./rpcclient.OutgoingMetadata: removed
 Compatible changes:
-- ./mailboxclient.Client.OrgCRL: added
-- ./mailboxclient.Client.PutOrgCRL: added
-- ./mailboxclient.OrgCRLPath: added
-- ./tlsend.(*Conn).CloseWriteSyncReceived: added
-- ./machinecert.LoadPair: added
-- ./machinecert.Pair: added
-- ./machinecert.SavePair: added
-- ./orgid.CRLCopy: added
-- ./orgid.Pair: added
-- ./orgid.ReadPair: added
-- package github.com/nfltr/relay/client/pairfile: added
+- ./relaytrust.CloseIdleConnections: added
+- ./relaytrust.Transport: added

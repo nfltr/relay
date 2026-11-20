@@ -1,7 +1,0 @@
-Incompatible changes:
-- ./orgpki.HostSerial: removed
-- ./orgpki.SignCheckpoint: removed
-Compatible changes:
-- ./orgenrol.CRLCopy: added
-- ./orgenrol.CRLCopyWriter: added
-- package github.com/nfltr/relay/org: added

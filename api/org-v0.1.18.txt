@@ -1,0 +1,9 @@
+Incompatible changes:
+- ./orgpki.HostSerial: removed
+- ./orgpki.SignCheckpoint: removed
+Compatible changes:
+- ./orgenrol.Pins.MachineID: added
+- ./orgpki.EnrolRequest.MachineID: added
+- ./orgpki.EnrolRequest.MachineMAC: added
+- ./orgpki.NewEnrolRequestFor: added
+- package github.com/nfltr/relay/org: added

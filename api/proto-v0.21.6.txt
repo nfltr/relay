@@ -1,0 +1,8 @@
+Incompatible changes:
+- ./wire/dataplane.CheckExclude: removed
+- ./wire/dataplane.ParseWindow: removed
+- ./wire/turnwire.ValidateTURNURL: removed
+- ./wire/chunking.AcksUploads: removed
+- ./wire/chunking.ReadChunksStreamingWithContext: removed
+- ./wire/wsframe.Mask: removed
+- ./wire/wsframe.ReadHeader: removed

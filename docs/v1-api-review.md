@@ -114,7 +114,7 @@ v1 tag that keeps them):
    `DiscoverExternalAddr`, `OpenBrowser` and their helpers. Gone with
    them: `spec/SignalConn.tla`, its trace check and fixtures,
    `spec/proverif/p2p_e2e.pv` with `TestP2PE2EModelBindings`, and their
-   gosec, semgrep and test-knob rows (`api/client-v0.23.12.txt`). Left:
+   gosec, semgrep and test-knob rows (`api/client-v0.23.13.txt`). Left:
    the browser direct path (`browserpeer.go`, `BrowserDirect`, its
    `chunkWriter` in `rtcdata.go`) and `signal.go`'s offer and answer,
    which relay-core's agent routing test sends.
@@ -149,7 +149,7 @@ reason:
   `ExampleListen`), `nfnet.Dial` (`ExampleDial`, nfltr
   `docs/decisions/p2p-sdk-2026-11-14.md`), `orgid.DefaultDir`,
   `capaddr.Format` (Parse's inverse).
-- Names added since client v0.23.12 for the consumers' next bump
+- Names added since client v0.23.12, shipped in client v0.23.13
   (CERTPAIR, CERTATOMIC: `machinecert.Pair`, `LoadPair`, `SavePair`,
   `orgid.Pair`, `ReadPair`, `CRLCopy`, `mailboxclient.Client.OrgCRL`,
   `PutOrgCRL`, `OrgCRLPath`, `tlsend.Conn.CloseWriteSyncReceived`,
@@ -198,10 +198,14 @@ kept. `orgpki.Entry`'s fields are the audit log's JSON: kept.
 
 ## What the next releases make (api/)
 
-`api/proto-v0.21.5.txt`, `api/client-v0.23.12.txt`,
-`api/org-v0.1.17.txt` list every change since those tags, the ones
-already on main (BLOBDEL's deleted blob packages and error reasons,
-CERTPAIR's and CERTATOMIC's additions) and this lane's. Both proto and
+`api/proto-v0.21.6.txt`, `api/client-v0.23.13.txt`,
+`api/org-v0.1.18.txt` list every change since those tags (promote r30;
+re-recorded by lane R31PREP on the r31 stack: this lane's, P2PDEL's,
+LOGINREDS' `orgenrol.Pins.MachineID` and `orgpki.EnrolRequest` fields,
+PINSCOPE's `relaytrust.Transport` and `CloseIdleConnections` in place of
+`Install`, `relayoutage.ShareClient` a func, `machinecred.Credential.Run`
+returning its join). BLOBDEL's deletions and CERTPAIR's and CERTATOMIC's
+additions shipped in r30's proto v0.21.6 and client v0.23.13. Both proto and
 client remove names, so their next releases are minors: **proto
 v0.22.0, client v0.24.0, org v0.2.0**. No consumer at its main uses a
 removed name; orch's `go vet` against relay main fails independent of
