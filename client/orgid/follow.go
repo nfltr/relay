@@ -70,19 +70,25 @@ func Follow(ctx context.Context, mb Mailbox, m *Identity, logger *slog.Logger) {
 }
 
 func followCRL(ctx context.Context, mb Mailbox, m *Identity, every time.Duration, now func() time.Time, logger *slog.Logger) {
-	apply := func(p []byte) error {
-		var cm CRLMessage
-		if err := json.Unmarshal(p, &cm); err != nil {
+	// apply(via): the take of one carrier's message (traced with its
+	// carrier: CrlCarriers.tla Push, ReadCopy).
+	apply := func(via string) func([]byte) error {
+		return func(p []byte) error {
+			var cm CRLMessage
+			if err := json.Unmarshal(p, &cm); err != nil {
+				return err
+			}
+			t := now()
+			took, err := m.TakeCRL(cm.CRL, cm.Issuer, t)
+			traceCarry(via, m, cm.CRL, t, took, err)
 			return err
 		}
-		_, err := m.TakeCRL(cm.CRL, cm.Issuer, now())
-		return err
 	}
 	var wg sync.WaitGroup
 	if cp, ok := mb.(CRLCopy); ok {
-		wg.Go(func() { readCopy(ctx, cp, m.OrgID(), every, apply, m.Changed, logger) })
+		wg.Go(func() { readCopy(ctx, cp, m.OrgID(), every, apply("copy"), m.Changed, logger) })
 	}
-	follow(ctx, mb, CRLMailbox(m.OrgID()), every, apply, m.Changed, logger)
+	follow(ctx, mb, CRLMailbox(m.OrgID()), every, apply("mailbox"), m.Changed, logger)
 	wg.Wait()
 }
 

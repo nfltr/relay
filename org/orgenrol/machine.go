@@ -264,19 +264,25 @@ func rotatedRoot(root, recovery *x509.Certificate, orgID string) error {
 // no longer lapses the CRL, CrlCarriers.tla). A client process without a
 // Keeper follows with relay client orgid.Follow, which does the same.
 func followCRL(ctx context.Context, mb Mailbox, m *orgmachine.Machine, every time.Duration, now func() time.Time, logger *slog.Logger) {
-	apply := func(p []byte) error {
-		var cm orgid.CRLMessage
-		if err := json.Unmarshal(p, &cm); err != nil {
+	// apply(via): the take of one carrier's message (traced with its
+	// carrier: CrlCarriers.tla Push, ReadCopy).
+	apply := func(via string) func([]byte) error {
+		return func(p []byte) error {
+			var cm orgid.CRLMessage
+			if err := json.Unmarshal(p, &cm); err != nil {
+				return err
+			}
+			t := now()
+			took, err := m.TakeCRL(cm.CRL, cm.Issuer, t)
+			traceCarry(via, m, cm.CRL, t, took, err)
 			return err
 		}
-		_, err := m.TakeCRL(cm.CRL, cm.Issuer, now())
-		return err
 	}
 	var wg sync.WaitGroup
 	if cp, ok := mb.(CRLCopy); ok {
-		wg.Go(func() { readCopy(ctx, cp, m.OrgID(), every, apply, m.Changed, logger) })
+		wg.Go(func() { readCopy(ctx, cp, m.OrgID(), every, apply("copy"), m.Changed, logger) })
 	}
-	follow(ctx, mb, orgid.CRLMailbox(m.OrgID()), every, apply, m.Changed, logger)
+	follow(ctx, mb, orgid.CRLMailbox(m.OrgID()), every, apply("mailbox"), m.Changed, logger)
 	wg.Wait()
 }
 

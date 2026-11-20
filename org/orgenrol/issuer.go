@@ -606,6 +606,7 @@ func (s *service) putCopy(ctx context.Context, crl, issuer []byte, now time.Time
 		return
 	}
 	s.copyCRL, s.copyAt = crl, now
+	tracePut(s.Dir, crl) // before the put: a member's read may follow it at once
 	data, err := json.Marshal(orgid.CRLMessage{CRL: crl, Issuer: issuer})
 	if err == nil {
 		err = w.PutOrgCRL(ctx, s.org, data)
