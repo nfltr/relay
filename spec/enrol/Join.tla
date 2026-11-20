@@ -23,6 +23,22 @@
 \* takes a rotation; never an attacker's root (Evil, signed by another key).
 \* The attacker may also hold the token (it leaked: Other) and the
 \* machine's join key once a renewal retired it (Renew, then ReplayOld).
+\*
+\* The relay machine id (lane LOGINREDS; nfltr
+\* docs/decisions/machine-pair-read-2026-11-20.md "LOGINREDS"): a login
+\* bundle's token names no relay machine id (it is minted before the
+\* machine exists), so the join states its own, under the token's MAC
+\* (orgpki.EnrolRequest MachineID, MachineMAC; BIND:enrol.id); the issuer
+\* binds it into the certificate when the move policy admits it (a
+\* machine of its own relay account by the token's name, as Enrol.tla
+\* Move) and the relay names that machine as the request's sender. A
+\* certificate that named no id made the keeper of the machine's first
+\* `nfltr cat serve` move the name at once (Enrol.tla Move), replacing
+\* the pair a second serve was reading. The relay may change the id it
+\* carries or name another sender (Relabel): it cannot recompute the MAC,
+\* so the issuer refuses the request, which the relay could do anyway by
+\* not carrying it. Ids: "own" (the machine's, its account's machine of
+\* the name), "other" (any other machine), "none".
 EXTENDS Integers, Sequences, FiniteSets
 
 CONSTANTS
@@ -36,6 +52,7 @@ CONSTANTS
 Evil == MaxRoot + 1   \* a root another key signed (the attacker's)
 OtherKey == 0         \* the key of whoever else holds the token
 Results == {"none", "joined", "refused-token", "refused-root"}
+Ids == {"none", "own", "other"}
 
 VARIABLES
     root,     \* the owner's current root generation
@@ -51,21 +68,24 @@ VARIABLES
     jroot,    \* the root the join took, 0 = none
     result,   \* how the joins ended
     tries,    \* join runs
-    lost      \* requests and answers the relay lost
+    lost,     \* requests and answers the relay lost
+    relabeled,\* the relay changed a request's id or its sender
+    jcert     \* the certificate the join installed, 0 = none
 
-vars == <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, active, jroot, result, tries, lost>>
+vars == <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, active, jroot, result, tries, lost, relabeled, jcert>>
 
 TokCerts == {i \in DOMAIN certs : certs[i].tok}
 Newest == certs[Len(certs)]
 
 TypeOK ==
     /\ root \in 1..MaxRoot
-    /\ \A i \in DOMAIN certs : certs[i].key \in 0..MaxKeys /\ certs[i].root \in 1..MaxRoot
+    /\ \A i \in DOMAIN certs : certs[i].key \in 0..MaxKeys /\ certs[i].root \in 1..MaxRoot /\ certs[i].id \in Ids /\ certs[i].mac \in BOOLEAN
     /\ revoked \in BOOLEAN /\ other \in BOOLEAN /\ replayed \in BOOLEAN
-    /\ \A r \in reqs : r.key \in 0..MaxKeys /\ r.run \in 0..MaxTries
+    /\ \A r \in reqs : r.key \in 0..MaxKeys /\ r.run \in 0..MaxTries /\ r.id \in Ids /\ r.mac \in BOOLEAN
     /\ \A a \in ans : a.key \in 0..MaxKeys /\ a.cert \in 0..MaxCerts /\ a.run \in 0..MaxTries
     /\ keys \in 0..MaxKeys /\ jkey \in 0..MaxKeys /\ active \in BOOLEAN
     /\ jroot \in 0..Evil /\ result \in Results /\ tries \in 0..MaxTries /\ lost \in 0..MaxLost
+    /\ relabeled \in BOOLEAN /\ jcert \in 0..MaxCerts
 
 Init ==
     /\ root = 1
@@ -74,6 +94,7 @@ Init ==
     /\ reqs = {} /\ ans = {}
     /\ keys = 0 /\ jkey = 0 /\ active = FALSE /\ jroot = 0
     /\ result = "none" /\ tries = 0 /\ lost = 0
+    /\ relabeled = FALSE /\ jcert = 0
 
 \* The join's check of the root message (orgenrol.trust): the pinned root,
 \* or a root the pinned recovery key certifies. Under pin-root-only (the
@@ -86,7 +107,8 @@ Trusts(g) ==
 \* `nfltr org join` runs: the relay hands it root g (the owner's current,
 \* or the attacker's); it refuses a root it does not trust, else posts the
 \* request for the key it keeps for the token (a new one the first time,
-\* and every time under new-key-per-join: the code before).
+\* and every time under new-key-per-join: the code before), stating its
+\* own relay machine id under the token's MAC.
 Start(g) ==
     /\ ~active /\ result = "none" /\ tries < MaxTries
     /\ g \in {root, Evil}
@@ -94,15 +116,15 @@ Start(g) ==
     /\ jroot' = g
     /\ IF ~Trusts(g)
        THEN /\ result' = "refused-root"
-            /\ UNCHANGED <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, active, lost>>
+            /\ UNCHANGED <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, active, lost, relabeled, jcert>>
        ELSE LET fresh == jkey = 0 \/ Mutant = "new-key-per-join"
                 k == IF fresh THEN keys + 1 ELSE jkey IN
             /\ k <= MaxKeys
             /\ keys' = IF fresh THEN keys + 1 ELSE keys
             /\ jkey' = k
-            /\ reqs' = reqs \cup {[key |-> k, run |-> tries + 1]}
+            /\ reqs' = reqs \cup {[key |-> k, run |-> tries + 1, id |-> "own", mac |-> TRUE]}
             /\ active' = TRUE
-            /\ UNCHANGED <<root, certs, revoked, other, replayed, ans, result, lost>>
+            /\ UNCHANGED <<root, certs, revoked, other, replayed, ans, result, lost, relabeled, jcert>>
 
 \* The issuer reads a request and decides under its lock, as of now
 \* (orgpki.Issuer.Enrol): a token not redeemed enrols the request's key; a
@@ -113,6 +135,17 @@ Start(g) ==
 \* (the code before), reissue-any-key re-issues for any key,
 \* reissue-revoked ignores the revoke, reissue-after-renewal re-issues a
 \* key a renewal retired.
+\*
+\* The certificate binds the request's id when the MAC covers it and the
+\* policy admits it ("own"); a request whose id or sender the relay
+\* changed is refused (nothing is redeemed). Mutants: bind-none (the code
+\* before: no id, the keeper moves the name at the first serve),
+\* bind-unmacd (an id the MAC does not cover, e.g. the sender the relay
+\* names, is bound), bind-any-account (the policy not asked).
+BindOf(r) ==
+    CASE Mutant = "bind-none" -> "none"
+      [] r.id = "own" \/ Mutant = "bind-any-account" -> r.id
+      [] OTHER -> "none"
 Reissues(k) ==
     /\ Mutant # "burn-name"
     /\ ~revoked \/ Mutant = "reissue-revoked"
@@ -121,13 +154,13 @@ Reissues(k) ==
 Issue(r) ==
     /\ r \in reqs
     /\ reqs' = reqs \ {r}
-    /\ IF certs = <<>> \/ Reissues(r.key)
+    /\ IF (r.mac \/ Mutant = "bind-unmacd") /\ (certs = <<>> \/ Reissues(r.key))
        THEN /\ Len(certs) < MaxCerts
-            /\ certs' = Append(certs, [key |-> r.key, root |-> root, tok |-> TRUE, afterRevoke |-> revoked])
+            /\ certs' = Append(certs, [key |-> r.key, root |-> root, tok |-> TRUE, afterRevoke |-> revoked, id |-> BindOf(r), mac |-> r.mac])
             /\ ans' = ans \cup {[key |-> r.key, cert |-> Len(certs) + 1, run |-> r.run]}
        ELSE /\ ans' = ans \cup {[key |-> r.key, cert |-> 0, run |-> r.run]}
             /\ UNCHANGED certs
-    /\ UNCHANGED <<root, revoked, other, replayed, keys, jkey, active, jroot, result, tries, lost>>
+    /\ UNCHANGED <<root, revoked, other, replayed, keys, jkey, active, jroot, result, tries, lost, relabeled, jcert>>
 
 \* The join reads the answer to its run's request, or to the first run's
 \* (kept with the key: it carries the sealed A2A key): a certificate for
@@ -138,16 +171,18 @@ Install(a) ==
     /\ IF a.cert # 0 /\ a.key = jkey
        THEN /\ certs[a.cert].root = jroot   \* else the chain check fails: not taken
             /\ result' = "joined"
-       ELSE result' = "refused-token"
+            /\ jcert' = a.cert
+       ELSE /\ result' = "refused-token"
+            /\ UNCHANGED jcert
     /\ active' = FALSE
-    /\ UNCHANGED <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, jroot, tries, lost>>
+    /\ UNCHANGED <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, jroot, tries, lost, relabeled>>
 
 \* The join's wait ends (--wait) with no answer taken: the operator runs
 \* it again (Start).
 GiveUp ==
     /\ active
     /\ active' = FALSE
-    /\ UNCHANGED <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, jroot, result, tries, lost>>
+    /\ UNCHANGED <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, jroot, result, tries, lost, relabeled, jcert>>
 
 \* The relay loses a request or an answer (or keeps it past its TTL).
 Lose ==
@@ -155,14 +190,14 @@ Lose ==
     /\ lost' = lost + 1
     /\ \/ \E r \in reqs : reqs' = reqs \ {r} /\ ans' = ans
        \/ \E a \in ans : ans' = ans \ {a} /\ reqs' = reqs
-    /\ UNCHANGED <<root, certs, revoked, other, replayed, keys, jkey, active, jroot, result, tries>>
+    /\ UNCHANGED <<root, certs, revoked, other, replayed, keys, jkey, active, jroot, result, tries, relabeled, jcert>>
 
 \* The token leaked: whoever holds it posts a request for its own key.
 Other ==
     /\ ~other
     /\ other' = TRUE
-    /\ reqs' = reqs \cup {[key |-> OtherKey, run |-> 0]}
-    /\ UNCHANGED <<root, certs, revoked, replayed, ans, keys, jkey, active, jroot, result, tries, lost>>
+    /\ \E id \in Ids : reqs' = reqs \cup {[key |-> OtherKey, run |-> 0, id |-> id, mac |-> TRUE]}
+    /\ UNCHANGED <<root, certs, revoked, replayed, ans, keys, jkey, active, jroot, result, tries, lost, relabeled, jcert>>
 
 \* The machine renews (Enrol.tla Request, Issue, Install): a new key,
 \* certified in the name's log, not under the token.
@@ -170,41 +205,52 @@ Renew ==
     /\ result = "joined" /\ ~revoked /\ Newest.tok
     /\ keys < MaxKeys /\ Len(certs) < MaxCerts
     /\ keys' = keys + 1
-    /\ certs' = Append(certs, [key |-> keys + 1, root |-> root, tok |-> FALSE, afterRevoke |-> FALSE])
-    /\ UNCHANGED <<root, revoked, other, replayed, reqs, ans, jkey, active, jroot, result, tries, lost>>
+    /\ certs' = Append(certs, [key |-> keys + 1, root |-> root, tok |-> FALSE, afterRevoke |-> FALSE, id |-> Newest.id, mac |-> Newest.mac])
+    /\ UNCHANGED <<root, revoked, other, replayed, reqs, ans, jkey, active, jroot, result, tries, lost, relabeled, jcert>>
 
 \* The machine's retired join key leaked (enrol.pv's web previous key):
 \* the attacker posts a request for it with the token.
 ReplayOld ==
     /\ ~replayed /\ \E i \in DOMAIN certs : ~certs[i].tok
     /\ replayed' = TRUE
-    /\ reqs' = reqs \cup {[key |-> jkey, run |-> 0]}
-    /\ UNCHANGED <<root, certs, revoked, other, ans, keys, jkey, active, jroot, result, tries, lost>>
+    /\ \E id \in Ids : reqs' = reqs \cup {[key |-> jkey, run |-> 0, id |-> id, mac |-> TRUE]}
+    /\ UNCHANGED <<root, certs, revoked, other, ans, keys, jkey, active, jroot, result, tries, lost, relabeled, jcert>>
 
 \* The owner revokes the name.
 Revoke ==
     /\ certs # <<>> /\ ~revoked
     /\ revoked' = TRUE
-    /\ UNCHANGED <<root, certs, other, replayed, reqs, ans, keys, jkey, active, jroot, result, tries, lost>>
+    /\ UNCHANGED <<root, certs, other, replayed, reqs, ans, keys, jkey, active, jroot, result, tries, lost, relabeled, jcert>>
 
 \* The owner rotates with the recovery key.
 Rotate ==
     /\ root < MaxRoot
     /\ root' = root + 1
-    /\ UNCHANGED <<certs, revoked, other, replayed, reqs, ans, keys, jkey, active, jroot, result, tries, lost>>
+    /\ UNCHANGED <<certs, revoked, other, replayed, reqs, ans, keys, jkey, active, jroot, result, tries, lost, relabeled, jcert>>
+
+\* The relay changes a carried request's relay machine id, or names
+\* another machine as its sender (one request, once): it cannot make the
+\* token's MAC over the id it puts.
+Relabel ==
+    /\ ~relabeled
+    /\ \E r \in reqs, id \in Ids :
+        /\ r.id # id
+        /\ reqs' = (reqs \ {r}) \cup {[r EXCEPT !.id = id, !.mac = FALSE]}
+    /\ relabeled' = TRUE
+    /\ UNCHANGED <<root, certs, revoked, other, replayed, ans, keys, jkey, active, jroot, result, tries, lost, jcert>>
 
 \* Under any-root the join takes the attacker's root, and the attacker
 \* answers with a certificate of its own under it.
 InstallForged ==
     /\ active /\ jroot = Evil
     /\ result' = "joined" /\ active' = FALSE
-    /\ UNCHANGED <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, jroot, tries, lost>>
+    /\ UNCHANGED <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, jroot, tries, lost, relabeled, jcert>>
 
 Next ==
     \/ \E g \in 1..Evil : Start(g)
     \/ \E r \in reqs : Issue(r)
     \/ \E a \in ans : Install(a)
-    \/ GiveUp \/ Lose \/ Other \/ Renew \/ ReplayOld \/ Revoke \/ Rotate \/ InstallForged
+    \/ GiveUp \/ Lose \/ Other \/ Renew \/ ReplayOld \/ Revoke \/ Rotate \/ Relabel \/ InstallForged
 
 Spec == Init /\ [][Next]_vars
 
@@ -224,11 +270,21 @@ NoRetiredKeyRevived == \A i, j \in DOMAIN certs : j < i /\ certs[i].tok => certs
 \* key or the name revoked; a root, only when it is not the owner's. A
 \* lost or late answer never burns the name.
 RefusedOnlyForCause ==
-    /\ result = "refused-token" => revoked \/ other
+    /\ result = "refused-token" => revoked \/ other \/ relabeled
     /\ result = "refused-root" => jroot = Evil
 
 \* A machine joins only under a root the owner made.
 JoinRootsAreOwners == result = "joined" => jroot # Evil
+
+\* A certificate binds a relay machine id only as the token's holder
+\* stated it under the token's MAC (the relay cannot choose it), and only
+\* the issuer's account machine of the name (the move policy).
+BindOnlyStated == \A i \in DOMAIN certs : certs[i].id # "none" => certs[i].mac
+BindOnlyOwnAccount == \A i \in DOMAIN certs : certs[i].id \in {"none", "own"}
+
+\* A join the relay did not tamper with installs a certificate naming its
+\* relay machine id: no move at the first serve.
+JoinedBound == result = "joined" /\ jroot # Evil /\ ~relabeled => certs[jcert].id = "own"
 
 \* Witnesses (each must be violated: the states are reachable).
 WitnessRetriedJoin == ~(result = "joined" /\ tries >= 2)
@@ -237,4 +293,6 @@ WitnessJoinedAfterLoss == ~(result = "joined" /\ lost > 0)
 WitnessJoinedAfterRotation == ~(result = "joined" /\ jroot > 1)
 WitnessRefusedOther == ~(result = "refused-token" /\ other)
 WitnessRefusedEvil == result # "refused-root"
+WitnessJoinedBound == ~(result = "joined" /\ jcert # 0 /\ certs[jcert].id = "own")
+WitnessRefusedRelabeled == ~(result = "refused-token" /\ relabeled /\ ~other /\ ~revoked)
 =============================================================================

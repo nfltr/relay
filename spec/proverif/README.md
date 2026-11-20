@@ -805,6 +805,8 @@ closed, rotation) is `spec/enrol/Enrol.tla`. Code: `org/orgpki` (issuer, profile
 | 19 | witness: web's certificate, expired within the grace (`orgpki.RenewGrace`, the name's newest serial), renewed with its own key (`ep_grace`; no verifier admits it, query 3's ep_old is everything else expired, a superseded serial however recent) | attack (reachable), as it must |
 | 20 | a move (lane SEAMLESS, `org/orgpki` `NewMoveRequest`, `Issuer.Renew` with a machine id): web's name moves only to the relay machine id web asked for with its key; the issuer's account policy is the relay's word, so the signature over the id is the check (BIND:move.id, `TestMoveModelBindings`) | true; mutant `move-id-unsigned` (the id beside the signed renewal) false |
 | 21 | witness: web's name moved to its new relay machine id | attack (reachable), as it must |
+| 22 | a join's relay machine id (lane LOGINREDS, `org/orgpki` `NewEnrolRequestFor`, `Issuer.Enrol` of a token naming none; `spec/enrol/Join.tla` JoinedBound): web's name is certified at its enrolment only for the id web stated under the token's HMAC, or none; the policy is the relay's word, as for a move (BIND:enrol.id, `TestEnrolIDModelBindings`) | true; mutant `bind-id-unmacd` (the id beside the HMAC) false, and `name-from-request`, `token-in-request` (the attacker redeems web's name) false |
+| 23 | witness: web's name certified for the id it stated | attack (reachable), as it must |
 
 Mutants: `no-chain-check` (an issuer certificate not checked against the
 root: 1, 2, 4, 7 fail), `no-name-check` (1, 2, 4), `no-expiry-check` (3),

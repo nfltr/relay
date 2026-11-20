@@ -32,6 +32,7 @@
      BIND:rebind.mac  the new machine's key is bound to the rebind token by its HMAC (org/orgpki Enrol)
      BIND:rebind.name the certificate names the token's name, never the request's (org/orgpki rebind)
      BIND:move.id     a move's new relay machine id is under the current key's signature (org/orgpki Renew, lane SEAMLESS)
+     BIND:enrol.id    a join's stated relay machine id is under the token's HMAC (org/orgpki Enrol, lane LOGINREDS)
 
    The code: org/orgpki (README "Code map"); every query
    it enforces has a test there, and testdata/mutants.txt plants the
@@ -56,6 +57,7 @@ free ep_old, ep_grace, ep_now: epoch.
 free g_db, g_other: group.
 free none, s_lost: bitstring.          (* serials are public *)
 free rid_web: bitstring.               (* web's new relay machine id (it enrolled with the relay again) *)
+free jid_web: bitstring.               (* the relay machine id web states when it joins *)
 
 (* x509 (crypto/x509): the issuer's CA certificate, a machine's leaf
    (DNS SAN <name>.<org>.internal, OU the group, NotAfter), a CRL
@@ -67,6 +69,7 @@ fun crl(epoch, bitstring): bitstring [data].
 fun rotation(pkey): bitstring [data].
 fun renewal(pkey): bitstring [data].   (* a CSR for the new key, signed with the current one *)
 fun moving(pkey, bitstring): bitstring [data]. (* the same, naming a new relay machine id (a move) *)
+fun stating(pkey, bitstring): bitstring [data]. (* what a join's id HMAC covers: its key (the CSR) and the relay machine id, domain-separated from the enrolment HMAC (orgpki enrolIDMAC) *)
 
 free skRoot: skey [private].           (* the root's current primary *)
 free skOld: skey [private].            (* the old root's primary: stolen, below *)
@@ -86,6 +89,8 @@ event Admitted(mname, pkey).
 event Renewed(mname, epoch).        (* the issuer renewed a certificate of that epoch *)
 event AsksMove(mname, bitstring).   (* the name's machine asks, with its key, to move to that relay id *)
 event Moved(mname, bitstring).      (* the issuer moved the name to that relay id *)
+event AsksBind(mname, bitstring).   (* the name's machine states that relay id, under the token's HMAC, when it joins *)
+event Bound(mname, bitstring).      (* the issuer certified the name for that relay id at its enrolment *)
 event IssuerCertified(pkey).
 event RecoverySigned(pkey).
 event RotatedTo(pkey).
@@ -95,13 +100,22 @@ event TrustsIssuer(pkey).
    fixed when the owner made it for a name not enrolled; the request binds
    the machine's key to the token by an HMAC, so the relay never sees the
    token and cannot attach another key to it. *)
+(* A login bundle's token names no relay machine id (lane LOGINREDS,
+   spec/enrol/Join.tla JoinedBound): the join states its own (rid; none
+   when it states none) under the token's HMAC (mi), and the issuer
+   certifies the name for it; the relay cannot put an id of its choosing
+   (mutant bind-id-unmacd: the id beside the HMAC, the relay's to change).
+   The move policy (the id is the issuer's account machine of the name)
+   is the relay's word and the attacker's here, as for a move. *)
 let Redeem(t: bitstring, n: mname, g: group) =
   new s: bitstring;
-  in(c, (nr: mname, k: pkey, m: bitstring));
+  in(c, (nr: mname, k: pkey, m: bitstring, rid: bitstring, mi: bitstring));
   if m = hmac(t, (nr, k)) then        (* NOT:token-in-request *)
   if m = t then                        (* ONLY:token-in-request *)
   let nn = n in                        (* NOT:name-from-request *)
   let nn = nr in                       (* ONLY:name-from-request *)
+  if rid = none || mi = hmac(t, stating(k, rid)) then   (* NOT:bind-id-unmacd *)
+  event Bound(nn, rid);
   event Enrolled(t, nn, k);
   event Issued(nn, k, s, ep_now, g);
   out(c, sign(leaf(nn, k, s, ep_now, g), skIss));
@@ -138,8 +152,10 @@ let RebindRedeem(t: bitstring, n: mname, g: group) =
 let WebMachine(t: bitstring) =
   new sk: skey;
   event Holds(web, pk(sk));
-  out(c, (web, pk(sk), hmac(t, (web, pk(sk))))).   (* NOT:token-in-request *)
-  out(c, (web, pk(sk), t)).                        (* ONLY:token-in-request *)
+  event AsksBind(web, none);           (* a certificate naming no id is web's too: the keeper moves it *)
+  event AsksBind(web, jid_web);
+  out(c, (web, pk(sk), hmac(t, (web, pk(sk))), jid_web, hmac(t, stating(pk(sk), jid_web)))).   (* NOT:token-in-request *)
+  out(c, (web, pk(sk), t, jid_web, hmac(t, stating(pk(sk), jid_web)))).                        (* ONLY:token-in-request *)
 
 (* Renewal: the current certificate and a CSR for the new key signed with
    the current one; refused for a revoked certificate and an expired one
@@ -306,6 +322,12 @@ query event(Renewed(web, ep_grace)).
 query r: bitstring; event(Moved(web, r)) ==> event(AsksMove(web, r)).
 (* 21. witness: web's name moved to its new relay machine id *)
 query event(Moved(web, rid_web)).
+(* 22. web's name is certified at its enrolment only for the relay
+   machine id web stated (or none, AsksBind(web, none)): the relay cannot bind an id of its
+   choosing (BIND:enrol.id) *)
+query r: bitstring; event(Bound(web, r)) ==> event(AsksBind(web, r)).
+(* 23. witness: web's name certified for the relay machine id it stated *)
+query event(Bound(web, jid_web)).
 
 process
   Setup |

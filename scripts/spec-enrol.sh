@@ -47,7 +47,7 @@ trap 'st=$?; "$cicache" end "$CICACHE_STAGE" $st || st=1; rm -rf "$work"; exit $
 dir=spec/enrol
 temporal="TakesEffect MachinesFollowRotation RenewsAfterExpiry"
 witnesses="WitnessRenewed WitnessRenewedAfterExpiry WitnessRevokeSeen WitnessFailClosed WitnessForgedSession WitnessRotated WitnessSessionAfterRotation WitnessRetried@EnrolLoss.cfg WitnessRebound@Rebind.cfg WitnessSessionAfterRebind@Rebind.cfg WitnessRetiredHeld@Rebind.cfg WitnessMoved@Rebind.cfg
-WitnessRetriedJoin@Join.cfg WitnessReissued@Join.cfg WitnessJoinedAfterLoss@Join.cfg WitnessJoinedAfterRotation@Join.cfg WitnessRefusedOther@Join.cfg WitnessRefusedEvil@Join.cfg
+WitnessRetriedJoin@Join.cfg WitnessReissued@Join.cfg WitnessJoinedAfterLoss@Join.cfg WitnessJoinedAfterRotation@Join.cfg WitnessRefusedOther@Join.cfg WitnessRefusedEvil@Join.cfg WitnessJoinedBound@Join.cfg WitnessRefusedRelabeled@Join.cfg
 WitnessCutByPush@RevokePush.cfg WitnessServeBackstop@RevokePush.cfg WitnessFollowBackstop@RevokePush.cfg WitnessHeldAfterRevoke@RevokePush.cfg
 WitnessLapsed@CrlCarriers.cfg WitnessCopyWhileMailboxDown@CrlCarriers.cfg WitnessAlert@CrlCarriers.cfg WitnessLearned@CrlCarriers.cfg WitnessRestartWhileIssuerDown@CrlCarriers.cfg
 WitnessAlertWithoutCopy@CrlCarriers.cfg WitnessPeerCopy@CrlCarriersReplicas.cfg"

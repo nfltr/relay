@@ -96,15 +96,21 @@ the relay loses one request or answer; one rotation.
 | NoIssueAfterRevoke | nothing is issued under a token after the name's revoke | `reissue-revoked` |
 | NoRetiredKeyRevived | a key a renewal retired is never certified by the token again | `reissue-after-renewal` |
 | JoinRootsAreOwners | a machine joins only under a root the owner made | `any-root` |
+| RefusedOnlyForCause (relabel) | ... or the relay changed the request's relay machine id or named another sender (it can refuse a join, as it can by not carrying it) | |
+| BindOnlyStated | a certificate binds a relay machine id only as the token's holder stated it under the token's MAC (`orgpki.EnrolRequest` MachineID, MachineMAC; BIND:enrol.id): the relay cannot choose it | `bind-unmacd` (the id the MAC does not cover, such as the sender the relay names, bound) |
+| BindOnlyOwnAccount | ... and only the issuer's account machine of the name (the move policy, as Enrol.tla Move) | `bind-any-account` |
+| JoinedBound | a join the relay did not tamper with installs a certificate naming its relay machine id, so the keeper of its first `nfltr cat serve` moves nothing (lane LOGINREDS: that move replaced the pair while a second serve read it) | `bind-none` (the code before: a login bundle's certificate named no id) |
 
 Witnesses: `WitnessRetriedJoin`, `WitnessReissued`,
 `WitnessJoinedAfterLoss`, `WitnessJoinedAfterRotation`,
-`WitnessRefusedOther`, `WitnessRefusedEvil`.
+`WitnessRefusedOther`, `WitnessRefusedEvil`, `WitnessJoinedBound`,
+`WitnessRefusedRelabeled`.
 
 | Action | code |
 |---|---|
-| Start | `orgenrol.Join`: the root message checked (`trust`: the pinned root, or one the pinned recovery key certifies), the token's kept key, the request posted under the run's id |
-| Issue | `orgpki.Issuer.Enrol` (through `orgenrol.Service`): a redeemed token answers again only its key, while the name is not revoked and its newest certificate is the token's |
+| Start | `orgenrol.Join`: the root message checked (`trust`: the pinned root, or one the pinned recovery key certifies), the token's kept key, the request posted under the run's id, stating the machine's relay machine id under the token's MAC (`Pins.MachineID`, `orgpki.NewEnrolRequestFor`) |
+| Issue | `orgpki.Issuer.Enrol` (through `orgenrol.Service`): a redeemed token answers again only its key, while the name is not revoked and its newest certificate is the token's; a token naming no relay machine id binds the request's when its MAC holds and the move policy admits it; `orgenrol.Service` refuses a request whose id is not its sender's |
+| Relabel | the relay changes a request's relay machine id (the MAC no longer holds: `orgpki.Issuer.Enrol` refuses) or names another sender (`orgenrol.Service.wrongMachine` refuses) |
 | Install | `orgenrol.Join`: the answer to this run's or the first run's request, checked by `orgmachine.Checked` (key, chain) |
 | GiveUp | the join's `--wait` ends |
 | Lose | the relay loses a request or an answer (or keeps it past its TTL) |
@@ -369,6 +375,7 @@ fixtures each rejected by its invariant.
 | Enrol.tla | org/orgissuer/store.go |
 | Join.tla | org/orgpki/issuer.go |
 | Join.tla | org/orgenrol/machine.go |
+| Join.tla | org/orgenrol/issuer.go |
 | RevokePush.tla | org/orgenrol/issuer.go |
 | RevokePush.tla | org/orgenrol/orgenrol.go |
 | CrlCarriers.tla | client/orgid/follow.go |

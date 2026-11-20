@@ -48,6 +48,14 @@ reissue-revoked NoIssueAfterRevoke Join.cfg
 reissue-after-renewal NoRetiredKeyRevived Join.cfg
 pin-root-only RefusedOnlyForCause Join.cfg
 any-root JoinRootsAreOwners Join.cfg
+# the join's relay machine id (lane LOGINREDS): bind-none is the code
+# before (a login's certificate named no id, so the first serve moved the
+# name while a second serve read the pair); bind-unmacd binds an id the
+# token's MAC does not cover (the sender the relay names); bind-any-account
+# binds an id the move policy refuses.
+bind-none JoinedBound Join.cfg
+bind-unmacd BindOnlyStated Join.cfg
+bind-any-account BindOnlyOwnAccount Join.cfg
 # RevokePush.tla (a revoke's events and backstops, RevokePush.cfg):
 # poll-only is the code before 2026-11-16 (the issuer published a CRL
 # another process wrote at its next round, serveWait).

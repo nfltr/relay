@@ -186,29 +186,33 @@ cap_address reg-is-rec TTTTTTTTTTFFFFTTTTFFTTFFTFFF
 cap_address reg-unsigned TTTTTTTTTTFFFFTTTTFFTTFFTFFF
 cap_address_link - T
 cap_address_link pin-unkeyed ?
-enrol - TTTTTTTTTTTFFFFFFFFTF
-enrol no-chain-check FFTFTTFTTTTFFFFFFFFTF
-enrol no-name-check FFTFTTTTTTTFFFFFFFFTF
-enrol no-expiry-check TTFTTTTTTTTFFFFFFFFTF
-enrol stale-crl TTTFTTTTTTTFFFFFFFFTF
-enrol no-crl-check TTTFTTTTTTTFFFFFFFFTF
-enrol crl-any-signer TTTFTTTTTTTFFFFFFFFTF
-enrol renew-expired TFTTTTTTTTTFFFFFFFFFF
-enrol renew-revoked TTTFTTTTTTTFFFFFFFFTF
-enrol reusable-token TTTTFTTTTTTFFFFFFFFTF
-enrol name-from-request TFTFFFTTTTTFFFFFFFFFF
-enrol token-in-request TFTTTTTTTTTFFFFFFFFFF
-enrol no-group-check TTTTTTFTTTTFFFFFFFFTF
-enrol rotate-by-primary TTTTTTTFFTTFFFFFFFFTF
-enrol keep-old-root TTTTTTTTFTTFFFFFFFFTF
-enrol reissue-any-key TTTTTTTTTFTFFFFFFFFTF
+enrol - TTTTTTTTTTTFFFFFFFFTFTF
+enrol no-chain-check FFTFTTFTTTTFFFFFFFFTFTF
+enrol no-name-check FFTFTTTTTTTFFFFFFFFTFTF
+enrol no-expiry-check TTFTTTTTTTTFFFFFFFFTFTF
+enrol stale-crl TTTFTTTTTTTFFFFFFFFTFTF
+enrol no-crl-check TTTFTTTTTTTFFFFFFFFTFTF
+enrol crl-any-signer TTTFTTTTTTTFFFFFFFFTFTF
+enrol renew-expired TFTTTTTTTTTFFFFFFFFFFTF
+enrol renew-revoked TTTFTTTTTTTFFFFFFFFTFTF
+enrol reusable-token TTTTFTTTTTTFFFFFFFFTFTF
+enrol name-from-request TFTFFFTTTTTFFFFFFFFFFFF
+enrol token-in-request TFTTTTTTTTTFFFFFFFFFFFF
+enrol no-group-check TTTTTTFTTTTFFFFFFFFTFTF
+enrol rotate-by-primary TTTTTTTFFTTFFFFFFFFTFTF
+enrol keep-old-root TTTTTTTTFTTFFFFFFFFTFTF
+enrol reissue-any-key TTTTTTTTTFTFFFFFFFFTFTF
 # a rebind token naming another name than its own (lane REBIND): the
 # attacker moves web (2) and the revoked lost (4) with mallory's leaked one.
-enrol rebind-any-name TFTFTTTTTTFFFFFFFFFFF
+enrol rebind-any-name TFTFTTTTTTFFFFFFFFFFFTF
 # a move (lane SEAMLESS) whose new relay machine id sits beside the signed
 # renewal: the relay moves web to an id of its own (20). Every mutant that
 # hands the attacker a key of web fails 20 too (it then signs a move).
-enrol move-id-unsigned TTTTTTTTTTTFFFFFFFFFF
+enrol move-id-unsigned TTTTTTTTTTTFFFFFFFFFFTF
+# a join's relay machine id beside the token's HMAC (lane LOGINREDS): the
+# relay binds web to an id of its own (22). name-from-request and
+# token-in-request fail 22 too: the attacker redeems web's name itself.
+enrol bind-id-unmacd TTTTTTTTTTTFFFFFFFFTFFF
 orgmove - TTTFTTTF
 orgmove plain-bundle FTFFTTFF
 orgmove recipient-via-relay FTFFTTFF
