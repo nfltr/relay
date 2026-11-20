@@ -26,7 +26,7 @@ func ExampleForRelay() {
 		return
 	}
 	ctx := context.Background()
-	cred.Run(ctx, slog.Default()) // renews until ctx ends
+	defer cred.Run(ctx, slog.Default())() // renews until ctx ends; stop waits for the renewer
 	self, err := machinecred.Machines("https://nfltr.xyz", cred.HTTPClient())(ctx, "")
 	if err != nil {
 		fmt.Println(cred.Refusal(err)) // ErrRefused when the relay refused the certificate
