@@ -56,16 +56,19 @@ import (
 // (revoked, rotated away, past the grace) ends the command with
 // ErrRefused.
 type Credential struct {
-	key      *ecdsa.PrivateKey
-	dir      string
-	host, id string             // the relay's host and the machine: never change
-	name     string             // the machine's name in its account, as loaded
-	s        *machinecert.Saved // the certificate as last saved; under mu
-	cur      atomic.Pointer[tls.Certificate]
-	refused  atomic.Bool // the renewal was refused for good
-	running  atomic.Bool // Run started the renewal
-	once     sync.Once
-	mu       sync.Mutex // one renewal at a time (Run's loop, a handshake's); holds s
+	key       *ecdsa.PrivateKey
+	dir       string
+	host, id  string             // the relay's host and the machine: never change
+	name      string             // the machine's name in its account, as loaded
+	s         *machinecert.Saved // the certificate as last saved; under mu
+	cur       atomic.Pointer[tls.Certificate]
+	refused   atomic.Bool        // the renewal was refused for good
+	running   atomic.Bool        // Run started the renewal
+	runMu     sync.Mutex         // holds holders, stopRenew, renewed
+	holders   int                // Run calls not stopped yet
+	stopRenew context.CancelFunc // ends the renewer
+	renewed   chan struct{}      // closed when the renewer has finished
+	mu        sync.Mutex         // one renewal at a time (Run's loop, a handshake's); holds s
 }
 
 // ErrRefused ends a command whose machine certificate the relay refused;
@@ -291,14 +294,14 @@ const (
 	pingTimeout = 10 * time.Second
 )
 
-// Transport is Go's default transport as this process configured it (a
-// relay pin: relaytrust.Install) presenting the certificate on every
+// Transport is Go's default transport's settings, trusting the relay's
+// pinned certificate (relaytrust.PinEnv), presenting the certificate on every
 // connection to the relay's HTTP side (REST, mailboxes, the Fleet
 // API), with HTTP/2 health checks. The relay authenticates it as the
 // machine, as on gRPC.
 func (c *Credential) Transport() *http.Transport {
 	t := http.DefaultTransport.(*http.Transport).Clone()
-	t.TLSClientConfig = c.TLSConfig(t.TLSClientConfig)
+	t.TLSClientConfig = c.TLSConfig(relaytrust.WithPin(t.TLSClientConfig, os.Getenv(relaytrust.PinEnv)))
 	h2 := http.HTTP2Config{}
 	if t.HTTP2 != nil {
 		h2 = *t.HTTP2
@@ -312,18 +315,49 @@ func (c *Credential) Transport() *http.Transport {
 // context.
 func (c *Credential) HTTPClient() *http.Client { return &http.Client{Transport: c.Transport()} }
 
-// Run renews the certificate until ctx ends, once per process (later
-// calls return at once). After a final refusal the certificate is still
-// presented, the relay refuses it and the command ends with ErrRefused
-// (Refusal).
-func (c *Credential) Run(ctx context.Context, logger *slog.Logger) {
+// Run renews the certificate while a caller holds it: from Run until ctx
+// ends or the returned stop is called. One renewer runs however many
+// callers hold it (with the first one's logger). stop releases this
+// caller's hold (a second call does nothing); the last holder's returns
+// only once the renewer has finished: nothing of it renews or writes the
+// directory after (guard TestRunStopJoinsTheRenewer). After a final
+// refusal the certificate is still presented, the relay refuses it and the
+// command ends with ErrRefused (Refusal).
+func (c *Credential) Run(ctx context.Context, logger *slog.Logger) (stop func()) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	c.once.Do(func() {
-		c.running.Store(true)
-		go c.renew(ctx, logger)
-	})
+	c.runMu.Lock()
+	if c.holders == 0 {
+		rctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
+		done := make(chan struct{})
+		c.stopRenew, c.renewed = cancel, done
+		go func() {
+			defer close(done)
+			c.renew(rctx, logger)
+		}()
+	}
+	c.holders++
+	c.runMu.Unlock()
+	c.running.Store(true)
+	var once sync.Once
+	release := func() {
+		once.Do(func() {
+			c.runMu.Lock()
+			c.holders--
+			last, cancel, done := c.holders == 0, c.stopRenew, c.renewed
+			c.runMu.Unlock()
+			if last {
+				cancel()
+				<-done
+			}
+		})
+	}
+	unwatch := context.AfterFunc(ctx, release)
+	return func() {
+		unwatch()
+		release() // waits for a release the context's end began
+	}
 }
 
 // Renewing: Run started renewing the certificate in this process.
