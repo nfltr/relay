@@ -49,8 +49,8 @@ func IsOldUpgrade(r *http.Request) bool {
 	return r.ProtoMajor == 1 && r.Method == http.MethodGet && strings.EqualFold(r.Header.Get("Upgrade"), OldUpgradeToken)
 }
 
-// ParseWindow parses a window announced in a header.
-func ParseWindow(s string) (int, error) {
+// parseWindow parses a window announced in a header.
+func parseWindow(s string) (int, error) {
 	w, err := strconv.ParseUint(s, 10, 32)
 	if err != nil {
 		return 0, fmt.Errorf("dataplane: window %q: %w", s, err)

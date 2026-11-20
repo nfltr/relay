@@ -69,7 +69,7 @@ func TestReadHeaderAllocatesNothing(t *testing.T) {
 	allocs := testing.AllocsPerRun(100, func() {
 		rd.Reset(wire)
 		br.Reset(rd)
-		if _, err := ReadHeader(br); err != nil {
+		if _, err := readHeader(br); err != nil {
 			t.Fatal(err)
 		}
 	})
@@ -84,7 +84,7 @@ func BenchmarkMask(b *testing.B) {
 	b.Run("wordwise", func(b *testing.B) {
 		b.SetBytes(int64(len(buf)))
 		for b.Loop() {
-			Mask(buf, key)
+			mask(buf, key)
 		}
 	})
 	b.Run("bytewise", func(b *testing.B) {

@@ -40,9 +40,10 @@ const (
 // as late as the host slept (guard TestRenewalLoopRenewsOnTimeAfterTheHostSlept).
 const MaxSleep = time.Minute
 
-// Run renews cur at RenewAt (a new jitter each time) and again for each
-// certificate it gets, until ctx ends (nil) or the relay refuses for good
-// (a final RefusedError: revoked, or expired past the relay's grace).
+// Run renews cur at half its lifetime, up to 10 % of it later (a new
+// jitter each time), and again for each certificate it gets, until ctx
+// ends (nil) or the relay refuses for good (a final RefusedError:
+// revoked, or expired past the relay's grace).
 func (l Loop) Run(ctx context.Context, cur *Cert) error {
 	now, jitter, after := l.Now, l.Jitter, l.After
 	if now == nil {
@@ -70,7 +71,7 @@ func (l Loop) Run(ctx context.Context, cur *Cert) error {
 		}
 	}
 	for {
-		if !wait(RenewAt(cur.Leaf.NotBefore, cur.Leaf.NotAfter, jitter())) {
+		if !wait(renewAt(cur.Leaf.NotBefore, cur.Leaf.NotAfter, jitter())) {
 			return nil
 		}
 		for backoff := RetryMin; ; backoff = min(2*backoff, RetryMax) {

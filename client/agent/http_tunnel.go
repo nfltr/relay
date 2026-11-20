@@ -86,7 +86,7 @@ const errNoRoute = "not found"
 // backendRequest builds the request to fwd's backend; contentLength -1 is
 // unknown.
 func backendRequest(ctx context.Context, method string, headers http.Header, body io.Reader, contentLength int64, fwd resolvedForward, agentID string) (*http.Request, error) {
-	targetURL, err := TargetURL(fwd.targetBase, fwd.strippedPath)
+	targetURL, err := targetURL(fwd.targetBase, fwd.strippedPath)
 	if err != nil {
 		return nil, err
 	}

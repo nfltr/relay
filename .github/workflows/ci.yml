@@ -55,6 +55,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # check-api compares against each module's latest release tag
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.work
@@ -82,6 +83,8 @@ jobs:
       # the models' bindings against the code (spec/proverif/README.md "Bindings")
       - run: make spec-bindings
       - run: make check-spec-drift
+      # each module's API changes since its latest tag are the ones api/ lists
+      - run: make check-api
       - run: make check-spec-actions
       # ProVerif is built from source once (scripts/fetch-proverif.sh).
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

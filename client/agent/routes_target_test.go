@@ -34,13 +34,13 @@ func TestRoutedTargetURL(t *testing.T) {
 		"x:y/z":              "http://localhost:8080/x:y/z",
 	} {
 		fwd := rt.forward(req, nil)
-		got, err := TargetURL(fwd.targetBase, fwd.strippedPath)
+		got, err := targetURL(fwd.targetBase, fwd.strippedPath)
 		if err != nil || got != want {
 			t.Errorf("%q -> %q, %v; want %q", req, got, err, want)
 		}
 	}
 	fwd := app.forward("static/x.css", nil)
-	if got, _ := TargetURL(fwd.targetBase, fwd.strippedPath); got != "http://h/app/static/x.css" {
+	if got, _ := targetURL(fwd.targetBase, fwd.strippedPath); got != "http://h/app/static/x.css" {
 		t.Errorf("default route with a path: %q", got)
 	}
 }

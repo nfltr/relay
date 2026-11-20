@@ -1,0 +1,23 @@
+Incompatible changes:
+- ./grpcclient.DialThrough: removed
+- ./grpcclient.ExplainTLS: removed
+- package github.com/nfltr/relay/client/relayblob: removed
+- ./rpcclient.NewOutgoingMetadata: removed
+- ./rpcclient.OutgoingMetadata: removed
+- ./machinecert.RenewAt: removed
+- ./agent.SpliceUpgrade: removed
+- ./agent.SplitRoute: removed
+- ./agent.TargetURL: removed
+- ./agent.UpgradeVisitor: removed
+Compatible changes:
+- ./mailboxclient.Client.OrgCRL: added
+- ./mailboxclient.Client.PutOrgCRL: added
+- ./mailboxclient.OrgCRLPath: added
+- ./tlsend.(*Conn).CloseWriteSyncReceived: added
+- ./machinecert.LoadPair: added
+- ./machinecert.Pair: added
+- ./machinecert.SavePair: added
+- ./orgid.CRLCopy: added
+- ./orgid.Pair: added
+- ./orgid.ReadPair: added
+- package github.com/nfltr/relay/client/pairfile: added

@@ -892,7 +892,7 @@ func (i *Issuer) unexpired(now time.Time) error {
 // checkpoint signs the head with the issuer and the root primary. Callers
 // hold mu.
 func (i *Issuer) checkpoint(root crypto.Signer, now time.Time) error {
-	sig, err := SignCheckpoint(root, i.orgID, i.head)
+	sig, err := signCheckpoint(root, i.orgID, i.head)
 	if err != nil {
 		return fmt.Errorf("root signature: %w", err)
 	}

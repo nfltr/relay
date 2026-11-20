@@ -226,7 +226,7 @@ func TestUpgrade(t *testing.T) {
 		t.Fatalf("a relay that answers 400: %v, want NoUpgradeError", err)
 	}
 	for _, w := range []string{"", "x", "1", "99999999999"} {
-		if _, err := ParseWindow(w); err == nil {
+		if _, err := parseWindow(w); err == nil {
 			t.Fatalf("window %q accepted", w)
 		}
 	}

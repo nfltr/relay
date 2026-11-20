@@ -268,12 +268,12 @@ func (c *Client) post(ctx context.Context, path string, body any) (*Cert, error)
 	return &out, nil
 }
 
-// RenewAt is when a certificate valid from notBefore to notAfter renews:
+// renewAt is when a certificate valid from notBefore to notAfter renews:
 // at half its lifetime, up to 10 % of it later by jitter (in [-1, 1]: -1
 // at half, 1 at 60 %), so a fleet's machines spread their renewals and
 // half the lifetime is left for retries (the relay takes a renewal in the
 // last two thirds).
-func RenewAt(notBefore, notAfter time.Time, jitter float64) time.Time {
+func renewAt(notBefore, notAfter time.Time, jitter float64) time.Time {
 	jitter = max(-1, min(1, jitter))
 	life := notAfter.Sub(notBefore)
 	return notBefore.Add(life/2 + time.Duration(float64(life)*0.05*(jitter+1)))

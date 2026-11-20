@@ -51,13 +51,6 @@ const (
 	UploadWindow = 4
 )
 
-// AcksUploads reports whether an agent's FlowControlMetadataKey value says
-// it streams request bodies and acks their chunks.
-func AcksUploads(level string) bool {
-	n, err := strconv.Atoi(level)
-	return err == nil && n >= 2
-}
-
 // WantsUploadAcks reports whether the relay asks for acks of this request
 // body's chunks.
 func WantsUploadAcks(h map[string]*pb.HeaderValueList) bool {
