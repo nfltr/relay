@@ -30,6 +30,7 @@ func TestAbortDirectRequiredOnALinkSession(t *testing.T) {
 		}
 		_ = link.NewMux(c).Serve(func(_ []byte, s *link.Session) {
 			_, err := io.ReadAll(s)
+			_ = s.Close()
 			got <- err
 		})
 	}()
