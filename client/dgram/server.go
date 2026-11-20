@@ -50,7 +50,7 @@ func (s *Server) Stats() Stats { return s.a.stats() }
 func (s *Server) Done() <-chan struct{} { return s.a.done }
 
 // Close ends the association (a revocation: nothing reaches a target
-// after it returns).
+// after it returns). A second Close returns nil (TestCloseTwice).
 func (s *Server) Close() error {
 	s.a.endWith(net.ErrClosed, 0, endRevoke)
 	return nil

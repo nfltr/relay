@@ -97,7 +97,8 @@ func (d *Dialer) DialTarget(ctx context.Context, t Target, o DialOptions) (*Conn
 }
 
 // Close ends the Dialer's data connections and direct paths: every open
-// Conn of it is reset, and no session opens after it.
+// Conn of it is reset, and no session opens after it. It returns nil, a
+// second Close too.
 func (d *Dialer) Close() error {
 	d.mu.Lock()
 	d.closed = true

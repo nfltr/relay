@@ -106,7 +106,8 @@ func (fl *Flow) Send(p []byte) bool {
 	return true
 }
 
-// Close ends the flow: the agent is told (C) when it knew the flow.
+// Close ends the flow: the agent is told (C) when it knew the flow. A
+// second Close returns nil (TestCloseTwice).
 func (fl *Flow) Close() error {
 	fl.c.closeFlow(fl.f, ReasonClosed, false)
 	return nil
@@ -201,7 +202,8 @@ func (c *Client) Done() <-chan struct{} { return c.a.done }
 // Err is why the association ended, nil while it runs.
 func (c *Client) Err() error { return c.a.errNow() }
 
-// Close ends the association and its flows.
+// Close ends the association and its flows. A second Close returns nil
+// (TestCloseTwice).
 func (c *Client) Close() error {
 	c.a.endWith(net.ErrClosed, 0, endCut)
 	return nil

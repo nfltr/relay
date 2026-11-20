@@ -177,7 +177,8 @@ func (fw *Forwarder) Stats() Stats {
 	return s
 }
 
-// Close ends the association.
+// Close ends the association. A second Close returns nil
+// (TestCloseTwice).
 func (fw *Forwarder) Close() error {
 	fw.mu.Lock()
 	c := fw.c
