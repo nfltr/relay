@@ -169,14 +169,32 @@ func sameRelay(host, server string) bool {
 	return strings.TrimPrefix(machinecert.RelayHost(host), "grpc.") == strings.TrimPrefix(machinecert.RelayHost(server), "grpc.")
 }
 
+// pairWait bounds load's wait for a pair being replaced: only against a
+// writer that died between its two renames.
+const pairWait = 5 * time.Second
+
+// load reads dir's certificate and key as one pair. A login replaces the
+// key, then machine.json, each by rename (nfltr's machinecli keep), so a
+// read between the two finds a key the certificate does not certify: load
+// reads both again until they match, at most pairWait (lane CERTPAIR, guard
+// TestLoadWaitsForTheWritersCertificate).
 func load(dir string) *Credential {
-	s, err := machinecert.Load(dir)
-	if err != nil {
-		return nil
-	}
-	key, err := loadKey(dir)
-	if err != nil {
-		return nil
+	var s *machinecert.Saved
+	var key *ecdsa.PrivateKey
+	for deadline := time.Now().Add(pairWait); ; time.Sleep(10 * time.Millisecond) {
+		var err error
+		if s, err = machinecert.Load(dir); err != nil {
+			return nil
+		}
+		if key, err = loadKey(dir); err != nil {
+			return nil
+		}
+		if pub, ok := s.Leaf.PublicKey.(*ecdsa.PublicKey); ok && pub.Equal(&key.PublicKey) {
+			break
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
 	}
 	c := &Credential{key: key, dir: dir, host: s.RelayHost, id: s.MachineID, name: s.Name, s: s}
 	t := s.TLS(key)

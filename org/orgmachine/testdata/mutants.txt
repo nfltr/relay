@@ -13,3 +13,4 @@ no-cut-on-update | orgmachine.go | 			u, cerr := check(time.Now()) | 			u, cerr 
 reload-skips-crl | orgmachine.go | 		if err := m.ver.TakeCRL(crl, issuer, now); err != nil { | 		if false && m.ver.TakeCRL(crl, issuer, now) != nil { | TestRevocationCutsHeldSession
 install-stale-answer | orgmachine.go | 	if pub, ok := leaf.PublicKey.(ed25519.PublicKey); !ok || !pub.Equal(key.Public()) { | 	if _, ok := leaf.PublicKey.(ed25519.PublicKey); !ok { | TestInstallRefusesAnotherKey
 install-any-host-cert | orgmachine.go | 	if _, err := orgpki.CheckHostCert(hostCert, leaf, issuer); err != nil { | 	if _, err := orgpki.CheckHostCert(hostCert, leaf, issuer); false { | TestInstallChecksHostCert
+read-pair-once | orgmachine.go | 		if !strings.Contains(err.Error(), "private key does not match public key") || time.Now().After(deadline) { | 		if !strings.Contains(err.Error(), "private key does not match public key") || !deadline.IsZero() { | TestReadPairWaitsForTheWritersCertificate

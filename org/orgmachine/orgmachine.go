@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -135,20 +136,9 @@ func (m *Machine) Reload(now time.Time) (changed bool, err error) {
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", RootFile, err)
 	}
-	chain, err := os.ReadFile(filepath.Join(m.dir, CertFile))
-	if err != nil {
-		return false, notEnrolled(m.dir, err)
-	}
-	if err := checkKeyMode(filepath.Join(m.dir, KeyFile)); err != nil {
-		return false, err
-	}
-	keyPEM, err := os.ReadFile(filepath.Join(m.dir, KeyFile))
+	chain, cert, err := readPair(m.dir)
 	if err != nil {
 		return false, err
-	}
-	cert, err := tls.X509KeyPair(chain, keyPEM)
-	if err != nil {
-		return false, fmt.Errorf("%s: %w", CertFile, err)
 	}
 	if len(cert.Certificate) != 2 {
 		return false, fmt.Errorf("%s: want the machine's certificate and its issuer's", CertFile)
@@ -468,8 +458,8 @@ func (m *Machine) Install(certDER, issuerDER, hostCert []byte, key ed25519.Priva
 }
 
 // writeIdentity writes the key, then the certificate chain and the host
-// certificate: a reader between the two sees a pair that does not match and
-// keeps what it held.
+// certificate: a reader between the two finds a pair that does not match
+// and reads again (readPair).
 func writeIdentity(dir string, certDER, issuerDER, hostCert []byte, key ed25519.PrivateKey) error {
 	pk, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
@@ -514,6 +504,40 @@ func WriteFiles(dir string, e Enrolment) error {
 		}
 	}
 	return writeIdentity(dir, e.Cert, e.Issuer, e.HostCert, e.Key)
+}
+
+// pairWait bounds readPair's wait for a pair being replaced: only against a
+// writer that died between its two renames.
+const pairWait = 5 * time.Second
+
+// readPair reads dir's CertFile and KeyFile as one pair: writeIdentity
+// replaces the key, then the certificate, each by rename, so a read between
+// the two finds a key the certificate does not certify (another process's
+// renewal: nfltr node, nfltr up and nfltr cat serve each run one). readPair
+// reads both again until they match, at most pairWait (lane CERTPAIR,
+// guard TestReadPairWaitsForTheWritersCertificate; client/orgid's readPair
+// is the same).
+func readPair(dir string) (chain []byte, cert tls.Certificate, err error) {
+	for deadline := time.Now().Add(pairWait); ; time.Sleep(10 * time.Millisecond) {
+		var keyPEM []byte
+		if chain, err = os.ReadFile(filepath.Join(dir, CertFile)); err != nil { // #nosec G304 -- a file of the machine's own directory
+			return nil, cert, notEnrolled(dir, err)
+		}
+		if err = checkKeyMode(filepath.Join(dir, KeyFile)); err != nil {
+			return nil, cert, err
+		}
+		if keyPEM, err = os.ReadFile(filepath.Join(dir, KeyFile)); err != nil { // #nosec G304 -- a file of the machine's own directory
+			return nil, cert, err
+		}
+		if cert, err = tls.X509KeyPair(chain, keyPEM); err == nil {
+			return chain, cert, nil
+		}
+		// crypto/tls's own words for a key of another certificate; the
+		// guard fails if they change.
+		if !strings.Contains(err.Error(), "private key does not match public key") || time.Now().After(deadline) {
+			return nil, cert, fmt.Errorf("%s: %w", CertFile, err)
+		}
+	}
 }
 
 // checkKeyMode refuses a key other users can read.

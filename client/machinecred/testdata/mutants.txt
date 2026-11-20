@@ -1,0 +1,3 @@
+# Planted bugs of machinecred (scripts/go-mutants.sh client/machinecred/testdata/mutants.txt,
+# make test-go-mutants), in the format of client/orgid/testdata/mutants.txt.
+load-unmatched-pair | credential.go | 		if pub, ok := s.Leaf.PublicKey.(*ecdsa.PublicKey); ok && pub.Equal(&key.PublicKey) { | 		if true { | TestLoadWaitsForTheWritersCertificate

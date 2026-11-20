@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -124,20 +125,9 @@ func (m *Identity) Reload(now time.Time) (changed bool, err error) {
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", RootFile, err)
 	}
-	chain, err := os.ReadFile(filepath.Join(m.dir, CertFile))
-	if err != nil {
-		return false, notEnrolled(m.dir, err)
-	}
-	if err := checkKeyMode(filepath.Join(m.dir, KeyFile)); err != nil {
-		return false, err
-	}
-	keyPEM, err := os.ReadFile(filepath.Join(m.dir, KeyFile))
+	cert, err := readPair(m.dir)
 	if err != nil {
 		return false, err
-	}
-	cert, err := tls.X509KeyPair(chain, keyPEM)
-	if err != nil {
-		return false, fmt.Errorf("%s: %w", CertFile, err)
 	}
 	if len(cert.Certificate) != 2 {
 		return false, fmt.Errorf("%s: want the machine's certificate and its issuer's", CertFile)
@@ -290,6 +280,39 @@ func (m *Identity) OrgID() string { return m.orgID }
 
 // Verifier is the verifier m checks with (its root, its CRLs).
 func (m *Identity) Verifier() *Verifier { return m.ver }
+
+// pairWait bounds readPair's wait for a pair being replaced: only against a
+// writer that died between its two renames.
+const pairWait = 5 * time.Second
+
+// readPair reads dir's CertFile and KeyFile as one pair. A renewal or an
+// enrolment replaces the key, then the certificate, each by rename
+// (org/orgmachine's writeIdentity), so a read between the two finds a key
+// the certificate does not certify: readPair reads both again until they
+// match, at most pairWait (lane CERTPAIR, guard
+// TestReadPairWaitsForTheWritersCertificate).
+func readPair(dir string) (cert tls.Certificate, err error) {
+	for deadline := time.Now().Add(pairWait); ; time.Sleep(10 * time.Millisecond) {
+		var chain, keyPEM []byte
+		if chain, err = os.ReadFile(filepath.Join(dir, CertFile)); err != nil { // #nosec G304 -- a file of the machine's own directory
+			return cert, notEnrolled(dir, err)
+		}
+		if err = checkKeyMode(filepath.Join(dir, KeyFile)); err != nil {
+			return cert, err
+		}
+		if keyPEM, err = os.ReadFile(filepath.Join(dir, KeyFile)); err != nil { // #nosec G304 -- a file of the machine's own directory
+			return cert, err
+		}
+		if cert, err = tls.X509KeyPair(chain, keyPEM); err == nil {
+			return cert, nil
+		}
+		// crypto/tls's own words for a key of another certificate; the
+		// guard fails if they change.
+		if !strings.Contains(err.Error(), "private key does not match public key") || time.Now().After(deadline) {
+			return cert, fmt.Errorf("%s: %w", CertFile, err)
+		}
+	}
+}
 
 // checkKeyMode refuses a key other users can read.
 func checkKeyMode(path string) error {
