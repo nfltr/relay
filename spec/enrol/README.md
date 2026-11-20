@@ -305,6 +305,8 @@ fixtures each rejected by its invariant.
 | RevokePush.tla | org/orgenrol/issuer.go |
 | RevokePush.tla | org/orgenrol/orgenrol.go |
 | CrlCarriers.tla | client/orgid/follow.go |
+| CrlCarriers.tla | client/mailboxclient/orgcrl.go |
+| CrlCarriers.tla | org/orgenrol/machine.go |
 | CrlCarriers.tla | org/orgenrol/issuer.go |
 | TraceEnrol.tla | org/orgpki/trace_on.go |
 | TraceEnrol.tla | client/orgid/trace_on.go |

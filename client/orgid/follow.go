@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/nfltr/relay/client/mailboxclient"
@@ -32,6 +33,15 @@ type Mailbox interface {
 	Pull(ctx context.Context, mailbox string, after uint64, max int, wait time.Duration) ([]mailboxclient.Envelope, string, error)
 }
 
+// CRLCopy is the relay's own copy of the organisation's newest
+// CRLMessage (mailboxclient.Client.OrgCRL; nil when it holds none): a
+// carrier apart from the mailbox service, so a mailbox outage no longer
+// lapses the CRL (spec/enrol/CrlCarriers.tla CurrentWithoutMailbox). A
+// Mailbox that has it is read for it as well.
+type CRLCopy interface {
+	OrgCRL(ctx context.Context, orgID string) ([]byte, error)
+}
+
 // Timing (transport bounds, not policy).
 const (
 	// FollowEvery: the backstop, a fresh read of the CRL well before its
@@ -49,20 +59,59 @@ const (
 // a process that opens organisation sessions follows the CRL itself, so a
 // revoke reaches its sessions at the push, not at the next Reload of a
 // file another process writes. It returns only after its last write is
-// done: a caller waits for it before removing m's directory.
+// done: a caller waits for it before removing m's directory. When mb is
+// also a CRLCopy (mailboxclient.Client) it reads the relay's copy too,
+// every FollowEvery and whenever m changes; either CRL is taken by the
+// same rule (TakeCRL: signed under the trusted root, newer than the one
+// held, not lapsed), whichever carrier brought it (CrlCarriers.tla
+// copy-rollback, copy-unsigned, stale-copy).
 func Follow(ctx context.Context, mb Mailbox, m *Identity, logger *slog.Logger) {
 	followCRL(ctx, mb, m, FollowEvery, time.Now, logger)
 }
 
 func followCRL(ctx context.Context, mb Mailbox, m *Identity, every time.Duration, now func() time.Time, logger *slog.Logger) {
-	follow(ctx, mb, CRLMailbox(m.OrgID()), every, func(p []byte) error {
+	apply := func(p []byte) error {
 		var cm CRLMessage
 		if err := json.Unmarshal(p, &cm); err != nil {
 			return err
 		}
 		_, err := m.TakeCRL(cm.CRL, cm.Issuer, now())
 		return err
-	}, m.Changed, logger)
+	}
+	var wg sync.WaitGroup
+	if cp, ok := mb.(CRLCopy); ok {
+		wg.Go(func() { readCopy(ctx, cp, m.OrgID(), every, apply, m.Changed, logger) })
+	}
+	follow(ctx, mb, CRLMailbox(m.OrgID()), every, apply, m.Changed, logger)
+	wg.Wait()
+}
+
+// readCopy applies the relay's copy of orgID's CRL now, then every every
+// and whenever retry's channel closes (m changed: a CRL or a rotation
+// taken), until ctx ends; it returns after its last apply. A copy that
+// fails to read or is not taken (the one held already, or older) is
+// logged at debug: the mailbox's push stays the first carrier.
+func readCopy(ctx context.Context, cp CRLCopy, orgID string, every time.Duration, apply func([]byte) error, retry func() <-chan struct{}, logger *slog.Logger) {
+	for ctx.Err() == nil {
+		var again <-chan struct{}
+		if retry != nil {
+			again = retry() // before the read: a change meanwhile closes it
+		}
+		p, err := cp.OrgCRL(ctx, orgID)
+		if err == nil && p != nil {
+			err = apply(p)
+		}
+		if err != nil && ctx.Err() == nil {
+			logger.Debug("org: the relay's CRL copy not taken", "error", err)
+		}
+		t := time.NewTimer(every)
+		select {
+		case <-ctx.Done():
+		case <-t.C:
+		case <-again:
+		}
+		t.Stop()
+	}
 }
 
 // follow applies mailbox's newest message whenever it changes: a

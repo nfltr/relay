@@ -209,6 +209,44 @@ func follow(ctx context.Context, mb Mailbox, mailbox string, every time.Duration
 	}
 }
 
+// CRLCopy is the relay's own copy of the organisation's newest
+// orgid.CRLMessage (mailboxclient.Client.OrgCRL, nil when it holds none;
+// the issuer's CRLCopyWriter puts it): the CRL's carrier apart from the
+// mailbox service (relay client orgid.CRLCopy, the same method).
+type CRLCopy interface {
+	OrgCRL(ctx context.Context, orgID string) ([]byte, error)
+}
+
+// readCopy applies the relay's copy of orgID's CRL now, then every every
+// and whenever retry's channel closes (the machine changed: a CRL or a
+// rotation taken), until ctx ends. apply takes it by the CRL's signature
+// and NextUpdate, as a push (CrlCarriers.tla copy-rollback, copy-unsigned,
+// stale-copy); one not taken (the one held already, or older) or not read
+// is logged at debug: the mailbox's push stays the first carrier. The
+// loop is relay client orgid's readCopy: org requires a tagged client.
+func readCopy(ctx context.Context, cp CRLCopy, orgID string, every time.Duration, apply func([]byte) error, retry func() <-chan struct{}, logger *slog.Logger) {
+	for ctx.Err() == nil {
+		var again <-chan struct{}
+		if retry != nil {
+			again = retry() // before the read: a change meanwhile closes it
+		}
+		p, err := cp.OrgCRL(ctx, orgID)
+		if err == nil && p != nil {
+			err = apply(p)
+		}
+		if err != nil && ctx.Err() == nil {
+			logger.Debug("org: the relay's CRL copy not taken", "error", err)
+		}
+		t := time.NewTimer(every)
+		select {
+		case <-ctx.Done():
+		case <-t.C:
+		case <-again:
+		}
+		t.Stop()
+	}
+}
+
 func sleepCtx(ctx context.Context, d time.Duration) {
 	t := time.NewTimer(d)
 	defer t.Stop()

@@ -168,6 +168,8 @@ type followRig struct {
 	cli *Identity
 	web *x509.Certificate
 	box *box
+	// preRevoke: a CRL signed before web's revoke (a copy test's rollback).
+	preRevoke []byte
 }
 
 func newFollowRig(t *testing.T) *followRig {

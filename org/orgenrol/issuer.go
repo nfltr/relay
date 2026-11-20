@@ -38,6 +38,21 @@ import (
 // (spec/enrol/RevokePush.tla EventBound, BackstopBound).
 const serveWait = 10 * time.Second
 
+// copyEvery: the issuer puts the relay's copy of its CRL again this often
+// (and at once when the CRL changes): the copy is in the relay's process
+// and a restart loses it. CrlCarriers.tla CurrentWithoutMailbox needs
+// copyEvery + orgid.FollowEvery under the re-sign margin (CRLLife/3).
+const copyEvery = 5 * time.Minute
+
+// CRLCopyWriter is a Mailbox that also keeps the relay's own copy of the
+// organisation's CRL (mailboxclient.Client.PutOrgCRL; relay-server
+// /api/v1/org-crl/<org id>): the CRL's carrier apart from the mailbox
+// service, which members read too (orgid.CRLCopy). The issuer puts the
+// same orgid.CRLMessage it publishes.
+type CRLCopyWriter interface {
+	PutOrgCRL(ctx context.Context, orgID string, msg []byte) error
+}
+
 // serveLock: the file a Service holds while it serves its directory.
 const serveLock = "serve.lock"
 
@@ -130,6 +145,9 @@ type service struct {
 	// What the relay holds (published by this service).
 	pubRoot, pubCRL, pubCRLIssuer []byte
 	pubRootAt                     time.Time
+	// The CRL last put on the relay's copy, and when (putCopy).
+	copyCRL []byte
+	copyAt  time.Time
 	// failingSince: the first of the current run of failed maintain
 	// rounds (zero while they succeed; maintained).
 	failingSince time.Time
@@ -508,6 +526,9 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	if crlErr == nil {
+		s.putCopy(ctx, crl, issuer, now) // before the mailbox: its outage must not hold the copy back
+	}
 	if pub := slices.Concat(root, issuers); !bytes.Equal(pub, s.pubRoot) || now.Sub(s.pubRootAt) >= rootEvery {
 		// The owner's machine may have published a newer CRL of issuers
 		// itself (a revoke this issuer did not publish): kept, not
@@ -573,6 +594,25 @@ func issuersNumber(der []byte, root *x509.Certificate) *big.Int {
 func signedBy(crl []byte, issuer *x509.Certificate) bool {
 	c, err := x509.ParseRevocationList(crl)
 	return err == nil && c.CheckSignatureFrom(issuer) == nil
+}
+
+// putCopy puts the CRL on the relay's copy when the Mailbox keeps one,
+// when it changed or copyEvery passed since the last attempt (a refusal is
+// tried again then: a relay without the copy is not asked every round). A
+// failure is logged; the mailbox's publish and its alarm are unchanged.
+func (s *service) putCopy(ctx context.Context, crl, issuer []byte, now time.Time) {
+	w, ok := s.Mailbox.(CRLCopyWriter)
+	if !ok || (bytes.Equal(crl, s.copyCRL) && now.Sub(s.copyAt) < copyEvery) {
+		return
+	}
+	s.copyCRL, s.copyAt = crl, now
+	data, err := json.Marshal(orgid.CRLMessage{CRL: crl, Issuer: issuer})
+	if err == nil {
+		err = w.PutOrgCRL(ctx, s.org, data)
+	}
+	if err != nil && ctx.Err() == nil {
+		s.Logger.Warn("org issuer: the relay's copy of the CRL not kept (tried again within "+copyEvery.String()+"; members still read the mailbox)", "error", err)
+	}
 }
 
 // publish keeps msg as mailbox's one message (replace key); the append

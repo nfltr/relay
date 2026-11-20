@@ -259,18 +259,25 @@ func rotatedRoot(root, recovery *x509.Certificate, orgID string) error {
 }
 
 // followCRL takes the organisation's CRL pushes into m (its Changed cuts
-// the sessions a CRL refuses) until ctx ends, a fresh read every every.
-// A client process without a Keeper follows with relay client
-// orgid.Follow.
+// the sessions a CRL refuses) until ctx ends, a fresh read every every,
+// and the relay's copy of it when mb keeps one (CRLCopy: a mailbox outage
+// no longer lapses the CRL, CrlCarriers.tla). A client process without a
+// Keeper follows with relay client orgid.Follow, which does the same.
 func followCRL(ctx context.Context, mb Mailbox, m *orgmachine.Machine, every time.Duration, now func() time.Time, logger *slog.Logger) {
-	follow(ctx, mb, orgid.CRLMailbox(m.OrgID()), every, func(p []byte) error {
+	apply := func(p []byte) error {
 		var cm orgid.CRLMessage
 		if err := json.Unmarshal(p, &cm); err != nil {
 			return err
 		}
 		_, err := m.TakeCRL(cm.CRL, cm.Issuer, now())
 		return err
-	}, m.Changed, logger)
+	}
+	var wg sync.WaitGroup
+	if cp, ok := mb.(CRLCopy); ok {
+		wg.Go(func() { readCopy(ctx, cp, m.OrgID(), every, apply, m.Changed, logger) })
+	}
+	follow(ctx, mb, orgid.CRLMailbox(m.OrgID()), every, apply, m.Changed, logger)
+	wg.Wait()
 }
 
 // Keeper keeps a machine current: it follows the CRL and the root

@@ -55,6 +55,10 @@ type relay struct {
 	from string
 	// late delays a pull's delivery from the mailboxes it names.
 	late func(mailbox string) time.Duration
+	// down: the mailbox service is down (every append, pull and ack
+	// fails); the relay's CRL copy (copies: copyRelay) still serves.
+	down   bool
+	copies map[string][]byte
 }
 
 func newRelay() *relay {
@@ -64,6 +68,9 @@ func newRelay() *relay {
 func (r *relay) Append(_ context.Context, box string, payload []byte, o mailboxclient.AppendOptions) (mailboxclient.Appended, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.down {
+		return mailboxclient.Appended{}, errMailboxDown
+	}
 	if r.fail != nil {
 		if err := r.fail(box); err != nil {
 			return mailboxclient.Appended{}, err
@@ -96,6 +103,10 @@ func (r *relay) Pull(ctx context.Context, box string, after uint64, _ int, wait 
 	defer t.Stop()
 	for {
 		r.mu.Lock()
+		if r.down {
+			r.mu.Unlock()
+			return nil, "", errMailboxDown
+		}
 		var out []mailboxclient.Envelope
 		if !(r.withhold != nil && r.withhold(box) && after > 0) {
 			for _, e := range r.boxes[box] {
@@ -125,6 +136,9 @@ func (r *relay) Pull(ctx context.Context, box string, after uint64, _ int, wait 
 func (r *relay) Ack(_ context.Context, box string, through uint64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.down {
+		return errMailboxDown
+	}
 	r.boxes[box] = slices.DeleteFunc(r.boxes[box], func(e mailboxclient.Envelope) bool { return e.Seq <= through })
 	return nil
 }
@@ -229,6 +243,17 @@ type fleet struct {
 	noA2A     bool // the issuer has no A2A root (no MachineKey)
 	// wait, when set, is the issuer's round (Service.Wait; 50ms when not).
 	wait time.Duration
+	// copy: the relay keeps a copy of the CRL (copyRelay, copy_test.go)
+	// for the issuer and the keeper.
+	copy bool
+}
+
+// mailbox is the relay as the fleet's issuer and keeper use it.
+func (f *fleet) mailbox() Mailbox {
+	if f.copy {
+		return copyRelay{f.relay}
+	}
+	return f.relay
 }
 
 // machineKeys is the issuer's machine keys (the caller's shape: a
@@ -271,7 +296,7 @@ func newFleetWith(t *testing.T, prep func(*fleet)) *fleet {
 	}
 	go func() {
 		defer close(done)
-		_ = Service{Mailbox: f.relay, Dir: f.org.dir, Logger: quiet(), Now: clk.Now, Wait: cmp.Or(f.wait, 50*time.Millisecond), MachineKey: mk, MachineOf: f.machineOf}.Run(ctx)
+		_ = Service{Mailbox: f.mailbox(), Dir: f.org.dir, Logger: quiet(), Now: clk.Now, Wait: cmp.Or(f.wait, 50*time.Millisecond), MachineKey: mk, MachineOf: f.machineOf}.Run(ctx)
 	}()
 	t.Cleanup(func() { cancel(); <-done })
 	var err error
@@ -295,7 +320,7 @@ func newFleetWith(t *testing.T, prep func(*fleet)) *fleet {
 const hang = retryWait / 2
 
 func (f *fleet) keeper() Keeper {
-	return Keeper{Mailbox: f.relay, Machine: f.m, Logger: quiet(), Now: f.clk.Now, AnswerWait: hang, RetryWait: 10 * time.Millisecond, FollowEvery: 100 * time.Millisecond}
+	return Keeper{Mailbox: f.mailbox(), Machine: f.m, Logger: quiet(), Now: f.clk.Now, AnswerWait: hang, RetryWait: 10 * time.Millisecond, FollowEvery: 100 * time.Millisecond}
 }
 
 // keep runs k until the test (or ctx) ends, joined before TempDir's
