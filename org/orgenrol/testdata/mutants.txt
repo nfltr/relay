@@ -54,3 +54,5 @@ move-any-account | issuer.go | 		case got != id: | 		case got == "\x00": | TestK
 # CurrentWithoutMailbox): the issuer puts no copy, the keeper reads none.
 no-copy-put | issuer.go | 		s.putCopy(ctx, crl, issuer, now) // before the mailbox: its outage must not hold the copy back | 		_ = now | TestRevokeReachesTheMachineWhileTheMailboxIsDown
 no-copy-read | machine.go | 	if cp, ok := mb.(CRLCopy); ok { | 	if cp, ok := mb.(CRLCopy); false && ok { | TestRevokeReachesTheMachineWhileTheMailboxIsDown
+# OrgMove.tla Revive: the restore drill (restore_test.go) without the restore line.
+restore-skipped | ../orgissuer/bundle.go | 	return iss.Restore(crl, now) | 	_ = iss; return nil | TestRestoreFromABackupBehindThePublishedCRL

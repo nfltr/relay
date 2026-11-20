@@ -277,7 +277,9 @@ key, checked by `Join.tla`'s Issue rules (`OneKeyPerToken`,
 for a token answered after the revoke). `TraceEnrol.tla` reads
 the lines in order and requires each outcome to be the one this model's
 rules give from what the lines before it established; a wrong outcome a
-model mutant names is reported by that mutant's property. `scripts/spec-enrol.sh
+model mutant names is reported by that mutant's property. A CRL may also
+list an expired serial (no act: a restore from a backup lists the serials
+of the CRL it took for MachineLife, `spec/orgmove/OrgMove.tla` Revive). `scripts/spec-enrol.sh
 traces` (`make spec-enrol-traces`) runs every test of orgpki, orgmachine and
 orgenrol (the mailbox round trips, the push and the backstop, the rotation)
 that way and checks each trace (54 traces, 375 lines); with the Go mutant

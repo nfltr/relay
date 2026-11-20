@@ -23,3 +23,4 @@ receive-drops-membership | bundle.go | 			if err := os.Rename(s.Path(f), filepat
 signed-forgets | store.go | 	return orgfiles.Write(s.Path(SignedFile), append(old, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...), 0o600) | 	return orgfiles.Write(s.Path(SignedFile), append(old[:0], pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...), 0o600) | TestStoreKeepsSignedIssuersAndNewerIssuerCRLs
 take-older-issuers | store.go | 		if err == nil && h.Number != nil && h.Number.Cmp(crl.Number) >= 0 { | 		if err == nil && h == nil { | TestStoreKeepsSignedIssuersAndNewerIssuerCRLs
 take-foreign-issuers | store.go | 	if err := crl.CheckSignatureFrom(root); err != nil { | 	if err := error(nil); err != nil { | TestStoreKeepsSignedIssuersAndNewerIssuerCRLs
+restore-skipped | bundle.go | 	return iss.Restore(crl, now) | 	_ = iss; return nil | TestRestoreThenMoveResumesAboveThePublishedCRL

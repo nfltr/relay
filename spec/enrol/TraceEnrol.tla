@@ -96,10 +96,13 @@ RefuseBad ==
 \* and every unexpired serial a rebind retired (Rebind).
 Listable == {x[2] : x \in {c \in DOMAIN certs : c[1] = E.o /\ IsRevoked(E.o, certs[c].n) /\ certs[c].exp > E.t}}
 ListRetired == {x[2] : x \in {c \in retired : c[1] = E.o /\ certs[c].exp > E.t}}
+\* An expired serial listed is no act (a restore from a backup lists the
+\* serials of the CRL it took for MachineLife: OrgMove.tla Revive).
+Rev == {s \in Set(E.rev) : ~(<<E.o, s>> \in DOMAIN certs /\ certs[<<E.o, s>>].exp <= E.t)}
 CrlBad ==
-    (IF Set(E.rev) = Listable \cup ListRetired THEN {}
-     ELSE IF ~(ListRetired \subseteq Set(E.rev)) THEN {"rebind-keeps-serials"}
-     ELSE IF Set(E.rev) \subseteq Listable \cup ListRetired THEN {"revoke-current-only"} ELSE {"diverged"})
+    (IF Rev = Listable \cup ListRetired THEN {}
+     ELSE IF ~(ListRetired \subseteq Rev) THEN {"rebind-keeps-serials"}
+     ELSE IF Rev \subseteq Listable \cup ListRetired THEN {"revoke-current-only"} ELSE {"diverged"})
     \cup (IF E.o \in DOMAIN last /\ E.num <= last[E.o] THEN {"diverged"} ELSE {})
     \cup (IF E.next > E.t THEN {} ELSE {"diverged"})
 
