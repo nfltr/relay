@@ -198,6 +198,7 @@ after it (the bound's margin covers the other order).
 | AlertOnlyOnIssuer | the alert fires only while the issuer is down (or back and not yet put): never for a mailbox outage | `alert-on-mailbox` |
 | AlertBeforeLapse | the alert fires by the time a replica's copy lapses | `alert-on-mailbox` |
 | CurrentWithoutMailbox, AlertOnlyOnIssuer (two replicas) | a put on one replica reaches every replica: a member reading any of them holds a current CRL, and no replica's copy goes late while the issuer is up | `one-replica` (the put kept only by the replica it landed on: the design before MAILBOXSPOF2) |
+| AlertOnlyOnIssuer (two replicas) | a delivery older than a put the replica took directly meanwhile is not kept | `deliver-lww` (last writer wins: two puts landing on different replicas, the bus's older one replaced the newer and the replica served a stale copy) |
 | AlertWhileIssuerDown | with the issuer down past its last put's re-sign time the alert fires (Vanish after the last restart at the latest), whichever replicas restarted | `alert-forgets` (no memory of a copy a restart lost: a restart during an issuer outage silenced the alert, the design before MAILBOXSPOF2) |
 
 Witnesses: `WitnessLapsed` (an issuer outage lapses the CRL: the bound
@@ -212,7 +213,8 @@ did not land on).
 Replicas (lane MAILBOXSPOF2): a put lands on one replica, which keeps it
 and publishes it on the replicas' bus (relay-server's Redis pub/sub, as
 its revocations); every other replica keeps it on delivery (Deliver,
-before time passes). A read lands on any replica. A restart loses the
+before time passes) unless it holds a newer copy (by the CRL's
+ThisUpdate). A read lands on any replica. A restart loses the
 replica's copy and what the bus sent it meanwhile (a resubscribe is
 modelled as a restart). The alert is per replica: its copy late
 (`OrgIssuerUnreachable`), or a copy a restart lost and no put brought

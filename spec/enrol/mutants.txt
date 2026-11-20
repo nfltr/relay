@@ -79,4 +79,7 @@ alert-on-mailbox AlertBeforeLapse CrlCarriers.cfg
 # issuer outage silences it).
 one-replica CurrentWithoutMailbox CrlCarriersReplicas.cfg
 one-replica AlertOnlyOnIssuer CrlCarriersReplicas.cfg
+# A peer replica keeping whatever the bus delivers, older than a put it
+# took directly meanwhile (two puts landing on different replicas).
+deliver-lww AlertOnlyOnIssuer CrlCarriersReplicas.cfg
 alert-forgets AlertWhileIssuerDown CrlCarriers.cfg

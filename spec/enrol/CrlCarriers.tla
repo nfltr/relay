@@ -176,10 +176,15 @@ PutCopy(r) ==
     /\ landed' = r /\ lostAt' = [lostAt EXCEPT ![r] = -1]
     /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, restarts, held, learned, readAt, sess, renewal, restartAt, peerTook>>
 \* A peer replica keeps the put the bus delivered (relay-server
-\* runOrgCRLCopies).
+\* runOrgCRLCopies) unless it holds a newer one: a put that landed on it
+\* directly after the one the bus was carrying (deliver-lww, last writer
+\* wins: the older delivery replaced the newer put and the replica served
+\* a stale copy, late while the issuer is up; TLC's first counterexample
+\* of this design, MAILBOXSPOF2).
+Kept(r) == IF Mutant = "deliver-lww" \/ bus[r] >= copy[r] THEN bus[r] ELSE copy[r]
 Deliver(r) ==
     /\ bus[r] # 0
-    /\ copy' = [copy EXCEPT ![r] = bus[r]] /\ bus' = [bus EXCEPT ![r] = 0] /\ lostAt' = [lostAt EXCEPT ![r] = -1]
+    /\ copy' = [copy EXCEPT ![r] = Kept(r)] /\ bus' = [bus EXCEPT ![r] = 0] /\ lostAt' = [lostAt EXCEPT ![r] = -1]
     /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, sent, putAt, restarts, held, learned, readAt, sess, renewal, landed, restartAt, peerTook>>
 \* A renewal (Enrol.tla Issue) is decided by the issuer's own log. Under
 \* renew-by-copy it is decided by the CRL a carrier holds (the relay's
