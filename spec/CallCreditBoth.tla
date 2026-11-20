@@ -43,18 +43,23 @@ ASSUME StuckReq \cup StuckResp \subseteq Calls /\ WReq >= 1 /\ WResp >= 1 /\ N >
 
 Uncredited(d) == Mutant = "no-credit-" \o d
 
+\* The requests a call sends before its request EOM (a trace's own count:
+\* TraceCallCreditBoth.tla overrides it; responses are bounded by N).
+NReq == N
+
 VARIABLES cr, sent, pipe, gch, buf, got, cons, up, down, closed, eom, gone, late
 vars == <<cr, sent, pipe, gch, buf, got, cons, up, down, closed, eom, gone, late>>
 
-\* The entries of FIFO s of kind k, direction d and call c (data: 1 each;
-\* a window update: its count when cnt).
-OfK(s, k, d, c, cnt) == LET f[i \in 0..Len(s)] ==
-        IF i = 0 THEN 0
-        ELSE IF s[i].k = k /\ s[i].d = d /\ s[i].c = c
-             THEN f[i-1] + (IF cnt THEN s[i].n ELSE 1) ELSE f[i-1]
-    IN f[Len(s)]
-DataOn(s, d, c) == OfK(s, "data", d, c, FALSE)
 Sum(s) == LET f[i \in 0..Len(s)] == IF i = 0 THEN 0 ELSE f[i-1] + s[i] IN f[Len(s)]
+
+\* The entries of FIFO s of kind k, direction d and call c (data: 1 each;
+\* a window update: its count when cnt). SelectSeq, not a recursive
+\* function: a long trace's FIFOs (TraceCallCreditBoth.tla) would take one
+\* Java frame per entry (lane TRACEFIX2's CallCredit Of).
+Entries(s, k, d, c) == SelectSeq(s, LAMBDA m : m.k = k /\ m.d = d /\ m.c = c)
+OfK(s, k, d, c, cnt) == LET t == Entries(s, k, d, c) IN
+    IF cnt THEN Sum([i \in 1..Len(t) |-> t[i].n]) ELSE Len(t)
+DataOn(s, d, c) == OfK(s, "data", d, c, FALSE)
 
 Room(d, c) == Len(buf[d][c]) < W(d)
 
@@ -89,7 +94,7 @@ Send(d, c) ==
 
 \* clientStream.CloseSend, after the call's requests: the request EOM.
 CloseSend(c) ==
-    /\ ~closed[c] /\ sent["req"][c] = N /\ Len(up["caller"]) < Q
+    /\ ~closed[c] /\ sent["req"][c] = NReq /\ Len(up["caller"]) < Q
     /\ closed' = [closed EXCEPT ![c] = TRUE]
     /\ up' = [up EXCEPT !["caller"] = Append(@, [k |-> "eom", d |-> "req", c |-> c, n |-> 0])]
     /\ UNCHANGED <<cr, sent, pipe, gch, buf, got, cons, down, eom, gone, late>>
@@ -206,17 +211,14 @@ GrantBound == \A d \in Dirs, c \in Calls :
       <= W(d) \div T(d)
 
 \* Each call's frames of each direction arrive in order, once each.
-Nums(s, d, c) == LET f[i \in 0..Len(s)] ==
-        IF i = 0 THEN <<>>
-        ELSE IF s[i].k = "data" /\ s[i].d = d /\ s[i].c = c THEN Append(f[i-1], s[i].n) ELSE f[i-1]
-    IN f[Len(s)]
+Nums(s, d, c) == LET t == Entries(s, "data", d, c) IN [i \in 1..Len(t) |-> t[i].n]
 Seq1(a, b) == [k \in 1..(b - a + 1) |-> a + k - 1]
 Ordered == \A d \in Dirs, c \in Calls : ~gone[c] =>
     buf[d][c] \o Nums(down[Receiver(d)], d, c) \o pipe[d][c] \o Nums(up[Sender(d)], d, c)
       = Seq1(got[d][c] + 1, sent[d][c])
 
 \* Liveness: every call with no stuck reader gets all its frames both ways.
-HealthyReqDone == \A c \in Calls \ Ends : <>(got["req"][c] = N)
+HealthyReqDone == \A c \in Calls \ Ends : <>(got["req"][c] = NReq)
 HealthyRespDone == \A c \in Calls \ Ends : <>(got["resp"][c] = N)
 HealthyDone == HealthyReqDone /\ HealthyRespDone
 
@@ -224,7 +226,7 @@ HealthyDone == HealthyReqDone /\ HealthyRespDone
 \* A healthy call done both ways while the stuck one's buffers are full both ways.
 W_BothFullHealthyDone == ~(\E s \in Ends, h \in Calls \ Ends :
     ~gone[s] /\ Len(buf["req"][s]) = WReq /\ Len(buf["resp"][s]) = WResp
-    /\ got["req"][h] = N /\ got["resp"][h] = N)
+    /\ got["req"][h] = NReq /\ got["resp"][h] = N)
 \* A window update behind data on one connection.
 W_GrantBehindData == ~(\E a \in Agents : \E i, j \in 1..Len(down[a]) :
     i < j /\ down[a][i].k = "data" /\ down[a][j].k = "grant")

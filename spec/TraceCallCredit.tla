@@ -34,6 +34,9 @@ Step ==
       [] E.ev = "Eom" -> Eom(Call)
       [] E.ev = "Grant" -> gout # <<>> /\ Head(gout) = <<Call, E.n>> /\ SenderGrant
       [] E.ev = "Cancel" -> End(Call)
+      \* A serverStream.Send about to take credit (CallCreditSenders'
+      \* Start): no step of this machine.
+      [] E.ev = "Start" -> UNCHANGED vars
       [] OTHER -> Print(<<"unknown event", E>>, FALSE)
 
 \* The relay's steps the next logged one waits for.
