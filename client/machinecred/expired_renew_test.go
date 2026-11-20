@@ -94,7 +94,7 @@ func TestExpiredCertificateWhileTheRelayIsDownOrRefuses(t *testing.T) {
 		http.Error(w, "machine_revoked", status)
 	})
 	cfg := c.TLSConfig(nil)
-	if _, err := cfg.GetClientCertificate(&tls.CertificateRequestInfo{}); !errors.Is(err, ErrRenewing) {
+	if _, err := cfg.GetClientCertificate(nil); !errors.Is(err, ErrRenewing) { // nil: as callers outside a handshake (nfltr tests)
 		t.Fatalf("relay down: %v, want ErrRenewing", err)
 	}
 	if errors.Is(c.Refusal(errors.New("dial")), ErrRefused) {

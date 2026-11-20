@@ -237,9 +237,9 @@ func (c *Credential) TLSConfig(base *tls.Config) *tls.Config {
 		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
 	cfg.GetClientCertificate = func(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
-		ctx := cri.Context()
-		if ctx == nil { // a CertificateRequestInfo made outside a handshake
-			ctx = context.Background()
+		ctx := context.Background() // a CertificateRequestInfo made outside a handshake has none
+		if cri != nil && cri.Context() != nil {
+			ctx = cri.Context()
 		}
 		return c.certificate(ctx)
 	}
