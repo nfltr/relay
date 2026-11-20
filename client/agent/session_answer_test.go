@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/internal/tcprig"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentservices"
@@ -66,15 +67,10 @@ func echoTarget(t *testing.T) string {
 	return ln.Addr().String()
 }
 
-// closedAddr is a loopback address nothing listens on.
+// closedAddr is a loopback address nothing listens on: a port the test
+// holds, never one probed free (a parallel package can take that).
 func closedAddr(t *testing.T) string {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
-	return addr
+	return tcprig.RefusedAddr(t).String()
 }
 
 // An open that asks for an answer gets one before any byte: OK once the

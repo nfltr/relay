@@ -14,6 +14,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nfltr/relay/client/internal/tcprig"
 )
 
 func freeAddr(t *testing.T) string {
@@ -73,7 +75,7 @@ func TestTransportHonoursCallerDeadline(t *testing.T) {
 	client := &http.Client{Transport: Transport(http.DefaultTransport)}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+freeAddr(t)+"/api/v1/orchestration/tasks/t1", nil)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+tcprig.RefusedAddr(t).String()+"/api/v1/orchestration/tasks/t1", nil)
 	start := time.Now()
 	_, err := client.Do(req)
 	if err == nil {

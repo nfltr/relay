@@ -193,12 +193,7 @@ func TestE2EEStreamUpgrade(t *testing.T) {
 // TestE2EEStreamBackendDown: a backend that cannot be reached gets the
 // client a 502, on a dedicated connection and through the pool alike.
 func TestE2EEStreamBackendDown(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := ln.Addr().String()
-	_ = ln.Close()
+	addr := closedAddr(t)
 	for _, conn := range []string{"keep-alive", "close"} {
 		c := streamSession(t, addr)
 		_, _ = io.WriteString(c, "GET / HTTP/1.1\r\nHost: x\r\nConnection: "+conn+"\r\n\r\n")
