@@ -280,7 +280,7 @@ func (l *linkSessions) accept(_ string, header []byte, s peerlink.Session) {
 			serveNF1(l.ctx, s, target, p, l.logger)
 			return
 		}
-		_ = peerlink.Join(s, target)
+		_ = joinTarget(s, nil, target)
 	}
 }
 

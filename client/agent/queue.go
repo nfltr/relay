@@ -343,7 +343,12 @@ func (c *QueueConn) CloseWrite() error {
 // end, link.ErrReset when it could not (closeSync.wait).
 func (c *QueueConn) Close() error {
 	c.end(nil)
-	return c.cs.wait()
+	err := c.cs.wait()
+	if err == errUnacked { // within psCloseBound: the session is cut
+		c.end(link.ErrReset)
+		return link.ErrReset
+	}
+	return err
 }
 
 // Reset ends the session as failed: the peer reads link.ErrReset, its
@@ -352,6 +357,15 @@ func (c *QueueConn) Close() error {
 func (c *QueueConn) Reset() error {
 	c.end(link.ErrReset)
 	return nil
+}
+
+// EndDelivered (peerlink.EndNotifier): Join's CloseWriteSync of the
+// agent's end onto a relayed agent-link session returned: the relay read
+// every byte and the end (joinTarget).
+func (c *QueueConn) EndDelivered() {
+	if c.agentSide {
+		c.cs.report(nil)
+	}
 }
 
 // used: the agent's end in use without joinTarget's report (a plain

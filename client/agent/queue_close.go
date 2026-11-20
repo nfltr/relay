@@ -47,10 +47,11 @@ func (s *closeSync) report(err error) {
 	s.once.Do(func() { s.err = err; close(s.done) })
 }
 
-// wait returns the report; nil at once when none comes (a relayed
-// session, a bare pipe). Undecided, it waits at most e2eeHeaderTimeout:
-// the session's goroutine joins or drops the agent's end within its
-// handshake bound.
+// wait returns the report; nil at once when none comes (a session
+// that reports nothing: a gRPC stream's, a bare pipe). Undecided, it
+// waits at most e2eeHeaderTimeout: the session's goroutine joins or drops
+// the agent's end within its handshake bound. A report not given within
+// psCloseBound (a live peer that takes no bytes) is errUnacked.
 func (s *closeSync) wait() error {
 	select {
 	case <-s.decided:
@@ -60,12 +61,17 @@ func (s *closeSync) wait() error {
 	if !s.reports {
 		return nil
 	}
-	<-s.done
-	return s.err
+	select {
+	case <-s.done:
+		return s.err
+	case <-time.After(psCloseBound):
+		return errUnacked
+	}
 }
 
 // acker is a session that tells when its peer acknowledged its bytes:
-// a direct path's psConn (pathswitch: within its Linger of silence).
+// a direct path's psConn (pathswitch: within its Linger of silence), a
+// relayed agent-link session (syncAcker).
 type acker interface {
 	Written() uint64
 	WaitAcked(n uint64, d time.Duration) bool
@@ -73,10 +79,37 @@ type acker interface {
 
 // ackerOf is c's acker, nil when c is none.
 func ackerOf(c net.Conn) acker {
-	if a, ok := c.(acker); ok {
-		return a
+	switch v := c.(type) {
+	case acker:
+		return v
+	case syncer:
+		return syncAcker{v}
 	}
 	return nil
+}
+
+// syncer is a link session (an agent link's, relayed): Sync returns once
+// the relay's Mux read every frame buffered before it.
+type syncer interface{ Sync() error }
+
+// syncAcker acknowledges a relayed session's bytes once the relay read
+// them (lane RELAYCLOSE, link spec/RelayedClose.tla CloseTruth): the
+// relay then delivers its tail and end whatever the agent does next
+// (link: a FIN then a failure reads io.EOF). The link's liveness bounds
+// Sync; d bounds a relay that is alive but takes nothing.
+type syncAcker struct{ s syncer }
+
+func (syncAcker) Written() uint64 { return 0 }
+
+func (a syncAcker) WaitAcked(_ uint64, d time.Duration) bool {
+	done := make(chan error, 1)
+	go func() { done <- a.s.Sync() }()
+	select {
+	case err := <-done:
+		return err == nil
+	case <-time.After(d):
+		return false
+	}
 }
 
 var errUnacked = errors.New("the peer did not acknowledge the session's end")
@@ -86,13 +119,22 @@ var errUnacked = errors.New("the peer did not acknowledge the session's end")
 // end reached tc (Join's CloseWrite on it: TLS close_notify) it waits
 // until the peer acknowledged every byte, then reports to the target's
 // Accept conn (closeSync); unacknowledged, it resets the session.
+//
+// Where tc is the relayed agent-link session itself (peerlink.SyncsEnd),
+// Join's CloseWriteSync onto it is the acknowledgement: Join tells the
+// agent's end (QueueConn.EndDelivered), and tc stays a *link.Session
+// for Join (Pump, no goroutine while idle).
 func joinTarget(tc peerlink.Session, a acker, target net.Conn) error {
 	q := queueOf(target)
-	if q == nil || a == nil {
-		return peerlink.Join(tc, target)
+	switch {
+	case q == nil:
+	case peerlink.SyncsEnd(tc):
+		q.cs.decide(true)
+	case a != nil:
+		q.cs.decide(true)
+		return peerlink.Join(ackedEnd{tc, a, q.cs}, target) // the target's end reports what CloseWrite did not
 	}
-	q.cs.decide(true)
-	return peerlink.Join(ackedEnd{tc, a, q.cs}, target) // the target's end reports what CloseWrite did not
+	return peerlink.Join(tc, target)
 }
 
 func queueOf(c net.Conn) *QueueConn {
