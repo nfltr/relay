@@ -226,6 +226,7 @@ type fleet struct {
 	// machineOf, when set, is the issuer's account name resolution
 	// (Service.MachineOf).
 	machineOf func(ctx context.Context, name string) (string, error)
+	noA2A     bool // the issuer has no A2A root (no MachineKey)
 	// wait, when set, is the issuer's round (Service.Wait; 50ms when not).
 	wait time.Duration
 }
@@ -264,9 +265,13 @@ func newFleetWith(t *testing.T, prep func(*fleet)) *fleet {
 	t.Cleanup(cancel)
 	f.ctx = ctx
 	done := make(chan struct{})
+	mk := keys.make
+	if f.noA2A {
+		mk = nil
+	}
 	go func() {
 		defer close(done)
-		_ = Service{Mailbox: f.relay, Dir: f.org.dir, Logger: quiet(), Now: clk.Now, Wait: cmp.Or(f.wait, 50*time.Millisecond), MachineKey: keys.make, MachineOf: f.machineOf}.Run(ctx)
+		_ = Service{Mailbox: f.relay, Dir: f.org.dir, Logger: quiet(), Now: clk.Now, Wait: cmp.Or(f.wait, 50*time.Millisecond), MachineKey: mk, MachineOf: f.machineOf}.Run(ctx)
 	}()
 	t.Cleanup(func() { cancel(); <-done })
 	var err error

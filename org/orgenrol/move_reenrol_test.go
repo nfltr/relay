@@ -45,6 +45,7 @@ func TestKeeperMovesTheNameAfterAReEnrolment(t *testing.T) {
 	f := newFleetWith(t, func(f *fleet) {
 		f.relay.from = web1
 		f.machineOf = acct.of
+		f.noA2A = true
 	})
 	acct.set("web-1", newID)
 	f.relay.mu.Lock()
@@ -69,6 +70,7 @@ func TestKeeperMoveRefusedKeepsTheOldID(t *testing.T) {
 	f := newFleetWith(t, func(f *fleet) {
 		f.relay.from = web1
 		f.machineOf = acct.of
+		f.noA2A = true
 	})
 	f.relay.mu.Lock()
 	f.relay.from = otherID // another account's machine: the account still names web1
@@ -82,4 +84,14 @@ func TestKeeperMoveRefusedKeepsTheOldID(t *testing.T) {
 		cur, _ := f.m.Current()
 		return serial(f.m) != before && orgid.MachineID(cur) == "m-web-1" // the token's id
 	})
+}
+
+// An issuer with an A2A root (MachineKey) moves no name: its machine keys
+// are re-keyed only on an enrolment (the rebind token's).
+func TestNoMoveWithAnA2ARoot(t *testing.T) {
+	s := &service{MachineOf: func(context.Context, string) (string, error) { return web1, nil },
+		MachineKey: func(string, string, time.Time) (string, []byte, error) { return "", nil, nil }}
+	if s.movePolicy(t.Context()) != nil {
+		t.Fatal("a move policy with an A2A root")
+	}
 }

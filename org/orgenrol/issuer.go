@@ -376,9 +376,13 @@ func (s *service) wrongMachine(ctx context.Context, req orgpki.Request, sender s
 // movePolicy admits moving a name to a relay machine id when that id is
 // the issuer's account machine of that name (MachineOf; Enrol.tla Move,
 // MoveOnlyOwnAccount): the default for the account that holds the
-// issuer. nil (no MachineOf): only a rebind token moves a name.
+// issuer. nil (no MachineOf, or MachineKey set): only a rebind token
+// moves a name. ponytail: an A2A root's machine keys are keyed by machine
+// id and re-keyed only on an enrolment (MachineKey's RebindMachineKey), so
+// a move would leave the new id keyless; sealing a key into a renewal's
+// answer lifts this.
 func (s *service) movePolicy(ctx context.Context) orgpki.MovePolicy {
-	if s.MachineOf == nil {
+	if s.MachineOf == nil || s.MachineKey != nil {
 		return nil
 	}
 	return func(name, id string) error {
