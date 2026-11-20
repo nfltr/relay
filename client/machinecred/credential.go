@@ -273,7 +273,7 @@ const (
 
 // Transport is Go's default transport as this process configured it (a
 // relay pin: relaytrust.Install) presenting the certificate on every
-// connection to the relay's HTTP side (REST, mailboxes, blobs, the Fleet
+// connection to the relay's HTTP side (REST, mailboxes, the Fleet
 // API), with HTTP/2 health checks. The relay authenticates it as the
 // machine, as on gRPC.
 func (c *Credential) Transport() *http.Transport {

@@ -59,8 +59,6 @@ const (
 	ErrorReason_ERROR_REASON_RESERVED_NAME ErrorReason = 13
 	// The mailbox holds as many messages as it may.
 	ErrorReason_ERROR_REASON_MAILBOX_FULL ErrorReason = 14
-	// Bytes did not match the SHA-256 (or size) they were sent under.
-	ErrorReason_ERROR_REASON_BLOB_HASH_MISMATCH ErrorReason = 15
 	// Unknown webhook id, or not the caller's.
 	ErrorReason_ERROR_REASON_WEBHOOK_NOT_FOUND ErrorReason = 16
 	// The relay is starting and cannot answer yet (retryable).
@@ -69,11 +67,6 @@ const (
 	// agent), so it cannot tell where the agent is or whether it is
 	// connected (retryable).
 	ErrorReason_ERROR_REASON_DIRECTORY_UNAVAILABLE ErrorReason = 21
-	// No blob of that SHA-256 the caller may read (unknown, not its own, or
-	// the grant is invalid or expired).
-	ErrorReason_ERROR_REASON_BLOB_NOT_FOUND ErrorReason = 24
-	// An upload part starts beyond the bytes held; resume at Upload-Offset.
-	ErrorReason_ERROR_REASON_BLOB_UPLOAD_GAP ErrorReason = 25
 	// The call carries no Hello, or a protocol version the peer does not
 	// speak: the older side must update (session, 30-33).
 	ErrorReason_ERROR_REASON_PROTOCOL_UNSUPPORTED ErrorReason = 30
@@ -132,12 +125,9 @@ var (
 		12: "ERROR_REASON_RELAY_DRAINING",
 		13: "ERROR_REASON_RESERVED_NAME",
 		14: "ERROR_REASON_MAILBOX_FULL",
-		15: "ERROR_REASON_BLOB_HASH_MISMATCH",
 		16: "ERROR_REASON_WEBHOOK_NOT_FOUND",
 		20: "ERROR_REASON_RELAY_STARTING",
 		21: "ERROR_REASON_DIRECTORY_UNAVAILABLE",
-		24: "ERROR_REASON_BLOB_NOT_FOUND",
-		25: "ERROR_REASON_BLOB_UPLOAD_GAP",
 		30: "ERROR_REASON_PROTOCOL_UNSUPPORTED",
 		31: "ERROR_REASON_ALREADY_ATTACHED",
 		40: "ERROR_REASON_TARGET_UNREACHABLE",
@@ -162,12 +152,9 @@ var (
 		"ERROR_REASON_RELAY_DRAINING":          12,
 		"ERROR_REASON_RESERVED_NAME":           13,
 		"ERROR_REASON_MAILBOX_FULL":            14,
-		"ERROR_REASON_BLOB_HASH_MISMATCH":      15,
 		"ERROR_REASON_WEBHOOK_NOT_FOUND":       16,
 		"ERROR_REASON_RELAY_STARTING":          20,
 		"ERROR_REASON_DIRECTORY_UNAVAILABLE":   21,
-		"ERROR_REASON_BLOB_NOT_FOUND":          24,
-		"ERROR_REASON_BLOB_UPLOAD_GAP":         25,
 		"ERROR_REASON_PROTOCOL_UNSUPPORTED":    30,
 		"ERROR_REASON_ALREADY_ATTACHED":        31,
 		"ERROR_REASON_TARGET_UNREACHABLE":      40,
@@ -211,7 +198,7 @@ var File_nfltr_relay_v1_error_reason_proto protoreflect.FileDescriptor
 
 const file_nfltr_relay_v1_error_reason_proto_rawDesc = "" +
 	"\n" +
-	"!nfltr/relay/v1/error_reason.proto\x12\x0enfltr.relay.v1*\xab\b\n" +
+	"!nfltr/relay/v1/error_reason.proto\x12\x0enfltr.relay.v1*\xb1\b\n" +
 	"\vErrorReason\x12\x1c\n" +
 	"\x18ERROR_REASON_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cERROR_REASON_UNAUTHENTICATED\x10\x01\x12 \n" +
@@ -226,13 +213,10 @@ const file_nfltr_relay_v1_error_reason_proto_rawDesc = "" +
 	"\x1bERROR_REASON_LIMIT_EXCEEDED\x10\v\x12\x1f\n" +
 	"\x1bERROR_REASON_RELAY_DRAINING\x10\f\x12\x1e\n" +
 	"\x1aERROR_REASON_RESERVED_NAME\x10\r\x12\x1d\n" +
-	"\x19ERROR_REASON_MAILBOX_FULL\x10\x0e\x12#\n" +
-	"\x1fERROR_REASON_BLOB_HASH_MISMATCH\x10\x0f\x12\"\n" +
+	"\x19ERROR_REASON_MAILBOX_FULL\x10\x0e\x12\"\n" +
 	"\x1eERROR_REASON_WEBHOOK_NOT_FOUND\x10\x10\x12\x1f\n" +
 	"\x1bERROR_REASON_RELAY_STARTING\x10\x14\x12&\n" +
-	"\"ERROR_REASON_DIRECTORY_UNAVAILABLE\x10\x15\x12\x1f\n" +
-	"\x1bERROR_REASON_BLOB_NOT_FOUND\x10\x18\x12 \n" +
-	"\x1cERROR_REASON_BLOB_UPLOAD_GAP\x10\x19\x12%\n" +
+	"\"ERROR_REASON_DIRECTORY_UNAVAILABLE\x10\x15\x12%\n" +
 	"!ERROR_REASON_PROTOCOL_UNSUPPORTED\x10\x1e\x12!\n" +
 	"\x1dERROR_REASON_ALREADY_ATTACHED\x10\x1f\x12#\n" +
 	"\x1fERROR_REASON_TARGET_UNREACHABLE\x10(\x12!\n" +
@@ -241,7 +225,7 @@ const file_nfltr_relay_v1_error_reason_proto_rawDesc = "" +
 	"\x1dERROR_REASON_E2EE_UNAVAILABLE\x10+\x12\"\n" +
 	"\x1eERROR_REASON_BALANCE_EXHAUSTED\x102\x12%\n" +
 	"!ERROR_REASON_MACHINE_NOT_ENROLLED\x103\x12!\n" +
-	"\x1dERROR_REASON_ACCOUNT_REQUIRED\x104\"\x04\b\x04\x10\x04\"\x04\b\x05\x10\x05*\x1dERROR_REASON_SESSION_REPLACED* ERROR_REASON_SESSION_RECONNECTEDB\xb5\x01\n" +
+	"\x1dERROR_REASON_ACCOUNT_REQUIRED\x104\"\x04\b\x04\x10\x04\"\x04\b\x05\x10\x05\"\x04\b\x0f\x10\x0f\"\x04\b\x18\x10\x18\"\x04\b\x19\x10\x19*\x1dERROR_REASON_SESSION_REPLACED* ERROR_REASON_SESSION_RECONNECTED*\x1fERROR_REASON_BLOB_HASH_MISMATCH*\x1bERROR_REASON_BLOB_NOT_FOUND*\x1cERROR_REASON_BLOB_UPLOAD_GAPB\xb5\x01\n" +
 	"\x12com.nfltr.relay.v1B\x10ErrorReasonProtoP\x01Z3github.com/nfltr/relay/proto/nfltr/relay/v1;relayv1\xa2\x02\x03NRX\xaa\x02\x0eNfltr.Relay.V1\xca\x02\x0eNfltr\\Relay\\V1\xe2\x02\x1aNfltr\\Relay\\V1\\GPBMetadata\xea\x02\x10Nfltr::Relay::V1b\x06proto3"
 
 var (

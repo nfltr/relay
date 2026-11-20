@@ -25,6 +25,9 @@ enum ErrorReason {
   // session ends with a gRPC status (rpcclient.IsSessionReplaced).
   reserved 4, 5;
   reserved "ERROR_REASON_SESSION_REPLACED", "ERROR_REASON_SESSION_RECONNECTED";
+  // 15, 24 and 25 were the blob service's (left with it, lane BLOBREST).
+  reserved 15, 24, 25;
+  reserved "ERROR_REASON_BLOB_HASH_MISMATCH", "ERROR_REASON_BLOB_NOT_FOUND", "ERROR_REASON_BLOB_UPLOAD_GAP";
   // The peer does not support the requested feature.
   ERROR_REASON_FEATURE_UNSUPPORTED = 6;
   // The agent refused the port or service, or its target refused the
@@ -44,8 +47,6 @@ enum ErrorReason {
   ERROR_REASON_RESERVED_NAME = 13;
   // The mailbox holds as many messages as it may.
   ERROR_REASON_MAILBOX_FULL = 14;
-  // Bytes did not match the SHA-256 (or size) they were sent under.
-  ERROR_REASON_BLOB_HASH_MISMATCH = 15;
   // Unknown webhook id, or not the caller's.
   ERROR_REASON_WEBHOOK_NOT_FOUND = 16;
   // The relay is starting and cannot answer yet (retryable).
@@ -54,11 +55,6 @@ enum ErrorReason {
   // agent), so it cannot tell where the agent is or whether it is
   // connected (retryable).
   ERROR_REASON_DIRECTORY_UNAVAILABLE = 21;
-  // No blob of that SHA-256 the caller may read (unknown, not its own, or
-  // the grant is invalid or expired).
-  ERROR_REASON_BLOB_NOT_FOUND = 24;
-  // An upload part starts beyond the bytes held; resume at Upload-Offset.
-  ERROR_REASON_BLOB_UPLOAD_GAP = 25;
   // The call carries no Hello, or a protocol version the peer does not
   // speak: the older side must update (session, 30-33).
   ERROR_REASON_PROTOCOL_UNSUPPORTED = 30;

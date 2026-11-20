@@ -6,7 +6,6 @@ avoid-bind-to-all-interfaces client/p2p/connect.go 55e66725deb47514  # ln, err :
 incorrect-default-permission client/agent/acme.go 47474cf36a37704a  # if err := os.MkdirAll(cacheDir, 0o700); err != nil {
 incorrect-default-permission client/p2p/transfer.go c318f6693297dcb7  # if err := os.MkdirAll(outPath, 0o755); err != nil {
 incorrect-default-permission client/p2p/transfer.go d4cb9f42b4919064  # if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
-incorrect-default-permission client/relayblob/relayblob.go 7e76fbbc60205a41  # f, err := os.OpenFile(part, os.O_CREATE|os.O_RDWR, 0o644)
 math-random-used client/relayoutage/redial.go 16cc1e9b49ab250d  # "math/rand/v2"
 math-random-used client/rpcclient/reconnect_backoff.go 6015cc9b848e6a73  # "math/rand"
 missing-ssl-minversion client/agent/http_tunnel.go 7bbd6a6edc0c064d  # tlsCfg = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // opt-in, dev onl

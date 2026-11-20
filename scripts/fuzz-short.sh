@@ -19,8 +19,6 @@ TARGETS=(
 	"proto ./wire/dataplane FuzzUpgradeReply"
 	"proto ./wire/dataplane FuzzReadAnswer"
 	"proto ./wire/agentservices FuzzParse"
-	"proto ./wire/blobwire FuzzParseContentRange"
-	"proto ./wire/blobwire FuzzParseDigest"
 	"proto ./wire/hookwire FuzzOpen"
 	"client ./mailboxclient FuzzDecodeError"
 	"client ./capaddr FuzzParse"
