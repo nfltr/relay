@@ -23,7 +23,7 @@ require (
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/jackpal/gateway v1.2.0 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
-	github.com/nfltr/link v0.13.1 // indirect
+	github.com/nfltr/link v0.13.2 // indirect
 	github.com/nfltr/link/pathswitch v0.1.1 // indirect
 	github.com/nfltr/link/peerlink/quiclink v0.7.0 // indirect
 	github.com/nfltr/quic-go v0.63.1-nfltr.3 // indirect
