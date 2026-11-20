@@ -157,7 +157,7 @@ func (c *Client) handle(fr frame) error {
 			kind = "refuse"
 			a.cnt.refused.Add(1)
 		}
-		traceRecvC(kind, fr.id, "")
+		traceRecvC(kind, fr.id, tailOut(fr))
 		if f == nil {
 			break
 		}
@@ -203,6 +203,6 @@ func (c *Client) Err() error { return c.a.errNow() }
 
 // Close ends the association and its flows.
 func (c *Client) Close() error {
-	c.a.end(net.ErrClosed)
+	c.a.endWith(net.ErrClosed, 0, endCut)
 	return nil
 }

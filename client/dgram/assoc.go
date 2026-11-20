@@ -260,7 +260,7 @@ func (a *assoc) sweep(expire func(*flow)) {
 				expire(f)
 			}
 			if idle {
-				a.end(ErrIdle)
+				a.endWith(ErrIdle, 0, endCut)
 				return
 			}
 		}
@@ -278,7 +278,15 @@ func (a *assoc) remove(fl *flow) {
 
 // end ends the association once: the stream closed, every flow closed
 // (the agent's sockets with them).
-func (a *assoc) end(err error) { a.endWith(err, 0) }
+func (a *assoc) end(err error) { a.endWith(err, 0, endNotice) }
+
+// How an association's side ended (the trace's step: DatagramAssoc
+// NoticeC/NoticeA, Cut, Revoke).
+const (
+	endNotice = iota // it read the stream's end, or its write failed
+	endCut           // its own end: the client's Close or idle end, the agent's stop
+	endRevoke        // the agent's revocation (Server.Close, CloseWith)
+)
 
 // tailGrace bounds how long an end with a reason waits for the stream to
 // take its closes.
@@ -287,10 +295,10 @@ const tailGrace = time.Second
 // endWith is end; why non-zero first tells the peer of each flow open at
 // this side why it closed (a C frame each on the stream, after the frames
 // the sender already wrote, within tailGrace), its targets already closed.
-func (a *assoc) endWith(err error, why Reason) {
+func (a *assoc) endWith(err error, why Reason, by int) {
 	a.endOnce.Do(func() {
-		traceEnd()
 		a.mu.Lock()
+		traceEndStep(a.client, by)
 		a.err = err
 		var fs []*flow
 		for _, f := range a.flows {
@@ -306,6 +314,7 @@ func (a *assoc) endWith(err error, why Reason) {
 		}
 		clear(a.fresh)
 		a.out = nil
+		traceCleanup(a.client, by)
 		a.mu.Unlock()
 		close(a.done)
 		if why != 0 && len(fs) > 0 {

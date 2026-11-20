@@ -688,6 +688,28 @@ func TestDatagramAssocTrace(t *testing.T) {
 	}
 }
 
+// TestDatagramAssocTraceRevoke is the revocation's run scripts/spec.sh
+// traces records (-tags relaytrace): a flow's datagram and its reply, then
+// the agent's revocation with its reason (CloseWith: Revoke, CleanupA, the
+// tail's close) and the client reading the end (NoticeC). TestDatagramAssocTrace's
+// end is the client's (Cut, NoticeA, CleanupA).
+func TestDatagramAssocTraceRevoke(t *testing.T) {
+	to, _ := echo(t, 1)
+	c, s := pair(t, Config{}, Config{}, dialUDP(to))
+	in, cl := make(chan []byte, 1), make(chan Reason, 1)
+	f, err := c.Open(FlowOptions{Source: "a", Deliver: func(p []byte) { in <- append([]byte(nil), p...) }, Closed: func(r Reason) { cl <- r }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Send([]byte("a1"))
+	recv(t, in) // nothing in flight: the revocation's tail is all the stream carries after it
+	s.CloseWith(ReasonRevoked)
+	if r := <-cl; r != ReasonRevoked {
+		t.Fatalf("flow closed %v, want ReasonRevoked", r)
+	}
+	<-c.Done()
+}
+
 // countAtSend is a direct path that records, as each datagram leaves, how
 // many the association counts sent direct: a reply can be seen as soon as
 // SendDatagram hands the datagram on, so the count must already hold it.

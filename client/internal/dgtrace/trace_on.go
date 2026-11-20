@@ -15,11 +15,11 @@ import (
 // The DatagramAssoc trace (go test -tags relaytrace, RELAYTRACE=<dir>):
 // one NDJSON line per step to <dir>/datagramassoc-<pid>.ndjson (spec/README.md
 // "DatagramAssoc traces"). A traced process runs one association.
-// Recording stops at the association's end (End).
+// Recording stops once both sides of the association ended (End).
 var (
-	mu    sync.Mutex
-	file  *os.File
-	ended bool
+	mu   sync.Mutex
+	file *os.File
+	ends int
 )
 
 // On: RELAYTRACE names the trace's directory.
@@ -43,7 +43,7 @@ func Unlock() { mu.Unlock() }
 
 // LineLocked is Line with the lock held.
 func LineLocked(line string) {
-	if ended || !On() {
+	if ends >= 2 || !On() {
 		return
 	}
 	if file == nil {
@@ -58,9 +58,9 @@ func LineLocked(line string) {
 	}
 }
 
-// End stops the recording (the association's end).
+// End is one side's end; the recording stops at the second.
 func End() {
 	mu.Lock()
-	ended = true
+	ends++
 	mu.Unlock()
 }

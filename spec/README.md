@@ -849,6 +849,11 @@ depth 33, about 5 min. Every action taken in each (`-coverage 1`); the
 14 UDP mutants and witnesses about 20 s. Code map: none yet; the lane
 that builds `client/udpflow` adds it with a trace recorder.
 
+Status: design only, no code, so no trace recorder (lane TRACEGAPS,
+2026-11-21): the code built is `client/dgram`, one association per
+listener (`DatagramAssoc.tla`, which refines this model and is traced);
+a per-flow session (`client/udpflow`) is not built.
+
 ## BrowserPeer.tla: an nf1 address in a browser, its paths' lifecycle
 
 Lane BROWSERPEER (2026-11-16). The design is nfltr's
@@ -1108,9 +1113,31 @@ recorder orders one flow's steps; a traced run with a direct path and
 several flows in flight at once may record an open-flow datagram (logged
 at its send) after another flow's open (logged as it is queued) that the
 stream carries after it, a false rejection, so `DG_DIRECT_TESTS` run one
-flow at a time. Not traced: `Cut`, `Revoke`, the `Notice`s and `CleanupA`
-(recording stops at the association's end), and `client/agent`'s
-`dgUnit` tests (`TestDatagramRevokeOnDirect`, `TestDatagramModelBindings`,
+flow at a time.
+
+The association's end (lane TRACEGAPS, 2026-11-21): each side's end is
+logged under its lock before anything of it is seen (`assoc.endWith`):
+its own (`Cut`: the client's `Close` or idle end, `who` client; the
+agent's `Serve` stopped, `who` agent), the agent's revocation (`Revoke`:
+`Server.Close`, `CloseWith`), or the stream's end it read (`NoticeC`,
+`NoticeA`), then the agent's `CleanupA` once its flows closed (not at its
+own stop, whose flows end with it); recording stops once both sides
+ended. `TestDatagramAssocTrace` ends with the client's `Cut`, `NoticeA`,
+`CleanupA`; `TestDatagramAssocTraceRevoke` with `Revoke`, `CleanupA`, the
+tail's close and `NoticeC`. A revocation's tail (`CloseWith`'s reason, a
+close per open flow on the stream after what the sender wrote) is below
+the model, whose `Revoke` resets the stream at once: the client's
+`RecvC` of a tail close (`out` `tail`) changes nothing and is taken only
+after a `Revoke` with the stream empty; a direct frame a side drops once
+it ended changes nothing either. Ceiling: a frame in flight at an end is
+delivered by the code (the stream is FIFO) and dropped by the model, so a
+traced run ends quiet; the end tests run that way. Two more hand-made
+traces must be rejected: a datagram delivered to the target after the
+revocation (`reject-datagramassoc-deliver-after-revoke`), a tail close
+with no revocation (`reject-datagramassoc-tail-without-revoke`).
+`NoDeliverAfterRevoke` is checked on every trace. Not traced:
+the session's `Cut` (the stream reset with both processes running: no
+side's step logs it), and `client/agent`'s `dgUnit` tests (`TestDatagramRevokeOnDirect`, `TestDatagramModelBindings`,
 `TestDatagramAgentDirectOnceItHeardTheClient`), whose client frames are
 raw ones under any tag, no association's; their Go mutants
 `direct-ignores-assoc`, `tag-unchecked` and `agent-sends-unheard`

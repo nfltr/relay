@@ -26,7 +26,7 @@ type Server struct{ a *assoc }
 // at the client's clean end) and closes stream.
 func Serve(ctx context.Context, stream io.ReadWriteCloser, cfg Config, dial Dial) error {
 	s := NewServer(stream, cfg, dial)
-	stop := context.AfterFunc(ctx, func() { s.a.end(ctx.Err()) })
+	stop := context.AfterFunc(ctx, func() { s.a.endWith(ctx.Err(), 0, endCut) })
 	defer stop()
 	<-s.a.done
 	return s.a.errNow()
@@ -52,7 +52,7 @@ func (s *Server) Done() <-chan struct{} { return s.a.done }
 // Close ends the association (a revocation: nothing reaches a target
 // after it returns).
 func (s *Server) Close() error {
-	s.a.end(net.ErrClosed)
+	s.a.endWith(net.ErrClosed, 0, endRevoke)
 	return nil
 }
 
@@ -60,7 +60,7 @@ func (s *Server) Close() error {
 // Closed gets why): ReasonRevoked for a revocation, ReasonClosed for the
 // service's stop. Nothing reaches a target after it returns either.
 func (s *Server) CloseWith(why Reason) {
-	s.a.endWith(net.ErrClosed, why)
+	s.a.endWith(net.ErrClosed, why, endRevoke)
 }
 
 func (s *Server) handle(fr frame, dial Dial) error {

@@ -20,10 +20,11 @@ import (
 // lock), so a frame's line comes before its receiver's, and the lines of
 // one side's frames are in its stream order; a datagram that may go
 // direct is recorded by the sender as it sends it (traceSend), with the
-// carrier it took. Recording stops at the association's end (its cut is
-// not traced). A line names the step (ev), the flow id (f), a source (s,
+// carrier it took; each side's end too (traceEndStep). Recording stops
+// once both sides ended. A line names the step (ev), the flow id (f), a source (s,
 // with whether it is admitted: adm), a frame's kind (k), what the side
-// did with it (out) and the carrier of a datagram (op, out).
+// did with it (out), the carrier of a datagram (op, out) and who cut the
+// association (who).
 func trace(line string) { dgtrace.Line(line) }
 
 func traceServe(maxFlows int) { trace(fmt.Sprintf(`{"ev":"Serve","n":%d}`, maxFlows)) }
@@ -54,7 +55,43 @@ func traceRecvDg(client bool, f uint64, out string) {
 	}
 	trace(fmt.Sprintf(`{"ev":%q,"f":%d,"out":%q}`, ev, f, out))
 }
-func traceEnd() { dgtrace.End() }
+
+// traceEndStep: a side's end, under its lock, before anything of it is
+// seen: its own (Cut), the agent's revocation (Revoke), or the stream's
+// end it read (NoticeC, NoticeA).
+func traceEndStep(client bool, by int) {
+	switch {
+	case by == endRevoke:
+		trace(`{"ev":"Revoke"}`)
+	case by == endCut && client:
+		trace(`{"ev":"Cut","who":"client"}`)
+	case by == endCut:
+		trace(`{"ev":"Cut","who":"agent"}`)
+	case client:
+		trace(`{"ev":"NoticeC"}`)
+	default:
+		trace(`{"ev":"NoticeA"}`)
+	}
+}
+
+// traceCleanup: the side's flows closed; the agent's, but at its own stop
+// (Cut: its flows end with it), is the model's CleanupA. The recording
+// stops once both sides ended.
+func traceCleanup(client bool, by int) {
+	if !client && by != endCut {
+		trace(`{"ev":"CleanupA"}`)
+	}
+	dgtrace.End()
+}
+
+// tailOut marks a close of the agent's end's tail (CloseWith's reason):
+// below the model, whose Revoke resets the stream at once.
+func tailOut(fr frame) string {
+	if fr.typ == frameClose && (fr.reason == ReasonRevoked || fr.reason == ReasonClosed) {
+		return "tail"
+	}
+	return ""
+}
 
 // traceSend sends p on d (flow f's datagram from src at the client, a
 // reply at the agent) and records the step with the carrier it took:
