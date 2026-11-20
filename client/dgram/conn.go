@@ -153,7 +153,8 @@ func (c *Conn) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-// Close ends the flow; Read and Write then fail net.ErrClosed.
+// Close ends the flow; Read and Write then fail net.ErrClosed, and so
+// does a second Close, as net.Conn's (TestCloseTwice).
 func (c *Conn) Close() error {
 	c.mu.Lock()
 	if c.closeErr != nil {
