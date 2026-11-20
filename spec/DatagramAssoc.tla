@@ -180,7 +180,9 @@ AssocOpen ==
 \* lookup (no-source-check: treated as admitted). An open flow's datagram
 \* goes direct when the association is bound there, else on the stream
 \* while it has credit, else it is dropped (block-on-credit: the reader
-\* waits for credit and reads nothing else). An opening flow's goes on
+\* waits for credit and reads nothing else). One too large for a packet
+\* spills to the stream though bound (spill: any datagram, sizes
+\* abstracted). An opening flow's goes on
 \* the stream behind its open (the agent drops it if it refuses the flow).
 \* A new source gets a flow (its open carries the datagram) while the
 \* table has room and the stream has credit; else dropped.
@@ -208,7 +210,8 @@ Read(s) ==
             /\ inb' = [inb EXCEPT ![s] = @ + 1]
             /\ fin' = [fin EXCEPT ![k] = @ + 1]
             /\ blocked' = NoKey
-            /\ IF cst[k] = "open" /\ cep \in cbnd
+            /\ \E spill \in BOOLEAN :
+               IF cst[k] = "open" /\ cep \in cbnd /\ ~spill
                THEN /\ dg' = dg \cup {[dir |-> "c2a", e |-> cep, f |-> k[2], src |-> s]}
                     /\ UNCHANGED c2a
                ELSE IF ~ccut /\ Data(c2a) < W
@@ -387,12 +390,13 @@ RecvDgA(m) ==
                    revoked, cuts, losses, blocked, got, ampDrop>>
 
 \* The agent sends flow k's next reply: direct when bound and it took a
-\* client's frame there (agent-sends-unheard: once bound), else on the
-\* stream on credit, else dropped (it never waits).
+\* client's frame there (agent-sends-unheard: once bound), else (or
+\* spilled, as Read) on the stream on credit, else dropped (it never waits).
 ReplyA(k) ==
     /\ aq[k] > 0 /\ ast[k] = "open" /\ k[1] = aep /\ aup
     /\ aq' = [aq EXCEPT ![k] = @ - 1]
-    /\ IF aep \in abnd /\ (aep \in aheard \/ Mutant = "agent-sends-unheard")
+    /\ \E spill \in BOOLEAN :
+       IF aep \in abnd /\ (aep \in aheard \/ Mutant = "agent-sends-unheard") /\ ~spill
        THEN /\ dg' = dg \cup {[dir |-> "a2c", e |-> aep, f |-> k[2], src |-> asrc[k]]}
             /\ UNCHANGED a2c
        ELSE IF ~acut /\ Data(a2c) < W
