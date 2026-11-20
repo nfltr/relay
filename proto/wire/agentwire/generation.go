@@ -12,7 +12,7 @@ import "strconv"
 // and the HTTP/2 tunnels). It is not the binary's version: a development
 // build sends it too. nfltr v2.0.0 is generation 2; clients before it send
 // none. Generation 3 (relay proto v0.16.0, nfltr after v2.1.6) answers
-// session opens link's own way (link.FeatureChain) instead of in band: a
+// session opens link's own way (link's FeatureChain) instead of in band: a
 // relay that requires it no longer needs the in-band answers
 // (dataplane.ReadAnswer). A relay refuses a client below its minimum generation with
 // ClientGenerationTooOld (nfltr-relay's security.min_client_generation).

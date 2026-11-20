@@ -122,7 +122,7 @@ func ClientConfig(window int) link.Config {
 // and binds the link (the request carried the credential), announcing
 // window; ctx bounds the hello. The 101 says the relay answers sessions
 // that ask (AnswerHeader: read by clients that answer in band, nfltr
-// v2.1.6; a client with link.FeatureChain reads the answers link's own
+// v2.1.6; a client with link's FeatureChain reads the answers link's own
 // way) and states e2eePolicy (E2EEPolicyHeader).
 func Accept(ctx context.Context, nc net.Conn, window int, e2eePolicy string) (*Mux, error) {
 	resp := "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: " + UpgradeToken +

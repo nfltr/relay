@@ -41,6 +41,7 @@ func relayedSession(t *testing.T) (s *link.Session, gate chan struct{}, got <-ch
 	gate = make(chan struct{})
 	armed := new(atomic.Bool)
 	read := make(chan []byte, 1)
+	opened := make(chan struct{})
 	ctx := context.Background()
 	go func() {
 		c, _, err := link.Server(ctx, relayGate{Conn: b, armed: armed, open: gate}, link.Config{Auth: link.NoAuth})
@@ -50,6 +51,7 @@ func relayedSession(t *testing.T) (s *link.Session, gate chan struct{}, got <-ch
 		m := link.NewMux(c)
 		t.Cleanup(func() { _ = m.Close() })
 		_ = m.Serve(func(_ []byte, s *link.Session) {
+			close(opened)
 			bs, _ := io.ReadAll(s)
 			_ = s.Close()
 			read <- bs
@@ -62,12 +64,10 @@ func relayedSession(t *testing.T) (s *link.Session, gate chan struct{}, got <-ch
 	m := link.NewMux(c)
 	go func() { _ = m.Serve(nil) }()
 	t.Cleanup(func() { _ = m.Close() })
-	if s, err = m.Open([]byte("relay")); err != nil {
+	if s, err = m.Open(context.Background(), []byte("relay")); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.Sync(); err != nil { // the relay took the open
-		t.Fatal(err)
-	}
+	<-opened // the relay took the open
 	armed.Store(true)
 	return s, gate, read
 }
@@ -115,7 +115,7 @@ func TestQueueRelayedPeerCloseThenCloseIsNil(t *testing.T) {
 	m := link.NewMux(c)
 	go func() { _ = m.Serve(nil) }()
 	t.Cleanup(func() { _ = m.Close() })
-	s, err := m.Open([]byte("relay"))
+	s, err := m.Open(context.Background(), []byte("relay"))
 	if err != nil {
 		t.Fatal(err)
 	}

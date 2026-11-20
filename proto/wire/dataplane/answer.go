@@ -20,7 +20,7 @@ import (
 // message. pb.TCPData.Answer marks an owner's /connect session, whose
 // opener waits for the far side's answer.
 //
-// On a leg whose two sides negotiated link.FeatureChain (link v0.10.0:
+// On a leg whose two sides negotiated link's FeatureChain (link v0.10.0:
 // /connect data connections, agent links over TCP, QUIC links that negotiated
 // quiclink.ALPNChain, the replica link) the answer is link's own: the
 // accepter's Accept, or a refusal (Refusal, link.Abort.Refused) whose
@@ -97,13 +97,13 @@ func ReadAnswer(r io.Reader) (*relayv1.SessionAnswer, error) {
 }
 
 // AbortCode is reason's code in a link abort (link.CodeApp + reason): the
-// answer's reason on a leg that negotiated link.FeatureChain.
+// answer's reason on a leg that negotiated link's FeatureChain.
 func AbortCode(reason relayv1.ErrorReason) uint32 {
 	return link.CodeApp + uint32(reason) // #nosec G115 -- ErrorReason values are small and non-negative
 }
 
 // Refusal is the refusal of an open with reason and msg on a leg that
-// negotiated link.FeatureChain (link.Session.AbortWith, a Route's error).
+// negotiated link's FeatureChain (link.Session.AbortWith, a Route's error).
 func Refusal(reason relayv1.ErrorReason, msg string) *link.Abort {
 	return &link.Abort{Refused: true, Code: AbortCode(reason), Msg: msg}
 }

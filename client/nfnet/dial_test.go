@@ -62,7 +62,7 @@ func TestDialerOneDataConnection(t *testing.T) {
 }
 
 // TestDialerPastOneConnectionsSessions (CONNCAP): a data connection
-// carries at most the relay's 1,024 sessions (link.MaxSessions); the
+// carries at most the relay's 1,024 sessions (link.DefaultMaxSessions); the
 // 1,025th open goes on a second connection, not refused, and no third is
 // dialled for it.
 func TestDialerPastOneConnectionsSessions(t *testing.T) {
@@ -74,16 +74,16 @@ func TestDialerPastOneConnectionsSessions(t *testing.T) {
 			_ = c.Close()
 		}
 	}()
-	for i := range link.MaxSessions + 1 {
+	for i := range link.DefaultMaxSessions + 1 {
 		c, err := dial(t, d, web("echo"), DialOptions{})
 		if err != nil {
 			t.Fatalf("open %d: %v, want a session (another data connection may open)", i+1, err)
 		}
 		held = append(held, c)
 	}
-	echoAndHalfClose(t, held[link.MaxSessions], "past the first connection")
+	echoAndHalfClose(t, held[link.DefaultMaxSessions], "past the first connection")
 	if n := r.conns.Load(); n != 2 {
-		t.Fatalf("relay saw %d connections for %d sessions, want 2", n, link.MaxSessions+1)
+		t.Fatalf("relay saw %d connections for %d sessions, want 2", n, link.DefaultMaxSessions+1)
 	}
 }
 

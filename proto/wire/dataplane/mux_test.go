@@ -130,7 +130,7 @@ func TestMuxMaxSessions(t *testing.T) {
 		_ = s.Close()
 	})
 	var first *Session
-	for i := range link.MaxSessions {
+	for i := range link.DefaultMaxSessions {
 		s, err := client.Open(&pb.TCPData{AgentId: "a"})
 		if err != nil {
 			t.Fatalf("session %d: %v", i, err)
@@ -141,7 +141,7 @@ func TestMuxMaxSessions(t *testing.T) {
 		}
 	}
 	if _, err := client.Open(&pb.TCPData{AgentId: "a"}); !errors.Is(err, link.ErrFull) {
-		t.Fatalf("session past link.MaxSessions: %v, want link.ErrFull", err)
+		t.Fatalf("session past link.DefaultMaxSessions: %v, want link.ErrFull", err)
 	}
 	_ = first.Close()
 	s, err := client.Open(&pb.TCPData{AgentId: "a"})
@@ -198,7 +198,7 @@ func TestUpgrade(t *testing.T) {
 	if got := make([]byte, 4); func() error { _, err := io.ReadFull(s, got); return err }() != nil || string(got) != "ping" {
 		t.Fatalf("echo over the upgraded connection: %q", got)
 	}
-	// The data connection negotiates link.FeatureChain: opens are
+	// The connection negotiates link's FeatureChain: opens are
 	// answered link's own way, a refusal carries its reason.
 	if !s.Answers() || s.Answered(context.Background()) != nil {
 		t.Fatalf("session answers %v, answered %v: want an accepted FeatureChain session", s.Answers(), s.Answered(context.Background()))
@@ -207,7 +207,7 @@ func TestUpgrade(t *testing.T) {
 	// MaxExclude (marshalled raw: OpenHeader refuses to write it).
 	oversized, _ := proto.Marshal(&pb.TCPData{AgentId: "echo", Exclude: refs(MaxExclude + 1)})
 	for _, h := range [][]byte{{0xff}, oversized} {
-		bad, err := m.m.Open(h)
+		bad, err := m.m.Open(context.Background(), h)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -289,7 +289,7 @@ func TestMuxDrain(t *testing.T) {
 
 // TestPoolPastMaxSessions: a client's link.Pool over upgraded data
 // connections (RequestUpgrade in its Dial, ClientConfig its Link) opens
-// past one connection's link.MaxSessions on a second, and fails link.ErrFull only
+// past one connection's link.DefaultMaxSessions on a second, and fails link.ErrFull only
 // with both full (link spec/Pool.tla FullOnlyAtMax; nfltr's tcp-connect).
 func TestPoolPastMaxSessions(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -340,15 +340,15 @@ func TestPoolPastMaxSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := range 2 * link.MaxSessions {
+	for i := range 2 * link.DefaultMaxSessions {
 		s, err := p.Open(context.Background(), header)
 		if err != nil {
-			t.Fatalf("session %d of %d on two connections: %v", i+1, 2*link.MaxSessions, err)
+			t.Fatalf("session %d of %d on two connections: %v", i+1, 2*link.DefaultMaxSessions, err)
 		}
 		t.Cleanup(func() { _ = s.Close() })
 	}
 	if _, err := p.Open(context.Background(), header); !errors.Is(err, link.ErrFull) {
-		t.Fatalf("a session past both connections' link.MaxSessions: %v, want link.ErrFull", err)
+		t.Fatalf("a session past both connections' link.DefaultMaxSessions: %v, want link.ErrFull", err)
 	}
 	if got, _ := policies.Load().(string); got != "allow" {
 		t.Fatalf("101's E2EE policy %q, want allow", got)

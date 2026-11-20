@@ -40,14 +40,14 @@ func (m *Mux) Open(open *pb.TCPData) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	return m.m.Open(header)
+	return m.m.Open(context.Background(), header)
 }
 
 // Serve receives frames until the connection ends (link.Mux.Serve).
 // accept, nil on the opening side, gets each session the peer opens with
 // its open's fields; a session whose header is not a valid TCPData
 // (ParseOpenHeader) is refused
-// (INVALID_ARGUMENT where the connection negotiated link.FeatureChain).
+// (INVALID_ARGUMENT where the connection negotiated link's FeatureChain).
 func (m *Mux) Serve(accept func(open *pb.TCPData, s *Session)) error {
 	if accept == nil {
 		return m.m.Serve(nil)
@@ -66,7 +66,7 @@ func (m *Mux) Serve(accept func(open *pb.TCPData, s *Session)) error {
 // the peer to open its next sessions on another connection (its Open
 // fails link.ErrGoAway), the open sessions run to their end or ctx's
 // deadline, where each still open is aborted link.CodeDrainDeadline (on a
-// link.FeatureChain connection; a peer without it reads the connection's
+// link's FeatureChain connection; a peer without it reads the connection's
 // end). A relay drains its clients' data connections so when it leaves.
 // allow:wrapper
 func (m *Mux) Drain(ctx context.Context) error { return m.m.Drain(ctx) }

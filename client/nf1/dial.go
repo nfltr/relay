@@ -171,8 +171,8 @@ func (c *conn) Reset() error {
 // resets or closes it.
 func AbortDirectRequired(c net.Conn) error {
 	switch v := c.(type) {
-	case interface{ Abort(uint32, string) error }:
-		return v.Abort(dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED), ErrDirectRequired.Error())
+	case interface{ AbortWith(*link.Abort) error }:
+		return v.AbortWith(&link.Abort{Code: dataplane.AbortCode(relayv1.ErrorReason_ERROR_REASON_ACCOUNT_REQUIRED), Msg: ErrDirectRequired.Error()})
 	case interface{ Reset() error }:
 		return v.Reset()
 	}
