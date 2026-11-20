@@ -77,6 +77,7 @@ type tokenRec struct {
 	dev       Device
 	expires   time.Time
 	rebind    bool // MakeRebindToken's: moves an enrolled name to machineID
+	void      bool // made before a restore from a backup (restore.go)
 }
 
 type certRec struct {
@@ -98,29 +99,31 @@ type nameRec struct {
 // Issuer is the organisation's automated signer: every act takes its one
 // lock, is written to the log (Sink) and only then takes effect.
 type Issuer struct {
-	mu        sync.Mutex
-	orgID     string
-	root      *x509.Certificate
-	recovery  *x509.Certificate
-	rootLabel string
-	rootKind  string
-	cert      *x509.Certificate
-	key       ed25519.PrivateKey
-	tokenKey  []byte
-	tokens    map[string]*tokenRec
-	names     map[string]*nameRec
-	denied    map[string]bool     // "person:<address>", "app:<app>": revoked (RevokePerson, RevokeApp)
-	certs     map[string]*certRec // by serial (hex)
-	crlNumber int64
-	crlNext   time.Time
-	crlDue    bool   // a revocation or a new issuer certificate since the last CRL
-	movedTo   string // the receive key the log's last fence names (move.go)
-	head      string
-	heads     map[string]bool       // every head the log had: a remote renewal checkpoints one (renew.go)
-	rules     map[string]SignInRule // by id (signin.go)
-	idps      providers
-	sink      Sink
-	move      MovePolicy // nil: no move without a rebind token
+	mu         sync.Mutex
+	orgID      string
+	root       *x509.Certificate
+	recovery   *x509.Certificate
+	rootLabel  string
+	rootKind   string
+	cert       *x509.Certificate
+	key        ed25519.PrivateKey
+	tokenKey   []byte
+	tokens     map[string]*tokenRec
+	names      map[string]*nameRec
+	denied     map[string]bool     // "person:<address>", "app:<app>": revoked (RevokePerson, RevokeApp)
+	certs      map[string]*certRec // by serial (hex)
+	crlNumber  int64
+	crlNext    time.Time
+	crlDue     bool                 // a revocation or a new issuer certificate since the last CRL
+	movedTo    string               // the receive key the log's last fence names (move.go)
+	restoredAt time.Time            // the last restore from a backup (restore.go); zero: none
+	carried    map[string]time.Time // serials a restore took from the published CRL, listed until then
+	head       string
+	heads      map[string]bool       // every head the log had: a remote renewal checkpoints one (renew.go)
+	rules      map[string]SignInRule // by id (signin.go)
+	idps       providers
+	sink       Sink
+	move       MovePolicy // nil: no move without a rebind token
 }
 
 // MovePolicy admits moving name to the relay machine id: nil when id is
@@ -220,7 +223,7 @@ func (i *Issuer) apply(e Entry) error {
 		return err
 	case ActToken:
 		i.tokens[e.Token] = &tokenRec{name: e.Name, groups: e.Groups, machineID: e.MachineID, dev: Device{e.Person, e.App}, expires: e.NotAfter, rebind: e.Rebind}
-	case ActIssued, ActRenewed, ActRebound:
+	case ActIssued, ActRenewed, ActRebound, ActAdopted:
 		n := i.names[e.Name]
 		if n == nil {
 			n = &nameRec{groups: e.Groups, machineID: e.MachineID, dev: Device{e.Person, e.App}}
@@ -259,6 +262,8 @@ func (i *Issuer) apply(e Entry) error {
 		delete(i.rules, e.Name)
 	case ActCRL:
 		i.crlNumber, i.crlNext, i.crlDue = e.Number, e.NotAfter, false
+	case ActRestored:
+		i.applyRestored(e)
 	case ActMoved:
 		i.movedTo = e.Key
 	case ActArrived:
@@ -523,6 +528,9 @@ func (i *Issuer) Enrol(req EnrolRequest, now time.Time) ([]byte, error) {
 		return nil, i.refuse(refusal, "unknown token")
 	}
 	refusal.Name = t.name
+	if t.void { // OrgMove.tla Revive (mutant revive-keeps-tokens): the lost issuer may have redeemed it
+		return nil, i.refuse(refusal, "the token was made before the issuer was restored from a backup: make a new one")
+	}
 	if !hmac.Equal(req.MAC, enrolMAC(i.tokenSecret(req.TokenID), req.CSR)) {
 		return nil, i.refuse(refusal, "the request is not bound to the token")
 	}
@@ -605,7 +613,17 @@ func (i *Issuer) Renew(req RenewRequest, now time.Time) ([]byte, error) {
 	}
 	sn := hex.EncodeToString(cur.SerialNumber.Bytes())
 	refusal.Serial = sn
+	if until, ok := i.carried[sn]; ok && now.Before(until) { // OrgMove.tla Revive: revoked in the CRL a restore took
+		i.traceRefused(sn, cur, "revoked", now)
+		return nil, i.refuse(refusal, "the certificate is revoked (in the published CRL the issuer's restore took)")
+	}
 	rec := i.certs[sn]
+	if n, ok := i.adoptable(cur); rec == nil && ok {
+		if err := i.adopt(cur, req.Cert, n, now); err != nil {
+			return nil, err
+		}
+		rec = i.certs[sn]
+	}
 	sum := sha256.Sum256(req.Cert)
 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) {
 		i.traceRefused(sn, cur, "log", now)
@@ -823,6 +841,7 @@ func (i *Issuer) CRL(now time.Time) ([]byte, error) {
 		return nil, err
 	}
 	var listed []x509.RevocationListEntry
+	seen := map[string]bool{}
 	for _, n := range i.names {
 		sns := n.serials[:n.retired] // Enrol.tla Rebind (mutant rebind-keeps-serials)
 		if n.revoked {
@@ -832,9 +851,14 @@ func (i *Issuer) CRL(now time.Time) ([]byte, error) {
 			if !now.Before(i.certs[sn].notAfter) {
 				continue
 			}
+			seen[sn] = true
 			b, _ := hex.DecodeString(sn)
 			listed = append(listed, x509.RevocationListEntry{SerialNumber: new(big.Int).SetBytes(b), RevocationTime: now})
 		}
+	}
+	for _, sn := range i.carriedSerials(seen, now) { // OrgMove.tla Revive (mutant merge-skipped)
+		b, _ := hex.DecodeString(sn)
+		listed = append(listed, x509.RevocationListEntry{SerialNumber: new(big.Int).SetBytes(b), RevocationTime: now})
 	}
 	slices.SortFunc(listed, func(a, b x509.RevocationListEntry) int { return a.SerialNumber.Cmp(b.SerialNumber) })
 	number := i.crlNumber + 1

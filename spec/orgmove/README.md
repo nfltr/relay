@@ -229,7 +229,12 @@ order and keeps the properties one process can see: one history (no two
 lines after the same one: AtMostOneIssuer, AuditContinuous), nothing after
 a fence but its arrival (OldCannotIssue), an import and a send only of a
 fence naming their key (ImportFenced: import-unfenced,
-fence-names-no-recipient), CRL Numbers that only grow (CRLMonotone).
+fence-names-no-recipient), CRL Numbers that only grow (CRLMonotone). A
+`restored` act (a restore from a backup, `orgpki.Issuer.Restore`, its
+`num` the published CRL's Number) continues an older line, the lost
+machine's: it is no fork, but its Number is at least every one before it
+(`restore-behind`, CRLMonotone), and a second line after the same parent
+once restored is a fork again.
 `scripts/spec-orgmove.sh traces` (`make spec-orgmove-traces`) runs every
 test of orgpki, orgissuer and orgenrol that way and checks each
 trace (55 traces, 313 lines: 260 act, 22 fence, 14 import, 17 send), then
@@ -246,7 +251,10 @@ root's of `orgmove.pv` (`root-moves`, `finish-deletes-root`,
 receive sets aside only the issuer's files: the receiving machine's own
 membership `machine/` stays; member state is not in the model, which
 abstracts a host to its issuer directory); orgenrol
-`serve-after-fence`. The transfer's bindings (`BIND:move.*` of
+`serve-after-fence`; orgpki's restore (`restore.go`, OrgMove.tla Revive):
+`number-not-above-published`, `merge-skipped`, `revive-keeps-tokens`,
+`restore-not-lapsed`, `restore-any-issuer`, `restore-older-than-copy`,
+`adopt-any-signer`, `adopt-unknown-name`, `adopt-without-restore`. The transfer's bindings (`BIND:move.*` of
 `spec/proverif/orgmove.pv`) are orgissuer's `TestOrgMoveModelBindings`
 (`make spec-bindings`).
 

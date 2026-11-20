@@ -88,6 +88,12 @@ func TestPublishedCRLAndAFailingPublish(t *testing.T) {
 	if n, _, err := PublishedCRL(f.ctx, f.relay, f.org.root(t), f.clk.Now()); err != nil || n != num+1 {
 		t.Fatalf("published after the refusal: #%d %v, want #%d", n, err, num+1)
 	}
+	// A restore's input (orgissuer.Restore): the same CRL, as DER.
+	der, err := PublishedRevocationList(f.ctx, f.relay, f.org.root(t), f.clk.Now())
+	check(t, err)
+	if crl, err := x509.ParseRevocationList(der); err != nil || crl.Number.Int64() != num+1 {
+		t.Fatalf("the published CRL's DER: %v, want #%d", err, num+1)
+	}
 }
 
 // PublishedCRL judges the CRL as members take it (orgid.Verifier.TakeCRL):

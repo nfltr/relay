@@ -46,39 +46,55 @@ const (
 // orgid.Identity.Verifier().Root(), the issuer's Root()). mb declares
 // member on an organisation's mailboxes (transportcli.DeclareOrg).
 func PublishedCRL(ctx context.Context, mb Mailbox, root *x509.Certificate, now time.Time) (number int64, next time.Time, err error) {
-	orgID, err := orgid.OrgIDOfRoot(root)
+	crl, _, err := publishedCRL(ctx, mb, root, now)
 	if err != nil {
 		return 0, time.Time{}, err
+	}
+	return crl.Number.Int64(), crl.NextUpdate, nil
+}
+
+// PublishedRevocationList is PublishedCRL's CRL itself (DER), checked the
+// same way: the input of a restore from a backup (orgissuer.Restore, which
+// also takes it only under its own issuer key).
+func PublishedRevocationList(ctx context.Context, mb Mailbox, root *x509.Certificate, now time.Time) ([]byte, error) {
+	_, der, err := publishedCRL(ctx, mb, root, now)
+	return der, err
+}
+
+func publishedCRL(ctx context.Context, mb Mailbox, root *x509.Certificate, now time.Time) (*x509.RevocationList, []byte, error) {
+	orgID, err := orgid.OrgIDOfRoot(root)
+	if err != nil {
+		return nil, nil, err
 	}
 	data, err := latest(ctx, mb, orgid.CRLMailbox(orgID), 0)
 	if err == nil && data == nil {
 		err = errNoMessage
 	}
 	if err != nil {
-		return 0, time.Time{}, fmt.Errorf("read the published CRL: %w", err)
+		return nil, nil, fmt.Errorf("read the published CRL: %w", err)
 	}
 	var m orgid.CRLMessage
 	if err := json.Unmarshal(data, &m); err != nil {
-		return 0, time.Time{}, fmt.Errorf("the published CRL: %w", err)
+		return nil, nil, fmt.Errorf("the published CRL: %w", err)
 	}
 	iss, err := x509.ParseCertificate(m.Issuer)
 	if err != nil {
-		return 0, time.Time{}, fmt.Errorf("the published CRL's issuer: %w", err)
+		return nil, nil, fmt.Errorf("the published CRL's issuer: %w", err)
 	}
 	crl, err := x509.ParseRevocationList(m.CRL)
 	if err != nil {
-		return 0, time.Time{}, fmt.Errorf("the published CRL: %w", err)
+		return nil, nil, fmt.Errorf("the published CRL: %w", err)
 	}
 	roots := x509.NewCertPool()
 	roots.AddCert(root)
 	if _, err := iss.Verify(x509.VerifyOptions{Roots: roots, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageAny}}); err != nil {
-		return 0, time.Time{}, fmt.Errorf("the published CRL's issuer certificate (valid %s to %s): members refuse it: %w (expired: nfltr org issuer renew)",
+		return nil, nil, fmt.Errorf("the published CRL's issuer certificate (valid %s to %s): members refuse it: %w (expired: nfltr org issuer renew)",
 			iss.NotBefore.UTC().Format(time.RFC3339), iss.NotAfter.UTC().Format(time.RFC3339), err)
 	}
 	if err := crl.CheckSignatureFrom(iss); err != nil {
-		return 0, time.Time{}, fmt.Errorf("the published CRL: %w", err)
+		return nil, nil, fmt.Errorf("the published CRL: %w", err)
 	}
-	return crl.Number.Int64(), crl.NextUpdate, nil
+	return crl, m.CRL, nil
 }
 
 // PublishedLate is an error when a published CRL whose NextUpdate is next

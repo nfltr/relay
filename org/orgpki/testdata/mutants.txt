@@ -85,3 +85,15 @@ rebind-reusable | issuer.go | 	if redeemed { | 	if _ = redeemed; false { | TestR
 move-id-unsigned | issuer.go | 		msg = moveMessage(req.CSR, req.MachineID) | 		msg = renewMessage(req.CSR) | TestMoveModelBindings
 move-id-unsigned | issuer.go | 	return RenewRequest{Cert: cert, CSR: csr, MachineID: machineID, Sig: ed25519.Sign(current, moveMessage(csr, machineID))} | 	return RenewRequest{Cert: cert, CSR: csr, MachineID: machineID, Sig: ed25519.Sign(current, renewMessage(csr))} | TestMoveModelBindings
 move-any-account | issuer.go | 	if err := i.move(name, id); err != nil { | 	if err := i.move(name, id); false && err != nil { | TestMoveRefusedOutsideThePolicy
+# OrgMove.tla Revive (spec/orgmove/restore-mutants.txt): a restore from a
+# backup takes the newest published CRL (restore.go).
+number-not-above-published | restore.go | 	i.crlNumber = max(i.crlNumber, e.Number) | 	i.crlNumber = i.crlNumber | TestRestoreResumesAboveThePublishedCRL
+merge-skipped | issuer.go | 	for _, sn := range i.carriedSerials(seen, now) { // OrgMove.tla Revive (mutant merge-skipped) | 	for _, sn := range []string{} { | TestRestoreKeepsThePublishedRevocations
+merge-skipped | issuer.go | 	if until, ok := i.carried[sn]; ok && now.Before(until) { // OrgMove.tla Revive: revoked in the CRL a restore took | 	if until, ok := i.carried[sn]; false && ok && now.Before(until) { | TestRestoreKeepsThePublishedRevocations
+revive-keeps-tokens | issuer.go | 	if t.void { // OrgMove.tla Revive (mutant revive-keeps-tokens): the lost issuer may have redeemed it | 	if false { | TestRestoreVoidsTheCopysTokens
+restore-not-lapsed | restore.go | 	if now.Before(crl.NextUpdate) { | 	if false { | TestRestoreRefusals
+restore-any-issuer | restore.go | 	if err := crl.CheckSignatureFrom(i.cert); err != nil { | 	if err := error(nil); err != nil { | TestRestoreRefusals
+adopt-any-signer | restore.go | 	if i.restoredAt.IsZero() || !cur.NotBefore.Before(i.restoredAt) || cur.CheckSignatureFrom(i.cert) != nil { | 	if i.restoredAt.IsZero() || !cur.NotBefore.Before(i.restoredAt) { | TestRestoreAdoptsNothingElse
+adopt-unknown-name | restore.go | 	if n == nil || n.revoked || i.deniedDev(n.dev) || orgid.MachineID(cur) != n.machineID { | 	if n == nil { | TestRestoreAdoptsNothingElse
+restore-older-than-copy | restore.go | 	if crl.Number.Int64() < i.crlNumber { | 	if false { | TestRestoreRefusals
+adopt-without-restore | restore.go | 	if i.restoredAt.IsZero() || !cur.NotBefore.Before(i.restoredAt) || cur.CheckSignatureFrom(i.cert) != nil { | 	if cur.CheckSignatureFrom(i.cert) != nil { | TestRestoreRefusals

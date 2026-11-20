@@ -13,8 +13,11 @@
 (* AtMostOneIssuer, AuditContinuous), nothing after a fence but its        *)
 (* arrival (OldCannotIssue), an import and a send only of a fence naming    *)
 (* their key (import-unfenced, fence-names-no-recipient), CRL Numbers that *)
-(* only grow (CRLMonotone). TraceDone is violated when every line was      *)
-(* read: accepted.                                                         *)
+(* only grow (CRLMonotone). A restore from a backup (OrgMove.tla Revive:   *)
+(* act restored, num the published CRL's Number it took) continues an      *)
+(* older line, the lost machine's after it lost: no fork, but its Number   *)
+(* must be at least every one before (restore-behind). TraceDone is        *)
+(* violated when every line was read: accepted.                            *)
 EXTENDS Integers, Sequences, TLC, Json
 
 CONSTANT TraceFile
@@ -41,16 +44,17 @@ Bad ==
     CASE ~(E.ev \in {"act", "fence", "import", "send"}) -> {"diverged"}
       [] E.ev = "send" -> IF Fenced(E.h, E.k) THEN {} ELSE {"send-unfenced"}
       [] OTHER ->
-            (IF E.p \in parents THEN {"fork"} ELSE {})
+            (IF E.p \in parents /\ E.act # "restored" THEN {"fork"} ELSE {})
             \cup (IF After /\ line[E.p].act = "moved" /\ E.ev # "import" THEN {"after-fence"} ELSE {})
             \cup (IF E.ev = "import" /\ ~Fenced(E.p, E.k) THEN {"import-unfenced"} ELSE {})
             \cup (IF E.act = "crl" /\ E.o \in DOMAIN crl /\ E.num <= crl[E.o] THEN {"crl-back"} ELSE {})
+            \cup (IF E.act = "restored" /\ E.o \in DOMAIN crl /\ E.num < crl[E.o] THEN {"restore-behind"} ELSE {})
 
 Next ==
     /\ l <= Len(Log) /\ l' = l + 1
     /\ line' = IF Commit THEN (E.h :> [act |-> E.act, k |-> E.k]) @@ line ELSE line
     /\ parents' = IF Commit THEN parents \cup {E.p} ELSE parents
-    /\ crl' = IF Commit /\ E.act = "crl" THEN (E.o :> E.num) @@ crl ELSE crl
+    /\ crl' = IF Commit /\ E.act \in {"crl", "restored"} THEN (E.o :> E.num) @@ crl ELSE crl
     /\ bad' = bad \cup {<<b, l>> : b \in Bad}
 
 None(names) == \A b \in bad : b[1] \notin names
@@ -58,6 +62,6 @@ Conforms == None({"diverged"})
 AtMostOneIssuer == None({"fork"})
 OldCannotIssue == None({"after-fence"})
 ImportFenced == None({"import-unfenced", "send-unfenced"})
-CRLMonotone == None({"crl-back"})
+CRLMonotone == None({"crl-back", "restore-behind"})
 TraceDone == l <= Len(Log)
 =============================================================================

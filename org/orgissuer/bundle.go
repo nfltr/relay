@@ -192,6 +192,24 @@ func Send(configDir string, to ReceiveKey, now time.Time) ([]byte, error) {
 	return sealed, nil
 }
 
+// Restore is a restore from a backup's first step, `nfltr org move send
+// --restored` on the copy restore-secrets set aside (spec/orgmove/OrgMove.tla
+// Revive): under the directory's lock the copy takes crl, the newest CRL
+// the relay holds (orgenrol.PublishedRevocationList; lapsed, this issuer's:
+// orgpki.Issuer.Restore). Send then signs the CRL above it and fences.
+func Restore(configDir string, crl []byte, now time.Time) error {
+	s, err := Lock(Dir(configDir))
+	if err != nil {
+		return err
+	}
+	defer s.Unlock()
+	iss, err := s.Open()
+	if err != nil {
+		return err
+	}
+	return iss.Restore(crl, now)
+}
+
 // bundle is the tar of the bundle's members.
 func (s *Store) bundle(configDir string) ([]byte, error) {
 	var buf bytes.Buffer

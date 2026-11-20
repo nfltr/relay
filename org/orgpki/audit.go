@@ -37,6 +37,8 @@ const (
 	ActArrived     = "arrived"      // Key: the receive key the fence named, on the new machine
 	ActRule        = "rule"         // Rule: a sign-in rule added or replaced (signin.go)
 	ActRuleRemoved = "rule-removed" // Name: the sign-in rule's id
+	ActRestored    = "restored"     // Number, NotAfter, Serials: the published CRL a restore from a backup took (restore.go)
+	ActAdopted     = "adopted"      // as issued: a certificate the lost issuer issued after the backup, adopted at its renewal (restore.go)
 )
 
 // Entry is one line of the issuer's hash-chained JSON-lines log. Prev is
@@ -50,6 +52,7 @@ type Entry struct {
 	Person    string      `json:"person,omitempty"`
 	App       string      `json:"app,omitempty"`
 	Serial    string      `json:"serial,omitempty"`
+	Serials   []string    `json:"serials,omitempty"` // a restored line's: the published CRL's
 	From      string      `json:"from,omitempty"`
 	Key       string      `json:"key,omitempty"`
 	Digest    string      `json:"digest,omitempty"`
