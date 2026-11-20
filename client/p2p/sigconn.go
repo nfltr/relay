@@ -33,7 +33,7 @@ const maxAhead = 4096
 //
 // Every frame gets the next sequence number and is written on every open
 // path; a path that joins first carries the frames sent before it (the last
-// maxAhead of them), so a frame still in flight on a path that breaks is
+// 4096 of them), so a frame still in flight on a path that breaks is
 // carried by the newer one (spec/SignalConn.tla NoSilentLoss). The receiver delivers each sequence number once, in order: a copy of
 // a number already delivered is dropped (dedupe by sequence number, never by
 // payload: two identical frames are two frames), and a frame that overtook an
@@ -287,7 +287,7 @@ const tcpWriteTimeout = 10 * time.Second
 type tcpPath struct{ conn net.Conn }
 
 // TCPPath is a FramePath over a byte stream (the direct TCP channel): frames
-// are length-prefixed JSON (writeFrame/readFrame).
+// are JSON, each after its 4-byte big-endian length.
 func TCPPath(conn net.Conn) FramePath { return tcpPath{conn} }
 
 func (t tcpPath) WriteFrame(f *Frame) error {

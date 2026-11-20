@@ -26,9 +26,10 @@ import (
 
 const (
 	// PublishGrace: how long a CRL the issuer signed may take to reach
-	// the relay (Service.Run publishes each round, serveWait apart).
+	// the relay (Service.Run publishes each round, 10 s apart).
 	PublishGrace = 2 * time.Minute
-	// PublishAlarm: a publish failing this long is logged as alarmMsg.
+	// PublishAlarm: a publish failing this long is logged as
+	// "org issuer: PUBLISH FAILING".
 	PublishAlarm = 5 * time.Minute
 	// publishFailingFile, in the issuer directory: the failing publish's
 	// PublishFailure while it fails; removed by the next publish.
@@ -99,8 +100,8 @@ func publishedCRL(ctx context.Context, mb Mailbox, root *x509.Certificate, now t
 
 // PublishedLate is an error when a published CRL whose NextUpdate is next
 // is lapsed at now, or was due to be replaced more than PublishGrace ago
-// (the issuer signs its successor with orgpki.CRLLife/3 left,
-// Service.maintain): its successor was not published.
+// (the issuer signs its successor with orgpki.CRLLife/3 left, each
+// round of Service.Run): its successor was not published.
 func PublishedLate(next, now time.Time) error {
 	left := next.Sub(now)
 	switch {

@@ -50,7 +50,7 @@ func (e *Error) Error() string {
 	return fmt.Sprintf("relay presence: HTTP %d %s: %s", e.HTTPStatus, e.Reason, e.Message)
 }
 
-// Get performs one authenticated relay GET of pathAndQuery. Each surface
+// Get performs one authenticated relay GET of a path and query. Each surface
 // supplies its own base URL, credentials and HTTP client.
 type Get func(ctx context.Context, pathAndQuery string) (body []byte, status int, err error)
 

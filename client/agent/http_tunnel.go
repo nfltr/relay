@@ -20,8 +20,7 @@ import (
 )
 
 // The HTTP tunnel's per-request forwarding, shared by both ways a request
-// reaches the agent: as ConnectHTTP messages (processStream, client
-// generation 2) and on a link session served with net/http
+// reaches the agent: as ConnectHTTP messages (client generation 2) and on a link session served with net/http
 // (TunnelHandler, generation 3; dataplane.HTTPSessionTarget).
 
 // newBackendClient is the client that forwards tunnel requests to the
@@ -169,8 +168,8 @@ func responseBody(resp *http.Response, fwd resolvedForward, browsePrefix string)
 
 // TunnelHandler serves the agent's HTTP tunnel on link sessions (sessions
 // to dataplane.HTTPSessionTarget): each request goes to the backend its
-// route names, and its response comes back rewritten as processStream
-// rewrites it.
+// route names, and its response comes back rewritten as a ConnectHTTP
+// response is.
 type TunnelHandler struct {
 	agentID atomic.Pointer[string]
 	routes  routeTable

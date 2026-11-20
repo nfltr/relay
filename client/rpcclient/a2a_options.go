@@ -175,7 +175,7 @@ func WithLabels(labels map[string]string) DialOption {
 }
 
 // WithHeartbeatInterval sets the per-agent heartbeat send interval.
-// If not provided, agentHeartbeatInterval is used (synchronized with server config).
+// If not provided, 15 s (synchronized with server config).
 func WithHeartbeatInterval(interval time.Duration) DialOption {
 	return func(o *dialOptions) { o.heartbeatInterval = interval }
 }

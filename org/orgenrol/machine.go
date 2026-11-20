@@ -320,7 +320,7 @@ type Keeper struct {
 	Now                                func() time.Time
 	AnswerWait, RetryWait, FollowEvery time.Duration
 	// WakeEvery bounds the wait for the renewal: the keeper reads the
-	// clock again at least this often (zero: wakeEvery).
+	// clock again at least this often (zero: a minute).
 	WakeEvery time.Duration
 }
 

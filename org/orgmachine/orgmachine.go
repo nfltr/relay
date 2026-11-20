@@ -631,8 +631,8 @@ func (m *Machine) clientTLS(serverName string, check func([]*x509.Certificate, t
 // still passes moves until (spec/enrol/Enrol.tla NoExpiredSession and
 // RevocationBound; mutants no-expiry-timer, no-cut-on-update). Take
 // changed before the check that admitted the session. It returns when
-// done is closed or after cut. The relay agent's holdAdmission is the
-// same loop for a service (the relay SDK imports nothing of nfltr).
+// done is closed or after cut. orgid.Identity.Hold is the same loop in
+// the relay SDK, which client/agent runs for a service.
 func (m *Machine) Hold(until time.Time, changed <-chan struct{}, check func(now time.Time) (time.Time, error), cut func(), done <-chan struct{}) {
 	t := time.NewTimer(time.Until(until))
 	defer t.Stop()

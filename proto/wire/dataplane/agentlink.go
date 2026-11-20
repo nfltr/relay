@@ -88,7 +88,7 @@ func ParseOpenHeader(header []byte) (*pb.TCPData, error) {
 	return f, CheckExclude(f.GetExclude())
 }
 
-// MaxExclude bounds an open's exclude list (pb.TCPData.exclude): the
+// MaxExclude bounds an open's exclude list (pb.TCPData.Exclude): the
 // instances one open of a service name may have failed on.
 const MaxExclude = 16
 

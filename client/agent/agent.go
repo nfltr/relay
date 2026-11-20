@@ -9,7 +9,7 @@
 // The package wraps the same primitives the nfltr CLI uses:
 //   - [grpcclient.NewClientConn] / [grpcclient.NewMTLSClientConn] for gRPC transport
 //     with keepalive and enlarged HTTP/2 flow-control windows (4 MB/stream, 16 MB/conn)
-//   - [pb.NewDispatcherClient] + [pb.Dispatcher_ConnectHTTP] for the tunnel stream
+//   - [pb.NewDispatcherClient] + [pb.Dispatcher_ConnectHTTPClient] for the tunnel stream
 //   - Route parsing is lifted into the
 //     [Route] type so application code no longer needs string formatting.
 //

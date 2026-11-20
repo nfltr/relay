@@ -27,7 +27,7 @@ const groupRetryWait = 250 * time.Millisecond
 
 // retryGroup runs open for a group dial until it is not a refusal of the
 // end-to-end check (CodeE2EEPinMismatch): each refused certificate's
-// machine is excluded from the next open's pick (pb.TCPData.exclude, at
+// machine is excluded from the next open's pick (pb.TCPData.Exclude, at
 // most dataplane.MaxExclude), until ctx ends. When the relay then finds no
 // instance left (every one refused) or ctx ends, the answer is the last
 // refusal with the instances tried. Any other failure is the relay's or the
