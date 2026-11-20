@@ -6,6 +6,7 @@
 package orgenrol
 
 import (
+	"crypto"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -16,7 +17,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/orgissuer"
+	"github.com/nfltr/relay/org/orgpki"
 )
 
 // Trace mode (go test -tags enroltrace, ENROLTRACE=<dir>) appends the
@@ -111,6 +114,61 @@ func pushTrace(ev, dir string, der []byte) {
 	traceMu.Lock()
 	defer traceMu.Unlock()
 	f, err := os.OpenFile(filepath.Join(out, strconv.Itoa(os.Getpid())+".revokepush"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		panic(err)
+	}
+}
+
+// The join's steps of spec/enrol/Join.tla, to <pid>.ndjson beside the
+// issuer's lines (orgpki's trace_on.go), checked by TraceJoin.tla. Each
+// line is one append of the whole line (O_APPEND), and a join's request
+// is logged before it is posted, its end after its answer was read, so a
+// line of the issuer's answer to it falls between them.
+
+// traceJoinRoot logs the join's check of the root the relay gave
+// (Join.tla Start's Trusts): own when it is the owner's, the pinned root or
+// one the pinned recovery key certifies (decided here, apart from trust),
+// ok when trust took it.
+func traceJoinRoot(orgID string, pins Pins, root, rec *x509.Certificate, ok bool) {
+	own := orgid.Fingerprint(rec) == pins.Recovery &&
+		(orgid.Fingerprint(root) == pins.Root || rotatedRoot(root, rec, orgID) == nil)
+	joinLine(map[string]any{"ev": "jroot", "o": orgID, "own": own, "ok": ok})
+}
+
+// traceJoinStart logs a join run's request (Start): machine directory m,
+// the token, the key it asks for, the run's request id and the first
+// run's.
+func traceJoinStart(orgID, dir, tok string, pub crypto.PublicKey, run, first string) {
+	joinLine(map[string]any{"ev": "jstart", "o": orgID, "m": dir, "tok": tok, "k": orgid.KeyFingerprint(pub), "run": run, "first": first})
+}
+
+// traceJoinEnd logs how the run ended: joined (Install of answer id, for
+// key ak), refused (Install of a refusal) or failed (GiveUp: no answer,
+// or one the checks did not take).
+func traceJoinEnd(orgID, dir, tok, res string, a orgpki.Answer) {
+	ak := ""
+	if c, err := x509.ParseCertificate(a.Cert); err == nil {
+		ak = orgid.KeyFingerprint(c.PublicKey)
+	}
+	joinLine(map[string]any{"ev": "jend", "o": orgID, "m": dir, "tok": tok, "res": res, "id": a.ID, "ak": ak})
+}
+
+func joinLine(l map[string]any) {
+	out := os.Getenv("ENROLTRACE")
+	if out == "" {
+		return
+	}
+	b, err := json.Marshal(l)
+	if err != nil {
+		panic(err)
+	}
+	traceMu.Lock()
+	defer traceMu.Unlock()
+	f, err := os.OpenFile(filepath.Join(out, strconv.Itoa(os.Getpid())+".ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		panic(err)
 	}

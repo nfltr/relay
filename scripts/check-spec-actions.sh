@@ -65,6 +65,7 @@ done
 # <trace spec> <recorder dirs> <line kinds written only by tests or fixtures>
 recorders='enrol/TraceEnrol.tla org/orgpki,client/orgid -
 enrol/TraceRevokePush.tla org/orgenrol -
+enrol/TraceJoin.tla org/orgenrol -
 orgmove/TraceOrgMove.tla org/orgpki,org/orgissuer -
 appenrol/TraceAppEnrol.tla org/orgpki -
 TraceCallCredit.tla client/rpcclient -

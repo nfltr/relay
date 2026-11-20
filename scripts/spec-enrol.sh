@@ -179,6 +179,24 @@ trace() {
 	return 1
 }
 
+# jtrace F: the join's lines of F (orgenrol's, beside the issuer's),
+# checked by TraceJoin.tla.
+jtrace() {
+	t=$work/$(basename "$1").j
+	cat "$1" >"$t"
+	[ -s "$t" ] || { echo "$1: no lines"; return 0; }
+	printf 'CONSTANTS\n    TraceFile = "%s"\nINIT Init\nNEXT Next\nINVARIANTS\n    Conforms\n    RefusedOnlyForCause\n    JoinRootsAreOwners\n    TraceDone\n' "$t" >"$t.cfg"
+	(cd $dir && "$java" -cp "$jar" tlc2.TLC -workers 1 -noGenerateSpecTE -deadlock \
+		-metadir "$t.states" -config "$t.cfg" TraceJoin.tla) >"$t.out" 2>&1 || true
+	if grep -q '^Error: Invariant TraceDone is violated' "$t.out"; then
+		echo "$(basename "$1"): $(wc -l <"$t" | tr -d ' ') lines: accepted"
+		return 0
+	fi
+	grep -m1 '^Error' "$t.out" || tail -20 "$t.out"
+	echo "$(basename "$1"): $(wc -l <"$t" | tr -d ' ') lines: REJECTED"
+	return 1
+}
+
 # ptrace F: a RevokePush trace (<pid>.revokepush), checked by
 # TraceRevokePush.tla.
 ptrace() {
@@ -218,8 +236,8 @@ ctrace() {
 
 fixtures() {
 	: >"$work/ffails"
-	for f in $dir/traces/*.ndjson $dir/traces/*.revokepush $dir/traces/*.crlcarriers; do
-		case $f in *.revokepush) chk=ptrace ;; *.crlcarriers) chk=ctrace ;; *) chk=trace ;; esac
+	for f in $dir/traces/*.ndjson $dir/traces/*.revokepush $dir/traces/*.crlcarriers $dir/traces/*.join; do
+		case $f in *.revokepush) chk=ptrace ;; *.crlcarriers) chk=ctrace ;; *.join) chk=jtrace ;; *) chk=trace ;; esac
 		want=$(basename "$f" | cut -d- -f1)
 		if [ "$want" = Accepted ]; then
 			if $chk "$f" >"$work/m.out"; then
@@ -261,6 +279,24 @@ traces() {
 		n=$((n + 1))
 		trace "$f" >"$work/t.out" || { echo "$f"; cat "$work/t.out"; echo x >>"$work/fails"; }
 	done
+	# Join.tla's machine side: every trace with a join's lines, and the
+	# outcomes they take (a step no test takes is a test gap).
+	nj=0
+	for f in "$work"/unit/*/*.ndjson; do
+		grep -q '"ev":"j' "$f" || continue
+		nj=$((nj + 1))
+		jtrace "$f" >"$work/t.out" || { echo "$f"; cat "$work/t.out"; echo x >>"$work/fails"; }
+	done
+	cat "$work"/unit/*/*.ndjson 2>/dev/null | grep '"ev":"j' |
+		sed -E 's/.*"ev":"jroot".*"ok":(true|false).*"own":(true|false).*/jroot-ok-\1-own-\2/; s/.*"ev":"jend".*"res":"([a-z]+)".*/jend-\1/; s/.*"ev":"jstart".*/jstart/' |
+		sort | uniq -c >"$work/jcov"
+	# A run again with the kept key: a jstart whose first is not its run.
+	n2=$(cat "$work"/unit/*/*.ndjson 2>/dev/null | grep '"ev":"jstart"' | grep -cvE '"first":"([^"]*)".*"run":"\1"' || true)
+	echo "$nj Join traces: $(tr -s ' ' <"$work/jcov" | tr '\n' ' ') jstart-again $n2"
+	for want in jroot-ok-true-own-true jroot-ok-false-own-false jend-joined jend-refused jend-failed; do
+		grep -q " $want\$" "$work/jcov" || { echo "coverage: no Join trace takes $want"; echo x >>"$work/fails"; }
+	done
+	[ "$n2" -gt 0 ] || { echo "coverage: no Join trace runs a join again"; echo x >>"$work/fails"; }
 	np=0
 	for f in "$work"/unit/*/*.revokepush; do
 		[ -f "$f" ] || continue

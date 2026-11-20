@@ -123,8 +123,9 @@ CheckBad ==
       [] ~E.ok /\ CheckOK -> IF E.why \in {"chain", "name", "group", "user", "app"} THEN {} ELSE {"diverged"}
       [] OTHER -> {}
 
-\* itake (the root's CRL of issuers taken) is spec/orgmove/TraceOrgHosted.tla's.
-Kinds == {"issue", "refuse", "revoke", "rebind", "crl", "take", "rotate", "check", "itake"}
+\* itake (the root's CRL of issuers taken) is spec/orgmove/TraceOrgHosted.tla's;
+\* jroot, jstart and jend (a join's steps) are TraceJoin.tla's.
+Kinds == {"issue", "refuse", "revoke", "rebind", "crl", "take", "rotate", "check", "itake", "jroot", "jstart", "jend"}
 
 \* rebind: the name's serials the trace knows, but the new one.
 Retires == {c \in DOMAIN certs : c[1] = E.o /\ certs[c].n = E.n /\ c[2] # E.s}

@@ -135,6 +135,7 @@ func Join(ctx context.Context, mb Mailbox, dir string, pins Pins, token string, 
 		return Joined{}, err
 	}
 	req.Enrol = &er
+	traceJoinStart(orgID, dir, er.TokenID, key.Public(), req.ID, first)
 	var a orgpki.Answer
 	for {
 		a, err = exchange(ctx, mb, orgID, req, min(AnswerWait, wait), first)
@@ -144,17 +145,24 @@ func Join(ctx context.Context, mb Mailbox, dir string, pins Pins, token string, 
 	}
 	if a.Refused != "" {
 		_ = os.Remove(filepath.Join(dir, JoinKeyFile)) // refused: the token answers this key no more
+		traceJoinEnd(orgID, dir, er.TokenID, "refused", a)
 	}
 	if err != nil {
+		if a.Refused == "" {
+			traceJoinEnd(orgID, dir, er.TokenID, "failed", a)
+		}
 		return Joined{}, err
 	}
 	if err := orgmachine.Checked(ver, a.Cert, a.Issuer, a.HostCert, key, "", now()); err != nil {
+		traceJoinEnd(orgID, dir, er.TokenID, "failed", a)
 		return Joined{}, fmt.Errorf("the answer: %w", err)
 	}
 	if err := orgmachine.WriteFiles(dir, orgmachine.Enrolment{Root: rm.Root, Recovery: rm.Recovery, Cert: a.Cert, Issuer: a.Issuer, HostCert: a.HostCert, CRL: cm.CRL, Issuers: rm.Issuers, Key: key}); err != nil {
+		traceJoinEnd(orgID, dir, er.TokenID, "failed", a)
 		return Joined{}, err
 	}
 	_ = os.Remove(filepath.Join(dir, JoinKeyFile)) // installed: the machine's key now
+	traceJoinEnd(orgID, dir, er.TokenID, "joined", a)
 	var j Joined
 	if j.Cert, err = x509.ParseCertificate(a.Cert); err != nil || a.MachineKey == nil {
 		return j, err
@@ -206,11 +214,13 @@ func trust(ctx context.Context, mb Mailbox, orgID string, pins Pins, wait time.D
 		// (orgid TakeRotation; spec/enrol/Join.tla Trusts, mutant
 		// pin-root-only; enrol.pv RotClient).
 		if err := rotatedRoot(root, rec, orgID); err != nil {
+			traceJoinRoot(orgID, pins, root, rec, false)
 			return nil, nil, rm, cm, fmt.Errorf("the organisation's root is not the pinned one, nor certified by the pinned recovery key: %w", err)
 		}
 		rootPin = orgid.Fingerprint(root)
 	}
 	ver, err := orgid.NewVerifier(root, rec, rootPin, pins.Recovery)
+	traceJoinRoot(orgID, pins, root, rec, err == nil)
 	if err != nil {
 		return nil, nil, rm, cm, err
 	}

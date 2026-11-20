@@ -292,6 +292,27 @@ renewal 30 days after the NotAfter: inside SEAMLESS's 90-day grace)
 fails when a line kind TraceEnrol reads is no longer written by orgpki or
 orgid.
 
+Join.tla's machine side is recorded by `org/orgenrol`'s `Join` into the
+same `<pid>.ndjson` (`trace_on.go`; one append per line, a run's request
+logged before it is posted and its end after its answer was read, so the
+issuer's answer falls between them): `jroot` (the root check: `own` when
+the root is the owner's, the pinned one or one the pinned recovery key
+certifies, decided by the recorder apart from `trust`; `ok` when `trust`
+took it), `jstart` (machine directory `m`, token, key, the run's request
+id and the first run's) and `jend` (`joined` by answer `id` for key `ak`,
+`refused`, `failed`: GiveUp). `TraceJoin.tla` requires a run again to ask
+with the key the join keeps for its token (RefusedOnlyForCause, mutant
+`new-key-per-join`), a root to be taken exactly when it is the owner's
+(RefusedOnlyForCause `pin-root-only`, JoinRootsAreOwners `any-root`), an
+install to take this run's or the first run's answer for its key, and
+every line to be a step (Conforms); Issue is TraceEnrol's (above).
+`traces` checks every trace with join lines and fails when none takes a
+root taken, a root refused, a join run again, and each of joined,
+refused, failed; `traces/<Invariant>-*.join` are the fixtures each
+rejected by its invariant, `Accepted-*.join` accepted. The other actions
+are no code's: Lose, Other, ReplayOld and InstallForged are the relay's
+or the attacker's, Renew, Revoke and Rotate are TraceEnrol's lines.
+
 CrlCarriers.tla's carrier steps are recorded to `<pid>.crlcarriers` by
 `org/orgenrol` (the issuer's `put`, logged before it is sent, and
 `publish`; a machine's Keeper's `take`) and relay client `orgid`
@@ -356,6 +377,7 @@ fixtures each rejected by its invariant.
 | CrlCarriers.tla | org/orgenrol/issuer.go |
 | TraceEnrol.tla | org/orgpki/trace_on.go |
 | TraceEnrol.tla | client/orgid/trace_on.go |
+| TraceJoin.tla | org/orgenrol/trace_on.go |
 | TraceRevokePush.tla | org/orgenrol/trace_on.go |
 | TraceCrlCarriers.tla | org/orgenrol/trace_on.go |
 | TraceCrlCarriers.tla | client/orgid/trace_on.go |

@@ -5,7 +5,13 @@
 
 package orgenrol
 
-import "time"
+import (
+	"crypto"
+	"crypto/x509"
+	"time"
+
+	"github.com/nfltr/relay/org/orgpki"
+)
 
 // traceNotice, traceRead and tracePublish record the issuer service's
 // steps of spec/enrol/RevokePush.tla (README "Traces"): a file-change
@@ -23,3 +29,12 @@ func tracePublish(string, []byte) {}
 // with -tags enroltrace.
 func tracePut(string, []byte)                                {}
 func traceCarry(string, any, []byte, time.Time, bool, error) {}
+
+// traceJoinRoot, traceJoinStart and traceJoinEnd record a join's steps of
+// spec/enrol/Join.tla (README "Traces"): the root check (Start's Trusts),
+// a run's request with the key it keeps for the token, and how the run
+// ended (Install, or GiveUp); checked by TraceJoin.tla, built only with
+// -tags enroltrace.
+func traceJoinRoot(string, Pins, *x509.Certificate, *x509.Certificate, bool)  {}
+func traceJoinStart(string, string, string, crypto.PublicKey, string, string) {}
+func traceJoinEnd(string, string, string, string, orgpki.Answer)              {}
