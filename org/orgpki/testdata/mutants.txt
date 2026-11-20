@@ -24,7 +24,7 @@ reissue-any-key | issuer.go | 		if n.revoked || last.token != req.TokenID || las
 reissue-revoked | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | TestTokenAnsweredAgainForItsKey
 reissue-after-renewal | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if n.revoked || last.key != orgid.KeyFingerprint(pub) { | TestTokenAnsweredAgainForItsKey
 token-in-request | issuer.go | 	if !hmac.Equal(req.MAC, enrolMAC(i.tokenSecret(req.TokenID), req.CSR)) { | 	if false { | TestTokenForAnotherNameRefused
-name-from-request | issuer.go | 	der, err := i.issue(ActIssued, t.name, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now) | 	der, err := i.issue(ActIssued, cr.Subject.CommonName, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now) | TestTokenForAnotherNameRefused
+name-from-request | issuer.go | 	der, err := i.issue(ActIssued, t.name, t.groups, i.enrolMachineID(t, req.MachineID), t.dev, pub, req.TokenID, "", now) | 	der, err := i.issue(ActIssued, cr.Subject.CommonName, t.groups, i.enrolMachineID(t, req.MachineID), t.dev, pub, req.TokenID, "", now) | TestTokenForAnotherNameRefused
 token-outlives-ttl | issuer.go | 	if !now.Before(t.expires) { | 	if false { | TestTokenForAnotherNameRefused
 token-group-outside-policy | issuer.go | 	if policy := i.Groups(); !subset(groups, policy) { | 	if policy := i.Groups(); false && !subset(groups, policy) { | TestGroupOutsidePolicyRefused
 renew-forged | issuer.go | 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) { | 	if _ = sum; rec == nil { | TestRotationOnlyByRecoveryKey
@@ -97,3 +97,10 @@ adopt-any-signer | restore.go | 	if i.restoredAt.IsZero() || !cur.NotBefore.Befo
 adopt-unknown-name | restore.go | 	if n == nil || n.revoked || i.deniedDev(n.dev) || orgid.MachineID(cur) != n.machineID { | 	if n == nil { | TestRestoreAdoptsNothingElse
 restore-older-than-copy | restore.go | 	if crl.Number.Int64() < i.crlNumber { | 	if false { | TestRestoreRefusals
 adopt-without-restore | restore.go | 	if i.restoredAt.IsZero() || !cur.NotBefore.Before(i.restoredAt) || cur.CheckSignatureFrom(i.cert) != nil { | 	if cur.CheckSignatureFrom(i.cert) != nil { | TestRestoreRefusals
+# Join.tla Issue (lane LOGINREDS): the join's stated relay machine id.
+# bind-none is the code before (a login bundle's certificate named no id);
+# bind-unmacd binds an id the token's MAC does not cover; bind-any-account
+# binds one the move policy refuses.
+bind-none | issuer.go | 	if t.machineID != "" || stated == "" || i.move == nil || validMachineID(stated) != nil { | 	if true { | TestEnrolBindsTheStatedMachineID
+bind-unmacd | issuer.go | 		if !hmac.Equal(req.MachineMAC, enrolIDMAC(i.tokenSecret(req.TokenID), req.MachineID, req.CSR)) { | 		if false { | TestEnrolIDModelBindings
+bind-any-account | issuer.go | 	if err := i.move(t.name, stated); err != nil { | 	if err := i.move(t.name, stated); false && err != nil { | TestEnrolBindsTheStatedMachineID

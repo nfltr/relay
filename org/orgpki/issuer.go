@@ -56,6 +56,13 @@ type EnrolRequest struct {
 	TokenID string `json:"token_id"`
 	CSR     []byte `json:"csr"`
 	MAC     []byte `json:"mac"`
+	// MachineID, when set, is the joining machine's relay machine id,
+	// MachineMAC the token's MAC over it and the CSR (NewEnrolRequestFor;
+	// BIND:enrol.id): the issuer binds it into a certificate whose token
+	// names no id (a login bundle's) when the move policy admits it
+	// (spec/enrol/Join.tla JoinedBound). An issuer before it ignores both.
+	MachineID  string `json:"machine_id,omitempty"`
+	MachineMAC []byte `json:"machine_mac,omitempty"`
 }
 
 // RenewRequest is a renewal: the current certificate, a CSR for a new key,
@@ -330,6 +337,12 @@ func mac(key []byte, msg string) []byte {
 func enrolMAC(secret, csr []byte) []byte { return mac(secret, "nfltr-org-enrol-v1\x00"+string(csr)) }
 func renewMessage(csr []byte) []byte     { return append([]byte("nfltr-org-renew-v1\x00"), csr...) }
 
+// enrolIDMAC is the token's MAC over a join's relay machine id and its
+// CSR (BIND:enrol.id).
+func enrolIDMAC(secret []byte, machineID string, csr []byte) []byte {
+	return mac(secret, "nfltr-org-enrol-id-v1\x00"+machineID+"\x00"+string(csr))
+}
+
 // moveMessage is what a move's signature covers: the new relay machine id
 // and the CSR (BIND:move.id).
 func moveMessage(csr []byte, machineID string) []byte {
@@ -476,6 +489,21 @@ func NewEnrolRequest(token string, csr []byte) (EnrolRequest, error) {
 	return EnrolRequest{TokenID: id, CSR: csr, MAC: enrolMAC(secret, csr)}, nil
 }
 
+// NewEnrolRequestFor is NewEnrolRequest stating this machine's relay
+// machine id (none when ""), under the token's MAC.
+func NewEnrolRequestFor(token string, csr []byte, machineID string) (EnrolRequest, error) {
+	r, err := NewEnrolRequest(token, csr)
+	if err != nil || machineID == "" {
+		return r, err
+	}
+	_, _, secret, err := parseToken(token)
+	if err != nil {
+		return EnrolRequest{}, err
+	}
+	r.MachineID, r.MachineMAC = machineID, enrolIDMAC(secret, machineID, csr)
+	return r, nil
+}
+
 // NewRenewRequest is the machine's side of a renewal: csr for its new key,
 // signed with its current key.
 func NewRenewRequest(cert []byte, current ed25519.PrivateKey, csr []byte) RenewRequest {
@@ -534,6 +562,11 @@ func (i *Issuer) Enrol(req EnrolRequest, now time.Time) ([]byte, error) {
 	if !hmac.Equal(req.MAC, enrolMAC(i.tokenSecret(req.TokenID), req.CSR)) {
 		return nil, i.refuse(refusal, "the request is not bound to the token")
 	}
+	if req.MachineID != "" || req.MachineMAC != nil { // Join.tla Relabel: the relay cannot state an id
+		if !hmac.Equal(req.MachineMAC, enrolIDMAC(i.tokenSecret(req.TokenID), req.MachineID, req.CSR)) {
+			return nil, i.refuse(refusal, "the request's relay machine id is not bound to the token")
+		}
+	}
 	if !now.Before(t.expires) {
 		return nil, i.refuse(refusal, "the token expired")
 	}
@@ -557,11 +590,26 @@ func (i *Issuer) Enrol(req EnrolRequest, now time.Time) ([]byte, error) {
 			return nil, i.refuse(refusal, t.name+" is enrolled already (the token was redeemed, or another token's was)")
 		}
 	}
-	der, err := i.issue(ActIssued, t.name, t.groups, t.machineID, t.dev, pub, req.TokenID, "", now)
+	der, err := i.issue(ActIssued, t.name, t.groups, i.enrolMachineID(t, req.MachineID), t.dev, pub, req.TokenID, "", now)
 	if err == nil {
 		appTraceLine(map[string]any{"ev": "code", "o": i.orgID, "n": t.name, "u": t.dev.Person, "a": t.dev.App, "tok": req.TokenID, "k": orgid.KeyFingerprint(pub), "t": now.Unix()})
 	}
 	return der, err
+}
+
+// enrolMachineID is the relay machine id an enrolment certifies: the
+// token's, or, for a token naming none, the one the request stated when
+// the move policy admits it (Join.tla Issue, BindOnlyOwnAccount); else
+// none, as before (the keeper moves the name later if the policy admits
+// it then). Callers hold mu.
+func (i *Issuer) enrolMachineID(t *tokenRec, stated string) string {
+	if t.machineID != "" || stated == "" || i.move == nil || validMachineID(stated) != nil {
+		return t.machineID
+	}
+	if err := i.move(t.name, stated); err != nil {
+		return ""
+	}
+	return stated
 }
 
 // rebind redeems a rebind token (Enrol.tla Rebind, enrol.pv query 11):

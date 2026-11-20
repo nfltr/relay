@@ -56,3 +56,6 @@ no-copy-put | issuer.go | 		s.putCopy(ctx, crl, issuer, now) // before the mailb
 no-copy-read | machine.go | 	if cp, ok := mb.(CRLCopy); ok { | 	if cp, ok := mb.(CRLCopy); false && ok { | TestRevokeReachesTheMachineWhileTheMailboxIsDown
 # OrgMove.tla Revive: the restore drill (restore_test.go) without the restore line.
 restore-skipped | ../orgissuer/bundle.go | 	return iss.Restore(crl, now) | 	_ = iss; return nil | TestRestoreFromABackupBehindThePublishedCRL
+# Join.tla Relabel (lane LOGINREDS): an enrolment whose stated relay
+# machine id is not its sender's is refused.
+enrol-any-sender | issuer.go | 	if e := req.Enrol; e != nil && e.MachineID != "" && senderMachine(sender) != e.MachineID { // Join.tla Relabel | 	if e := req.Enrol; false && e != nil { | TestJoinStatingAnotherSendersIDIsRefused

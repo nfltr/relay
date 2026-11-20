@@ -27,9 +27,13 @@ import (
 )
 
 // Pins are a machine's first-use values: the organisation root's and its
-// recovery's fingerprints, provisioned with the token.
+// recovery's fingerprints, provisioned with the token, and MachineID, its
+// relay machine id (none: ""), which Join states under the token's MAC
+// for the issuer to bind where the token names none (spec/enrol/Join.tla
+// JoinedBound: no move at the first serve).
 type Pins struct {
 	Root, Recovery string
+	MachineID      string
 }
 
 func newKeyCSR() (ed25519.PrivateKey, []byte, error) {
@@ -130,7 +134,7 @@ func Join(ctx context.Context, mb Mailbox, dir string, pins Pins, token string, 
 	if err != nil {
 		return Joined{}, err
 	}
-	er, err = orgpki.NewEnrolRequest(token, csr)
+	er, err = orgpki.NewEnrolRequestFor(token, csr, pins.MachineID)
 	if err != nil {
 		return Joined{}, err
 	}

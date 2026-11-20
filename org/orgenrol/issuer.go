@@ -379,6 +379,9 @@ func (s *service) wrongMachine(ctx context.Context, req orgpki.Request, sender s
 	if r := req.Renew; r != nil && r.MachineID != "" && senderMachine(sender) != r.MachineID {
 		return fmt.Sprintf("a move to relay machine %s posted by %s: only that machine asks to move a name to it", r.MachineID, cmp.Or(sender, "unknown")), nil
 	}
+	if e := req.Enrol; e != nil && e.MachineID != "" && senderMachine(sender) != e.MachineID { // Join.tla Relabel
+		return fmt.Sprintf("an enrolment stating relay machine %s posted by %s: only that machine states its id", e.MachineID, cmp.Or(sender, "unknown")), nil
+	}
 	if req.Enrol == nil || s.MachineOf == nil {
 		return "", nil
 	}
@@ -451,6 +454,7 @@ func (s *service) decide(ctx context.Context, req orgpki.Request, refuse string,
 		var err error
 		switch {
 		case req.Enrol != nil:
+			iss.SetMovePolicy(s.movePolicy(ctx)) // binds the join's stated id (Join.tla Issue)
 			der, err = iss.Enrol(*req.Enrol, now)
 		case req.Renew != nil:
 			iss.SetMovePolicy(s.movePolicy(ctx))
