@@ -44,3 +44,8 @@ keep-sessions | identity.go | 	if newCRL || newCert || newIssuers { | 	if newCRL
 no-app-check | verify.go | 	if want.Apps != nil && !slices.Contains(want.Apps, app) { | 	if false { | TestAppEnrolModelBindingsAttrs
 no-user-check | verify.go | 	if want.Users != nil && !slices.Contains(want.Users, person) { | 	if false { | TestAppEnrolModelBindingsAttrs
 uri-host-unchecked | verify.go | 		if u.Scheme == "nfltr" && u.Host != Domain(v.orgID) { | 		if false { | TestAppEnrolModelBindingsAttrs
+# The relay's copy of the CRL (spec/enrol/CrlCarriers.tla): not read
+# (mailbox-only: CurrentWithoutMailbox); taken past its NextUpdate
+# (stale-copy: RevocationBound) or older than the one held (copy-rollback).
+no-copy-read | follow.go | 	if cp, ok := mb.(CRLCopy); ok { | 	if cp, ok := mb.(CRLCopy); false && ok { | TestFollowTakesTheRelayCopyWhileTheMailboxIsDown
+stale-copy | verify.go | 	if !now.Before(crl.NextUpdate) { | 	if false { | TestFollowRefusesAStaleRolledBackOrUnsignedCopy

@@ -50,3 +50,7 @@ no-renew-after-expiry | machine.go | 	if !now.Before(cur.NotAfter.Add(orgpki.Ren
 # name).
 keeper-no-move | machine.go | 	if id == "" || id == refused || id == orgid.MachineID(cur) { | 	if _ = cur; true { | TestKeeperMovesTheNameAfterAReEnrolment
 move-any-account | issuer.go | 		case got != id: | 		case got == "\x00": | TestKeeperMoveRefusedKeepsTheOldID
+# The CRL off the mailbox (spec/enrol/CrlCarriers.tla mailbox-only:
+# CurrentWithoutMailbox): the issuer puts no copy, the keeper reads none.
+no-copy-put | issuer.go | 		s.putCopy(ctx, crl, issuer, now) // before the mailbox: its outage must not hold the copy back | 		_ = now | TestRevokeReachesTheMachineWhileTheMailboxIsDown
+no-copy-read | machine.go | 	if cp, ok := mb.(CRLCopy); ok { | 	if cp, ok := mb.(CRLCopy); false && ok { | TestRevokeReachesTheMachineWhileTheMailboxIsDown
