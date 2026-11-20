@@ -181,8 +181,7 @@ var ErrA2AE2EENoKey = errors.New("rpcclient: A2A E2EE needs a key (WithA2AE2EEKe
 
 // LoadA2AE2EEPairingKey reads a pairing key file and derives the 32-byte key
 // K = SHA-256(context ‖ secret). The secret must be random: a relay that
-// sees handshakes could test guesses of a short passphrase offline. nfltr
-// p2p uses the same key (p2p.NewE2E).
+// sees handshakes could test guesses of a short passphrase offline.
 func LoadA2AE2EEPairingKey(path string) ([]byte, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

@@ -22,10 +22,10 @@ module, a second Close documented and guarded for the datagram API,
 `make check-api` added (records below), 0 wire changes. No consumer
 changes: relay-core, relay-server, send and pipe (`go vet ./...`) and
 nfltr (`go vet` of its 32 packages that import relay) pass against the
-branch with `replace` directives. One large deletion is proposed, not
-made: `client/p2p`'s file transfer, chat and call surface (155
-functions no consumer reaches; it carries a TLA+ spec and a ProVerif
-model, so its removal is a lane of its own, below).
+branch with `replace` directives. One large deletion was proposed here
+and made by lane P2PDEL: `client/p2p`'s file transfer, chat and call
+surface (155 functions no consumer reached, with its TLA+ spec and
+ProVerif model; below).
 
 ## Method
 
@@ -106,25 +106,18 @@ sentinels (`ErrRefused`, `ErrTooLarge`, `ErrUploadWindow`,
 Proposed, not changed (each needs its owner's decision; none blocks a
 v1 tag that keeps them):
 
-1. **`client/p2p`'s CLI transfer, chat and call surface** (lane
-   P2PDEL). nfltr deleted `nfltr p2p` (`91d974491`, 2026-11-13); since
-   then no consumer reaches `Connect`, `SendFile`/`ReceiveFile`,
+1. **`client/p2p`'s CLI transfer, chat and call surface**: deleted
+   (lane P2PDEL). nfltr deleted `nfltr p2p` (`91d974491`, 2026-11-13);
+   since then no consumer reached `Connect`, `SendFile`/`ReceiveFile`,
    `SendDir`/`ReceiveDir`, `Chat`, `CallServer`, `E2E`, `SignalConn`,
    `RelayMux`, `RelayConn`, `OpenDataPath`, `GatherCandidates`,
-   `DiscoverExternalAddr`, `OpenBrowser` and their helpers: 155
-   functions in `e2e.go`, `rtcdata.go`, `relaymux.go`, `sigconn.go`,
-   `relay.go`, `connect.go`, `transfer.go`, `localserver.go`, `ws.go`,
-   `datapath_tcp.go`, `encrypt.go`, `stun.go`, `trace_*.go`. The live
-   part is the browser direct path (`browserpeer.go`, `BrowserDirect`,
-   the signal stream messages of `signal.go`). Deleting the rest also
-   deletes `spec/SignalConn.tla` and its trace check (spec README
-   "Code map" rows for `sigconn.go`, `relaymux.go`, `e2e.go`,
-   `trace_on.go`; `scripts/spec.sh traces`), `spec/proverif/p2p_e2e.pv`
-   with `TestP2PE2EModelBindings`, and the gosec baseline rows for those
-   files; `rtcdata.go`'s data-channel code the browser path reuses must
-   be split from the transfer's first (BP3 reuses it). Gate:
-   `make spec spec-mutants spec-bindings spec-proverif`, `go test -race
-   ./p2p/ ./agent/`, the browser e2e.
+   `DiscoverExternalAddr`, `OpenBrowser` and their helpers. Gone with
+   them: `spec/SignalConn.tla`, its trace check and fixtures,
+   `spec/proverif/p2p_e2e.pv` with `TestP2PE2EModelBindings`, and their
+   gosec, semgrep and test-knob rows (`api/client-v0.23.12.txt`). Left:
+   the browser direct path (`browserpeer.go`, `BrowserDirect`, its
+   `chunkWriter` in `rtcdata.go`) and `signal.go`'s offer and answer,
+   which relay-core's agent routing test sends.
 2. `rpcclient.WithA2AE2EEPairingKeyFile`, `CheckA2AE2EEPairingKeyFile`:
    unreached (nfltr keys A2A E2EE with `WithA2AE2EEKeyring`); an E2EE
    key mode with a model, so its removal updates the A2A model first.
