@@ -10,3 +10,12 @@ no-bound | direct_nf1.go | 				s.directRequired() | 				_ = s | TestNF1AnonDirec
 target-before-direct | direct_nf1.go | 	if !onPathWithin(c, PathDirect, nf1AnonDirectBound, gone) { | 	if false { | TestNF1AnonDirectRequired
 plain-served | direct_nf1.go | 	if l.Anonymous() && first != nf1MarkControl && !framed(first) { | 	if false { | TestNF1AnonDirectRequired
 direct-lost-waits-detach | direct_server.go | 		ps.end.set(anonLost(sess.c, ps, sess.lost)) | 		_ = ps | TestNF1AnonDirectRequired
+# Lane ENDTRACE: an anonymous session's end hidden behind detachTap's
+# embedded net.Conn (as nf1.AnswerConn's, lane PIPERESET): tlsend's Reset
+# was psConn's clean Close, its CloseWrite only the close_notify.
+tap-reset-closes | direct_nf1.go | func (t *detachTap) Reset() error      { return pathStream{Conn: t.Conn}.Reset() } | func (t *detachTap) Reset() error      { return t.Conn.Close() } | TestSessionWrappersPassTheEndOn
+tap-closewrite-hidden | direct_nf1.go | func (t *detachTap) CloseWrite() error { return pathStream{Conn: t.Conn}.CloseWrite() } | func (t *detachTap) CloseWrite() error { return nil } | TestSessionWrappersPassTheEndOn
+# Lane ENDTRACE: a relayed nf1 session's receipt hidden behind peekConn:
+# tlsend's CloseWriteSyncReceived fell back to CloseWriteSync, so a join's
+# hold ended at the far end's ENDACK (link spec/HopHold.tla hold-until-ack).
+peek-receipt-hidden | direct.go | 	if s, ok := c.Conn.(interface{ CloseWriteSyncReceived(func()) error }); ok { | 	if s, ok := c.Conn.(interface{ CloseWriteSyncReceived(func()) error }); false && ok { | TestSessionWrappersPassTheEndOn

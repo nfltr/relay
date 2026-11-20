@@ -1,0 +1,10 @@
+# Planted bugs of tlsend (scripts/go-mutants.sh client/tlsend/testdata/mutants.txt,
+# make test-go-mutants, in make ci): each line "<mutant> | <file> | <exact
+# line text> | <replacement> | <test>". Model spec/TLSEnd.tla; the
+# relayed close's mutants are nfnet's (client/nfnet/testdata/mutants.txt).
+# Lane ENDTRACE: Close's direct-path exemption. A Close after the peer's
+# close_notify that takes the transport's end on a conn acknowledging no
+# end (a direct path's psConn) waited EndBound there: nfltr-pipe's direct
+# dials exited 6 (lane PIPERESET), caught until now only by pipe's direct
+# cases.
+direct-takes-end | tlsend.go | 	take := c.raw.notified.Load() && syncsEnd(c.raw.Conn) | 	take := c.raw.notified.Load() | TestCloseOnADirectPathTakesNoEnd
