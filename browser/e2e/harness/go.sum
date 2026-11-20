@@ -162,8 +162,8 @@ github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/nfltr/link v0.12.20 h1:qdqSzwYPLHuoyaTyufjBfXlEUCyXLu9An4dNH4lsA0Q=
 github.com/nfltr/link v0.12.20/go.mod h1:LLhvrzaG7o8p0NOndBo6ftqgp52EEUwxblwPyf9kyrc=
-github.com/nfltr/link/peerlink/quiclink v0.5.26 h1:4TtwFXWNyeZn1HNtPrgyVmA4OjI3AnaqXR8A9Pur7+4=
-github.com/nfltr/link/peerlink/quiclink v0.5.26/go.mod h1:eh+/bF4uYQFGh2fbfUIkQfFDcD7BLhSWorQ25hNH26Y=
+github.com/nfltr/link/peerlink/quiclink v0.5.27 h1:XYCry5uztNpmnCtFRJEHwF67zhYbt+Bnt4yQHsUifMA=
+github.com/nfltr/link/peerlink/quiclink v0.5.27/go.mod h1:0m4dyVJgW6jAqV2xg7RtljT3/Rfda4aEHuKPXNERFpk=
 github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261112202211-40e0a2570e52 h1:y3Vhg7vmt+JPeDoPm2gwPgXVCWOWCf/YlzlHFo9MhNM=
 github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261112202211-40e0a2570e52/go.mod h1:KlJwkQMVhFf/rlYdkm18TkxbgyKn1UO4AtWyo/hOj10=
 github.com/nfltr/relay-core v0.14.7-0.20261116092351-68fd813d135f h1:BS6A2uAPA9maDh+s1Cg5J380V5bb9PO7TihKATsRmu8=
