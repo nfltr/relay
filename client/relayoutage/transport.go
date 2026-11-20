@@ -10,7 +10,10 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"os"
 	"time"
+
+	"github.com/nfltr/relay/client/relaytrust"
 )
 
 // Budget bounds how long one relay request waits for a relay that
@@ -27,7 +30,7 @@ var Budget = 2 * time.Minute
 // idempotency-aware retry.
 func Transport(base http.RoundTripper) http.RoundTripper {
 	if base == nil {
-		base = http.DefaultTransport
+		base = relaytrust.Transport(os.Getenv(relaytrust.PinEnv))
 	}
 	return relayOutageTransport{base: base}
 }

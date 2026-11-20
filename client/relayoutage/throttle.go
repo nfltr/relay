@@ -5,8 +5,11 @@ package relayoutage
 
 import (
 	"net/http"
+	"os"
 	"strconv"
 	"time"
+
+	"github.com/nfltr/relay/client/relaytrust"
 )
 
 // Throttled wraps base so a request the relay throttles (429 Too Many
@@ -18,7 +21,7 @@ import (
 // sets for bytes, strings and no body).
 func Throttled(base http.RoundTripper) http.RoundTripper {
 	if base == nil {
-		base = http.DefaultTransport
+		base = relaytrust.Transport(os.Getenv(relaytrust.PinEnv))
 	}
 	return throttledTransport{base: base}
 }

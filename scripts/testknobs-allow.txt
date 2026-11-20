@@ -1,5 +1,4 @@
 # Test files that assign a package-level variable of their package (the knobs rule).
 # Format: <file_test.go>:<var> <reason and follow-up>. A stale entry fails make check-testknobs.
-client/relayoutage/share_client_test.go:ShareClient exported SDK variable; follow-up: an option on the constructor
 client/rpcclient/a2a_handler_heartbeat_test.go:agentHeartbeatInterval unexported timeout/interval knob shortened by the test; follow-up: field on the owning struct
 client/agent/direct_portmap_test.go:discoverGateway its init only: keeps every test off the machine's real LAN gateway (a NAT-PMP router would map the test's ports); a test that serves a gateway sets DirectEndpoint.gateway

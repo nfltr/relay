@@ -5,9 +5,12 @@
 // its SHA-256 fingerprint (a relay you run, `nfltr relay serve
 // --tls-self-signed`) without weakening verification of any other host.
 //
-// The pin comes from PinEnv; nfltr's main exports a saved pin there and calls
-// Install, so the gRPC dialer (grpcclient.NewClientConn), Go's default HTTP
-// transport and every child process (node agents, the hub's nfltr mcp) use it.
+// The pin comes from PinEnv; nfltr's main exports a saved pin there, so the
+// gRPC dialer (grpcclient.NewClientConn), the relay's HTTP clients
+// (Transport: machinecert, machinecred, mailboxclient, relayoutage) and
+// every child process (node agents, the hub's nfltr mcp) use it. The pin is
+// scoped to those clients: Go's default HTTP transport, and every client
+// to another host (an IdP, a download), never trusts it.
 package relaytrust
 
 import (
@@ -18,8 +21,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
+	"sync"
 )
 
 // PinEnv names the pinned relay certificate's SHA-256 fingerprint.
@@ -93,19 +96,43 @@ func WithPin(cfg *tls.Config, pin string) *tls.Config {
 	return cfg
 }
 
-// Install makes this process and its children trust pin: it is exported in
-// PinEnv (unless the environment already names one) and added to Go's
-// default HTTP transport, which every http.Client without its own Transport
-// uses. An empty pin does nothing.
-func Install(pin string) {
-	if strings.TrimSpace(pin) == "" {
-		return
+// Transport is the HTTP transport of calls to the relay whose certificate
+// is pin (PinEnv; "": none): Go's default transport's settings, trusting
+// the pinned certificate as WithPin does. Without a pin it is
+// http.DefaultTransport itself. One transport per pin, so connections are
+// kept and reused; a later pin (nfltr config set-relay) gets its own, and
+// no other client trusts it (lane PINSCOPE: a process-wide pin kept the
+// first one it was given).
+func Transport(pin string) http.RoundTripper {
+	pin = strings.TrimSpace(pin)
+	if pin == "" {
+		return http.DefaultTransport
 	}
-	if strings.TrimSpace(os.Getenv(PinEnv)) == "" {
-		_ = os.Setenv(PinEnv, pin)
-	}
-	if t, ok := http.DefaultTransport.(*http.Transport); ok {
+	pinned.Lock()
+	defer pinned.Unlock()
+	t, ok := pinned.m[pin]
+	if !ok {
+		t = http.DefaultTransport.(*http.Transport).Clone()
 		t.TLSClientConfig = WithPin(t.TLSClientConfig, pin)
+		pinned.m[pin] = t
+	}
+	return t
+}
+
+// pinned holds Transport's transports, one per pin.
+var pinned = struct {
+	sync.Mutex
+	m map[string]*http.Transport
+}{m: map[string]*http.Transport{}}
+
+// CloseIdleConnections closes the idle connections of every transport
+// Transport made, as http.DefaultTransport's CloseIdleConnections does for
+// it (a test's goroutine check).
+func CloseIdleConnections() {
+	pinned.Lock()
+	defer pinned.Unlock()
+	for _, t := range pinned.m {
+		t.CloseIdleConnections()
 	}
 }
 
