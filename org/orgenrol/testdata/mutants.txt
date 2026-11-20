@@ -3,7 +3,7 @@
 # orgpki's testdata/mutants.txt. Model: spec/enrol/Enrol.tla (no-retry:
 # MachinesFollowRotation; push-only: TakesEffect; stale-answer:
 # MachineHoldsItsKey, through orgmachine.Checked).
-no-retry | machine.go | 			sleepCtx(ctx, k.RetryWait) | 			return | TestRenewAsksAgainAfterALoss
+no-retry | machine.go | 		retry = min(retry*2, k.FollowEvery) | 		return | TestRenewAsksAgainAfterALoss
 push-only | orgenrol.go | 		if time.Since(fresh) >= every { | 		if fresh.IsZero() { | TestRevokePushAndBackstop
 no-spool | issuer.go | 	if os.IsNotExist(err) { | 	if true { | TestEnrolAnsweredOnceAcrossARetry
 crl-no-wake-on-rotation | orgenrol.go | 			again = retry() // before apply: a rotation taken meanwhile closes it | 			_ = retry | TestRotationMovesTheMachine
