@@ -746,6 +746,73 @@ stoprun() {
 	return $fail
 }
 
+# tetrace FILE: TLC on one direction of a session's end under end-to-end
+# TLS (spec/TraceTLSEnd.tla, lane ENDTRACE); 0 when TLC reaches the
+# trace's end with Y's Close returned (TraceUnfinished violated).
+tetrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    NoFalseReset
+    TraceUnfinished
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceTLSEnd.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceUnfinished is violated' "$1.out"
+}
+
+# terun TESTS: every event TraceTLSEnd.tla maps is one client/tlsend
+# records; the fixtures (accept-tlsend-*, reject-tlsend-*: each mutant's
+# order) are accepted and rejected; then client/tlsend's TESTS under
+# -tags relaytrace, every direction's trace accepted.
+terun() {
+	tego=$(grep -ohE 'c\.trace\("[A-Za-z]+"' client/tlsend/*.go | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u)
+	for e in $(grep -oE 'E\.ev = "[A-Za-z]+"' spec/TraceTLSEnd.tla | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u); do
+		echo "$tego" | grep -qx "$e" || { echo "spec/TraceTLSEnd.tla: event $e is recorded by no trace call of client/tlsend"; return 1; }
+	done
+	for f in spec/testdata/accept-tlsend-*.ndjson spec/testdata/reject-tlsend-*.ndjson; do
+		cp "$f" "$work/"
+		want=accepted
+		case $f in *reject-*) want=rejected ;; esac
+		got=rejected
+		! tetrace "$work/$(basename "$f")" || got=accepted
+		grep -q 'distinct states found' "$work/$(basename "$f").out" || { echo "$f: TLC failed:"; tail -20 "$work/$(basename "$f").out"; return 1; }
+		[ $got = $want ] || { echo "$f: $got, want $want"; return 1; }
+		echo "$f: $got"
+	done
+	d=$work/tetraces
+	mkdir -p "$d"
+	(cd client && RELAYTRACE=$d go test -tags relaytrace -count=1 -run "$1" ./tlsend/) >"$work/tetest.out" 2>&1 || {
+		cat "$work/tetest.out"
+		return 1
+	}
+	nt=0 fail=0
+	for f in "$d"/tlsend-*.ndjson; do
+		[ -s "$f" ] || continue
+		nt=$((nt + 1))
+		if tetrace "$f"; then
+			echo "trace $(basename "$f"): $(wc -l <"$f" | tr -d ' ') lines: accepted"
+		else
+			echo "trace $(basename "$f"): REJECTED"
+			grep -E 'Error|unknown event' "$f.out" | head -5
+			fail=1
+		fi
+	done
+	cat "$d"/tlsend-*.ndjson >"$d/all" 2>/dev/null || true
+	for e in $(echo "$tego"); do
+		printf '%s %s; ' "$e" "$(grep -c "\"ev\":\"$e\"" "$d/all" || true)"
+	done
+	echo
+	echo "$nt traces"
+	[ "$nt" -gt 0 ] || fail=1
+	return $fail
+}
+
 fail=0
 cfg=
 # The stop tests traces records: three stops with a dead peer, a target's
@@ -1029,6 +1096,12 @@ stoptraces)
 	stoprun "${STOP_TRACE_TESTS:-$STOPCI}" || fail=1
 	exit $fail
 	;;
+tetraces)
+	# A session's end under end-to-end TLS over a link session (lane
+	# ENDTRACE): its fixtures and client/tlsend's end tests.
+	terun "${TE_TRACE_TESTS:-^TestEndOverALinkSession\$}" || fail=1
+	exit $fail
+	;;
 astraces)
 	# The per-push slice: the session tests of the retry, the restart, the
 	# forged unknown, the warm, the revoke, the rotation and the restart
@@ -1100,6 +1173,7 @@ traces)
 	prun "${P_TRACE_TESTS:-$PTESTS}" || exit 1
 	stoprun "${STOP_TRACE_TESTS:-$STOPTESTS}" fixtures || exit 1
 	bprun "${BP_TRACE_TESTS:-^(TestBrowserDirect|TestBrowserPeerModelBindings)}" || exit 1
+	terun "${TE_TRACE_TESTS:-^TestEndOverALinkSession\$}" || exit 1
 	;;
 *)
 	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|ptraces|stoptraces|bptraces|ccruns|cctraces FILE..." >&2

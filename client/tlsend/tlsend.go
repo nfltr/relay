@@ -74,7 +74,9 @@ func (c *Conn) CloseWrite() error {
 	if err := c.Conn.CloseWrite(); err != nil {
 		return err
 	}
+	c.trace("Notify", 0) // spec/TraceTLSEnd.tla XNotify
 	if cw, ok := c.raw.Conn.(interface{ CloseWrite() error }); ok {
+		c.trace("Fin", 0) // XFin
 		return cw.CloseWrite()
 	}
 	return nil
@@ -97,16 +99,32 @@ func (c *Conn) CloseWriteSyncReceived(received func()) error {
 	if err := c.Conn.CloseWrite(); err != nil {
 		return err
 	}
+	c.trace("Notify", 0) // spec/TraceTLSEnd.tla XNotify
 	switch s := c.raw.Conn.(type) {
 	case interface{ CloseWriteSyncReceived(func()) error }:
-		return s.CloseWriteSyncReceived(received)
+		c.trace("Fin", 0) // XFin
+		err := s.CloseWriteSyncReceived(received)
+		c.traceEnd(err)
+		return err
 	case interface{ CloseWriteSync() error }:
-		if err := s.CloseWriteSync(); err != nil {
+		c.trace("Fin", 0)
+		err := s.CloseWriteSync()
+		c.traceEnd(err)
+		if err != nil {
 			return err
 		}
 	}
 	received()
 	return nil
+}
+
+// traceEnd logs the end of X's wait (spec/TraceTLSEnd.tla XRecv): 1 clean.
+func (c *Conn) traceEnd(err error) {
+	if err == nil {
+		c.trace("End", 1)
+	} else {
+		c.trace("End", 0)
+	}
 }
 
 // Close is the TLS connection's (close_notify, then the transport's
@@ -121,9 +139,14 @@ func (c *Conn) Close() error {
 	if c.raw.reset.Load() {
 		return c.raw.Conn.Close()
 	}
-	if c.raw.notified.Load() && syncsEnd(c.raw.Conn) {
+	take := c.raw.notified.Load() && syncsEnd(c.raw.Conn)
+	if take {
+		c.trace("Close", 1) // spec/TraceTLSEnd.tla YClose
 		c.raw.takeEnd()
+	} else {
+		c.trace("Close", 0)
 	}
+	c.trace("Closed", 0) // YClosed
 	return c.Conn.Close()
 }
 
@@ -152,7 +175,9 @@ func (c *Conn) Read(p []byte) (int, error) {
 		if c.raw.ended.Load() {
 			err = ErrTruncated
 		} else {
-			c.raw.notified.Store(true)
+			if !c.raw.notified.Swap(true) {
+				c.trace("EOF", 0) // spec/TraceTLSEnd.tla YRecv of the close_notify
+			}
 		}
 	}
 	return n, err
