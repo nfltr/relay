@@ -32,6 +32,18 @@ restated here.
 | FleetUnderServingIssuer | the serving issuer is the key the fleet's certificates chain through (verifiers hold CRLs by issuer key, relay client `orgid/verify.go`): machines keep their sessions and renew into it on their own | `rekey-on-import` |
 | MoveCompletes (LiveSpec) | a fenced move ends with a host serving again | `no-resend` (one send: a bundle the relay lost is never made good), `ephemeral-receive-key` (the receive key kept in memory: a crash of the new host before the import strands the move) |
 
+A restore from a backup (`Revive`, `OrgMoveRestore.cfg`: two hosts, two
+restores, so a copy restored again after the restored host is lost is
+checked too) keeps AtMostOneIssuer, OldCannotIssue, CRLMonotone,
+RevokedStaysRevoked and FleetUnderServingIssuer; AuditContinuous and
+TokenOnce are not claimed under it (acts the lost host committed after the
+copy are lost: a token redeemed then can be redeemed again). Mutants
+(`restore-mutants.txt`): `revive-behind` (a copy behind the published CRL
+restored: CRLMonotone, RevokedStaysRevoked), `revive-while-held` (restored
+while a host holds the organisation: AtMostOneIssuer). Witnesses
+`WitnessRevivedTaken` (the restored issuer signs a CRL the fleet takes),
+`WitnessBehindRefused` (the organisation lost, its only copy behind).
+
 Witnesses (each must be violated, the state reachable): `WitnessMoved`,
 `WitnessTokenAcrossMove` (a token made before the move is redeemed after
 it), `WitnessRevokedAcrossMove` (a CRL the new host signs lists a revoke
@@ -54,6 +66,7 @@ is not imported).
 | LoseHost | a host's disk is gone, at any point |
 | Crash | the new host crashes before it imports; its receive key is a 0600 file and survives |
 | Take | a fleet verifier takes a CRL the relay delivers, a newer Number only (`Enrol.tla` Take) |
+| Revive | a restore from a backup (MaxRevive > 0, `OrgMoveRestore.cfg`; nfltr's `nfltr-backup.sh restore-secrets`, then `org-issuer.sh restored send` and the move's receive, nfltr `docs/decisions/backup-secrets-2026-11-19.md` "The issuer from a backup"): with the organisation lost (no host holds it, no fenced bundle still importable) a backup copy whose last CRL Number is at least every published one is fenced for a host's receive key and imported there, in one step (the copy is aside and never serves) |
 
 LoseBundle, Import and Take range over a variable (`bundles`, `pub`), so
 TLC's coverage lists them as `Next`'s disjuncts at their lines.
@@ -171,6 +184,9 @@ repeat` (`make spec-orgmove-repeat`, not in ci): two moves in a
 row, `OrgMoveRepeat.cfg` (5478532 states, about a minute).
 `scripts/spec-orgmove.sh holds` (also in `ci`, seconds): `OrgHolds.tla`'s
 two configs, its mutants, witnesses and coverage.
+`scripts/spec-orgmove.sh restore` (also in `ci`, about 40 s): `OrgMoveRestore.cfg`
+(237527 states), `restore-mutants.txt`, its witnesses, `-coverage 1` (Crash
+aside: none there; `OrgMove.cfg`'s coverage skips Revive, MaxRevive 0).
 
 ## Environment assumptions
 
@@ -183,6 +199,7 @@ two configs, its mutants, witnesses and coverage.
 | the move completes within the fresh CRL's life (1 h), or the fleet fails closed until it does | MoveCompletes (untimed here) | the design: a move is the owner at both machines |
 | a shared mailbox's hold is decided by the mailbox service in one statement per touch; a release vacates only the caller's own hold; its kind (broadcast or drop box) is set by its first declared touch and never changes | OrgHolds SvcRead, SvcWrite, Release, XTake | relay-server `spec/Reach.tla` (GiveUp, ReleaseOnlyOwn), `internal/application/mailbox/scope.go` |
 | a running issuer service holds the serve lock (`flock`) for as long as it may publish; the lock is released when its process ends | OrgHolds Lock | `orgenrol/issuer.go` (`Run`), `org/internal/orgfiles` |
+| a restore runs only with the organisation lost: the old host deleted, no move under way, and the published CRL lapsed (no issuer signed for its hour); the copy's last CRL Number is read against the published one as members verify it | Revive (Lost, the Number check) | nfltr `deploy/standalone/org-issuer-remote.sh` (`restored check`), its runbook "The organisation issuer from a backup" |
 | the owner revokes a machine that takes a vacant hold (denial of service is outside the threat model) | OrgHolds Revoke (fair) | the mailbox service: a vacant hold is taken by the first holder declaration |
 
 ## Traces

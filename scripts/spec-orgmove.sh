@@ -26,6 +26,10 @@
 #             OrgHosted.cfg, OrgHostedLive.cfg, each line of
 #             spec/orgmove/hosted-mutants.txt caught, its witnesses
 #             reached, -coverage 1, hfixtures (in ci).
+#   restore   a restore from a backup (OrgMove.tla Revive):
+#             OrgMoveRestore.cfg, each line of
+#             spec/orgmove/restore-mutants.txt caught, its witnesses
+#             reached, -coverage 1 (in ci).
 #   hfixtures each spec/orgmove/traces/hosted/<Invariant>-*.ndjson is
 #             rejected by spec/orgmove/TraceOrgHosted.tla's <Invariant>.
 #   htraces   the tests of client/orgid, org/orgmachine and orgenrol built
@@ -52,6 +56,16 @@ temporal="MoveCompletes"
 actprops=""
 mfile=mutants.txt
 witnesses="WitnessMoved WitnessTokenAcrossMove WitnessRevokedAcrossMove WitnessResentAfterLoss WitnessOldWiped WitnessCrashedThenMoved WitnessBackupRefused"
+# OrgMove.cfg has no restore (MaxRevive 0): Revive is covered by restore.
+covskip="Revive"
+cfg=""
+# OrgMoveRestore.cfg: a restore from a backup (Revive) on OrgMove.tla.
+restore_spec() {
+	cfg=OrgMoveRestore.cfg
+	mfile=restore-mutants.txt
+	witnesses="WitnessRevivedTaken WitnessBehindRefused"
+	covskip="Crash" # no crash here: OrgMove.cfg covers it
+}
 # OrgHolds.tla: its actions taken only under a mutant (coverage skips them).
 holds_spec() {
 	spec=OrgHolds
@@ -87,7 +101,7 @@ run() {
 }
 
 # consts [cfg]: a config's constants ($spec.cfg's by default), Mutant aside.
-consts() { sed -n '/^CONSTANTS/,/^SPECIFICATION/p' $dir/${1:-$spec.cfg} | grep -v -e Mutant -e '^SPECIFICATION'; }
+consts() { sed -n '/^CONSTANTS/,/^SPECIFICATION/p' $dir/${1:-${cfg:-$spec.cfg}} | grep -v -e Mutant -e '^SPECIFICATION'; }
 
 mutants() {
 	: >"$work/fails"
@@ -132,7 +146,7 @@ witnesses() {
 }
 
 coverage() {
-	tlc $spec.cfg -coverage 1 >"$work/cov.out" 2>&1 || { tail -20 "$work/cov.out"; return 1; }
+	tlc ${cfg:-$spec.cfg} -coverage 1 >"$work/cov.out" 2>&1 || { tail -20 "$work/cov.out"; return 1; }
 	grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out"
 	if grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out" | grep -Ev "^<(${covskip:-^})[ (]" | grep -qE ': 0:|: 0$'; then
 		echo "coverage: an action is never taken"
@@ -259,7 +273,9 @@ witnesses) witnesses ;;
 coverage) coverage ;;
 ci) run OrgMove.cfg && run OrgMoveLive.cfg && mutants && witnesses && coverage && fixtures &&
 	holds_spec && run OrgHolds.cfg && run OrgHoldsLive.cfg && mutants && witnesses && coverage &&
-	hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage && fixtures hosted ;;
+	hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage && fixtures hosted &&
+	spec=OrgMove && restore_spec && run OrgMoveRestore.cfg && mutants && witnesses && coverage ;;
+restore) restore_spec && run OrgMoveRestore.cfg && mutants && witnesses && coverage ;;
 hosted) hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage && fixtures hosted ;;
 hfixtures) fixtures hosted ;;
 htraces) htraces ;;
@@ -268,5 +284,5 @@ holds) holds_spec && run OrgHolds.cfg && run OrgHoldsLive.cfg && mutants && witn
 fixtures) fixtures ;;
 traces) traces ;;
 trace) trace "$2" ;;
-*) sed -n '4,36p' "$0" >&2; exit 2 ;;
+*) sed -n '4,40p' "$0" >&2; exit 2 ;;
 esac

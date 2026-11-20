@@ -24,6 +24,14 @@
 \* bundle made before the fence) exist too (Backup): import must refuse
 \* them. The old host may die at any point (LoseHost); the recipient may
 \* crash before it imports (Crash): its receive key is on disk.
+\*
+\* A restore from a backup (Revive, MaxRevive > 0: OrgMoveRestore.cfg): with
+\* the organisation lost (no host holds it, no move under way), a backup
+\* copy is moved onto a host (fenced for its receive key, imported there)
+\* only when its last CRL Number is at least every published one. It keeps
+\* what the fleet sees (CRLMonotone, RevokedStaysRevoked) and one issuer
+\* (AtMostOneIssuer); acts after the copy are lost by design, so
+\* AuditContinuous and TokenOnce are not claimed under it.
 EXTENDS Integers, Sequences, FiniteSets
 
 CONSTANTS
@@ -38,6 +46,7 @@ CONSTANTS
     MaxBackup,   \* stale copies made (backups, early exports)
     MaxLostH,    \* hosts lost (disk gone)
     MaxCrash,    \* recipient crashes before import
+    MaxRevive,   \* restores of a backup copy (0: none)
     Mutant
 
 Hosts == 1..NH
@@ -55,10 +64,10 @@ VARIABLES
     vrev,     \* ... and the names that CRL lists
     vseen,    \* history: every name a CRL the verifier took listed
     sent,     \* sent[h]: bundles h sent
-    lostB, backups, lostH, crashes
+    lostB, backups, lostH, crashes, revives
 
-vars == <<dir, hist, pub, bundles, rkey, redeem, vnum, vrev, vseen, sent, lostB, backups, lostH, crashes>>
-cnt == <<sent, lostB, backups, lostH, crashes>>
+vars == <<dir, hist, pub, bundles, rkey, redeem, vnum, vrev, vseen, sent, lostB, backups, lostH, crashes, revives>>
+cnt == <<sent, lostB, backups, lostH, crashes, revives>>
 
 Last(s) == s[Len(s)]
 Has(h) == dir[h] # None
@@ -77,12 +86,12 @@ IsPrefix(s, t) == Len(s) <= Len(t) /\ s = SubSeq(t, 1, Len(s))
 Serving(h) == Has(h) /\ (~Fenced(LogOf(h)) \/ Mutant = "serve-after-fence")
 
 TypeOK ==
-    /\ \A h \in Hosts : dir[h] = None \/ (dir[h].key \in 1..2 /\ Len(dir[h].log) \in 1..1 + MaxLog + MaxMoves + NH + MaxLostH)
-    /\ Len(hist) \in 1..1 + MaxLog + MaxMoves + NH + MaxLostH
+    /\ \A h \in Hosts : dir[h] = None \/ (dir[h].key \in 1..2 /\ Len(dir[h].log) \in 1..1 + MaxLog + MaxMoves + NH + MaxLostH + 2 * MaxRevive)
+    /\ Len(hist) \in 1..1 + MaxLog + MaxMoves + NH + MaxLostH + 2 * MaxRevive
     /\ \A c \in pub : c.num \in 0..MaxCrl /\ c.rev \subseteq Names
     /\ \A b \in bundles : b.to \in Hosts
     /\ rkey \in [Hosts -> BOOLEAN]
-    /\ redeem \in [Tokens -> 0..NH]
+    /\ redeem \in [Tokens -> 0..NH + MaxRevive]
     /\ vnum \in 0..MaxCrl /\ vrev \subseteq Names /\ vseen \subseteq Names
     /\ sent \in [Hosts -> 0..MaxSend + MaxLostB]
 
@@ -94,7 +103,7 @@ Init ==
     /\ rkey = [h \in Hosts |-> TRUE]
     /\ redeem = [t \in Tokens |-> 0]
     /\ vnum = 0 /\ vrev = {} /\ vseen = {}
-    /\ sent = [h \in Hosts |-> 0] /\ lostB = 0 /\ backups = 0 /\ lostH = 0 /\ crashes = 0
+    /\ sent = [h \in Hosts |-> 0] /\ lostB = 0 /\ backups = 0 /\ lostH = 0 /\ crashes = 0 /\ revives = 0
 
 \* h commits act a: to its log (synced) and so to the history. MaxLog
 \* bounds the issuer's ordinary acts (Room), not the move's own lines.
@@ -163,7 +172,7 @@ Send(h, r) ==
             /\ Mutant = "fence-names-no-recipient" \/ r = FenceTo(LogOf(h))
             /\ bundles' = bundles \cup {[to |-> r, log |-> LogOf(h), key |-> dir[h].key]}
     /\ sent' = [sent EXCEPT ![h] = @ + 1]
-    /\ UNCHANGED <<dir, hist, pub, rkey, redeem, vnum, vrev, vseen, lostB, backups, lostH, crashes>>
+    /\ UNCHANGED <<dir, hist, pub, rkey, redeem, vnum, vrev, vseen, lostB, backups, lostH, crashes, revives>>
 
 \* A copy that is not a move: a backup, a disk image, a bundle made before
 \* the fence. Whoever holds it can hand it to any host.
@@ -171,14 +180,14 @@ Backup(h, r) ==
     /\ Has(h) /\ backups < MaxBackup /\ r # h
     /\ bundles' = bundles \cup {[to |-> r, log |-> LogOf(h), key |-> dir[h].key]}
     /\ backups' = backups + 1
-    /\ UNCHANGED <<dir, hist, pub, rkey, redeem, vnum, vrev, vseen, sent, lostB, lostH, crashes>>
+    /\ UNCHANGED <<dir, hist, pub, rkey, redeem, vnum, vrev, vseen, sent, lostB, lostH, crashes, revives>>
 
 \* The relay loses (or withholds for good) a bundle.
 LoseBundle(b) ==
     /\ lostB < MaxLostB
     /\ bundles' = bundles \ {b}
     /\ lostB' = lostB + 1
-    /\ UNCHANGED <<dir, hist, pub, rkey, redeem, vnum, vrev, vseen, sent, backups, lostH, crashes>>
+    /\ UNCHANGED <<dir, hist, pub, rkey, redeem, vnum, vrev, vseen, sent, backups, lostH, crashes, revives>>
 
 \* nfltr org move receive: r opens a bundle sealed to its receive key and
 \* imports it only when the log's last line is the fence naming r (the
@@ -213,7 +222,7 @@ LoseHost(h) ==
     /\ Has(h) /\ lostH < MaxLostH
     /\ dir' = [dir EXCEPT ![h] = None]
     /\ lostH' = lostH + 1
-    /\ UNCHANGED <<hist, pub, bundles, rkey, redeem, vnum, vrev, vseen, sent, lostB, backups, crashes>>
+    /\ UNCHANGED <<hist, pub, bundles, rkey, redeem, vnum, vrev, vseen, sent, lostB, backups, crashes, revives>>
 
 \* The recipient crashes before it imports: its receive key is a 0600 file
 \* and survives (ephemeral-receive-key: kept in memory only, lost).
@@ -221,7 +230,32 @@ Crash(r) ==
     /\ ~Has(r) /\ crashes < MaxCrash
     /\ rkey' = [rkey EXCEPT ![r] = rkey[r] /\ Mutant # "ephemeral-receive-key"]
     /\ crashes' = crashes + 1
-    /\ UNCHANGED <<dir, hist, pub, bundles, redeem, vnum, vrev, vseen, sent, lostB, backups, lostH>>
+    /\ UNCHANGED <<dir, hist, pub, bundles, redeem, vnum, vrev, vseen, sent, lostB, backups, lostH, revives>>
+
+\* A restore from a backup (nfltr's nfltr-backup.sh restore-secrets, then
+\* org-issuer.sh restored send and the move's receive on r): a copy b
+\* (unfenced: a backup) is fenced for r's receive key and imported on r, in
+\* one step here (the copy is aside on r and never serves). Only with the
+\* organisation lost (no host holds a directory, no fenced bundle still
+\* importable: the old VM deleted, no move under way; the operator's
+\* precondition, the published CRL lapsed its signal) and only when the
+\* copy is not behind the fleet: its last CRL Number at least every
+\* published one. Mutants: revive-behind (no Number check),
+\* revive-while-held (no precondition).
+MaxPub == CHOOSE m \in {c.num : c \in pub} : \A c \in pub : c.num <= m
+Lost == /\ \A x \in Hosts : ~Has(x)
+        /\ \A c \in bundles : Fenced(c.log) => ~rkey[FenceTo(c.log)]
+Revive(r) == \E b \in bundles :
+    /\ revives < MaxRevive
+    /\ ~Fenced(b.log) /\ rkey[r]
+    /\ Lost \/ Mutant = "revive-while-held"
+    /\ CrlNum(b.log) >= MaxPub \/ Mutant = "revive-behind"
+    /\ ~Has(r)
+    /\ dir' = [dir EXCEPT ![r] = [log |-> b.log \o <<[k |-> "fence", x |-> r], [k |-> "arrive", x |-> r]>>, key |-> b.key]]
+    /\ hist' = hist \o <<[k |-> "fence", x |-> r], [k |-> "arrive", x |-> r]>>
+    /\ rkey' = [rkey EXCEPT ![r] = FALSE]
+    /\ revives' = revives + 1
+    /\ UNCHANGED <<pub, bundles, redeem, vnum, vrev, vseen, sent, lostB, backups, lostH, crashes>>
 
 \* A fleet verifier takes a CRL the relay delivers, only a newer Number
 \* (Enrol.tla Take; the relay may withhold or replay any).
@@ -244,6 +278,7 @@ Next ==
     \/ \E h \in Hosts : LoseHost(h)
     \/ \E h \in Hosts : Crash(h)
     \/ \E c \in pub : Take(c)
+    \/ \E r \in Hosts : Revive(r)
 
 Spec == Init /\ [][Next]_vars
 
@@ -296,4 +331,8 @@ WitnessResentAfterLoss == ~(lostB > 0 /\ \E h \in Hosts : h # 1 /\ Serving(h))
 WitnessOldWiped == ~(dir[1] = None /\ lostH = 0 /\ \E h \in Hosts : Serving(h))
 WitnessCrashedThenMoved == ~(crashes > 0 /\ \E h \in Hosts : h # 1 /\ Serving(h))
 WitnessBackupRefused == ~(backups > 0 /\ \E b \in bundles : ~Fenced(b.log))
+\* OrgMoveRestore.cfg: a copy restored, the restored issuer signs a CRL
+\* the fleet takes; and a lost organisation whose only copy is behind.
+WitnessRevivedTaken == ~(revives > 0 /\ \E h \in Hosts : Serving(h) /\ vnum = CrlNum(LogOf(h)) /\ vnum > 0 /\ Last(LogOf(h)).k = "crl")
+WitnessBehindRefused == ~(Lost /\ backups > 0 /\ revives = 0 /\ \A b \in bundles : ~Fenced(b.log) => CrlNum(b.log) < MaxPub)
 =============================================================================
