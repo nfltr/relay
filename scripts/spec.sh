@@ -776,10 +776,15 @@ mutants)
 	expect DA:no-source-check -e 's/Mutant = "none"/Mutant = "no-source-check"/'
 	expect DA:no-amp-cap -e 's/Mutant = "none"/Mutant = "no-amp-cap"/'
 	expect DA:per-flow-budget -e 's/Mutant = "none"/Mutant = "per-flow-budget"/'
+	# lane DGRAMBIND: a datagram sent direct to an end not yet bound there
+	expect DA:client-binds-first -e 's/Mutant = "none"/Mutant = "client-binds-first"/'
+	expect DA:agent-sends-unheard -e 's/Mutant = "none"/Mutant = "agent-sends-unheard"/'
 	expect witness:DA-Revoked -e 's/^    NoHOL$/    W_Revoked/'
 	expect witness:DA-Refused -e 's/^    NoHOL$/    W_Refused/'
 	expect witness:DA-AmpDrop -e 's/^    NoHOL$/    W_AmpDrop/'
 	expect witness:DA-Reply -e 's/^    NoHOL$/    W_Reply/'
+	expect witness:DA-HalfBound -e 's/^    NoHOL$/    W_HalfBound/'
+	expect witness:DA-Heard -e 's/^    NoHOL$/    W_Heard/'
 	cfg=DatagramAssocMove
 	expect DA:tag-unchecked -e 's/Mutant = "none"/Mutant = "tag-unchecked"/'
 	expect witness:DA-Direct -e 's/^    NoHOL$/    W_Direct/'

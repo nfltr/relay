@@ -32,12 +32,13 @@
    Abstracted: contents and sizes (a datagram counts 1 against credit,
    queues and the amplification budget), real time (an idle timer may
    fire once its side has nothing to move), the open's handshake (one
-   step), the punch (Bind: never fair, a pair may never go direct).
+   step), the punch (BindA: never fair, a pair may never go direct).
 
    Mutants (scripts/spec.sh mutants), one per failure the design prevents:
    deliver-after-close, reuse-id, tag-unchecked, direct-ignores-assoc,
    no-client-cap, no-agent-cap, grow-queue, block-on-credit,
-   no-source-check, no-amp-cap, per-flow-budget, no-idle. *)
+   no-source-check, no-amp-cap, per-flow-budget, no-idle,
+   client-binds-first, agent-sends-unheard (lane DGRAMBIND). *)
 EXTENDS Naturals, Sequences, FiniteSets
 
 CONSTANTS
@@ -76,13 +77,15 @@ VARIABLES
     cst, csrc, cbnd,          \* client: flow states, their sources, epochs bound direct
     aep, aup, acut, adead,    \* agent: epoch, up, died unnoticed, cleanup pending
     ast, asrc, aq, abnd,      \* agent: flow states, sources (ghost), reply queues, bound epochs
+    aheard,         \* agent: bound epochs it took a client's frame under (it sends direct then)
     c2a, a2c,       \* the association's stream (control and relayed datagrams)
     dg,             \* QUIC DATAGRAM frames in flight on the direct connection (lossy)
     revoked, cuts, losses, blocked,
     late, cross, lateRev, \* ghosts: a datagram handed on after close, to another flow, after revoke
-    got, viaDirect, moved, staleTag, ampDrop
+    got, viaDirect, moved, staleTag, ampDrop,
+    lostBind        \* ghost: a frame dropped because its receiver's end was not bound yet
 
-vars == <<sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst, csrc,
+vars == <<aheard, lostBind, sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst, csrc,
           cbnd, aep, aup, acut, adead, ast, asrc, aq, abnd, c2a, a2c, dg,
           revoked, cuts, losses, blocked, late, cross, lateRev, got,
           viaDirect, moved, staleTag, ampDrop>>
@@ -98,7 +101,8 @@ TypeOK ==
     /\ ast \in [Keys -> {"free", "open", "closed"}]
     /\ csrc \in [Keys -> Srcs \cup {None}] /\ asrc \in [Keys -> Srcs \cup {None}]
     /\ aq \in [Keys -> Nat]
-    /\ cbnd \subseteq Eps /\ abnd \subseteq Eps
+    /\ cbnd \subseteq Eps /\ abnd \subseteq Eps /\ aheard \subseteq Eps
+    /\ lostBind \in BOOLEAN
     /\ \A i \in 1..Len(c2a) : c2a[i] \in Msg
     /\ \A i \in 1..Len(a2c) : a2c[i] \in Msg
     /\ dg \subseteq Dg
@@ -118,6 +122,7 @@ Init ==
     /\ revoked = FALSE /\ cuts = 0 /\ losses = 0 /\ blocked = NoKey
     /\ late = FALSE /\ cross = FALSE /\ lateRev = FALSE
     /\ got = FALSE /\ viaDirect = {} /\ moved = FALSE /\ staleTag = FALSE /\ ampDrop = FALSE
+    /\ aheard = {} /\ lostBind = FALSE
 
 Data(ch) == Cardinality({i \in 1..Len(ch) : ch[i].k \in {"open", "d"}})
 EpKeys(e) == {<<e, i>> : i \in Ids}
@@ -143,7 +148,7 @@ AppSend(s) ==
     /\ sent[s] < Sends(s)
     /\ sent' = [sent EXCEPT ![s] = @ + 1]
     /\ sock' = [sock EXCEPT ![s] = @ + 1]
-    /\ UNCHANGED <<inb, outb, fin, fout, cep, cup, ccut, crefused, cst, csrc,
+    /\ UNCHANGED <<aheard, lostBind, inb, outb, fin, fout, cep, cup, ccut, crefused, cst, csrc,
                    cbnd, aep, aup, acut, adead, ast, asrc, aq, abnd, c2a, a2c, dg,
                    revoked, cuts, losses, blocked, late, cross, lateRev, got,
                    viaDirect, moved, staleTag, ampDrop>>
@@ -167,7 +172,7 @@ AssocOpen ==
             /\ cup' = TRUE /\ aup' = TRUE
             /\ c2a' = <<>> /\ a2c' = <<>>
             /\ UNCHANGED crefused
-    /\ UNCHANGED <<sent, sock, inb, outb, fin, fout, ccut, cst, csrc, cbnd, acut,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, outb, fin, fout, ccut, cst, csrc, cbnd, acut,
                    adead, ast, asrc, aq, abnd, dg, revoked, cuts, losses, blocked,
                    late, cross, lateRev, got, viaDirect, moved, staleTag, ampDrop>>
 
@@ -224,7 +229,7 @@ Read(s) ==
                     /\ c2a' = Append(c2a, [k |-> "open", f |-> k[2], src |-> s])
                ELSE UNCHANGED <<cst, csrc, fin, c2a>>
             /\ UNCHANGED dg
-    /\ UNCHANGED <<sent, outb, fout, cep, cup, ccut, crefused, cbnd, aep, aup, acut,
+    /\ UNCHANGED <<aheard, lostBind, sent, outb, fout, cep, cup, ccut, crefused, cbnd, aep, aup, acut,
                    adead, ast, asrc, aq, abnd, a2c, revoked, cuts, losses, late, cross,
                    lateRev, got, viaDirect, moved, staleTag, ampDrop>>
 
@@ -260,7 +265,7 @@ RecvC ==
             [] m.k = "d" ->
                  /\ Reply(k, m.src, FALSE, FALSE)
                  /\ UNCHANGED cst
-    /\ UNCHANGED <<sent, sock, inb, fin, cep, cup, ccut, crefused, csrc, cbnd, aep,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, fin, cep, cup, ccut, crefused, csrc, cbnd, aep,
                    aup, acut, adead, ast, asrc, aq, abnd, c2a, dg, revoked, cuts,
                    losses, blocked, lateRev, viaDirect, moved, staleTag>>
 
@@ -273,6 +278,7 @@ RecvC ==
 RecvDgC(m) ==
     /\ m \in dg /\ m.dir = "a2c"
     /\ dg' = dg \ {m}
+    /\ lostBind' = (lostBind \/ (m.e = cep /\ cup /\ m.e \notin cbnd))
     /\ LET k == <<m.e, m.f>> IN
        IF m.e = cep /\ m.e \in cbnd /\ cup
        THEN IF cst[k] = "opening"
@@ -281,7 +287,7 @@ RecvDgC(m) ==
             ELSE /\ Reply(k, m.src, TRUE, FALSE)
                  /\ UNCHANGED cst
        ELSE UNCHANGED <<outb, fout, got, late, cross, ampDrop, cst>>
-    /\ UNCHANGED <<sent, sock, inb, fin, cep, cup, ccut, crefused, csrc, cbnd,
+    /\ UNCHANGED <<aheard, sent, sock, inb, fin, cep, cup, ccut, crefused, csrc, cbnd,
                    aep, aup, acut, adead, ast, asrc, aq, abnd, c2a, a2c, revoked,
                    cuts, losses, blocked, lateRev, viaDirect, moved, staleTag>>
 
@@ -293,7 +299,7 @@ ExpireC(k) ==
     /\ cst' = [cst EXCEPT ![k] = "closed"]
     /\ c2a' = SendC(Ctl("close", k[2]))
     /\ blocked' = IF blocked = k THEN NoKey ELSE blocked
-    /\ UNCHANGED <<sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, csrc,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, csrc,
                    cbnd, aep, aup, acut, adead, ast, asrc, aq, abnd, a2c, dg, revoked,
                    cuts, losses, late, cross, lateRev, got, viaDirect, moved,
                    staleTag, ampDrop>>
@@ -306,7 +312,7 @@ NoticeC ==
     /\ cst' = [k \in Keys |-> IF k \in LiveC THEN "closed" ELSE cst[k]]
     /\ cbnd' = cbnd \ {cep}
     /\ blocked' = NoKey
-    /\ UNCHANGED <<sent, sock, inb, outb, fin, fout, cep, crefused, csrc, aep, aup,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, outb, fin, fout, cep, crefused, csrc, aep, aup,
                    acut, adead, ast, asrc, aq, abnd, c2a, a2c, dg, revoked, cuts,
                    losses, late, cross, lateRev, got, viaDirect, moved, staleTag,
                    ampDrop>>
@@ -353,7 +359,7 @@ RecvA ==
                  /\ aq' = [aq EXCEPT ![k] = 0]
                  /\ UNCHANGED <<asrc, a2c, late, cross, lateRev, viaDirect, moved>>
             [] OTHER -> UNCHANGED <<ast, asrc, aq, a2c, late, cross, lateRev, viaDirect, moved>>
-    /\ UNCHANGED <<sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
                    csrc, cbnd, aep, aup, acut, adead, abnd, dg, revoked, cuts, losses,
                    blocked, got, staleTag, ampDrop>>
 
@@ -362,11 +368,14 @@ RecvA ==
 \* here and the flow is open. tag-unchecked: the id looked up in the
 \* current association, whatever the tag. direct-ignores-assoc: the
 \* association's end (a reset, a revocation) not checked on this path
-\* until the cleanup removes the binding.
+\* until the cleanup removes the binding. A frame taken under its tag
+\* tells the agent the client bound there: it sends direct from then on.
 RecvDgA(m) ==
     /\ m \in dg /\ m.dir = "c2a"
     /\ dg' = dg \ {m}
     /\ staleTag' = (staleTag \/ (m.e < aep /\ aup))
+    /\ lostBind' = (lostBind \/ (m.e = aep /\ aup /\ m.e \notin abnd))
+    /\ aheard' = IF m.e = aep /\ m.e \in abnd /\ aup THEN aheard \cup {m.e} ELSE aheard
     /\ LET k == IF Mutant = "tag-unchecked" THEN <<aep, m.f>> ELSE <<m.e, m.f>>
            tagOK == IF Mutant = "tag-unchecked" THEN aep \in abnd
                     ELSE m.e = aep /\ m.e \in abnd
@@ -377,19 +386,20 @@ RecvDgA(m) ==
                    csrc, cbnd, aep, aup, acut, adead, ast, asrc, abnd, c2a, a2c,
                    revoked, cuts, losses, blocked, got, ampDrop>>
 
-\* The agent sends flow k's next reply: direct when bound, else on the
+\* The agent sends flow k's next reply: direct when bound and it took a
+\* client's frame there (agent-sends-unheard: once bound), else on the
 \* stream on credit, else dropped (it never waits).
 ReplyA(k) ==
     /\ aq[k] > 0 /\ ast[k] = "open" /\ k[1] = aep /\ aup
     /\ aq' = [aq EXCEPT ![k] = @ - 1]
-    /\ IF aep \in abnd
+    /\ IF aep \in abnd /\ (aep \in aheard \/ Mutant = "agent-sends-unheard")
        THEN /\ dg' = dg \cup {[dir |-> "a2c", e |-> aep, f |-> k[2], src |-> asrc[k]]}
             /\ UNCHANGED a2c
        ELSE IF ~acut /\ Data(a2c) < W
        THEN /\ a2c' = Append(a2c, [k |-> "d", f |-> k[2], src |-> asrc[k]])
             /\ UNCHANGED dg
        ELSE UNCHANGED <<a2c, dg>>
-    /\ UNCHANGED <<sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
                    csrc, cbnd, aep, aup, acut, adead, ast, asrc, abnd, c2a, revoked,
                    cuts, losses, blocked, late, cross, lateRev, got, viaDirect, moved,
                    staleTag, ampDrop>>
@@ -403,7 +413,7 @@ ExpireA(k) ==
     /\ ast' = [ast EXCEPT ![k] = "closed"]
     /\ aq' = [aq EXCEPT ![k] = 0]
     /\ a2c' = SendA(Ctl("close", k[2]))
-    /\ UNCHANGED <<sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
                    csrc, cbnd, aep, aup, acut, adead, asrc, abnd, c2a, dg, revoked,
                    cuts, losses, blocked, late, cross, lateRev, got, viaDirect, moved,
                    staleTag, ampDrop>>
@@ -413,7 +423,7 @@ ExpireA(k) ==
 NoticeA ==
     /\ acut
     /\ acut' = FALSE /\ aup' = FALSE /\ adead' = TRUE
-    /\ UNCHANGED <<sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
                    csrc, cbnd, aep, ast, asrc, aq, abnd, c2a, a2c, dg, revoked, cuts,
                    losses, blocked, late, cross, lateRev, got, viaDirect, moved,
                    staleTag, ampDrop>>
@@ -424,7 +434,7 @@ CleanupA ==
     /\ ast' = [k \in Keys |-> IF ast[k] = "open" THEN "closed" ELSE ast[k]]
     /\ aq' = [k \in Keys |-> 0]
     /\ abnd' = abnd \ {aep}
-    /\ UNCHANGED <<sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
                    csrc, cbnd, aep, aup, acut, asrc, c2a, a2c, dg, revoked, cuts,
                    losses, blocked, late, cross, lateRev, got, viaDirect, moved,
                    staleTag, ampDrop>>
@@ -433,12 +443,28 @@ CleanupA ==
 \* The environment.
 
 \* The association binds to the direct connection (the punch and both
-\* tokens: cap_address.pv, DirectPath.tla). Never fair.
-Bind ==
-    /\ cup /\ aup /\ cep = aep /\ cep \notin cbnd /\ ~ccut /\ ~acut
-    /\ cbnd' = cbnd \cup {cep} /\ abnd' = abnd \cup {aep}
-    /\ UNCHANGED <<sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
-                   csrc, aep, aup, acut, adead, ast, asrc, aq, c2a, a2c, dg, revoked,
+\* tokens: cap_address.pv, DirectPath.tla), one end after the other
+\* (lane DGRAMBIND): the agent at its attach of the client's direct
+\* stream, after the client's token (BindA, never fair: a pair may never
+\* go direct); the agent's token goes on that stream only after it, and
+\* the client binds when it checked that token (BindC). client-binds-first:
+\* the token went before the attach, so the client may bind first.
+BindA ==
+    /\ cup /\ aup /\ cep = aep /\ aep \notin abnd /\ cep \notin cbnd /\ ~ccut /\ ~acut
+    /\ abnd' = abnd \cup {aep}
+    /\ aheard' = aheard \ {aep}
+    /\ UNCHANGED <<lostBind, sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
+                   csrc, cbnd, aep, aup, acut, adead, ast, asrc, aq, c2a, a2c, dg, revoked,
+                   cuts, losses, blocked, late, cross, lateRev, got, viaDirect, moved,
+                   staleTag, ampDrop>>
+
+BindC ==
+    /\ cup /\ ~ccut /\ cep \notin cbnd
+    /\ IF Mutant = "client-binds-first" THEN aup /\ cep = aep /\ ~acut
+       ELSE cep = aep /\ aep \in abnd
+    /\ cbnd' = cbnd \cup {cep}
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
+                   csrc, abnd, aep, aup, acut, adead, ast, asrc, aq, c2a, a2c, dg, revoked,
                    cuts, losses, blocked, late, cross, lateRev, got, viaDirect, moved,
                    staleTag, ampDrop>>
 
@@ -448,7 +474,7 @@ PathLoss ==
     /\ losses < MaxLoss /\ (cbnd # {} \/ abnd # {})
     /\ losses' = losses + 1
     /\ cbnd' = {} /\ abnd' = {} /\ dg' = {}
-    /\ UNCHANGED <<sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, outb, fin, fout, cep, cup, ccut, crefused, cst,
                    csrc, aep, aup, acut, adead, ast, asrc, aq, c2a, a2c, revoked,
                    cuts, blocked, late, cross, lateRev, got, viaDirect, moved,
                    staleTag, ampDrop>>
@@ -476,7 +502,7 @@ Cut(who) ==
             /\ aq' = [k \in Keys |-> 0]
        ELSE /\ acut' = aup
             /\ UNCHANGED <<aup, adead, ast, aq>>
-    /\ UNCHANGED <<sent, sock, fin, fout, cep, crefused, csrc, aep, asrc, revoked,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, fin, fout, cep, crefused, csrc, aep, asrc, revoked,
                    losses, late, cross, lateRev, got, viaDirect, moved, staleTag, ampDrop>>
 
 \* The client's right ends (the agent applies a revocation: the address
@@ -488,7 +514,7 @@ Revoke ==
     /\ aup' = FALSE /\ adead' = TRUE
     /\ c2a' = <<>> /\ a2c' = <<>>
     /\ ccut' = cup
-    /\ UNCHANGED <<sent, sock, inb, outb, fin, fout, cep, cup, crefused, cst, csrc,
+    /\ UNCHANGED <<aheard, lostBind, sent, sock, inb, outb, fin, fout, cep, cup, crefused, cst, csrc,
                    cbnd, aep, acut, ast, asrc, aq, abnd, dg, cuts, losses, blocked,
                    late, cross, lateRev, got, viaDirect, moved, staleTag, ampDrop>>
 
@@ -499,16 +525,18 @@ Next ==
     \/ AssocOpen \/ RecvC \/ NoticeC \/ RecvA \/ NoticeA \/ CleanupA
     \/ \E m \in dg : RecvDgC(m) \/ RecvDgA(m)
     \/ \E k \in Keys : ExpireC(k) \/ ReplyA(k) \/ ExpireA(k)
-    \/ Bind \/ PathLoss \/ Revoke
+    \/ BindA \/ BindC \/ PathLoss \/ Revoke
     \/ \E who \in {"session", "client", "agent"} : Cut(who)
 
-\* Every step but the environment's (Bind, PathLoss, Revoke, Cut) is fair.
+\* Every step but the environment's (BindA, PathLoss, Revoke, Cut) is fair;
+\* the client's bind once the agent's token is there too.
 Fairness ==
     /\ \A s \in Srcs : WF_vars(AppSend(s)) /\ WF_vars(Read(s))
     /\ WF_vars(AssocOpen) /\ WF_vars(RecvC) /\ WF_vars(NoticeC)
     /\ WF_vars(RecvA) /\ WF_vars(NoticeA) /\ WF_vars(CleanupA)
     /\ WF_vars(\E m \in dg : RecvDgC(m) \/ RecvDgA(m))
     /\ \A k \in Keys : WF_vars(ExpireC(k)) /\ WF_vars(ReplyA(k)) /\ WF_vars(ExpireA(k))
+    /\ WF_vars(BindC)
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
@@ -534,6 +562,10 @@ NoHOL == blocked # NoKey => \A s \in Srcs \ {csrc[blocked]} : sock[s] = 0
 NoReflection == \A s \in Srcs \ Adm : outb[s] = 0
 \* To each source at most R times what it sent, plus B (per client process).
 AmpBound == \A s \in Srcs : outb[s] <= R * inb[s] + B
+\* No frame is lost to a move: none reaches a running end, under its
+\* current association's tag, before that end bound there (each end
+\* sends direct only once the other is bound).
+NoLostOnMove == ~lostBind
 
 \* A closed flow stays closed (ids never reused in an association).
 ClosedFinal == [][\A k \in Keys : /\ (cst[k] = "closed" => cst'[k] = "closed")
@@ -552,6 +584,10 @@ W_AmpDrop == ~ampDrop                         \* a reply dropped by the budget
 W_Reply == ~got
 W_FlowRefused == ~(\E i \in 1..Len(a2c) : a2c[i].k = "refuse")
 \* a direct reply opened a flow whose accept is still on the stream
+\* the agent bound, the client not yet (the two binds are two steps)
+W_HalfBound == ~(cup /\ cep = aep /\ aep \in abnd /\ cep \notin cbnd)
+\* the agent took a client's frame direct, so it replies direct
+W_Heard == aheard \cap abnd = {}
 W_EarlyReply == ~(\E k \in Keys : k[1] = cep /\ cst[k] = "open"
                    /\ \E i \in 1..Len(a2c) : a2c[i].k = "accept" /\ a2c[i].f = k[2])
 =============================================================================
