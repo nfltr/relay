@@ -42,6 +42,13 @@ const (
 	IssuerLife  = 30 * 24 * time.Hour
 	MachineLife = 24 * time.Hour
 	CRLLife     = time.Hour
+	// RenewGrace: the issuer renews a name's newest certificate until this
+	// long after its NotAfter (Enrol.tla Renews), so an issuer out of reach
+	// through the renewal window (its mailbox down, the 2026-11-19 outage)
+	// or a machine off for days renews by itself; a superseded serial's key
+	// is retired and never renews once expired (enrol.pv 2).
+	// ponytail: one fixed week; a per-organisation policy if an owner asks.
+	RenewGrace = 7 * 24 * time.Hour
 )
 
 const (

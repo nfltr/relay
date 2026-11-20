@@ -10,7 +10,10 @@
 # session-level mutants no-expiry-timer and no-cut-on-update (the
 # verifier's callers, orgmachine).
 no-name-constraint | profile.go | 		PermittedDNSDomainsCritical: true, PermittedDNSDomains: []string{orgid.Domain(orgID)}, |  | TestForgedNameRefused
-renew-expired | issuer.go | 	if !now.Before(rec.notAfter) { | 	if false { | TestExpiredRefused
+renew-expired | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn) { | 	if false { | TestExpiredRefused
+renew-past-grace | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn) { | 	if !now.Before(rec.notAfter) && n.serials[len(n.serials)-1] != sn { | TestExpiredRefused
+grace-any-serial | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn) { | 	if !now.Before(rec.notAfter.Add(RenewGrace)) { | TestRenewInTheGraceOnlyTheNewest
+no-renew-after-expiry | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn) { | 	if !now.Before(rec.notAfter) { | TestRenewInTheGraceOnlyTheNewest
 revoke-current-only | issuer.go | 			sns = n.serials | 			sns = n.serials[len(n.serials)-1:] | TestRevokedRefused
 renew-revoked | issuer.go | 	if n.revoked { | 	if false { | TestRevokedRefused
 reusable-token | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if last == nil { | TestReusedTokenRefused

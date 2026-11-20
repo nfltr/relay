@@ -144,7 +144,7 @@ trace() {
 	t=$work/$(basename "$1")
 	cat "$1" >"$t"
 	[ -s "$t" ] || { echo "$1: no lines"; return 0; }
-	printf 'CONSTANTS\n    TraceFile = "%s"\nINIT Init\nNEXT Next\nINVARIANTS\n    Conforms\n    NoRenewAfterRevoke\n    OneKeyPerToken\n    NoRetiredKeyRevived\n    RefusedOnlyForCause\n    ForgedOnlyUnderStolenRoot\n    NoRenewOfRetired\n    RetiredRefused\n    RevokedMachineRefused\n    RevocationBound\n    NoExpiredSession\n    TraceDone\n' "$t" >"$t.cfg"
+	printf 'CONSTANTS\n    TraceFile = "%s"\nINIT Init\nNEXT Next\nINVARIANTS\n    Conforms\n    NoRenewAfterRevoke\n    OneKeyPerToken\n    NoRetiredKeyRevived\n    RefusedOnlyForCause\n    ForgedOnlyUnderStolenRoot\n    NoRenewOfRetired\n    RetiredRefused\n    RevokedMachineRefused\n    RevocationBound\n    NoExpiredSession\n    NoRenewPastGrace\n    GraceOnlyNewest\n    TraceDone\n' "$t" >"$t.cfg"
 	(cd $dir && "$java" -cp "$jar" tlc2.TLC -workers 1 -noGenerateSpecTE -deadlock \
 		-metadir "$t.states" -config "$t.cfg" TraceEnrol.tla) >"$t.out" 2>&1 || true
 	if grep -q '^Error: Invariant TraceDone is violated' "$t.out"; then

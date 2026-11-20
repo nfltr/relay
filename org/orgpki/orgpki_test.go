@@ -212,8 +212,10 @@ func TestForgedNameRefused(t *testing.T) {
 	}
 }
 
-// enrol.pv 3, Enrol.tla NoExpiredSession and renew-expired: an expired
-// certificate is refused by the verifier and by the issuer's renewal.
+// enrol.pv 3, Enrol.tla NoExpiredSession and NoRenewPastGrace (mutant
+// renew-past-grace; enrol.pv renew-expired): an expired certificate is
+// refused by the verifier, and by the issuer's renewal RenewGrace after
+// its NotAfter.
 func TestExpiredRefused(t *testing.T) {
 	o := newOrg(t)
 	web, k := o.enrol(t, "web-1", "web")
@@ -222,8 +224,34 @@ func TestExpiredRefused(t *testing.T) {
 	_, err := o.ver.Check(web, o.iss.Cert(), orgid.Peer{Name: "web-1"}, late)
 	refused(t, "an expired certificate", err)
 
+	past := web.NotAfter.Add(RenewGrace)
+	_, err = o.iss.Renew(NewRenewRequest(web.Raw, k, csr(t, newKey(t), "web-1")), past)
+	refused(t, "a renewal RenewGrace after the NotAfter", err)
+}
+
+// Enrol.tla RenewsAfterExpiry (mutant no-renew-after-expiry) and
+// GraceOnlyNewest (mutant grace-any-serial; enrol.pv 2, the rotated-out
+// key): the name's newest certificate renews within RenewGrace after its
+// NotAfter (the issuer was out of reach through the renewal window, or
+// the machine was off); a superseded one does not, however recent.
+func TestRenewInTheGraceOnlyTheNewest(t *testing.T) {
+	o := newOrg(t)
+	web, k := o.enrol(t, "web-1", "web")
+	late := web.NotAfter.Add(time.Hour)
+	k2 := newKey(t)
+	der, err := o.iss.Renew(NewRenewRequest(web.Raw, k, csr(t, k2, "web-1")), late)
+	if err != nil {
+		t.Fatalf("the newest certificate, an hour past its NotAfter: %v", err)
+	}
+	renewed, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !renewed.NotAfter.After(late) {
+		t.Fatalf("renewed until %s, want after %s", renewed.NotAfter, late)
+	}
 	_, err = o.iss.Renew(NewRenewRequest(web.Raw, k, csr(t, newKey(t), "web-1")), late)
-	refused(t, "a renewal of an expired certificate", err)
+	refused(t, "a superseded certificate past its NotAfter", err)
 }
 
 // Members refuse a CRL whose issuer certificate expired (orgid.Verifier.

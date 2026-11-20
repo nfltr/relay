@@ -276,7 +276,12 @@ func followCRL(ctx context.Context, mb Mailbox, m *orgmachine.Machine, every tim
 // Keeper keeps a machine current: it follows the CRL and the root
 // (FollowEvery: the backstop) and renews when RenewDue says (at 2/3 of the
 // certificate's lifetime, at once after a rotation), asking again with a
-// new key when no answer came (Enrol.tla Request, mutant no-retry).
+// new key when no answer came (Enrol.tla Request, mutant no-retry), also
+// past the certificate's NotAfter until orgpki.RenewGrace after it (an
+// issuer out of reach through the renewal window: RenewsAfterExpiry).
+// Failed attempts back off from RetryWait, doubling to FollowEvery, and a
+// change of the machine (a CRL taken: the issuer's mailbox is back) asks
+// again at once.
 type Keeper struct {
 	Mailbox Mailbox
 	Machine *orgmachine.Machine
@@ -335,6 +340,7 @@ func (k Keeper) Run(ctx context.Context) {
 			return err
 		}, nil, k.Logger)
 	})
+	retry := k.RetryWait
 	for ctx.Err() == nil {
 		changed := m.Changed()
 		if d := m.RenewDue(k.Now()).Sub(k.Now()); d > 0 {
@@ -347,22 +353,34 @@ func (k Keeper) Run(ctx context.Context) {
 			t.Stop()
 			continue
 		}
-		switch err := k.renew(ctx); {
+		err := k.renew(ctx)
+		switch cur, _ := m.Current(); {
 		case err == nil || ctx.Err() != nil:
+			retry = k.RetryWait
+			continue
 		case errors.Is(err, ErrExpired):
-			k.Logger.Error("org: this machine's certificate expired; enrol it again (nfltr org join with a new token)")
-			sleepCtx(ctx, k.FollowEvery)
+			k.Logger.Error("org: this machine's certificate expired more than the renewal grace ago; enrol it again (nfltr org join with a new token)", "not_after", cur.NotAfter.UTC())
+			retry = k.FollowEvery
+		case !k.Now().Before(cur.NotAfter):
+			k.Logger.Error("org: this machine's certificate expired and its renewal failed (asking again; sessions are refused until it renews)", "error", err, "not_after", cur.NotAfter.UTC(), "renews_until", cur.NotAfter.Add(orgpki.RenewGrace).UTC(), "retry_in", retry)
 		default:
-			k.Logger.Warn("org: renewal failed (asking again with a new key)", "error", err)
-			sleepCtx(ctx, k.RetryWait)
+			k.Logger.Warn("org: renewal failed (asking again with a new key)", "error", err, "expires_in", cur.NotAfter.Sub(k.Now()).Round(time.Second), "retry_in", retry)
 		}
+		t := time.NewTimer(retry)
+		select {
+		case <-ctx.Done():
+		case <-changed: // a CRL or the root taken: the issuer's mailbox answers again
+		case <-t.C:
+		}
+		t.Stop()
+		retry = min(retry*2, k.FollowEvery)
 	}
 }
 
-// ErrExpired: the machine's certificate expired; the issuer renews no
-// expired certificate (Enrol.tla Issue), so only a new token's enrolment
-// brings it back.
-var ErrExpired = errors.New("the certificate expired: enrol again with a new token (nfltr org join)")
+// ErrExpired: the machine's certificate expired orgpki.RenewGrace ago; the
+// issuer renews it no more (Enrol.tla Renews), so only a new token's
+// enrolment brings it back.
+var ErrExpired = errors.New("the certificate expired more than the renewal grace ago: enrol again with a new token (nfltr org join)")
 
 // renew asks the issuer once for a certificate of a new key, signed by the
 // current one, under the machine's renewal lock.
@@ -381,7 +399,7 @@ func (k Keeper) renew(ctx context.Context) error {
 		return nil // another process renewed
 	}
 	cur, curKey := m.Current()
-	if !now.Before(cur.NotAfter) {
+	if !now.Before(cur.NotAfter.Add(orgpki.RenewGrace)) {
 		return ErrExpired
 	}
 	key, csr, err := newKeyCSR()

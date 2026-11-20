@@ -32,9 +32,9 @@ CONSTANT TraceFile
 
 Log == ndJsonDeserialize(TraceFile)
 
-VARIABLES l, certs, revoked, last, held, bad, tokkey, lastTok, retired
+VARIABLES l, certs, revoked, last, held, bad, tokkey, lastTok, retired, newest
 
-vars == <<l, certs, revoked, last, held, bad, tokkey, lastTok, retired>>
+vars == <<l, certs, revoked, last, held, bad, tokkey, lastTok, retired, newest>>
 
 Init ==
     /\ l = 1
@@ -46,6 +46,7 @@ Init ==
     /\ tokkey = [x \in {} |-> ""]  \* <<org, token>> -> the key it enrolled
     /\ lastTok = [x \in {} |-> ""] \* <<org, name>> -> its newest certificate's token, "" a renewal
     /\ retired = {}                \* <<org, serial>>: retired by a rebind
+    /\ newest = [x \in {} |-> ""]  \* <<org, name>> -> its newest serial
 
 E == Log[l]
 Set(sq) == {sq[i] : i \in DOMAIN sq}
@@ -54,7 +55,11 @@ Set(sq) == {sq[i] : i \in DOMAIN sq}
 InLog == <<E.o, E.from>> \in DOMAIN certs
 From == certs[<<E.o, E.from>>]
 IsRevoked(o, n) == <<o, n>> \in revoked
-RenewOK == InLog /\ From.n = E.n /\ From.exp > E.t /\ ~IsRevoked(E.o, E.n)
+\* Enrol.tla Renews: valid, or the name's newest within the grace
+\* (orgpki.RenewGrace, a week in seconds).
+RenewGrace == 604800
+Renewable == From.exp > E.t \/ (From.exp + RenewGrace > E.t /\ <<E.o, From.n>> \in DOMAIN newest /\ newest[<<E.o, From.n>>] = E.from)
+RenewOK == InLog /\ From.n = E.n /\ Renewable /\ ~IsRevoked(E.o, E.n)
 \* An enrolment: a token's first is enrol.pv's; answered again (Join.tla
 \* Reissues), only for the key it enrolled, of a name not revoked whose
 \* newest certificate is still the token's.
@@ -73,12 +78,15 @@ IssueBad ==
       [] ~InLog -> {"renew-forged"}
       [] <<E.o, E.from>> \in retired -> {"renew-rebound"}
       [] IsRevoked(E.o, E.n) -> {"renew-revoked"}
-      [] OTHER -> IF RenewOK THEN {} ELSE {"diverged"}
+      [] OTHER -> CASE RenewOK -> {}
+                    [] InLog /\ From.n = E.n /\ From.exp + RenewGrace <= E.t -> {"renew-past-grace"}
+                    [] InLog /\ From.n = E.n /\ From.exp <= E.t -> {"grace-any-serial"}
+                    [] OTHER -> {"diverged"}
 RefuseBad ==
     CASE E.why \in {"log", "other"} -> {}
       [] E.why = "enrolled" ->
             IF Redeemed /\ E.k = tokkey[TK] /\ ~IsRevoked(E.o, E.n) /\ TokensNewest THEN {"burn-name"} ELSE {}
-      [] E.why = "expired" -> IF InLog /\ From.exp <= E.t THEN {} ELSE {"diverged"}
+      [] E.why = "expired" -> IF InLog /\ ~Renewable THEN {} ELSE {"diverged"}
       [] E.why = "revoked" -> IF InLog /\ IsRevoked(E.o, E.n) THEN {} ELSE {"diverged"}
       [] E.why = "rebound" -> IF <<E.o, E.from>> \in retired THEN {} ELSE {"diverged"}
       [] OTHER -> {"diverged"}
@@ -125,6 +133,7 @@ Next ==
     /\ tokkey' = IF E.ev = "issue" /\ E.from = "" /\ E.tok # "" /\ ~Redeemed THEN (TK :> E.k) @@ tokkey ELSE tokkey
     /\ lastTok' = IF E.ev = "issue" THEN (NK :> E.tok) @@ lastTok ELSE lastTok
     /\ retired' = IF E.ev = "rebind" THEN retired \cup Retires ELSE retired
+    /\ newest' = IF E.ev = "issue" THEN (NK :> E.s) @@ newest ELSE newest
     /\ held' = CASE E.ev = "take" /\ E.ok -> (HK :> [num |-> E.num, next |-> E.next, rev |-> Set(E.rev)]) @@ held
                  [] E.ev = "rotate" -> [x \in {y \in DOMAIN held : y[1] # E.v} |-> held[x]]
                  [] OTHER -> held
@@ -151,5 +160,7 @@ RetiredRefused == None({"rebind-keeps-serials"})
 RevokedMachineRefused == None({"accept-older-crl", "revoked-admitted", "revoke-current-only"})
 RevocationBound == None({"fail-open"})
 NoExpiredSession == None({"admit-expired"})
+NoRenewPastGrace == None({"renew-past-grace"})
+GraceOnlyNewest == None({"grace-any-serial"})
 TraceDone == l <= Len(Log)
 =============================================================================

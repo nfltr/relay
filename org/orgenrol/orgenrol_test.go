@@ -945,3 +945,36 @@ func TestKeeperRenewsOnTimeAfterTheHostSlept(t *testing.T) {
 	mclk.Add(17 * time.Hour)          // the host slept
 	eventually(t, "renewed after the host slept", func() bool { return serial(f.m) != before })
 }
+
+// The issuer is out of reach (its mailbox down) from before the renewal
+// until past the certificate's NotAfter, then back: the keeper, never
+// restarted, renews within the grace (Enrol.tla RenewsAfterExpiry,
+// mutant no-renew-after-expiry; incident 2026-11-19, the canary's
+// machines expired during the mailbox outage and never renewed).
+func TestKeeperRenewsAfterAnIssuerOutagePastExpiry(t *testing.T) {
+	f := newFleet(t)
+	before := serial(f.m)
+	down := errors.New("the mailbox service is offline")
+	var appends atomic.Int32
+	f.relay.mu.Lock()
+	f.relay.fail = func(box string) error {
+		if box == orgpki.EnrolMailbox(f.org.id) {
+			appends.Add(1)
+		}
+		return down
+	}
+	f.relay.mu.Unlock()
+	keep(t, f.ctx, f.keeper())
+	f.clk.Add(orgpki.MachineLife + time.Hour) // the outage outlasts the certificate
+	eventually(t, "the keeper asks while the issuer is down", func() bool { return appends.Load() > 2 })
+	if serial(f.m) != before {
+		t.Fatal("renewed while the issuer was down")
+	}
+	f.relay.mu.Lock()
+	f.relay.fail = nil
+	f.relay.mu.Unlock()
+	eventually(t, "renewed once the issuer is back", func() bool { return serial(f.m) != before })
+	if cur, _ := f.m.Current(); !cur.NotAfter.After(f.clk.Now()) {
+		t.Fatalf("the renewed certificate ends %s, before now %s", cur.NotAfter, f.clk.Now())
+	}
+}

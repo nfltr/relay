@@ -561,8 +561,9 @@ func (n *nameRec) isRetired(sn string) bool {
 
 // Renew re-certifies a machine under the current issuer for a new key. It
 // takes only a certificate its own log holds (Enrol.tla renew-forged), not
-// expired (renew-expired), of a name not revoked (renew-revoked), with the
-// current key's signature over the CSR.
+// expired, or the name's newest within RenewGrace after its NotAfter
+// (Enrol.tla Renews: renew-past-grace, grace-any-serial), of a name not
+// revoked (renew-revoked), with the current key's signature over the CSR.
 func (i *Issuer) Renew(req RenewRequest, now time.Time) ([]byte, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
@@ -581,9 +582,9 @@ func (i *Issuer) Renew(req RenewRequest, now time.Time) ([]byte, error) {
 	}
 	refusal.Name = rec.name
 	n := i.names[rec.name]
-	if !now.Before(rec.notAfter) {
+	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn) {
 		i.traceRefused(sn, cur, "expired", now)
-		return nil, i.refuse(refusal, "the certificate expired; enrol again with a new token")
+		return nil, i.refuse(refusal, fmt.Sprintf("the certificate expired at %s, more than %s ago or superseded by a newer one; enrol again with a new token", rec.notAfter.UTC().Format(time.RFC3339), RenewGrace))
 	}
 	if n.revoked {
 		i.traceRefused(sn, cur, "revoked", now)
