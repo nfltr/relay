@@ -357,9 +357,17 @@ func (d *directServer) nf1ListenTLS(hello *tls.ClientHelloInfo) (*tls.Config, er
 	return &tls.Config{
 		MinVersion:             tls.VersionTLS13,
 		Certificates:           []tls.Certificate{s.nf1.Certificate()},
-		NextProtos:             []string{quiclink.ALPNChain, quiclink.ALPN},
+		NextProtos:             nf1DirectALPNs(),
 		SessionTicketsDisabled: true,
 	}, nil
+}
+
+// nf1DirectALPNs is what an nf1 direct listener offers, in its order of
+// preference: quiclink.ALPNEndAck (a session's CloseWriteSync waits for
+// the far end), then ALPNChain and ALPN, which a client with an older
+// quiclink negotiates as before.
+func nf1DirectALPNs() []string {
+	return []string{quiclink.ALPNEndAck, quiclink.ALPNChain, quiclink.ALPN}
 }
 
 // dropAddressesNotIn resets the nf1 sessions of addresses t does not serve

@@ -7,7 +7,7 @@ require (
 	github.com/jackpal/gateway v1.2.0
 	github.com/nfltr/link v0.13.0
 	github.com/nfltr/link/pathswitch v0.1.0
-	github.com/nfltr/link/peerlink/quiclink v0.6.0
+	github.com/nfltr/link/peerlink/quiclink v0.6.1-0.20261120150246-9127c29aa757
 	github.com/nfltr/quic-go v0.63.1-nfltr.2.0.20261112202211-40e0a2570e52
 	github.com/nfltr/relay/proto v0.21.5
 	github.com/pion/datachannel v1.6.3

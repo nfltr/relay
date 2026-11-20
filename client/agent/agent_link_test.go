@@ -106,7 +106,11 @@ func (tokenVerifier) Verify(_ context.Context, _ tls.ConnectionState, m byte, p 
 	return link.Identity{Subject: "agent"}, nil
 }
 
-func newFakeLinkRelay(t *testing.T) *fakeLinkRelay {
+func newFakeLinkRelay(t *testing.T) *fakeLinkRelay { return newFakeLinkRelayALPNs(t, agentLinkALPNs()) }
+
+// newFakeLinkRelayALPNs is newFakeLinkRelay whose QUIC side offers alpns
+// (dataplane.AgentLinkALPNs: a relay without end acknowledgements).
+func newFakeLinkRelayALPNs(t *testing.T, alpns []string) *fakeLinkRelay {
 	t.Helper()
 	cert, _, err := generateSelfSignedCert("relay.test")
 	if err != nil {
@@ -160,7 +164,7 @@ func newFakeLinkRelay(t *testing.T) *fakeLinkRelay {
 	}
 	r.udpAddr = pc.LocalAddr().(*net.UDPAddr)
 	qtc := stc.Clone()
-	qtc.NextProtos = dataplane.AgentLinkALPNs()
+	qtc.NextProtos = alpns
 	r.quic = mustNode(quiclink.New(quiclink.Config{PacketConn: pc, TLS: qtc, ServedPeer: func(q *quic.Conn) (string, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

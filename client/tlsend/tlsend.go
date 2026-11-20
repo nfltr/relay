@@ -67,14 +67,30 @@ func (c *Conn) Reset() error {
 
 // CloseWriteSync is the half close (close_notify), then, on a transport
 // that syncs its end (a relayed link session), its CloseWriteSync: nil
-// once the relay read the close_notify and the end (link Sync).
-func (c *Conn) CloseWriteSync() error {
+// once the far end took the close_notify and the end (link FeatureEndAck;
+// else the relay's read of them, link Sync).
+func (c *Conn) CloseWriteSync() error { return c.CloseWriteSyncReceived(func() {}) }
+
+// CloseWriteSyncReceived is CloseWriteSync that also reports the next
+// hop's receipt where the transport does (link and quiclink
+// CloseWriteSyncReceived): received runs there, before the far end's
+// acknowledgement, so a peerlink.Join onto this conn ends its hold at the
+// receipt (link spec/HopHold.tla, mutant hold-until-ack); on a transport
+// without one it runs once its CloseWriteSync returned nil (or the
+// close_notify was written).
+func (c *Conn) CloseWriteSyncReceived(received func()) error {
 	if err := c.Conn.CloseWrite(); err != nil {
 		return err
 	}
-	if s, ok := c.raw.Conn.(interface{ CloseWriteSync() error }); ok {
-		return s.CloseWriteSync()
+	switch s := c.raw.Conn.(type) {
+	case interface{ CloseWriteSyncReceived(func()) error }:
+		return s.CloseWriteSyncReceived(received)
+	case interface{ CloseWriteSync() error }:
+		if err := s.CloseWriteSync(); err != nil {
+			return err
+		}
 	}
+	received()
 	return nil
 }
 

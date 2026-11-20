@@ -634,13 +634,24 @@ func (l *agentLink) dialTCPNode(ctx context.Context, _ string) (net.Conn, error)
 	return l.dialTCP(ctx)
 }
 
+// agentLinkALPNs is what the agent offers on its QUIC agent link:
+// quiclink.ALPNEndAck first (its sessions' CloseWriteSync waits for the
+// far end, through the relay's join), then dataplane.AgentLinkALPNs, so a
+// relay without it negotiates peerlink-chain as before. The relay proto
+// package does not list it: only a module that links a quiclink with
+// ALPNEndAck may offer it (quiclink v0.7.0; an older one would take the
+// ALPN for a plain one).
+func agentLinkALPNs() []string {
+	return append([]string{quiclink.ALPNEndAck}, dataplane.AgentLinkALPNs()...)
+}
+
 // dialQUIC dials the relay's UDP port and sends the bind token on the
 // connection's first stream (dataplane.WriteLinkHello).
 func (l *agentLink) dialQUIC(ctx context.Context, qc *quic.Config) (*quic.Conn, error) {
 	dctx, cancel := context.WithTimeout(ctx, dataHelloTimeout)
 	defer cancel()
 	tc := l.dial.QUIC.TLS.Clone()
-	tc.NextProtos = dataplane.AgentLinkALPNs()
+	tc.NextProtos = agentLinkALPNs()
 	addr := net.JoinHostPort(l.dial.QUIC.Host, strconv.Itoa(l.offer.QUICPort))
 	var q *quic.Conn
 	var err error

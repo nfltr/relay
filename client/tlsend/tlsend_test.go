@@ -13,6 +13,7 @@ import (
 	"io"
 	"math/big"
 	"net"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -118,5 +119,61 @@ func TestResetIsNotCloseNotify(t *testing.T) {
 		if _, err := io.ReadAll(peer); err == nil || errors.Is(err, io.EOF) {
 			t.Errorf("resetter server %v: the peer's read ended with %v, want a reset", resetterIsServer, err)
 		}
+	}
+}
+
+// receiptRaw is a transport that reports the next hop's receipt (a link
+// session's CloseWriteSyncReceived).
+type receiptRaw struct {
+	net.Conn
+	received atomic.Bool
+}
+
+func (r *receiptRaw) CloseWriteSyncReceived(received func()) error {
+	r.received.Store(true)
+	received()
+	return nil
+}
+
+// TestCloseWriteSyncReceivedPassesTheReceipt (lane ENDACKTRUTH): a Conn
+// over a transport with CloseWriteSyncReceived passes it on, so a
+// peerlink.Join onto the Conn ends its hold at the next hop's receipt, not
+// at the far end's acknowledgement (link spec/HopHold.tla, mutant
+// hold-until-ack).
+func TestCloseWriteSyncReceivedPassesTheReceipt(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ln.Close() }()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		c, _ := ln.Accept()
+		accepted <- c
+	}()
+	cc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc := <-accepted
+	t.Cleanup(func() { _ = cc.Close(); _ = sc.Close() })
+	raw := &receiptRaw{Conn: cc}
+	c := Client(raw, &tls.Config{InsecureSkipVerify: true, MinVersion: tls.VersionTLS13}) // #nosec G402 -- test: the test's own certificate
+	srv := tls.Server(sc, &tls.Config{Certificates: []tls.Certificate{cert(t)}, MinVersion: tls.VersionTLS13})
+	done := make(chan error, 1)
+	go func() { done <- srv.Handshake() }()
+	if err := c.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	r, ok := any(c).(interface{ CloseWriteSyncReceived(func()) error })
+	if !ok {
+		t.Fatal("Conn has no CloseWriteSyncReceived")
+	}
+	ran := false
+	if err := r.CloseWriteSyncReceived(func() { ran = true }); err != nil || !raw.received.Load() || !ran {
+		t.Fatalf("CloseWriteSyncReceived: %v, passed on %v, ran %v", err, raw.received.Load(), ran)
 	}
 }

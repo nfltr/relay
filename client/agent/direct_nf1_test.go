@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/link/peerlink/quiclink"
 	"github.com/nfltr/relay/client/nf1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentservices"
@@ -266,5 +267,40 @@ func TestDirectStopDrainsThenResets(t *testing.T) {
 	case <-stopped:
 	case <-time.After(directCutGrace + time.Second):
 		t.Fatal("stop did not return")
+	}
+}
+
+// TestNF1DirectALPNInterop (lane ENDACKTRUTH): an nf1 direct listener
+// prefers quiclink.ALPNEndAck; a client whose quiclink offers it (v0.7.0:
+// its default NextProtos) negotiates it, one with an older quiclink
+// (ALPNChain, ALPN) keeps peerlink-chain.
+func TestNF1DirectALPNInterop(t *testing.T) {
+	cert, _, err := generateSelfSignedCert("nf1.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		offer []string
+		want  string
+	}{
+		{[]string{quiclink.ALPNEndAck, quiclink.ALPNChain, quiclink.ALPN}, quiclink.ALPNEndAck},
+		{[]string{quiclink.ALPNChain, quiclink.ALPN}, quiclink.ALPNChain},
+	} {
+		a, b := net.Pipe()
+		srv := tls.Server(a, &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{*cert}, NextProtos: nf1DirectALPNs()})
+		cli := tls.Client(b, &tls.Config{MinVersion: tls.VersionTLS13, InsecureSkipVerify: true, NextProtos: c.offer}) // #nosec G402 -- a test's own pair
+		done := make(chan error, 1)
+		go func() { done <- srv.Handshake() }()
+		if err := cli.Handshake(); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if got := cli.ConnectionState().NegotiatedProtocol; got != c.want {
+			t.Fatalf("offer %q: negotiated %q, want %q", c.offer, got, c.want)
+		}
+		_ = a.Close()
+		_ = b.Close()
 	}
 }

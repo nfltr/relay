@@ -25,8 +25,8 @@ import (
 // *link.Abort whose code carries the reason, an open is accepted once the
 // target is reached, and no answer bytes precede the session's own.
 func TestAgentLinkNativeAnswers(t *testing.T) {
-	if got := dataplane.AgentLinkALPNs()[0]; got != quiclink.ALPNChain {
-		t.Fatalf("AgentLinkALPNs()[0] = %q, want quiclink.ALPNChain %q", got, quiclink.ALPNChain)
+	if got := agentLinkALPNs(); got[0] != quiclink.ALPNEndAck || got[1] != quiclink.ALPNChain {
+		t.Fatalf("agentLinkALPNs() = %q, want quiclink.ALPNEndAck, then quiclink.ALPNChain", got)
 	}
 	echo := echoTarget(t)
 	o := newTestOrg(t)
@@ -85,6 +85,50 @@ func TestAgentLinkNativeAnswers(t *testing.T) {
 				t.Fatalf("db: echo %q, %v; want exactly the bytes, then the target's half close", got, err)
 			}
 			_ = s.Close()
+		})
+	}
+}
+
+// TestAgentLinkQUICEndAckInterop (lane ENDACKTRUTH): the agent offers
+// quiclink.ALPNEndAck first: a relay that offers it too negotiates it
+// (its sessions acknowledge their ends), an older relay
+// (dataplane.AgentLinkALPNs, peerlink-chain first) keeps peerlink-chain;
+// the session's bytes and half close cross either way.
+func TestAgentLinkQUICEndAckInterop(t *testing.T) {
+	echo := echoTarget(t)
+	tab, err := NewServiceTable([]Service{{Name: "db", Kind: agentservices.TCP, Target: echo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string]struct {
+		alpns []string
+		acks  bool
+	}{"new relay": {agentLinkALPNs(), true}, "old relay": {dataplane.AgentLinkALPNs(), false}} {
+		t.Run(name, func(t *testing.T) {
+			r := newFakeLinkRelayALPNs(t, c.alpns)
+			offer := dataplane.AgentLinkOffer{TCP: true, QUIC: true, QUICPort: r.udpAddr.Port}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			ls := &linkSessions{ctx: ctx, targets: sessionTargets{services: tab}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+			go runAgentLink(ctx, r.dialer(TransportQUIC), testLinkToken, offer, ls, slog.New(slog.DiscardHandler))
+			s := r.open(t, r.quic, &pb.TCPData{TargetAddr: "db", Answer: true})
+			ea, ok := s.(interface {
+				AcksEnds() bool
+				CloseWriteSync() error
+			})
+			if !ok {
+				t.Fatalf("the relay's session %T is no quiclink session", s)
+			}
+			if ea.AcksEnds() != c.acks {
+				t.Fatalf("AcksEnds %v, want %v", ea.AcksEnds(), c.acks)
+			}
+			_, _ = s.Write([]byte("ping"))
+			if err := ea.CloseWriteSync(); err != nil {
+				t.Fatalf("CloseWriteSync: %v", err)
+			}
+			if got, err := io.ReadAll(s); err != nil || string(got) != "ping" {
+				t.Fatalf("echo %q, %v; want exactly the bytes, then the target's half close", got, err)
+			}
 		})
 	}
 }
