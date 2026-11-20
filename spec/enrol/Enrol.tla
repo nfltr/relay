@@ -29,6 +29,16 @@
 \* machine's disk (its certificate and key) is the attacker's from then:
 \* any of its certificates can be presented (Admit) and its renewal
 \* requests still sit in the relay's mailbox (Issue must refuse them).
+\*
+\* A move (lane SEAMLESS, nfltr docs/decisions/seamless-certificates-2026-11-20.md)
+\* is a rebind without the owner's token: the name's machine enrolled with
+\* the relay again (a new relay machine id: `nfltr config login`) and asks,
+\* in a renewal signed with its current key, to move its name to that id
+\* (enrol.pv query 20: the relay cannot change the id). The issuer moves
+\* it only when its policy admits the new id: a machine of the issuer's own
+\* relay account with that name (acct "own"). Anyone may ask: the request
+\* is signed by the name's key or not (key), for a machine of the issuer's
+\* account or another's (acct).
 EXTENDS Integers, Sequences, FiniteSets
 
 CONSTANTS
@@ -70,10 +80,11 @@ VARIABLES
     ans,        \* answers the relay carries (serials); it may keep old ones
     lost,       \* requests and answers the relay lost
     rebound,    \* rebound[m]: Len(certs) at m's rebind: serials <= it are retired; 0 = none
-    rebindCrl   \* rebindCrl[m]: the CRL the rebind signed, 0 = none
+    rebindCrl,  \* rebindCrl[m]: the CRL the rebind signed, 0 = none
+    moves       \* the moves the issuer made: [m, acct, key]
 
-vars == <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, reqs, ans, lost, rebound, rebindCrl>>
-rt == <<keys, want, reqs, ans, lost, rebound, rebindCrl>>
+vars == <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, reqs, ans, lost, rebound, rebindCrl, moves>>
+rt == <<keys, want, reqs, ans, lost, rebound, rebindCrl, moves>>
 
 Last == crls[Len(crls)]
 SerialsOf(m) == {i \in DOMAIN certs : certs[i].m = m /\ ~certs[i].forged}
@@ -136,6 +147,7 @@ TypeOK ==
     /\ \A r \in reqs : r.m \in Machines /\ r.from \in DOMAIN certs /\ r.key \in 1..MaxKeys + MaxLost + 1
     /\ ans \subseteq DOMAIN certs /\ lost \in 0..MaxLost
     /\ rebound \in [Machines -> 0..Len(certs)] /\ rebindCrl \in [Machines -> 0..Len(crls)]
+    /\ \A x \in moves : x.m \in Machines /\ x.acct \in {"own", "other"} /\ x.key \in BOOLEAN
 
 Init ==
     /\ now = 0
@@ -154,6 +166,7 @@ Init ==
     /\ want = [m \in Machines |-> 0]
     /\ reqs = {} /\ ans = {} /\ lost = 0
     /\ rebound = [m \in Machines |-> 0] /\ rebindCrl = [m \in Machines |-> 0]
+    /\ moves = {}
 
 \* Time passes; each verifier's timer ends sessions whose certificate
 \* expired or whose CRL lapsed (fail closed).
@@ -199,7 +212,7 @@ Request(m) ==
     /\ reqs' = reqs \cup {[m |-> m, from |-> cur[m], key |-> keys[m] + 1,
                            ok |-> Mutant # "check-at-request" \/ Unrevoked(m)]}
     /\ ans' = Live(ans, m)
-    /\ UNCHANGED <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, lost, rebound, rebindCrl>>
+    /\ UNCHANGED <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, lost, rebound, rebindCrl, moves>>
 
 \* The issuer reads a request and decides under its lock, as of now: it
 \* refuses a revoked name, a certificate expired RenewGrace ago or one
@@ -218,7 +231,7 @@ Issue(r) ==
     /\ certs' = Append(certs, [m |-> r.m, iss |-> now, exp |-> now + CertLife, root |-> root, forged |-> FALSE, key |-> r.key, from |-> r.from])
     /\ reqs' = reqs \ {r}
     /\ ans' = ans \cup {Len(certs) + 1}
-    /\ UNCHANGED <<now, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, lost, rebound, rebindCrl>>
+    /\ UNCHANGED <<now, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, lost, rebound, rebindCrl, moves>>
 
 \* Under renew-forged the issuer also renews a forged certificate the
 \* attacker presents, into the current root.
@@ -237,7 +250,7 @@ Install(m, i) ==
     /\ cur' = [cur EXCEPT ![m] = i]
     /\ want' = [want EXCEPT ![m] = 0]
     /\ ans' = Live(ans, m)
-    /\ UNCHANGED <<now, certs, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, reqs, lost, rebound, rebindCrl>>
+    /\ UNCHANGED <<now, certs, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, reqs, lost, rebound, rebindCrl, moves>>
 
 \* The relay loses a request or an answer.
 Lose ==
@@ -245,7 +258,7 @@ Lose ==
     /\ lost' = lost + 1
     /\ \/ \E r \in reqs : reqs' = reqs \ {r} /\ ans' = ans
        \/ \E i \in ans : ans' = ans \ {i} /\ reqs' = reqs
-    /\ UNCHANGED <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, rebound, rebindCrl>>
+    /\ UNCHANGED <<now, certs, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, rebound, rebindCrl, moves>>
 
 \* The owner revokes m; the issuer signs a CRL listing all of m's serials
 \* at once and the issuer pushes it (Fetch).
@@ -262,8 +275,7 @@ Revoke(m) ==
 \* rebind-keeps-serials it does not). The new machine holds the new
 \* certificate; whatever the old one waited for is dead (its requests stay
 \* in the relay's mailbox). One rebind per machine (state bound).
-Rebind(m) ==
-    /\ MaxRebinds > 0 /\ Unrevoked(m) /\ rebound[m] = 0
+Rebound(m) ==
     /\ certs' = Append(certs, [m |-> m, iss |-> now, exp |-> now + CertLife, root |-> root, forged |-> FALSE, key |-> keys[m] + 1, from |-> 0])
     /\ rebound' = [rebound EXCEPT ![m] = Len(certs)]
     /\ crls' = Append(crls, [this |-> now, next |-> now + CrlLife,
@@ -274,6 +286,27 @@ Rebind(m) ==
     /\ want' = [want EXCEPT ![m] = 0]
     /\ ans' = Live(ans, m)
     /\ UNCHANGED <<now, revokedAt, seen, maxSeen, vroot, root, stolen, evil, sess, reqs, lost>>
+Rebind(m) ==
+    /\ MaxRebinds > 0 /\ Unrevoked(m) /\ rebound[m] = 0
+    /\ Rebound(m)
+    /\ UNCHANGED moves
+
+\* A move asked for name m, to a re-enrolled relay machine of account acct
+\* ("own": the issuer's), in a request signed by m's current key or not
+\* (key: the name's machine asks; not: anyone else, the relay included).
+\* The issuer moves the name, as a rebind does, only for a request signed
+\* by the key of a certificate it would renew (valid or in the grace, not
+\* retired) and a machine of its own account. Mutants: move-no-key (the
+\* request's id not under the key's signature, or not checked: anyone
+\* moves the name), move-any-account (the policy not checked: another
+\* account's machine takes the name's membership).
+Move(m, acct, key) ==
+    /\ MaxRebinds > 0 /\ Unrevoked(m) /\ rebound[m] = 0
+    /\ key \/ Mutant = "move-no-key"
+    /\ key => Renews(cur[m], now) /\ ~Retired(cur[m])
+    /\ acct = "own" \/ Mutant = "move-any-account"
+    /\ Rebound(m)
+    /\ moves' = moves \cup {[m |-> m, acct |-> acct, key |-> key]}
 
 \* The issuer re-signs the CRL before its NextUpdate.
 Republish ==
@@ -345,6 +378,7 @@ Next ==
     \/ Tick
     \/ \E v \in Verifiers, i \in DOMAIN certs : Admit(v, i)
     \/ \E m \in Machines : Request(m) \/ Revoke(m) \/ Rebind(m)
+    \/ \E m \in Machines, a \in {"own", "other"}, k \in BOOLEAN : Move(m, a, k)
     \/ \E r \in reqs : Issue(r)
        \* (one disjunct for coverage: IssueForged is mutant-only)
        \/ \E i \in DOMAIN certs : IssueForged(i)
@@ -405,6 +439,11 @@ GraceOnlyNewest ==
         certs[i].forged \/ f = 0 \/ certs[i].iss < certs[f].exp
         \/ \A j \in DOMAIN certs : (f < j /\ j < i) => (certs[j].m # certs[i].m \/ certs[j].forged)
 
+\* A name moves only on its own key's request (enrol.pv query 20 for the
+\* relay that carries it), and only to a machine of the issuer's account.
+MoveOnlyByKey == \A x \in moves : x.key
+MoveOnlyOwnAccount == \A x \in moves : x.acct = "own"
+
 \* No session outlives its certificate.
 NoExpiredSession == \A s \in sess : NotExpired(s.c, now)
 
@@ -454,6 +493,7 @@ WitnessForgedSession == \A s \in sess : ~certs[s.c].forged
 WitnessRotated == \A v \in Verifiers : vroot[v] = 1
 WitnessSessionAfterRotation == \A s \in sess : certs[s.c].root = 1
 WitnessRebound == \A m \in Machines : rebound[m] = 0
+WitnessMoved == moves = {}
 WitnessSessionAfterRebind == \A s \in sess : rebound[certs[s.c].m] = 0 \/ Retired(s.c)
 WitnessRetiredHeld == \A s \in sess : ~Retired(s.c)
 WitnessRenewedAfterExpiry == \A i \in DOMAIN certs : certs[i].from = 0 \/ certs[i].iss < certs[certs[i].from].exp

@@ -33,7 +33,9 @@ after a rotation) is `Join.tla`.
 | RebindBound | CrlLife after a rebind no verifier holds a session of a serial it retired (the old machine id's certificates), whatever CRLs the relay delivered | `rebind-keeps-serials` (the rebind's CRL lists none of the name's earlier serials) |
 | RetiredRefused | once a verifier took the rebind's CRL, it holds no session of a retired serial | `rebind-keeps-serials` |
 | NoRenewOfRetired | the issuer renews no serial a rebind retired (the old disk's renewal request, still in the relay's mailbox) | `renew-rebound` |
-| NoRenewPastGrace | the issuer renews a certificate after its NotAfter only within RenewGrace of it | `renew-past-grace` |
+| NoRenewPastGrace | the issuer renews a certificate after its NotAfter only within RenewGrace of it (`orgpki.RenewGrace`, 90 days since lane SEAMLESS) | `renew-past-grace` |
+| MoveOnlyByKey (Rebind.cfg) | a name moves to a new relay machine id without the owner's token only on its own current key's request (the id under the key's signature: `enrol.pv` query 20) | `move-no-key` |
+| MoveOnlyOwnAccount (Rebind.cfg) | ... and only to a machine of the issuer's own relay account by that name: another account's machine never takes the name's membership | `move-any-account` |
 | GraceOnlyNewest | ... and only the name's newest serial (a superseded one's key is retired: `enrol.pv` 2) | `grace-any-serial` (EnrolLoss.cfg: the answer the machine never installed is newer) |
 | RenewsAfterExpiry (LiveSpec) | a machine whose certificate expired while the issuer was out of reach renews once it answers, without a restart (or the grace ended, it was revoked, or an answer it never installed superseded it) | `no-renew-after-expiry` (the design before 2026-11-20: the issuer refused every expired certificate, so an outage through the last third of the lifetime needed a new enrolment, nfltr `docs/decisions/org-renew-after-outage-2026-11-20.md`) |
 | TakesEffect (LiveSpec) | every revoke reaches every verifier | `push-only` (no backstop read: a lost push is never made good) |
@@ -49,7 +51,7 @@ states, not a property it claims), `WitnessRotated`,
 `WitnessRebound`, `WitnessSessionAfterRebind` (the new machine id's
 certificate admitted), `WitnessRetiredHeld` (before the rebind's CRL
 reaches it, a verifier does hold a session of a retired serial: the bound
-RebindBound states).
+RebindBound states), `WitnessMoved` (a name moved on its key's request).
 
 ## `Enrol.tla`
 
@@ -57,13 +59,14 @@ RebindBound states).
 |---|---|
 | Tick | time passes; each verifier's timer ends sessions at the certificate's NotAfter and at its CRL's NextUpdate |
 | Admit | a peer presents a certificate (honest, a stolen machine's, or forged); TLS VerifyConnection: chain, name, NotAfter, CRL |
-| Request | the machine (`orgenrol.Keeper`) is due (2/3 of its lifetime, or at once after a rotation; its certificate valid or within RenewGrace after its NotAfter), makes a new key and posts a renewal signed by the current one to `org.<org>.enrol`; with an earlier request or answer lost (none pending for its newest key) it asks again with another key |
+| Request | the machine (`orgenrol.Keeper`) is due (half its lifetime, up to 10 % later (lane SEAMLESS), or at once after a rotation; its certificate valid or within RenewGrace after its NotAfter), makes a new key and posts a renewal signed by the current one to `org.<org>.enrol`; with an earlier request or answer lost (none pending for its newest key) it asks again with another key |
 | Issue | the issuer (`nfltr org serve`, `orgenrol.Service`) reads a request and decides under its lock as of now: it refuses a revoked name, a certificate expired RenewGrace ago and an expired one that is not the name's newest serial (`orgpki.RenewGrace`), renews only a serial its own log holds, and posts the answer to `org.<org>.answers` under the request's id |
 | IssueForged | mutant `renew-forged` only: the issuer renews a forged certificate the attacker presents |
 | Install | the machine installs an answer for the key it made last (`orgmachine.Install`: any other is refused) |
 | Lose | the relay loses a request or an answer (bounded by MaxLost) |
 | Revoke | `nfltr org revoke <name>`: one CRL listing every unexpired serial of the name |
 | Rebind | `nfltr org token --rebind <name> --machine-id <new>` redeemed by the new machine (`orgpki.Enrol` of a rebind token: one `rebound` log entry certifying it and retiring the name's earlier serials, nfltr `docs/decisions/org-rebind-2026-11-17.md`); the CRL signed then lists them; `Renew` refuses a retired serial. Its authority (only the operator's token, only its name) is `enrol.pv` query 11 |
+| Move | lane SEAMLESS (nfltr `docs/decisions/seamless-certificates-2026-11-20.md`): the keeper (`orgenrol.Keeper`, `RelayMachineID`) finds the relay machine id changed (`nfltr config login` again) and sends a renewal naming the new id under its key's signature (`orgpki.NewMoveRequest`); `orgpki.Issuer.Renew` asks its `MovePolicy` (nfltr: the id is the issuer's own account's machine of that name, `machines resolve`) and applies the `rebound` log entry, as Rebind |
 | Republish | the issuer re-signs the CRL before its NextUpdate |
 | Take | a verifier takes a newer CRL and re-checks its sessions |
 | Replay | the relay delivers an older CRL |

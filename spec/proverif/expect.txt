@@ -199,24 +199,28 @@ cap_address reg-is-rec TTTTTTTTTTFFFFTTTTFFTTFFTFFF
 cap_address reg-unsigned TTTTTTTTTTFFFFTTTTFFTTFFTFFF
 cap_address_link - T
 cap_address_link pin-unkeyed ?
-enrol - TTTTTTTTTTTFFFFFFFF
-enrol no-chain-check FFTFTTFTTTTFFFFFFFF
-enrol no-name-check FFTFTTTTTTTFFFFFFFF
-enrol no-expiry-check TTFTTTTTTTTFFFFFFFF
-enrol stale-crl TTTFTTTTTTTFFFFFFFF
-enrol no-crl-check TTTFTTTTTTTFFFFFFFF
-enrol renew-expired TFTTTTTTTTTFFFFFFFF
-enrol renew-revoked TTTFTTTTTTTFFFFFFFF
-enrol reusable-token TTTTFTTTTTTFFFFFFFF
-enrol name-from-request TFTFFFTTTTTFFFFFFFF
-enrol token-in-request TFTTTTTTTTTFFFFFFFF
-enrol no-group-check TTTTTTFTTTTFFFFFFFF
-enrol rotate-by-primary TTTTTTTFFTTFFFFFFFF
-enrol keep-old-root TTTTTTTTFTTFFFFFFFF
-enrol reissue-any-key TTTTTTTTTFTFFFFFFFF
+enrol - TTTTTTTTTTTFFFFFFFFTF
+enrol no-chain-check FFTFTTFTTTTFFFFFFFFTF
+enrol no-name-check FFTFTTTTTTTFFFFFFFFTF
+enrol no-expiry-check TTFTTTTTTTTFFFFFFFFTF
+enrol stale-crl TTTFTTTTTTTFFFFFFFFTF
+enrol no-crl-check TTTFTTTTTTTFFFFFFFFTF
+enrol renew-expired TFTTTTTTTTTFFFFFFFFFF
+enrol renew-revoked TTTFTTTTTTTFFFFFFFFTF
+enrol reusable-token TTTTFTTTTTTFFFFFFFFTF
+enrol name-from-request TFTFFFTTTTTFFFFFFFFFF
+enrol token-in-request TFTTTTTTTTTFFFFFFFFFF
+enrol no-group-check TTTTTTFTTTTFFFFFFFFTF
+enrol rotate-by-primary TTTTTTTFFTTFFFFFFFFTF
+enrol keep-old-root TTTTTTTTFTTFFFFFFFFTF
+enrol reissue-any-key TTTTTTTTTFTFFFFFFFFTF
 # a rebind token naming another name than its own (lane REBIND): the
 # attacker moves web (2) and the revoked lost (4) with mallory's leaked one.
-enrol rebind-any-name TFTFTTTTTTFFFFFFFFF
+enrol rebind-any-name TFTFTTTTTTFFFFFFFFFFF
+# a move (lane SEAMLESS) whose new relay machine id sits beside the signed
+# renewal: the relay moves web to an id of its own (20). Every mutant that
+# hands the attacker a key of web fails 20 too (it then signs a move).
+enrol move-id-unsigned TTTTTTTTTTTFFFFFFFFFF
 orgmove - TTTFTTTF
 orgmove plain-bundle FTFFTTFF
 orgmove recipient-via-relay FTFFTTFF

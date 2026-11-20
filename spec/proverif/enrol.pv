@@ -31,6 +31,7 @@
    each: the field changed in the honest request, as a relay can):
      BIND:rebind.mac  the new machine's key is bound to the rebind token by its HMAC (org/orgpki Enrol)
      BIND:rebind.name the certificate names the token's name, never the request's (org/orgpki rebind)
+     BIND:move.id     a move's new relay machine id is under the current key's signature (org/orgpki Renew, lane SEAMLESS)
 
    The code: org/orgpki (README "Code map"); every query
    it enforces has a test there, and testdata/mutants.txt plants the
@@ -54,6 +55,7 @@ free web, mallory, lost, new1: mname.
 free ep_old, ep_grace, ep_now: epoch.
 free g_db, g_other: group.
 free none, s_lost: bitstring.          (* serials are public *)
+free rid_web: bitstring.               (* web's new relay machine id (it enrolled with the relay again) *)
 
 (* x509 (crypto/x509): the issuer's CA certificate, a machine's leaf
    (DNS SAN <name>.<org>.internal, OU the group, NotAfter), a CRL
@@ -64,6 +66,7 @@ fun leaf(mname, pkey, bitstring, epoch, group): bitstring [data].
 fun crl(epoch, bitstring): bitstring [data].
 fun rotation(pkey): bitstring [data].
 fun renewal(pkey): bitstring [data].   (* a CSR for the new key, signed with the current one *)
+fun moving(pkey, bitstring): bitstring [data]. (* the same, naming a new relay machine id (a move) *)
 
 free skRoot: skey [private].           (* the root's current primary *)
 free skOld: skey [private].            (* the old root's primary: stolen, below *)
@@ -81,6 +84,8 @@ event Revoked(mname).
 event Accepted(mname, pkey, bitstring, epoch).
 event Admitted(mname, pkey).
 event Renewed(mname, epoch).        (* the issuer renewed a certificate of that epoch *)
+event AsksMove(mname, bitstring).   (* the name's machine asks, with its key, to move to that relay id *)
+event Moved(mname, bitstring).      (* the issuer moved the name to that relay id *)
 event IssuerCertified(pkey).
 event RecoverySigned(pkey).
 event RotatedTo(pkey).
@@ -150,6 +155,27 @@ let Renew =
   event Issued(n, k2, s2, ep_now, g);
   out(c, sign(leaf(n, k2, s2, ep_now, g), skIss)).
 
+(* A move (lane SEAMLESS; nfltr docs/decisions/seamless-certificates-2026-11-20.md):
+   a renewal that names the machine's new relay machine id (it enrolled
+   with the relay again), signed with the current key over the new key
+   and the id; the issuer then certifies the name for that id and retires
+   its earlier serials (spec/enrol/Enrol.tla Move). Its policy (the id is
+   a machine of the issuer's own account with that name) is the relay's
+   word and the attacker's here: the key's signature over the id is what
+   the relay cannot forge (mutant move-id-unsigned: the id beside the
+   signed renewal, the relay's to change). *)
+let Move =
+  new s2: bitstring;
+  in(c, (cert: bitstring, k2: pkey, rid: bitstring, pop: bitstring));
+  let leaf(n, k, s, e, g) = checksign(cert, pk(skIss)) in
+  if e = ep_now || e = ep_grace then
+  if s <> s_lost then
+  if checksign(pop, k) = moving(k2, rid) then   (* NOT:move-id-unsigned *)
+  if checksign(pop, k) = renewal(k2) then       (* ONLY:move-id-unsigned *)
+  event Moved(n, rid);
+  event Issued(n, k2, s2, ep_now, g);
+  out(c, sign(leaf(n, k2, s2, ep_now, g), skIss)).
+
 (* A client dialing the service of machine x (the pin "signed by the
    organisation root with name x"): chain to the root, name, expiry, a
    current CRL from the same issuer that does not list the serial. The TLS
@@ -209,6 +235,10 @@ let Setup =
   event Holds(web, pk(skg)); event Holds(web, pk(skn));
   event Issued(web, pk(skg), sg, ep_grace, g_db);
   out(c, (sign(leaf(web, pk(skg), sg, ep_grace, g_db), skIss), pk(skn), sign(renewal(pk(skn)), skg)));
+  (* ... and, enrolled with the relay again (a new relay machine id), asks
+     with the same key to move its name there *)
+  event AsksMove(web, rid_web);
+  out(c, (sign(leaf(web, pk(skg), sg, ep_grace, g_db), skIss), pk(skn), rid_web, sign(moving(pk(skn), rid_web), skg)));
   (* mallory: enrolled, then compromised (not revoked) *)
   new skm: skey; new sm: bitstring;
   event Holds(mallory, pk(skm));
@@ -269,6 +299,11 @@ query t: bitstring, k: pkey; event(Reissued(t, web, k)).
 query t: bitstring, n: mname, k: pkey; event(Rebound(t, n, k)).
 (* 19. witness: web's certificate renewed in the grace *)
 query event(Renewed(web, ep_grace)).
+(* 20. web's name moves only to a relay machine id web asked for with its
+   key (the relay cannot move it to an id of its choosing) *)
+query r: bitstring; event(Moved(web, r)) ==> event(AsksMove(web, r)).
+(* 21. witness: web's name moved to its new relay machine id *)
+query event(Moved(web, rid_web)).
 
 process
   Setup |
@@ -278,4 +313,4 @@ process
   (* mallory's rebind token, leaked: its holder moves mallory (enrolled,
      its key the attacker's already), once *)
   (new tr: bitstring; event RebindTokenMade(tr, mallory); out(c, tr); RebindRedeem(tr, mallory, g_other)) |
-  (!Renew) | (!Client) | (!Service) | (!RotClient)
+  (!Renew) | (!Move) | (!Client) | (!Service) | (!RotClient)

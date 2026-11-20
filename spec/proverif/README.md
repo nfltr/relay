@@ -851,6 +851,8 @@ closed, rotation) is `spec/enrol/Enrol.tla`. Code: `org/orgpki` (issuer, profile
 | 11 | a rebind token (nfltr `docs/decisions/org-rebind-2026-11-17.md`) rebinds only the enrolled name it was made for | holds |
 | 12-18 | witnesses: web reached; a client admitted; the leaked token's own name enrolled by whoever redeems it first (the residual: one new name, once, and the real machine's enrolment then fails visibly); a rotation; an issuer trusted after it; web's token answered again; mallory's leaked rebind token redeemed (the same residual: its own name, once) | attack (reachable), as they must |
 | 19 | witness: web's certificate, expired within the grace (`orgpki.RenewGrace`, the name's newest serial), renewed with its own key (`ep_grace`; no verifier admits it, query 3's ep_old is everything else expired, a superseded serial however recent) | attack (reachable), as it must |
+| 20 | a move (lane SEAMLESS, `org/orgpki` `NewMoveRequest`, `Issuer.Renew` with a machine id): web's name moves only to the relay machine id web asked for with its key; the issuer's account policy is the relay's word, so the signature over the id is the check (BIND:move.id, `TestMoveModelBindings`) | true; mutant `move-id-unsigned` (the id beside the signed renewal) false |
+| 21 | witness: web's name moved to its new relay machine id | attack (reachable), as it must |
 
 Mutants: `no-chain-check` (an issuer certificate not checked against the
 root: 1, 2, 4, 7 fail), `no-name-check` (1, 2, 4), `no-expiry-check` (3),

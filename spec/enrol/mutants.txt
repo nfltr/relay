@@ -32,6 +32,12 @@ grace-any-serial GraceOnlyNewest EnrolLoss.cfg
 rebind-keeps-serials RetiredRefused Rebind.cfg
 rebind-keeps-serials RebindBound Rebind.cfg
 renew-rebound NoRenewOfRetired Rebind.cfg
+# a move (lane SEAMLESS, nfltr docs/decisions/seamless-certificates-2026-11-20.md):
+# a rebind on the name's own key's request, to a machine of the issuer's
+# account: the request unsigned (anyone moves the name), the policy not
+# checked (another account's machine takes the name's membership).
+move-no-key MoveOnlyByKey Rebind.cfg
+move-any-account MoveOnlyOwnAccount Rebind.cfg
 # Join.tla (the join by token, Join.cfg): burn-name and new-key-per-join
 # are the code before 2026-11-15 (a lost or late answer burnt the name);
 # pin-root-only refused a root the pinned recovery key certifies.
