@@ -24,10 +24,20 @@ TARGETS=(
 	"proto ./wire/blobwire FuzzParseDigest"
 	"proto ./wire/hookwire FuzzOpen"
 	"client ./mailboxclient FuzzDecodeError"
-	"client ./rpcclient FuzzA2AE2EE0RTTAccept"
 	"client ./capaddr FuzzParse"
 	"client ./nfnet FuzzParseTarget"
+	"client ./dgram FuzzReadFrame"
 )
+# Every fuzz target of the repository, by package, is in TARGETS and
+# nothing else is: go test -fuzz passes on a name that matches nothing.
+want=$(grep -rHoE '^func Fuzz[A-Za-z0-9_]+' --include='*_test.go' . |
+	sed -E 's|^\./||; s|/[^/]*:func | |' | LC_ALL=C sort)
+have=$(for t in "${TARGETS[@]}"; do read -r mod pkg name <<<"$t"; echo "${mod}/${pkg#./} ${name}"; done | LC_ALL=C sort)
+if [[ "$want" != "$have" ]]; then
+	echo "fuzz-short: TARGETS differs from the repository's fuzz targets:" >&2
+	diff <(echo "$have") <(echo "$want") >&2
+	exit 1
+fi
 failed=0
 for t in "${TARGETS[@]}"; do
 	read -r mod pkg name <<<"$t"
