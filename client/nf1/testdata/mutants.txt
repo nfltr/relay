@@ -12,3 +12,8 @@ anon-early | early.go | 			if a.err == nil && Anonymous(a.hints) { // an early s
 # nfltr-pipe defect 3 (pipe docs/reliability.md): a session reset before
 # the verdict read as the secret refused (exit 10, not the reset's 6).
 reset-is-refusal | nf1.go | 	if _, err := io.ReadFull(tc, v[:]); err != nil && err != io.EOF { | 	if _, err := io.ReadFull(tc, v[:]); false { | TestResetBeforeVerdictIsNotARefusal
+# Lane PIPERESET: an early session's end hidden behind the embedded
+# net.Conn: Close sent no FIN (a relayed listener's CloseWriteSync read the
+# whole close as a reset, link ENDACKTRUTH), Reset was a clean close.
+early-no-fin | early.go | 	if s, ok := a.Conn.(sessionEnd); ok { // a link session: its FIN, then the far end's ENDACK | 	if s, ok := a.Conn.(sessionEnd); false && ok { | TestAnswerConnPassesTheSessionsEnd
+early-reset-closes | early.go | 	if s, ok := a.Conn.(sessionEnd); ok { // a link session: the peer reads a reset | 	if s, ok := a.Conn.(sessionEnd); false && ok { | TestAnswerConnPassesTheSessionsEnd

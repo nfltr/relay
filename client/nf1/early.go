@@ -66,3 +66,34 @@ func (a *AnswerConn) Err() error {
 
 // Hints are the rendezvous answer's hints once it was taken.
 func (a *AnswerConn) Hints() []byte { return a.hints }
+
+// sessionEnd is the end of the session under an AnswerConn (a link
+// session's): its half close with the far end's acknowledgement, and its
+// reset.
+type sessionEnd interface {
+	CloseWriteSyncReceived(received func()) error
+	Reset() error
+}
+
+// CloseWriteSyncReceived is the session's (link.Session's): tlsend's
+// CloseWriteSync half-closes it after the close_notify and waits for the
+// far end's ENDACK. On a conn without one it only runs received. Hidden
+// behind net.Conn, a relayed early dial's Close sent no FIN: its whole
+// close then reached the listener before its end was acknowledged, a reset
+// there (lane PIPERESET; link WIRE.md 13, ENDACKTRUTH).
+func (a *AnswerConn) CloseWriteSyncReceived(received func()) error {
+	if s, ok := a.Conn.(sessionEnd); ok { // a link session: its FIN, then the far end's ENDACK
+		return s.CloseWriteSyncReceived(received)
+	}
+	received()
+	return nil
+}
+
+// Reset is the session's reset (tlsend's Reset: the peer reads a reset,
+// never a clean end); on a conn without one, its Close.
+func (a *AnswerConn) Reset() error {
+	if s, ok := a.Conn.(sessionEnd); ok { // a link session: the peer reads a reset
+		return s.Reset()
+	}
+	return a.Conn.Close()
+}

@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nfltr/link"
 	"github.com/nfltr/relay/client/capaddr"
 	"github.com/nfltr/relay/client/nf1"
 	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
@@ -401,5 +402,35 @@ func TestNF1CloseKeepsWhatWasWritten(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// An early nf1 session (a dial with direct paths off: nf1.AnswerConn over
+// the relay's session) resets as the link session under it does: the
+// relay reads a reset, never a clean end. nf1.AnswerConn's embedded
+// net.Conn once hid the session's end from tlsend: Reset was a clean
+// close, and Close sent no FIN and waited for no ENDACK (nf1
+// TestAnswerConnPassesTheSessionsEnd), so a relayed nfltr-pipe listener's
+// CloseWriteSync read the dialer's whole close as a reset (lane PIPERESET,
+// link ENDACKTRUTH).
+func TestNF1EarlySessionResetIsAReset(t *testing.T) {
+	l, _, err := nf1.Mint("relay.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, srvc, raws := nf1Relay(t, l)
+	c, err := dial(t, dialer(t, cfg), Target{Kind: AddressTarget, Address: l.Address()}, DialOptions{Direct: DirectOff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, raw := <-srvc, <-raws
+	defer srv.Close() //nolint:errcheck
+	_ = raw.SetReadDeadline(time.Now().Add(10 * time.Second))
+	_ = c.Reset()
+	for err == nil { // past the TLS records, the session's end
+		_, err = raw.Read(make([]byte, 4096))
+	}
+	if !errors.Is(err, link.ErrReset) {
+		t.Fatalf("the relay's session ended %v, want a reset", err)
 	}
 }
