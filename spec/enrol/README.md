@@ -67,6 +67,7 @@ RebindBound states), `WitnessMoved` (a name moved on its key's request).
 | Revoke | `nfltr org revoke <name>`: one CRL listing every unexpired serial of the name |
 | Rebind | `nfltr org token --rebind <name> --machine-id <new>` redeemed by the new machine (`orgpki.Enrol` of a rebind token: one `rebound` log entry certifying it and retiring the name's earlier serials, nfltr `docs/decisions/org-rebind-2026-11-17.md`); the CRL signed then lists them; `Renew` refuses a retired serial. Its authority (only the operator's token, only its name) is `enrol.pv` query 11 |
 | Move | lane SEAMLESS (nfltr `docs/decisions/seamless-certificates-2026-11-20.md`): the keeper (`orgenrol.Keeper`, `RelayMachineID`) finds the relay machine id changed (`nfltr config login` again) and sends a renewal naming the new id under its key's signature (`orgpki.NewMoveRequest`); `orgpki.Issuer.Renew` asks its `MovePolicy` (nfltr: the id is the issuer's own account's machine of that name, `machines resolve`) and applies the `rebound` log entry, as Rebind |
+| Rebound | the effect Rebind and Move share (one `rebound` log entry: the name's new machine id, its earlier serials retired, `orgpki.Issuer` `rebind`), not a step of its own |
 | Republish | the issuer re-signs the CRL before its NextUpdate |
 | Take | a verifier takes a newer CRL and re-checks its sessions |
 | Replay | the relay delivers an older CRL |
