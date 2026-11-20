@@ -8,7 +8,8 @@
 #             the same with a rebind; Join.cfg: the
 #             join by token (Join.tla); RevokePush.cfg: a revoke's events
 #             and backstops (RevokePush.tla); CrlCarriers.cfg: the CRL on
-#             the mailbox and the relay's copy (CrlCarriers.tla).
+#             the mailbox and the relay's copy (CrlCarriers.tla);
+#             CrlCarriersReplicas.cfg: the same on two replicas.
 #   live      TLC on spec/enrol/EnrolLive.cfg: the temporal properties;
 #             EnrolLoss.cfg: everything with the relay losing messages.
 #   mutants   each line of spec/enrol/mutants.txt must be caught (a line
@@ -22,7 +23,9 @@
 #             enroltrace, each test's trace checked by TraceEnrol.tla, then
 #             the fixtures (make spec-enrol-traces).
 #   trace F   one recorded trace file; ptrace F one RevokePush trace
-#             (<pid>.revokepush, TraceRevokePush.tla).
+#             (<pid>.revokepush, TraceRevokePush.tla); ctrace F one
+#             CrlCarriers trace (<pid>.crlcarriers, TraceCrlCarriers.tla;
+#             traces also runs client/orgid's Follow tests for these).
 # TLC_WORKERS (default 2) caps TLC's threads. Java (its heap capped) and
 # tla2tools.jar come from scripts/fetch-tla.sh.
 set -eu
@@ -41,7 +44,8 @@ temporal="TakesEffect MachinesFollowRotation RenewsAfterExpiry"
 witnesses="WitnessRenewed WitnessRenewedAfterExpiry WitnessRevokeSeen WitnessFailClosed WitnessForgedSession WitnessRotated WitnessSessionAfterRotation WitnessRetried@EnrolLoss.cfg WitnessRebound@Rebind.cfg WitnessSessionAfterRebind@Rebind.cfg WitnessRetiredHeld@Rebind.cfg WitnessMoved@Rebind.cfg
 WitnessRetriedJoin@Join.cfg WitnessReissued@Join.cfg WitnessJoinedAfterLoss@Join.cfg WitnessJoinedAfterRotation@Join.cfg WitnessRefusedOther@Join.cfg WitnessRefusedEvil@Join.cfg
 WitnessCutByPush@RevokePush.cfg WitnessServeBackstop@RevokePush.cfg WitnessFollowBackstop@RevokePush.cfg WitnessHeldAfterRevoke@RevokePush.cfg
-WitnessLapsed@CrlCarriers.cfg WitnessCopyWhileMailboxDown@CrlCarriers.cfg WitnessAlert@CrlCarriers.cfg WitnessLearned@CrlCarriers.cfg WitnessRestartWhileIssuerDown@CrlCarriers.cfg"
+WitnessLapsed@CrlCarriers.cfg WitnessCopyWhileMailboxDown@CrlCarriers.cfg WitnessAlert@CrlCarriers.cfg WitnessLearned@CrlCarriers.cfg WitnessRestartWhileIssuerDown@CrlCarriers.cfg
+WitnessAlertWithoutCopy@CrlCarriers.cfg WitnessPeerCopy@CrlCarriersReplicas.cfg"
 
 # modof CFG: the module a config checks (Join*.cfg: Join.tla,
 # RevokePush*.cfg: RevokePush.tla, CrlCarriers*.cfg: CrlCarriers.tla).
@@ -139,13 +143,18 @@ coverage() {
 		echo "coverage: a RevokePush.tla action is never taken"
 		return 1
 	fi
-	# ServeForged: mutant copy-unsigned only.
-	tlc CrlCarriers.cfg -coverage 1 >"$work/cov.out" 2>&1 || { tail -20 "$work/cov.out"; return 1; }
-	grep -E '^<[A-Z][A-Za-z]+(\(.*\))? line' "$work/cov.out"
-	if grep -E '^<[A-Z][A-Za-z]+(\(.*\))? line' "$work/cov.out" | grep -v '^<ServeForged' | grep -qE ': 0:|: 0$'; then
-		echo "coverage: a CrlCarriers.tla action is never taken"
-		return 1
-	fi
+	# ServeForged: mutant copy-unsigned only; Deliver needs a second
+	# replica (CrlCarriersReplicas.cfg).
+	for c in CrlCarriers.cfg CrlCarriersReplicas.cfg; do
+		tlc $c -coverage 1 >"$work/cov.out" 2>&1 || { tail -20 "$work/cov.out"; return 1; }
+		grep -E '^<[A-Z][A-Za-z]+(\(.*\))? line' "$work/cov.out"
+		skip='^<ServeForged'
+		[ $c = CrlCarriersReplicas.cfg ] || skip='^<ServeForged|^<Deliver'
+		if grep -E '^<[A-Z][A-Za-z]+(\(.*\))? line' "$work/cov.out" | grep -vE "$skip" | grep -qE ': 0:|: 0$'; then
+			echo "coverage: a CrlCarriers.tla action is never taken ($c)"
+			return 1
+		fi
+	done
 }
 
 # trace F: accepted when every line was read with no violation.
@@ -183,10 +192,29 @@ ptrace() {
 	return 1
 }
 
+# ctrace F: a CrlCarriers trace (<pid>.crlcarriers: the issuer's puts and
+# publishes, members' takes with their carrier), checked by
+# TraceCrlCarriers.tla.
+ctrace() {
+	t=$work/$(basename "$1")
+	cat "$1" >"$t"
+	[ -s "$t" ] || { echo "$1: no lines"; return 0; }
+	printf 'CONSTANTS\n    TraceFile = "%s"\nINIT Init\nNEXT Next\nINVARIANTS\n    Known\n    RevocationBound\n    RevokedMachineRefused\n    PutBeforePublish\n    TraceDone\n' "$t" >"$t.cfg"
+	(cd $dir && "$java" -cp "$jar" tlc2.TLC -workers 1 -noGenerateSpecTE -deadlock \
+		-metadir "$t.states" -config "$t.cfg" TraceCrlCarriers.tla) >"$t.out" 2>&1 || true
+	if grep -q '^Error: Invariant TraceDone is violated' "$t.out"; then
+		echo "$(basename "$1"): $(wc -l <"$t" | tr -d ' ') lines: accepted"
+		return 0
+	fi
+	grep -m1 '^Error' "$t.out" || tail -20 "$t.out"
+	echo "$(basename "$1"): $(wc -l <"$t" | tr -d ' ') lines: REJECTED"
+	return 1
+}
+
 fixtures() {
 	: >"$work/ffails"
-	for f in $dir/traces/*.ndjson $dir/traces/*.revokepush; do
-		case $f in *.revokepush) chk=ptrace ;; *) chk=trace ;; esac
+	for f in $dir/traces/*.ndjson $dir/traces/*.revokepush $dir/traces/*.crlcarriers; do
+		case $f in *.revokepush) chk=ptrace ;; *.crlcarriers) chk=ctrace ;; *) chk=trace ;; esac
 		want=$(basename "$f" | cut -d- -f1)
 		if $chk "$f" >"$work/m.out"; then
 			echo "$(basename "$f"): NOT rejected"
@@ -226,6 +254,31 @@ traces() {
 		ptrace "$f" >"$work/t.out" || { echo "$f"; cat "$work/t.out"; echo x >>"$work/fails"; }
 	done
 	echo "$np RevokePush traces"
+	# CrlCarriers: also relay client orgid's Follow tests (only their
+	# carrier lines: the verifier's own lines are TraceEnrol's above).
+	(cd client && go test -tags enroltrace -c -o "$work/orgid.test" ./orgid/)
+	"$work/orgid.test" -test.list '^TestFollow' >"$work/orgid.tests"
+	while read -r name; do
+		mkdir -p "$work/carry/orgid-$name"
+		(cd client/orgid && ENROLTRACE=$work/carry/orgid-$name "$work/orgid.test" -test.run "^$name\$" -test.count 1 -test.timeout 10m >"$work/carry/orgid-$name.out" 2>&1) ||
+			{ echo "orgid $name: test failed"; tail -20 "$work/carry/orgid-$name.out"; echo x >>"$work/fails"; }
+	done <"$work/orgid.tests"
+	nc=0
+	for f in "$work"/unit/*/*.crlcarriers "$work"/carry/*/*.crlcarriers; do
+		[ -f "$f" ] || continue
+		nc=$((nc + 1))
+		ctrace "$f" >"$work/t.out" || { echo "$f"; cat "$work/t.out"; echo x >>"$work/fails"; }
+	done
+	# Coverage: each CrlCarriers step some trace takes (PutCopy, Publish,
+	# Push, ReadCopy); a step no test takes is a test gap.
+	cat "$work"/unit/*/*.crlcarriers "$work"/carry/*/*.crlcarriers 2>/dev/null |
+		sed -E 's/.*"ev":"([a-z]+)".*/\1/; s/^take$//' | grep . | sort | uniq -c >"$work/ccov"
+	cat "$work"/unit/*/*.crlcarriers "$work"/carry/*/*.crlcarriers 2>/dev/null | grep '"ev":"take"' |
+		sed -E 's/.*"res":"([a-z]+)".*"via":"([a-z]+)".*|.*"via":"([a-z]+)".*"res":"([a-z]+)".*/take-\2\3-\1\4/' | sort | uniq -c >>"$work/ccov"
+	echo "$nc CrlCarriers traces: $(tr -s ' ' <"$work/ccov" | tr '\n' ' ')"
+	for want in put publish take-mailbox-taken take-copy-taken take-copy-refused; do
+		grep -q " $want\$" "$work/ccov" || { echo "coverage: no CrlCarriers trace takes $want"; echo x >>"$work/fails"; }
+	done
 	echo "events: $(cat "$work"/unit/*/*.ndjson 2>/dev/null | sed -E 's/.*"ev":"([a-z]+)".*/\1/' | sort | uniq -c | tr -s ' ' | tr '\n' ' ')"
 	echo "$n traces, $(wc -l <"$work/fails" | tr -d ' ') failed"
 	fixtures || echo x >>"$work/fails"
@@ -233,15 +286,16 @@ traces() {
 }
 
 case ${1:-} in
-check) run Enrol.cfg && run Rebind.cfg && run Join.cfg && run RevokePush.cfg && run CrlCarriers.cfg ;;
+check) run Enrol.cfg && run Rebind.cfg && run Join.cfg && run RevokePush.cfg && run CrlCarriers.cfg && run CrlCarriersReplicas.cfg ;;
 live) run EnrolLive.cfg && run EnrolLoss.cfg ;;
 mutants) mutants ;;
 witnesses) witnesses ;;
 coverage) coverage ;;
-ci) run Enrol.cfg && run Rebind.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && run RevokePush.cfg && run CrlCarriers.cfg && mutants && witnesses && fixtures ;;
+ci) run Enrol.cfg && run Rebind.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && run RevokePush.cfg && run CrlCarriers.cfg && run CrlCarriersReplicas.cfg && mutants && witnesses && fixtures ;;
 fixtures) fixtures ;;
 traces) traces ;;
 trace) trace "$2" ;;
 ptrace) ptrace "$2" ;;
+ctrace) ctrace "$2" ;;
 *) sed -n '4,20p' "$0" >&2; exit 2 ;;
 esac

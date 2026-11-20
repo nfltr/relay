@@ -1,0 +1,4 @@
+{"ev":"put","d":"/i","k":"00aa","num":1,"next":3600}
+{"ev":"publish","d":"/i","k":"00aa","num":1,"next":3600}
+{"ev":"take","via":"copy","v":"0x1","k":"00aa","num":1,"next":3600,"t":10,"res":"taken"}
+{"ev":"take","via":"copy","v":"0x2","k":"00aa","num":1,"next":3600,"t":3600,"res":"taken"}

@@ -196,21 +196,38 @@ after it (the bound's margin covers the other order).
 | NoRenewAfterRevoke | the issuer renews nothing after the revoke: its own log decides, never a carrier's CRL | `renew-by-copy` (a renewal decided by the copy's CRL, which can predate the revoke) |
 | CurrentWithoutMailbox | with the issuer up longer than CopyEvery + FollowEvery the verifier holds a current CRL, mailbox up or not | `mailbox-only` (the design before 2026-11-20: the mailbox the only carrier) |
 | AlertOnlyOnIssuer | the alert fires only while the issuer is down (or back and not yet put): never for a mailbox outage | `alert-on-mailbox` |
-| AlertBeforeLapse | the alert fires by the time the relay's copy lapses | `alert-on-mailbox` |
+| AlertBeforeLapse | the alert fires by the time a replica's copy lapses | `alert-on-mailbox` |
+| CurrentWithoutMailbox, AlertOnlyOnIssuer (two replicas) | a put on one replica reaches every replica: a member reading any of them holds a current CRL, and no replica's copy goes late while the issuer is up | `one-replica` (the put kept only by the replica it landed on: the design before MAILBOXSPOF2) |
+| AlertWhileIssuerDown | with the issuer down past its last put's re-sign time the alert fires (Vanish after the last restart at the latest), whichever replicas restarted | `alert-forgets` (no memory of a copy a restart lost: a restart during an issuer outage silenced the alert, the design before MAILBOXSPOF2) |
 
 Witnesses: `WitnessLapsed` (an issuer outage lapses the CRL: the bound
 is fail closed), `WitnessCopyWhileMailboxDown` (a CRL taken from the
 copy while the mailbox is down), `WitnessAlert`, `WitnessLearned`,
 `WitnessRestartWhileIssuerDown` (a relay restart during an issuer outage
-leaves no copy: the alert's gap).
+leaves no copy), `WitnessAlertWithoutCopy` (the alert fires with no copy
+anywhere: the monitoring's memory), `WitnessPeerCopy`
+(`CrlCarriersReplicas.cfg`: a member takes a CRL from a replica the put
+did not land on).
+
+Replicas (lane MAILBOXSPOF2): a put lands on one replica, which keeps it
+and publishes it on the replicas' bus (relay-server's Redis pub/sub, as
+its revocations); every other replica keeps it on delivery (Deliver,
+before time passes). A read lands on any replica. A restart loses the
+replica's copy and what the bus sent it meanwhile (a resubscribe is
+modelled as a restart). The alert is per replica: its copy late
+(`OrgIssuerUnreachable`), or a copy a restart lost and no put brought
+back for Vanish (`OrgCRLCopyVanished`, nfltr `deploy/metrics/alerts.yml`:
+the count of copies below its maximum of the last day; an issuer that is
+up puts again within CopyEvery < Vanish).
 
 | Action | code |
 |---|---|
 | Republish, Revoke | `orgenrol.service.maintain` (`orgpki.Issuer.CRL`), `nfltr org revoke` |
 | Publish | `service.publish` to `orgid.CRLMailbox` |
-| PutCopy | `service.putCopy`: `mailboxclient.Client.PutOrgCRL` when the CRL changed or `copyEvery` passed |
+| PutCopy | `service.putCopy`: `mailboxclient.Client.PutOrgCRL` when the CRL changed or `copyEvery` passed; relay-server `orgCRLCopies.serve` keeps it and publishes it to the peer replicas |
+| Deliver | relay-server `runOrgCRLCopies`: a peer replica keeps a put the bus delivered |
 | Renew | `orgpki.Issuer.Renew` (Enrol.tla Issue) |
-| IssuerDown/Back, MailboxDown/Back, RelayRestart | outages: the issuer's process, the mailbox service, the relay's process (its copy is in memory) |
+| IssuerDown/Back, MailboxDown/Back, RelayRestart | outages: the issuer's process, the mailbox service, a relay replica's process (its copy is in memory) |
 | Push | `orgid.Follow`'s long-poll of the mailbox |
 | ReadCopy | `orgid.Follow`'s read of the copy every `FollowEvery` (`mailboxclient.Client.OrgCRL`) |
 | Replay, ServeForged | the relay serving an older CRL, or one it made (refused: `copy-unsigned` takes it) |
@@ -219,9 +236,9 @@ leaves no copy: the alert's gap).
 
 `CrlCarriers.cfg`: MaxTime 7, CrlLife 5, ReSign 3, CopyEvery 1,
 FollowEvery 1 (the code's 60, 20, 5 and 10 minutes: CopyEvery +
-FollowEvery < ReSign), one outage of each kind (645320 states); in `ci`,
-`check`, `coverage`. Trace recorder: the next slice (orgid's `take` line
-gains its carrier; TraceEnrol already checks every take's rule).
+FollowEvery < ReSign), Vanish 2 (10 minutes), one replica, one outage of
+each kind; `CrlCarriersReplicas.cfg`: the same on two replicas; both in
+`ci`, `check`, `coverage` (`make spec-enrol-coverage`).
 
 ## Running
 
@@ -286,7 +303,8 @@ fixtures each rejected by its invariant.
 | the relay may lose, keep or replay a request or an answer but forge neither: requests are signed by the current key or bound to a token, answers are the issuer's certificates for a key the machine checks | Lose, Install | `spec/proverif/enrol.pv`; `orgmachine.Checked` |
 | the issuer is out of reach for a while (its mailbox or its process down) and the machine may be off: the model does not force time to pass (Tick is not fair), so RenewsAfterExpiry asks renewal to complete once the issuer answers, not before a deadline | Tick, Request, Issue | nfltr `docs/decisions/org-renew-after-outage-2026-11-20.md` (the 2026-11-19 mailbox outage) |
 | a timer may run slower than the wall clock (host sleep): the machine reads the clock again at least every minute | Request | `orgenrol` wakeEvery |
-| the relay's copy is in the relay's process: a restart loses it (the issuer puts it again every CopyEvery); a relay with several replicas serves it from the replica the issuer's put reached | CrlCarriers RelayRestart, ReadCopy | nfltr `docs/decisions/crl-off-mailbox-2026-11-20.md` |
+| the relay's copy is in each replica's process: a restart loses it (the issuer puts it again every CopyEvery); the replicas' bus (Redis pub/sub) delivers a put to every subscribed replica within moments and keeps nothing for one that was away | CrlCarriers RelayRestart, Deliver, ReadCopy | nfltr `docs/decisions/crl-off-mailbox-2026-11-20.md`; Redis pub/sub's at-most-once delivery (redis.io "Pub/Sub") |
+| the monitoring keeps the copies' count for a day (Prometheus retention well past it) | CrlCarriers Alert (OrgCRLCopyVanished) | nfltr `deploy/metrics/` |
 | a machine's Install is one step: its key and certificate are two files, each replaced by rename (key, then certificate), and every reader takes them as one pair (`readPair` in `orgmachine` and `orgid`: a key the certificate does not certify is read again, at most 5 s, the bound only against a writer that died between the two) | Install | lane CERTPAIR (nfltr `TestLoginJoinsTheOrganisation`, `nfltr cat serve --ssh` read a renewal's new key with the old certificate); guard `TestReadPairWaitsForTheWritersCertificate`, mutant `read-pair-once` |
 | the recovery key is never online with the primary | RootsAreOwners | the design |
 | one issuer acts on the log at a time, also across a move to another machine (`nfltr org move`): the old machine acts no more after its fence, the new one continues the same log and CRL Number | Issue, Revoke, Republish | `spec/orgmove/OrgMove.tla` (AtMostOneIssuer, OldCannotIssue, CRLMonotone) |

@@ -24,6 +24,19 @@
 \* revocation bound across renewals and rotations are Enrol.tla's: this
 \* model checks only that a second carrier keeps them and adds the
 \* availability it is for.
+\*
+\* Replicas (lane MAILBOXSPOF2): a relay of several replicas keeps the
+\* copy in each; a put lands on any one of them, which keeps it and
+\* publishes it on the replicas' bus (relay-server's Redis pub/sub,
+\* as its revocations), and every other replica keeps it on delivery
+\* (Deliver, before time passes: milliseconds against minutes). A member's
+\* read lands on any replica. A restart loses a replica's copy and what
+\* the bus sent it meanwhile (pub/sub keeps nothing for a subscriber that
+\* was away: a resubscribe is modelled as a restart, which loses more).
+\* The alert is per replica: its copy late (OrgIssuerUnreachable), or the
+\* replica held a copy and has not held one again for Vanish since its
+\* restart (OrgCRLCopyVanished: the monitoring remembers the copies'
+\* count): an issuer that is up puts it again within CopyEvery < Vanish.
 EXTENDS Integers, Sequences
 
 CONSTANTS
@@ -35,6 +48,8 @@ CONSTANTS
     Late,         \* the alert's slack past the re-sign time (relay crlLateSlack)
     MaxCrls,
     MaxOutages,   \* issuer outages, mailbox outages and relay restarts (each)
+    Replicas,     \* the relay's replicas (a set)
+    Vanish,       \* a replica's copy gone this long counts for the alert (OrgCRLCopyVanished's for)
     Mutant
 
 VARIABLES
@@ -44,17 +59,23 @@ VARIABLES
     issuerUp, upSince, downs,
     mailboxUp, mdowns,
     box,        \* the CRL Number the mailbox holds (0: none)
-    copy,       \* the CRL Number the relay's copy holds (0: none: lost at a restart)
+    copy,       \* replica -> the CRL Number its copy holds (0: none: lost at a restart)
+    bus,        \* replica -> the put the bus is delivering to it (0: none)
+    landed,     \* the replica the issuer's last put landed on
     sent,       \* the CRL Number the issuer last put on the copy (its own memory)
     putAt,      \* when the issuer last put the copy
     restarts,
+    lostAt,     \* replica -> when a restart lost its copy, -1 once it holds one again
+    restartAt,  \* when a replica last restarted (-1: never)
+    peerTook,   \* the verifier took a CRL from a replica the put did not land on
     held,       \* the verifier's CRL: [num, next, rev] (num 0: one the relay made)
     learned,    \* the verifier once took a signed CRL listing the machine
     readAt,     \* when the verifier last read the copy
     sess,       \* the verifier holds a session of the machine
     renewal     \* the issuer's renewals: "none", "before" the revoke only, or one "after" it
 
-vars == <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal>>
+vars == <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal, bus, landed, lostAt, restartAt, peerTook>>
+relay == <<bus, landed, lostAt, restartAt, peerTook>>
 
 Last == crls[Len(crls)]
 Rec(n) == [num |-> n, next |-> crls[n].next, rev |-> crls[n].rev]
@@ -80,27 +101,37 @@ Take(n, viaCopy) ==
 \* signature check; taken only under copy-unsigned.
 Forged == [num |-> 0, next |-> now + CrlLife, rev |-> FALSE]
 
-\* The relay's alert: the copy past its re-sign time by Late. Under
+\* The relay's alert: a replica's copy past its re-sign time by Late
+\* (OrgIssuerUnreachable), or a replica whose copy a restart lost and no
+\* put brought back for Vanish (OrgCRLCopyVanished; alert-forgets, the
+\* design before MAILBOXSPOF2, has no such memory). Under
 \* alert-on-mailbox it is the mailbox's health instead.
+AlertAt(r) ==
+    \/ copy[r] # 0 /\ now > crls[copy[r]].next - ReSign + Late
+    \/ Mutant # "alert-forgets" /\ lostAt[r] # -1 /\ now >= lostAt[r] + Vanish
 Alert ==
     IF Mutant = "alert-on-mailbox" THEN ~mailboxUp
-    ELSE copy # 0 /\ now > crls[copy].next - ReSign + Late
+    ELSE \E r \in Replicas : AlertAt(r)
 
 \* What must happen before time passes.
 ReSignDue == issuerUp /\ Len(crls) < MaxCrls /\ Last.next - now <= ReSign
 PutDue == issuerUp /\ Mutant # "mailbox-only" /\ (sent # Len(crls) \/ now - putAt >= CopyEvery)
 BoxDue == issuerUp /\ mailboxUp /\ box # Len(crls)
+DeliverDue == \E r \in Replicas : bus[r] # 0
 PushDue == mailboxUp /\ box > held.num /\ crls[box].next > now
 \* (A read due at the instant the issuer puts comes after the put: in the
 \* code's continuous time a read just before it is FollowEvery before the
 \* next, which the bound's margin, ReSign > CopyEvery + FollowEvery, is for.)
-ReadDue == Mutant # "mailbox-only" /\ now - readAt >= FollowEvery /\ ~ReSignDue /\ ~PutDue
+ReadDue == Mutant # "mailbox-only" /\ now - readAt >= FollowEvery /\ ~ReSignDue /\ ~PutDue /\ ~DeliverDue
 
 TypeOK ==
     /\ now \in 0..MaxTime
     /\ revokedAt \in -1..MaxTime
     /\ issuerUp \in BOOLEAN /\ mailboxUp \in BOOLEAN /\ sess \in BOOLEAN /\ learned \in BOOLEAN
-    /\ box \in 0..Len(crls) /\ copy \in 0..Len(crls)
+    /\ box \in 0..Len(crls)
+    /\ copy \in [Replicas -> 0..Len(crls)] /\ bus \in [Replicas -> 0..Len(crls)]
+    /\ landed \in Replicas /\ peerTook \in BOOLEAN
+    /\ lostAt \in [Replicas -> -1..MaxTime] /\ restartAt \in -1..MaxTime
     /\ held.num \in 0..Len(crls)
 
 Init ==
@@ -109,100 +140,116 @@ Init ==
     /\ revokedAt = -1
     /\ issuerUp = TRUE /\ upSince = 0 /\ downs = 0
     /\ mailboxUp = TRUE /\ mdowns = 0
-    /\ box = 1 /\ copy = (IF Mutant = "mailbox-only" THEN 0 ELSE 1) /\ sent = 1 /\ putAt = 0 /\ restarts = 0
+    /\ box = 1 /\ copy = [r \in Replicas |-> IF Mutant = "mailbox-only" THEN 0 ELSE 1] /\ sent = 1 /\ putAt = 0 /\ restarts = 0
+    /\ bus = [r \in Replicas |-> 0] /\ landed \in Replicas /\ lostAt = [r \in Replicas |-> -1] /\ restartAt = -1 /\ peerTook = FALSE
     /\ held = Rec(1) /\ learned = FALSE /\ readAt = 0
     /\ sess = FALSE /\ renewal = "none"
 
 Tick ==
     /\ now < MaxTime
-    /\ ~ReSignDue /\ ~PutDue /\ ~BoxDue /\ ~PushDue /\ ~ReadDue
+    /\ ~ReSignDue /\ ~PutDue /\ ~BoxDue /\ ~PushDue /\ ~ReadDue /\ ~DeliverDue
     /\ now' = now + 1
     /\ sess' = (sess /\ held.next > now + 1)     \* fail closed at NextUpdate
-    /\ UNCHANGED <<crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, renewal>>
+    /\ UNCHANGED <<crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, renewal, relay>>
 
 \* The issuer (nfltr org serve, orgenrol.Service.maintain).
 Republish ==
     /\ ReSignDue
     /\ crls' = Append(crls, [this |-> now, next |-> now + CrlLife, rev |-> Last.rev])
-    /\ UNCHANGED <<now, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal>>
+    /\ UNCHANGED <<now, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal, relay>>
 Revoke ==
     /\ issuerUp /\ revokedAt = -1 /\ Len(crls) < MaxCrls
     /\ revokedAt' = now
     /\ crls' = Append(crls, [this |-> now, next |-> now + CrlLife, rev |-> TRUE])
-    /\ UNCHANGED <<now, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal>>
+    /\ UNCHANGED <<now, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal, relay>>
 Publish ==
     /\ BoxDue
     /\ box' = Len(crls)
-    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal>>
-PutCopy ==
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal, relay>>
+\* The put lands on replica r, which keeps it and publishes it to the
+\* others (relay-server orgCRLCopies, the bus); under one-replica (the
+\* design before MAILBOXSPOF2) the others never get it.
+PutCopy(r) ==
     /\ PutDue
-    /\ copy' = Len(crls) /\ sent' = Len(crls) /\ putAt' = now
-    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, restarts, held, learned, readAt, sess, renewal>>
+    /\ copy' = [copy EXCEPT ![r] = Len(crls)] /\ sent' = Len(crls) /\ putAt' = now
+    /\ bus' = [x \in Replicas |-> IF x = r \/ Mutant = "one-replica" THEN bus[x] ELSE Len(crls)]
+    /\ landed' = r /\ lostAt' = [lostAt EXCEPT ![r] = -1]
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, restarts, held, learned, readAt, sess, renewal, restartAt, peerTook>>
+\* A peer replica keeps the put the bus delivered (relay-server
+\* runOrgCRLCopies).
+Deliver(r) ==
+    /\ bus[r] # 0
+    /\ copy' = [copy EXCEPT ![r] = bus[r]] /\ bus' = [bus EXCEPT ![r] = 0] /\ lostAt' = [lostAt EXCEPT ![r] = -1]
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, sent, putAt, restarts, held, learned, readAt, sess, renewal, landed, restartAt, peerTook>>
 \* A renewal (Enrol.tla Issue) is decided by the issuer's own log. Under
 \* renew-by-copy it is decided by the CRL a carrier holds (the relay's
 \* copy: an issuer restoring its revocations from it, or a renewal path
 \* off the mailbox reading it), which can predate the revoke.
 Renew ==
     /\ issuerUp
-    /\ IF Mutant = "renew-by-copy" THEN copy # 0 /\ ~crls[copy].rev ELSE revokedAt = -1
+    /\ IF Mutant = "renew-by-copy" THEN \E r \in Replicas : copy[r] # 0 /\ ~crls[copy[r]].rev ELSE revokedAt = -1
     /\ renewal' = IF revokedAt # -1 \/ renewal = "after" THEN "after" ELSE "before"
-    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess>>
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, relay>>
 
 \* Outages: the issuer's process or its host; the mailbox service; a
 \* relay restart (its copy is in memory).
 IssuerDown ==
     /\ issuerUp /\ downs < MaxOutages
     /\ issuerUp' = FALSE /\ downs' = downs + 1
-    /\ UNCHANGED <<now, crls, revokedAt, upSince, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal>>
+    /\ UNCHANGED <<now, crls, revokedAt, upSince, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal, relay>>
 IssuerBack ==
     /\ ~issuerUp
     /\ issuerUp' = TRUE /\ upSince' = now
-    /\ UNCHANGED <<now, crls, revokedAt, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal>>
+    /\ UNCHANGED <<now, crls, revokedAt, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal, relay>>
 MailboxDown ==
     /\ mailboxUp /\ mdowns < MaxOutages
     /\ mailboxUp' = FALSE /\ mdowns' = mdowns + 1
-    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal>>
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal, relay>>
 MailboxBack ==
     /\ ~mailboxUp
     /\ mailboxUp' = TRUE
-    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal>>
-RelayRestart ==
-    /\ restarts < MaxOutages /\ copy # 0
-    /\ copy' = 0 /\ restarts' = restarts + 1
-    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, sent, putAt, held, learned, readAt, sess, renewal>>
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, sess, renewal, relay>>
+RelayRestart(r) ==
+    /\ restarts < MaxOutages /\ copy[r] # 0
+    /\ copy' = [copy EXCEPT ![r] = 0] /\ bus' = [bus EXCEPT ![r] = 0] /\ restarts' = restarts + 1
+    /\ lostAt' = [lostAt EXCEPT ![r] = now] /\ restartAt' = now
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, sent, putAt, held, learned, readAt, sess, renewal, landed, peerTook>>
 
 \* The member (orgid.Follow): the mailbox's push, the copy's read.
 Push ==
     /\ PushDue
     /\ Take(box, FALSE)
-    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, readAt, renewal>>
-ReadCopy ==
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, readAt, renewal, relay>>
+\* (the read lands on any replica r)
+ReadCopy(r) ==
     /\ ReadDue
     /\ readAt' = now
-    /\ IF copy # 0 /\ TakeOK(copy, TRUE) THEN Take(copy, TRUE)
-       ELSE UNCHANGED <<held, learned, sess>>
-    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, renewal>>
+    /\ IF copy[r] # 0 /\ TakeOK(copy[r], TRUE)
+       THEN Take(copy[r], TRUE) /\ peerTook' = (peerTook \/ r # landed)
+       ELSE UNCHANGED <<held, learned, sess, peerTook>>
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, renewal, bus, landed, lostAt, restartAt>>
 \* The relay serves CRL n (one it carried) on either carrier, when it likes.
 Replay(n, viaCopy) ==
     /\ Take(n, viaCopy)
-    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, readAt, renewal>>
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, readAt, renewal, relay>>
 \* ... or one it made.
 ServeForged ==
     /\ Mutant = "copy-unsigned"
     /\ held' = Forged
-    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, learned, readAt, sess, renewal>>
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, learned, readAt, sess, renewal, relay>>
 
 \* The machine presents its certificate; the verifier admits it on a
 \* current CRL that does not list it.
 Admit ==
     /\ ~sess /\ Fresh /\ ~held.rev
     /\ sess' = TRUE
-    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, renewal>>
+    /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, renewal, relay>>
 
 Next ==
-    \/ Tick \/ Republish \/ Revoke \/ Publish \/ PutCopy \/ Renew
-    \/ IssuerDown \/ IssuerBack \/ MailboxDown \/ MailboxBack \/ RelayRestart
-    \/ Push \/ ReadCopy \/ \E n \in 1..Len(crls), c \in BOOLEAN : Replay(n, c)
+    \/ Tick \/ Republish \/ Revoke \/ Publish \/ Renew
+    \/ \E r \in Replicas : PutCopy(r) \/ Deliver(r) \/ RelayRestart(r) \/ ReadCopy(r)
+    \/ IssuerDown \/ IssuerBack \/ MailboxDown \/ MailboxBack
+    \/ Push \/ \E n \in 1..Len(crls), c \in BOOLEAN : Replay(n, c)
     \/ ServeForged \/ Admit
 
 Spec == Init /\ [][Next]_vars
@@ -229,15 +276,24 @@ NoRenewAfterRevoke == renewal # "after"
 CurrentWithoutMailbox == (issuerUp /\ now > upSince + CopyEvery + FollowEvery) => Fresh
 
 \* The alert fires only while the issuer is down (a mailbox outage never
-\* fires it; an issuer just back clears it at its put), and fires before a member's CRL lapses while the relay
+\* fires it; an issuer just back clears it at its put and the bus's
+\* delivery), and fires before a member's CRL lapses while the relay
 \* holds a copy.
-AlertOnlyOnIssuer == Alert => ~issuerUp \/ ReSignDue \/ PutDue
-AlertBeforeLapse == (copy # 0 /\ crls[copy].next <= now) => Alert
+AlertOnlyOnIssuer == Alert => ~issuerUp \/ ReSignDue \/ PutDue \/ DeliverDue
+AlertBeforeLapse == \A r \in Replicas : (copy[r] # 0 /\ crls[copy[r]].next <= now) => Alert
+\* The alert survives a relay restart during an issuer outage: with the
+\* issuer down past its last put's re-sign time it fires (once Vanish has
+\* passed since the last restart), whichever replicas restarted.
+\* alert-forgets breaks it.
+AlertWhileIssuerDown ==
+    (~issuerUp /\ now > crls[sent].next - ReSign + Late /\ (restartAt = -1 \/ now >= restartAt + Vanish)) => Alert
 
 \* Witnesses (each must be violated: reachable).
 WitnessLapsed == Fresh
 WitnessCopyWhileMailboxDown == ~(~mailboxUp /\ held.num > box)
 WitnessAlert == ~Alert
 WitnessLearned == ~learned
-WitnessRestartWhileIssuerDown == ~(~issuerUp /\ copy = 0)
+WitnessRestartWhileIssuerDown == ~(~issuerUp /\ \A r \in Replicas : copy[r] = 0)
+WitnessAlertWithoutCopy == ~(Alert /\ \A r \in Replicas : copy[r] = 0)
+WitnessPeerCopy == ~peerTook
 =============================================================================

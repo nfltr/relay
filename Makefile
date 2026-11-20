@@ -248,12 +248,15 @@ test-go-mutants:
 # spec/enrol/README.md): the invariants, the liveness properties, every
 # mutant, the witnesses and the trace fixtures; spec-enrol-traces: the tests
 # of org/orgpki, orgmachine and orgenrol built -tags enroltrace, each trace
-# checked by spec/enrol/TraceEnrol.tla.
-.PHONY: spec-enrol-ci spec-enrol-traces spec-orgmove-ci spec-orgmove-traces spec-orgmove-repeat
+# checked by spec/enrol/TraceEnrol.tla; spec-enrol-coverage: TLC -coverage 1
+# on each config, failing on an action never taken.
+.PHONY: spec-enrol-ci spec-enrol-traces spec-enrol-coverage spec-orgmove-ci spec-orgmove-traces spec-orgmove-repeat
 spec-enrol-ci:
 	./scripts/spec-enrol.sh ci
 spec-enrol-traces:
 	./scripts/spec-enrol.sh traces
+spec-enrol-coverage:
+	./scripts/spec-enrol.sh coverage
 
 # spec-orgmove-ci (in make ci, about a minute): moving an organisation's
 # issuer to another machine (spec/orgmove/README.md): the invariants,

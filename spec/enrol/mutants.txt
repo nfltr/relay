@@ -73,3 +73,10 @@ renew-by-copy NoRenewAfterRevoke CrlCarriers.cfg
 mailbox-only CurrentWithoutMailbox CrlCarriers.cfg
 alert-on-mailbox AlertOnlyOnIssuer CrlCarriers.cfg
 alert-on-mailbox AlertBeforeLapse CrlCarriers.cfg
+# Replicas and the alert's memory (lane MAILBOXSPOF2): a put kept only by
+# the replica it landed on (a member reading another lapses), and an
+# alert with no memory of a copy a restart lost (a restart during an
+# issuer outage silences it).
+one-replica CurrentWithoutMailbox CrlCarriersReplicas.cfg
+one-replica AlertOnlyOnIssuer CrlCarriersReplicas.cfg
+alert-forgets AlertWhileIssuerDown CrlCarriers.cfg
