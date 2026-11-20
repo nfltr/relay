@@ -112,8 +112,8 @@ func (c *Conn) CloseWriteSyncReceived(received func()) error {
 // Close is the TLS connection's (close_notify, then the transport's
 // close), or after Reset only the transport's. After the peer's
 // close_notify was read it first takes the end of a transport that
-// acknowledges ends (syncsEnd: its FIN behind the close_notify), within
-// EndBound: a close before it races that FIN, and a
+// acknowledges ends (one with CloseWriteSync or CloseWriteSyncReceived:
+// its FIN behind the close_notify), within EndBound: a close before it races that FIN, and a
 // link peer's CloseWriteSync reads such a close as a reset (link
 // ENDACKTRUTH; lane PIPERESET). crypto/tls reads nothing past the
 // close_notify.
