@@ -15,7 +15,11 @@
 #   mutants   each line of spec/enrol/mutants.txt must be caught (a line
 #             naming a Join*.cfg runs Join.tla).
 #   witnesses each Witness* must be violated (reachable).
-#   ci        check, live, mutants, witnesses, fixtures (make spec-enrol-ci).
+#   ci        check (CrlCarriersReplicas.cfg aside: its mutants and
+#             witness only), live, mutants, witnesses, fixtures (make
+#             spec-enrol-ci).
+#   replicas  CrlCarriersReplicas.cfg (15M states, about half under its
+#             symmetry; nightly in make spec-traces).
 #   coverage  check with -coverage 1; fails on an action never taken.
 #   fixtures  each spec/enrol/traces/<Invariant>-*.ndjson is rejected by
 #             <Invariant> of TraceEnrol.tla (in ci).
@@ -111,11 +115,11 @@ witnesses() {
 
 coverage() {
 	# EvilRotate and IssueForged are mutant-only steps, never taken under
-	# "none"; Lose only in EnrolLoss.cfg (MaxLost 1), Rebind only in
-	# Rebind.cfg (MaxRebinds 1).
+	# "none"; Lose only in EnrolLoss.cfg (MaxLost 1), Rebind and Move only
+	# in Rebind.cfg (MaxRebinds 1).
 	tlc Enrol.cfg -coverage 1 >"$work/cov.out" 2>&1 || { tail -20 "$work/cov.out"; return 1; }
 	grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out"
-	if grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out" | grep -v -e '^<EvilRotate' -e '^<IssueForged' -e '^<Lose' -e '^<Rebind' | grep -qE ': 0:|: 0$'; then
+	if grep -E '^<[A-Za-z]+(\(.*\))? line' "$work/cov.out" | grep -v -e '^<EvilRotate' -e '^<IssueForged' -e '^<Lose' -e '^<Rebind' -e '^<Move' | grep -qE ': 0:|: 0$'; then
 		echo "coverage: an action is never taken"
 		return 1
 	fi
@@ -291,9 +295,10 @@ live) run EnrolLive.cfg && run EnrolLoss.cfg ;;
 mutants) mutants ;;
 witnesses) witnesses ;;
 coverage) coverage ;;
-ci) run Enrol.cfg && run Rebind.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && run RevokePush.cfg && run CrlCarriers.cfg && run CrlCarriersReplicas.cfg && mutants && witnesses && fixtures ;;
+ci) run Enrol.cfg && run Rebind.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && run RevokePush.cfg && run CrlCarriers.cfg && mutants && witnesses && fixtures ;;
 fixtures) fixtures ;;
 traces) traces ;;
+replicas) run CrlCarriersReplicas.cfg ;;
 trace) trace "$2" ;;
 ptrace) ptrace "$2" ;;
 ctrace) ctrace "$2" ;;

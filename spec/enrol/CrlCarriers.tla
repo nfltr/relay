@@ -37,7 +37,7 @@
 \* replica held a copy and has not held one again for Vanish since its
 \* restart (OrgCRLCopyVanished: the monitoring remembers the copies'
 \* count): an issuer that is up puts it again within CopyEvery < Vanish.
-EXTENDS Integers, Sequences
+EXTENDS Integers, Sequences, TLC
 
 CONSTANTS
     MaxTime,
@@ -258,6 +258,9 @@ Next ==
     \/ ServeForged \/ Admit
 
 Spec == Init /\ [][Next]_vars
+
+\* The replicas are interchangeable (CrlCarriersReplicas.cfg's SYMMETRY).
+ReplicaPerms == Permutations(Replicas)
 
 ----------------------------------------------------------------------------
 \* Safety: a second carrier keeps Enrol.tla's revocation properties.

@@ -169,6 +169,7 @@ spec-mutants:
 spec-traces:
 	./scripts/spec.sh traces
 	./scripts/spec-appenrol.sh traces
+	./scripts/spec-enrol.sh replicas
 spec-cltraces:
 	./scripts/spec.sh cltraces
 spec-astraces:

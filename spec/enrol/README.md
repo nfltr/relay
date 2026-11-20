@@ -239,8 +239,12 @@ up puts again within CopyEvery < Vanish).
 `CrlCarriers.cfg`: MaxTime 7, CrlLife 5, ReSign 3, CopyEvery 1,
 FollowEvery 1 (the code's 60, 20, 5 and 10 minutes: CopyEvery +
 FollowEvery < ReSign), Vanish 2 (10 minutes), one replica, one outage of
-each kind; `CrlCarriersReplicas.cfg`: the same on two replicas; both in
-`ci`, `check`, `coverage` (`make spec-enrol-coverage`).
+each kind (1.76M states, 20 s; in `ci`); `CrlCarriersReplicas.cfg`: the
+same on two replicas (15M states, under its replica symmetry about
+half; `check` and nightly, `make spec-traces` running `spec-enrol.sh
+replicas`: its mutants and witness in `ci`); both in `coverage` (`make
+spec-enrol-coverage`). The CrlCarriers
+trace check (`TraceCrlCarriers.tla`, "Traces") runs in `traces`.
 
 ## Running
 
@@ -283,6 +287,23 @@ check rejects the recorded traces by that mutant's property. `traces/<Invariant>
 named invariant (`fixtures`, in `ci`). `scripts/check-spec-actions.sh`
 fails when a line kind TraceEnrol reads is no longer written by orgpki or
 orgid.
+
+CrlCarriers.tla's carrier steps are recorded to `<pid>.crlcarriers` by
+`org/orgenrol` (the issuer's `put`, logged before it is sent, and
+`publish`; a machine's Keeper's `take`) and relay client `orgid`
+(`Follow`'s `take`): a take names its carrier (`via`: `mailbox`, the
+push; `copy`, the relay's copy) and its outcome (`res`: taken, same,
+refused). `TraceCrlCarriers.tla` requires a CRL taken, whatever carried
+it, to be within its NextUpdate (`RevocationBound`, mutant `stale-copy`)
+and newer than every CRL the member took of that issuer before
+(`RevokedMachineRefused`, `copy-rollback`), a CRL the issuer publishes to
+have been put on the copy first (`PutBeforePublish`: a mailbox failure
+never holds the copy back), and every line to map to a step (`Known`).
+`traces` checks every recorded one (orgpki's, orgmachine's and orgenrol's
+tests, and client/orgid's `TestFollow*`) and fails when no trace takes
+the issuer's put, its publish, a take by the push, a take by the copy and
+a copy refused; `traces/<Invariant>-*.crlcarriers` are the fixtures each
+rejected by its invariant.
 
 The issuer service's RevokePush.tla steps are recorded the same way by
 `org/orgenrol` (`trace_on.go`: `<pid>.revokepush` beside the other lines):
@@ -332,3 +353,5 @@ fixtures each rejected by its invariant.
 | TraceEnrol.tla | org/orgpki/trace_on.go |
 | TraceEnrol.tla | client/orgid/trace_on.go |
 | TraceRevokePush.tla | org/orgenrol/trace_on.go |
+| TraceCrlCarriers.tla | org/orgenrol/trace_on.go |
+| TraceCrlCarriers.tla | client/orgid/trace_on.go |
