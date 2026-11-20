@@ -1321,3 +1321,50 @@ a fresh grace past the drain and one grace. Fix: `registerSession`
 refuses a session once a drain ended (`stopped`, read under the table's
 lock; `stop` takes `left` under it): reset at once, not tabled
 (`TestDirectStopRefusesLateSessions`, failing first).
+
+## TLSEnd.tla: a session's end under end-to-end TLS
+
+`client/tlsend` runs TLS on a link session (nf1 and organisation
+sessions, relayed). A peer X ends its stream with the close_notify, then
+the transport's FIN (`Conn.CloseWriteSync`), and waits for the far end's
+ENDACK (link FeatureEndAck). The reader Y's reads end at the close_notify:
+crypto/tls reads nothing past it. Y's whole close (`Conn.Close`) then
+raced the FIN still in flight, and since link ENDACKTRUTH a whole close
+before the end was acknowledged ends X's wait with a reset: nfltr-pipe's
+relayed ends exited 6 after a clean two-sided end (lane PIPERESET, pipe
+`TestSecondDialIsReset/relayed`). Design: `Close` after the peer's
+close_notify first reads the transport to its end (the FIN, which Y's
+Mux acknowledges before any close), within `EndBound` (5 s, crypto/tls's
+own close_notify bound) when X ended only its TLS stream and keeps the
+transport (a plain crypto/tls peer's `CloseWrite`).
+
+`TLSEnd.cfg` (`make spec`, 20 states, every action taken with
+`COVERAGE=1`); X may keep the transport (`keep`).
+
+| invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
+|---|---|---|
+| `NoFalseReset` | nothing fails here: X's end, every byte taken, is never read as a reset | `close-at-notify` (the code before: Close at the close_notify) |
+| `XEnds` | X's wait for the ENDACK ends clean | `close-at-notify` |
+| `YCloses` | Y's Close returns, also when X keeps the transport | `unbounded` (the FIN awaited with no bound) |
+
+Witnesses (violated): `W_Clean` (X's end acknowledged), `W_Bound` (Y
+closed by the bound, X keeping the transport). Go mutants:
+`client/nfnet/testdata/mutants.txt` `close-before-fin`
+(`TestNF1CloseTakesThePeersEnd`).
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| A link session is one ordered stream each way; the close_notify record and the FIN written after it arrive in that order | link `WIRE.md` (session frames in order) |
+| A far end's Mux acknowledges a FIN on receipt, and an end it holds before its close (a hop's reader when it takes the end) | link `endack.go` (`AckEnd`, `ackAtClose`, `readEnd`), link `spec/RelayedClose.tla`, `spec/EndAckLeg.tla` |
+| A whole close that reaches the peer before its end's ENDACK ends the peer's `CloseWriteSync` with `ErrReset` | link ENDACKTRUTH (`closeAckErr`), link `spec/RelayedClose.tla` `CClose` |
+| The FIN behind a close_notify arrives within `EndBound` (written right after it on the same stream); later, Close closes anyway | crypto/tls bounds its close_notify write by 5 s (`Conn.closeNotify`) |
+
+### Code map (TLSEnd.tla)
+
+| actions | code |
+|---|---|
+| `XNotify`, `XFin` | client/tlsend/tlsend.go (`CloseWriteSyncReceived`) |
+| `YRecv` (the close_notify's EOF: `notified`), `YClose`, `YClosed` | client/tlsend/tlsend.go (`Read`, `Close`, `rawEnd.takeEnd`) |
+| trace recorder | none yet (lane PIPERESET follow-up): `TestNF1CloseTakesThePeersEnd` and the Go mutant guard the code |

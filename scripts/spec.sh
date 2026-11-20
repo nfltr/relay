@@ -6,7 +6,8 @@
 #   check    TLC on spec/SignalConn.cfg, spec/A2ASession.cfg, spec/CallCredit.cfg,
 #            spec/CallCreditBoth.cfg, spec/CallCreditSenders.cfg,
 #            spec/UDPFlow.cfg, spec/UDPFlowLive.cfg, spec/DatagramAssoc*.cfg,
-#            spec/BrowserPeer.cfg, spec/DirectPunch.cfg and spec/AgentStop*.cfg:
+#            spec/BrowserPeer.cfg, spec/DirectPunch.cfg, spec/AgentStop*.cfg and
+#            spec/TLSEnd.cfg:
 #            their invariants and liveness
 #            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg,
 #            UDPFlowLarge.cfg).
@@ -622,7 +623,7 @@ STOPTESTS='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession|T
 PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectPunchPrefersLAN|TestDirectMappedAgentGoesDirect|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain)$'
 case ${1:-} in
 check)
-	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch AgentStop AgentStopNoDrain AgentStopLate AgentStopClose"
+	cfgs="SignalConn CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch AgentStop AgentStopNoDrain AgentStopLate AgentStopClose TLSEnd"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	for c in $cfgs; do
 		m=${c%Large}
@@ -859,6 +860,15 @@ mutants)
 		expect STOP0:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
 	done
 	cfg=
+	model=TLSEnd
+	# A session's end under end-to-end TLS (lane PIPERESET): a Close at the
+	# peer's close_notify, before the FIN behind it (the code before); a
+	# Close that waits for that FIN with no bound.
+	for m in close-at-notify unbounded; do
+		expect TLSEND:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
+	done
+	expect witness:Clean -e 's/^    NoFalseReset$/    W_Clean/'
+	expect witness:Bound -e 's/^    NoFalseReset$/    W_Bound/'
 	exit $fail
 	;;
 cltraces)
