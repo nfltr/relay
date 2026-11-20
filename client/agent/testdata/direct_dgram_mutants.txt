@@ -6,3 +6,9 @@
 # (BIND:dgram.tag).
 direct-ignores-assoc | direct_datagram.go | 		if d.c.Current() != cur || bound != nil && !bound() { | 		if bound != nil && !bound() { | TestDatagramRevokeOnDirect
 tag-unchecked | direct_datagram.go | 		if d.c.Current() != cur || bound != nil && !bound() { | 		if d.c.Current() == nil || bound != nil && !bound() { | TestDatagramModelBindings
+# Lane DGRAMBIND: spec/DatagramAssoc.tla NoLostOnMove (client-binds-first,
+# agent-sends-unheard) and the session's clean end at the client's.
+token-before-attach | direct_server.go | 	ps.first.b = pathToken(sess.key, roleServer, o.Epoch, qk) | 	ps.first.b = pathToken(sess.key, roleServer, o.Epoch, qk); _ = ps.first.send(s) | TestDatagramDirectOnlyOnceTheAgentAttached
+client-sends-unbound | direct_datagram.go | 	if r := d.ready.Load(); r == nil || *r != cur { | 	if r := d.ready.Load(); false && (r == nil || *r != cur) { | TestDatagramDirectOnlyOnceTheAgentAttached
+agent-sends-unheard | direct_datagram.go | 	if r := d.ready.Load(); r == nil || *r != cur { | 	if r := d.ready.Load(); r != nil && *r != cur { | TestDatagramAgentDirectOnceItHeardTheClient
+target-closed-whole | datagram_target.go | func (t datagramTarget) CloseWrite() error { return t.srv.Close() } | func (t datagramTarget) CloseWrite() error { return t.Conn.Close() } | TestDatagramTargetEndsCleanlyAtTheClientsEnd

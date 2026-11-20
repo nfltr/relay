@@ -22,21 +22,40 @@ import (
 // direct-ignores-assoc), and at the client only once that stream's agent
 // token was checked (BIND:dgram.tag: the stream is bound to this session
 // by both tokens). The tag that picks the session on its connection is the
-// stream's QUIC stream id (quiclink).
+// stream's QUIC stream id (quiclink). They are sent direct only on the
+// stream whose far end bound it (ready): no datagram goes to an end that
+// would drop it (relay spec/DatagramAssoc.tla NoLostOnMove).
 type sessionDatagrams struct {
 	c    *pathswitch.Conn
 	on   atomic.Pointer[func([]byte)]
 	recv *atomic.Uint64 // direct bytes received (the client's metrics); nil: none
+	// ready is the direct stream whose far end is bound there: at the
+	// client once its agent's token was checked (the agent attached
+	// first: BindC), at the agent once it took a client's datagram on it
+	// (aheard: TestDatagramAgentDirectOnceItHeardTheClient)
+	ready atomic.Pointer[pathswitch.Stream]
 }
 
 var _ dgram.Direct = (*sessionDatagrams)(nil)
 
 func (d *sessionDatagrams) SendDatagram(p []byte) error {
-	st, ok := d.c.Current().(interface{ SendDatagram([]byte) error })
+	cur := d.c.Current()
+	if r := d.ready.Load(); r == nil || *r != cur {
+		return dgram.ErrNotDirect // its far end not bound there (yet): the stream carries it
+	}
+	st, ok := cur.(interface{ SendDatagram([]byte) error })
 	if !ok {
 		return dgram.ErrNotDirect
 	}
 	return st.SendDatagram(p)
+}
+
+// bound notes that cur's far end is bound to the session there.
+func (d *sessionDatagrams) bound(cur pathswitch.Stream) {
+	if r := d.ready.Load(); r != nil && *r == cur {
+		return
+	}
+	d.ready.Store(&cur)
 }
 
 func (d *sessionDatagrams) OnDatagram(f func([]byte)) { d.on.Store(&f) }
@@ -48,6 +67,9 @@ func (d *sessionDatagrams) take(cur pathswitch.Stream, s *quiclink.Session, boun
 	s.OnDatagram(func(p []byte) {
 		if d.c.Current() != cur || bound != nil && !bound() {
 			return // an old stream's, a reset session's, an unproved stream's
+		}
+		if bound == nil {
+			d.bound(cur) // the agent: its client sent it direct, so takes replies there
 		}
 		if d.recv != nil {
 			d.recv.Add(uint64(len(p)))

@@ -462,6 +462,7 @@ func (s *DirectSession) tryDirect() string {
 	heard := new(atomic.Bool)
 	tc.ok = func() {
 		heard.Store(true)
+		s.dg.bound(tc) // the agent attached before its token: datagrams go direct from now on
 		s.directOnce.Do(func() { close(s.direct) })
 		s.emit(PathEvent{Path: PathDirect, Peer: peer})
 	}

@@ -342,6 +342,21 @@ type pathStream struct {
 	sent, recv *atomic.Uint64
 	heard      *atomic.Bool // set by its first byte read (nil: none kept)
 	end        *streamEnd   // told the read error that ended it (nil: none)
+	first      *firstWrite  // written ahead of its first write (nil: none)
+}
+
+// firstWrite is bytes a stream sends ahead of anything else, once: the
+// agent's token on a direct stream, after its attach (acceptDirect), ahead
+// of the path layer's first frame however soon that is written.
+type firstWrite struct {
+	once sync.Once
+	b    []byte
+	err  error
+}
+
+func (f *firstWrite) send(c net.Conn) error {
+	f.once.Do(func() { _, f.err = c.Write(f.b) })
+	return f.err
 }
 
 func (s pathStream) Read(p []byte) (int, error) {
@@ -367,6 +382,11 @@ type streamEnd struct{ fn atomic.Pointer[func(error)] }
 func (e *streamEnd) set(fn func(error)) { e.fn.Store(&fn) }
 
 func (s pathStream) Write(p []byte) (int, error) {
+	if s.first != nil {
+		if err := s.first.send(s.Conn); err != nil {
+			return 0, err
+		}
+	}
 	n, err := s.Conn.Write(p)
 	if s.sent != nil {
 		s.sent.Add(uint64(n)) // #nosec G115 -- n >= 0

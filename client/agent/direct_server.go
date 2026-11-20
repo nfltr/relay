@@ -53,6 +53,9 @@ type directServer struct {
 	changed  chan struct{}     // closed when one of them ends; nil: none waits
 	stopped  atomic.Bool       // a stop's drain ended: a later stop only resets (stop)
 	tr       stopTracer        // spec/AgentStop.tla's trace (-tags relaytrace)
+	// beforeAttach, set, runs in acceptDirect just before the attach (a
+	// test's hold: TestDatagramDirectOnlyOnceTheAgentAttached)
+	beforeAttach atomic.Pointer[func()]
 }
 
 // qadTarget is a relay's QAD: its agent link's UDP address and TLS.
@@ -355,13 +358,18 @@ func (d *directServer) matchLocked(match func(*directSession) bool) *directSessi
 }
 
 // acceptDirect takes a stream on a direct connection: the session its
-// OPEN's token names, after this end's token on it (the client's proof
-// that the agent of its session answered), else a refusal.
+// OPEN's token names, attached, then this end's token on it (the client's
+// proof that the agent of its session answered), else a refusal. The
+// token goes only after the attach, the stream's first bytes before
+// anything the path layer writes (first): the client binds its datagrams
+// once it checked the token, so the agent already takes them (spec
+// DatagramAssoc.tla BindA, BindC; the token before the attach dropped the
+// client's first direct datagram: TestDatagramDirectOnlyOnceTheAgentAttached).
 func (d *directServer) acceptDirect(peer string, _ []byte, s peerlink.Session) {
 	d.mu.Lock()
 	qk := d.quic[peer]
 	d.mu.Unlock()
-	ps := pathStream{Conn: s, end: &streamEnd{}}
+	ps := pathStream{Conn: s, end: &streamEnd{}, first: new(firstWrite)}
 	o, err := pathswitch.ReadOpen(ps)
 	if err != nil || qk == nil {
 		_ = s.Reset()
@@ -376,15 +384,19 @@ func (d *directServer) acceptDirect(peer string, _ []byte, s peerlink.Session) {
 	if sess.lost != nil {
 		ps.end.set(anonLost(sess.c, ps, sess.lost))
 	}
-	if _, err := s.Write(pathToken(sess.key, roleServer, o.Epoch, qk)); err != nil {
-		_ = s.Reset()
-		return
-	}
+	ps.first.b = pathToken(sess.key, roleServer, o.Epoch, qk)
 	if q, ok := s.(*quiclink.Session); ok {
 		sess.dg.take(ps, q, nil) // its client's token checked (find): bound by both
 	}
+	if h := d.beforeAttach.Load(); h != nil {
+		(*h)()
+	}
 	if err := sess.c.Attach(o, PathDirect); err != nil {
 		_ = s.Reset()
+		return
+	}
+	if err := ps.first.send(s); err != nil {
+		_ = s.Reset() // the session's stream ended: it re-attaches or ends
 		return
 	}
 	d.mu.Lock()

@@ -36,6 +36,15 @@ type datagramTarget struct {
 	srv *dgram.Server
 }
 
+// CloseWrite: the client ended its direction of the session, so its
+// association (a datagram has no half close): the association's server
+// ends and closes its end of the pipe, and the session's other direction
+// reads a clean EOF. Closing this end whole instead, that direction read
+// its own closed pipe, a failure: the session was reset at the client's
+// clean end and lingered aborted at the agent until its detach bound
+// (TestDatagramTargetEndsCleanlyAtTheClientsEnd).
+func (t datagramTarget) CloseWrite() error { return t.srv.Close() }
+
 // revokeDatagrams ends target's association for a revocation when target
 // is a udp service's session end: nothing reaches its target from now on,
 // each open flow's client is told why (dgram.ReasonRevoked: flow_close

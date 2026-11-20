@@ -16,7 +16,10 @@ import (
 // (uvarint) and the datagram. Control (O, A, R, C) always rides the
 // stream. The client sends a flow's datagrams direct once the agent
 // accepted the flow (before, they follow its O on the stream); the agent
-// sends every reply direct. A datagram that does not fit in a packet
+// sends every reply direct. The carrier sends direct only once the far end
+// is bound there (the client once the agent attached, the agent once it
+// took a client's frame; relay spec/DatagramAssoc.tla NoLostOnMove), else
+// ErrNotDirect and the stream carries it. A datagram that does not fit in a packet
 // spills to the stream (counted Spills), never fragmented. A direct frame
 // is taken only while the association runs, for a flow open at this side:
 // the carrier (Direct) checks the session's state and tag first, so a
