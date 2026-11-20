@@ -16,7 +16,6 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"go/ast"
 	"go/doc"
@@ -243,13 +242,12 @@ func removedNames(dirOf map[string]string) map[string]map[string]bool {
 			fatal(err)
 		}
 		for _, f := range files {
-			fh, err := os.Open(f)
+			data, err := os.ReadFile(f) // #nosec G304 -- api/*.txt of this repository, from Glob
 			if err != nil {
 				fatal(err)
 			}
-			sc := bufio.NewScanner(fh)
-			for sc.Scan() {
-				l, ok := strings.CutSuffix(sc.Text(), ": removed")
+			for _, l := range strings.Split(string(data), "\n") {
+				l, ok := strings.CutSuffix(l, ": removed")
 				if !ok || !strings.HasPrefix(l, "- ") || strings.HasPrefix(l, "- package ") {
 					continue
 				}
@@ -267,7 +265,6 @@ func removedNames(dirOf map[string]string) map[string]map[string]bool {
 				}
 				out[pkg][parts[len(parts)-1]] = true
 			}
-			fh.Close()
 		}
 	}
 	return out
