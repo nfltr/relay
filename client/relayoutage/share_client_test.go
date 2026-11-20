@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,8 +34,6 @@ func TestShareClientTrustsThePinAndClosesItsConnection(t *testing.T) {
 	defer srv.Close()
 
 	t.Setenv(relaytrust.PinEnv, relaytrust.Fingerprint(srv.Certificate().Raw))
-	ShareClient = sync.OnceValue(newShareClient) // built after the pin is installed, as in main
-	t.Cleanup(func() { ShareClient = sync.OnceValue(newShareClient) })
 
 	resp, err := ShareClient().Post(srv.URL+"/api/v1/share", "", nil)
 	if err != nil {

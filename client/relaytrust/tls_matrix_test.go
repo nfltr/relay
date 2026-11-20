@@ -18,8 +18,7 @@ import (
 
 // TestWithPinCertificateMatrix dials a loopback server per certificate kind
 // with the relay TLS config every pinned path builds (grpcclient,
-// grpcfactory, relayoutage.ShareClient, the default HTTP transport after
-// Install): refused unless the CA is trusted or the certificate pinned, and
+// grpcfactory, relayoutage.ShareClient, relaytrust.Transport): refused unless the CA is trusted or the certificate pinned, and
 // the refusal says how to fix it.
 func TestWithPinCertificateMatrix(t *testing.T) {
 	set := relaytrusttest.New(t)

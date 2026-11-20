@@ -97,3 +97,36 @@ func colons(hexs string) string {
 	}
 	return strings.Join(parts, ":")
 }
+
+// TestTransportScopesThePin: each pin is trusted by its own transport only
+// (lane PINSCOPE: a process-wide pin on http.DefaultTransport kept the
+// first one, and a later relay's certificate was refused).
+func TestTransportScopesThePin(t *testing.T) {
+	srv := httptest.NewTLSServer(http.NotFoundHandler())
+	defer srv.Close()
+	pin, other := Fingerprint(srv.Certificate().Raw), strings.Repeat("ab", 32)
+	do := func(rt http.RoundTripper) error {
+		resp, err := (&http.Client{Transport: rt}).Get(srv.URL)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+		return err
+	}
+	// In both orders: no pin given first is kept.
+	for _, order := range [][]string{{pin, other}, {other, pin}} {
+		for _, p := range order {
+			if err := do(Transport(p)); (err == nil) != (p == pin) {
+				t.Errorf("Transport(%.8s): %v, want trusted=%v", p, err, p == pin)
+			}
+		}
+	}
+	if err := do(http.DefaultTransport); err == nil {
+		t.Error("http.DefaultTransport trusts a pinned certificate")
+	}
+	if Transport(pin) != Transport(" "+pin) {
+		t.Error("one pin, two transports: connections are not reused")
+	}
+	if Transport("") != http.DefaultTransport {
+		t.Error("no pin: not http.DefaultTransport")
+	}
+}

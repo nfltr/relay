@@ -5,8 +5,11 @@ package mailboxclient
 
 import (
 	"net/http"
+	"os"
 	"sync"
 	"time"
+
+	"github.com/nfltr/relay/client/relaytrust"
 )
 
 // A long-poll parks on a connection that carries nothing until its answer.
@@ -26,10 +29,19 @@ const (
 	pingTimeout = 10 * time.Second
 )
 
-// relayHTTP is the client of a Client without its own: Go's default
-// transport as the process configured it by its first call (a relay
-// certificate pin: relaytrust.Install), health-checked.
-var relayHTTP = sync.OnceValue(func() *http.Client { return healthChecked(http.DefaultTransport, pingAfter, pingTimeout) })
+// relayHTTP is the client of a Client without its own: the relay's
+// transport for the pin as it is now (relaytrust.Transport), health-checked;
+// one per pin, so connections are reused.
+func relayHTTP() *http.Client {
+	pin := os.Getenv(relaytrust.PinEnv)
+	if c, ok := relayHTTPs.Load(pin); ok {
+		return c.(*http.Client)
+	}
+	c, _ := relayHTTPs.LoadOrStore(pin, healthChecked(relaytrust.Transport(pin), pingAfter, pingTimeout))
+	return c.(*http.Client)
+}
+
+var relayHTTPs sync.Map // pin -> *http.Client
 
 // healthChecked is a client over a copy of base with HTTP/2 health checks;
 // base itself when it is not an *http.Transport.

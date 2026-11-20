@@ -42,6 +42,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/nfltr/relay/client/relaytrust"
 )
 
 // The relay's routes (relay-server services/accounts/accountswire).
@@ -191,7 +193,8 @@ func (e *RefusedError) Final() bool {
 }
 
 // Client calls the relay's machine routes at BaseURL (the relay's
-// https:// URL) with HTTP (nil: http.DefaultClient).
+// https:// URL) with HTTP (nil: a client trusting the relay's pinned
+// certificate, relaytrust.PinEnv).
 type Client struct {
 	BaseURL string
 	HTTP    *http.Client
@@ -244,7 +247,7 @@ func (c *Client) post(ctx context.Context, path string, body any) (*Cert, error)
 	req.Header.Set("Content-Type", "application/json")
 	hc := c.HTTP
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = &http.Client{Transport: relaytrust.Transport(os.Getenv(relaytrust.PinEnv))}
 	}
 	resp, err := hc.Do(req)
 	if err != nil {

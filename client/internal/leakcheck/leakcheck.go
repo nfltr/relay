@@ -19,6 +19,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nfltr/relay/client/relaytrust"
 )
 
 // Wait is how long leaked goroutines get to exit after the last test.
@@ -97,6 +99,7 @@ func RunFunc(run func() int, ignore ...string) int {
 		if t, ok := http.DefaultTransport.(*http.Transport); ok {
 			t.CloseIdleConnections()
 		}
+		relaytrust.CloseIdleConnections()
 		if l = leaked(before, ignore); len(l) == 0 || time.Now().After(deadline) {
 			break
 		}
