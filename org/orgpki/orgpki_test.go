@@ -225,6 +225,11 @@ func TestExpiredRefused(t *testing.T) {
 	refused(t, "an expired certificate", err)
 
 	past := web.NotAfter.Add(RenewGrace)
+	for at := t0.Add(20 * 24 * time.Hour); at.Before(past); at = at.Add(20 * 24 * time.Hour) {
+		if err := o.iss.RenewIssuer(o.root, o.groups, at); err != nil { // RenewGrace outlasts IssuerLife: refused for the grace, not the issuer
+			t.Fatal(err)
+		}
+	}
 	_, err = o.iss.Renew(NewRenewRequest(web.Raw, k, csr(t, newKey(t), "web-1")), past)
 	refused(t, "a renewal RenewGrace after the NotAfter", err)
 }
