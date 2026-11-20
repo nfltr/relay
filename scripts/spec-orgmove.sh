@@ -63,7 +63,7 @@ cfg=""
 restore_spec() {
 	cfg=OrgMoveRestore.cfg
 	mfile=restore-mutants.txt
-	witnesses="WitnessRevivedTaken WitnessBehindRefused"
+	witnesses="WitnessRevivedTaken WitnessBehindRestored WitnessRevocationMerged WitnessTokenVoided"
 	covskip="Crash" # no crash here: OrgMove.cfg covers it
 }
 # OrgHolds.tla: its actions taken only under a mutant (coverage skips them).

@@ -4,3 +4,7 @@
 revive-behind CRLMonotone
 revive-behind RevokedStaysRevoked
 revive-while-held AtMostOneIssuer
+merge-skipped RevokedStaysRevoked
+merge-skipped CRLMonotone
+number-not-above-published CRLMonotone
+revive-keeps-tokens TokenOnce

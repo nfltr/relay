@@ -27,11 +27,14 @@
 \*
 \* A restore from a backup (Revive, MaxRevive > 0: OrgMoveRestore.cfg): with
 \* the organisation lost (no host holds it, no move under way), a backup
-\* copy is moved onto a host (fenced for its receive key, imported there)
-\* only when its last CRL Number is at least every published one. It keeps
-\* what the fleet sees (CRLMonotone, RevokedStaysRevoked) and one issuer
-\* (AtMostOneIssuer); acts after the copy are lost by design, so
-\* AuditContinuous and TokenOnce are not claimed under it.
+\* copy of any age is moved onto a host (fenced for its receive key,
+\* imported there) after it takes the newest published CRL as input: a
+\* restore line resumes its CRL Number at that CRL's, the CRL's revocations
+\* merged in (mrev lines), and every token made before the restore void.
+\* It keeps what the fleet sees (CRLMonotone, RevokedStaysRevoked), one
+\* issuer (AtMostOneIssuer) and TokenOnce (a token the lost host redeemed
+\* after the copy is void in it); acts after the copy are lost by design,
+\* so AuditContinuous is not claimed under it.
 EXTENDS Integers, Sequences, FiniteSets
 
 CONSTANTS
@@ -75,8 +78,18 @@ LogOf(h) == dir[h].log
 Acts(l, k) == {i \in 1..Len(l) : l[i].k = k}
 Made(l) == {l[i].x : i \in Acts(l, "tok")}
 Redeemed(l) == {l[i].x : i \in Acts(l, "red")}
-Revoked(l) == {l[i].x : i \in Acts(l, "rev")}
-CrlNum(l) == Cardinality(Acts(l, "crl"))
+\* A restore's merged revocations (mrev) are revocations too.
+Revoked(l) == {l[i].x : i \in Acts(l, "rev") \cup Acts(l, "mrev")}
+\* The log's last restore line (0: none). A restore resumes the CRL Number
+\* at its x (the published CRL's); tokens made before it are void.
+LastRestore(l) == IF Acts(l, "restore") = {} THEN 0
+                  ELSE CHOOSE i \in Acts(l, "restore") : \A j \in Acts(l, "restore") : j <= i
+CrlNum(l) == IF LastRestore(l) = 0 THEN Cardinality(Acts(l, "crl"))
+             ELSE l[LastRestore(l)].x + Cardinality({i \in Acts(l, "crl") : i > LastRestore(l)})
+\* Tokens the issuer still answers: made after the last restore
+\* (revive-keeps-tokens: every token of the log).
+LiveMade(l) == IF Mutant = "revive-keeps-tokens" THEN Made(l)
+               ELSE {l[i].x : i \in {j \in Acts(l, "tok") : j > LastRestore(l)}}
 Fenced(l) == Len(l) > 0 /\ Last(l).k = "fence"
 FenceTo(l) == Last(l).x
 IsPrefix(s, t) == Len(s) <= Len(t) /\ s = SubSeq(t, 1, Len(s))
@@ -86,8 +99,8 @@ IsPrefix(s, t) == Len(s) <= Len(t) /\ s = SubSeq(t, 1, Len(s))
 Serving(h) == Has(h) /\ (~Fenced(LogOf(h)) \/ Mutant = "serve-after-fence")
 
 TypeOK ==
-    /\ \A h \in Hosts : dir[h] = None \/ (dir[h].key \in 1..2 /\ Len(dir[h].log) \in 1..1 + MaxLog + MaxMoves + NH + MaxLostH + 2 * MaxRevive)
-    /\ Len(hist) \in 1..1 + MaxLog + MaxMoves + NH + MaxLostH + 2 * MaxRevive
+    /\ \A h \in Hosts : dir[h] = None \/ (dir[h].key \in 1..2 /\ Len(dir[h].log) \in 1..1 + MaxLog + MaxMoves + NH + MaxLostH + (3 + Cardinality(Names)) * MaxRevive)
+    /\ Len(hist) \in 1..1 + MaxLog + MaxMoves + NH + MaxLostH + (3 + Cardinality(Names)) * MaxRevive
     /\ \A c \in pub : c.num \in 0..MaxCrl /\ c.rev \subseteq Names
     /\ \A b \in bundles : b.to \in Hosts
     /\ rkey \in [Hosts -> BOOLEAN]
@@ -113,9 +126,11 @@ Commit(h, a) ==
     /\ dir' = [dir EXCEPT ![h].log = Append(@, a)]
     /\ hist' = Append(hist, a)
 
-\* nfltr org token: a single-use token for a name.
+\* nfltr org token: a single-use token for a name. Its id is fresh across
+\* the whole history (128 random bits: a restored issuer never makes the id
+\* of a token the lost host made).
 MakeToken(h, t) ==
-    /\ Serving(h) /\ t \notin Made(LogOf(h)) /\ Room
+    /\ Serving(h) /\ t \notin Made(hist) /\ Room
     /\ Commit(h, [k |-> "tok", x |-> t])
     /\ UNCHANGED <<pub, bundles, rkey, redeem, vnum, vrev, vseen>> /\ UNCHANGED cnt
 
@@ -124,7 +139,7 @@ MakeToken(h, t) ==
 \* host whose key is not the token's cannot redeem it.
 Redeem(h, t) ==
     /\ Serving(h)
-    /\ t \in Made(LogOf(h)) /\ t \notin Redeemed(LogOf(h)) /\ Room
+    /\ t \in LiveMade(LogOf(h)) /\ t \notin Redeemed(LogOf(h)) /\ Room
     /\ dir[h].key = FleetKey
     /\ Commit(h, [k |-> "red", x |-> t])
     /\ redeem' = [redeem EXCEPT ![t] = @ + 1]
@@ -233,26 +248,42 @@ Crash(r) ==
     /\ UNCHANGED <<dir, hist, pub, bundles, redeem, vnum, vrev, vseen, sent, lostB, backups, lostH, revives>>
 
 \* A restore from a backup (nfltr's nfltr-backup.sh restore-secrets, then
-\* org-issuer.sh restored send and the move's receive on r): a copy b
-\* (unfenced: a backup) is fenced for r's receive key and imported on r, in
-\* one step here (the copy is aside on r and never serves). Only with the
+\* org-issuer.sh restored send: nfltr org move send --restored, and the
+\* move's receive on r): a copy b (unfenced: a backup) of any age takes the
+\* newest published CRL (the relay's, verified under the issuer's own key)
+\* as input: a restore line resumes its CRL Number at that CRL's (so its
+\* next CRL is above every published one), that CRL's revocations the copy
+\* lacks are merged in (mrev), and every token made before the restore is
+\* void; then it is fenced for r's receive key and imported on r, in one
+\* step here (the copy is aside on r and never serves). Only with the
 \* organisation lost (no host holds a directory, no fenced bundle still
 \* importable: the old VM deleted, no move under way; the operator's
-\* precondition, the published CRL lapsed its signal) and only when the
-\* copy is not behind the fleet: its last CRL Number at least every
-\* published one. Mutants: revive-behind (no Number check),
-\* revive-while-held (no precondition).
+\* precondition, the published CRL lapsed its signal). Mutants:
+\* revive-behind (no restore line: the copy's own Number and
+\* revocations), merge-skipped (the Number resumed, the revocations not
+\* merged), number-not-above-published (the revocations merged, the Number
+\* the copy's own), revive-keeps-tokens (LiveMade), revive-while-held (no
+\* precondition).
 MaxPub == CHOOSE m \in {c.num : c \in pub} : \A c \in pub : c.num <= m
+NewestRev == (CHOOSE c \in pub : c.num = MaxPub).rev
 Lost == /\ \A x \in Hosts : ~Has(x)
         /\ \A c \in bundles : Fenced(c.log) => ~rkey[FenceTo(c.log)]
+\* The lines of a set of names, in some order.
+SeqOf(S) == CHOOSE s \in [1..Cardinality(S) -> S] : {s[i] : i \in DOMAIN s} = S
+MergeLines(l) ==
+    IF Mutant = "revive-behind" THEN <<>>
+    ELSE <<[k |-> "restore", x |-> IF Mutant = "number-not-above-published" THEN CrlNum(l) ELSE MaxPub]>> \o
+         LET S == IF Mutant = "merge-skipped" THEN {} ELSE NewestRev \ Revoked(l)
+             q == SeqOf(S)
+         IN [i \in DOMAIN q |-> [k |-> "mrev", x |-> q[i]]]
 Revive(r) == \E b \in bundles :
     /\ revives < MaxRevive
     /\ ~Fenced(b.log) /\ rkey[r]
     /\ Lost \/ Mutant = "revive-while-held"
-    /\ CrlNum(b.log) >= MaxPub \/ Mutant = "revive-behind"
     /\ ~Has(r)
-    /\ dir' = [dir EXCEPT ![r] = [log |-> b.log \o <<[k |-> "fence", x |-> r], [k |-> "arrive", x |-> r]>>, key |-> b.key]]
-    /\ hist' = hist \o <<[k |-> "fence", x |-> r], [k |-> "arrive", x |-> r]>>
+    /\ LET add == MergeLines(b.log) \o <<[k |-> "fence", x |-> r], [k |-> "arrive", x |-> r]>>
+       IN /\ dir' = [dir EXCEPT ![r] = [log |-> b.log \o add, key |-> b.key]]
+          /\ hist' = hist \o add
     /\ rkey' = [rkey EXCEPT ![r] = FALSE]
     /\ revives' = revives + 1
     /\ UNCHANGED <<pub, bundles, redeem, vnum, vrev, vseen, sent, lostB, backups, lostH, crashes>>
@@ -332,7 +363,13 @@ WitnessOldWiped == ~(dir[1] = None /\ lostH = 0 /\ \E h \in Hosts : Serving(h))
 WitnessCrashedThenMoved == ~(crashes > 0 /\ \E h \in Hosts : h # 1 /\ Serving(h))
 WitnessBackupRefused == ~(backups > 0 /\ \E b \in bundles : ~Fenced(b.log))
 \* OrgMoveRestore.cfg: a copy restored, the restored issuer signs a CRL
-\* the fleet takes; and a lost organisation whose only copy is behind.
+\* the fleet takes.
 WitnessRevivedTaken == ~(revives > 0 /\ \E h \in Hosts : Serving(h) /\ vnum = CrlNum(LogOf(h)) /\ vnum > 0 /\ Last(LogOf(h)).k = "crl")
-WitnessBehindRefused == ~(Lost /\ backups > 0 /\ revives = 0 /\ \A b \in bundles : ~Fenced(b.log) => CrlNum(b.log) < MaxPub)
+\* A copy behind the published CRL restored (its own Number below the
+\* restore's), the fleet then taking the restored issuer's CRL; a
+\* revocation the copy lacked merged in; a token made in the copy void.
+WitnessBehindRestored == ~\E h \in Hosts : Serving(h) /\ vnum > 0 /\ \E i \in Acts(LogOf(h), "restore") :
+    LogOf(h)[i].x > CrlNum(SubSeq(LogOf(h), 1, i - 1)) /\ vnum > LogOf(h)[i].x
+WitnessRevocationMerged == ~\E h \in Hosts : Serving(h) /\ Acts(LogOf(h), "mrev") # {}
+WitnessTokenVoided == ~\E h \in Hosts, t \in Tokens : Serving(h) /\ redeem[t] = 1 /\ t \in Made(LogOf(h)) /\ t \notin LiveMade(LogOf(h)) /\ t \notin Redeemed(LogOf(h))
 =============================================================================
