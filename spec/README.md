@@ -1189,9 +1189,10 @@ the session failed or ended first (`CloseReturn`); the other configs
 leave it out (`CloseWaits = FALSE`: no states added). The model's
 relayed sessions always waited too, while the code's returned at once
 (lane RELAYCLOSE closed the gap: for a relayed session `dlv = wrote`
-means the relay read every byte and the END, which it then delivers,
-link `spec/RelayedClose.tla`; relay-core
-`TestRelayedCloseThenExitDeliversTheTail` read a cut tail before).
+means the far end took every byte and the END, the relay passing its
+ENDACK on, link `spec/RelayedClose.tla`; relay-core
+`TestRelayedCloseThenExitDeliversTheTail` read a cut tail before, and
+pipe `TestRelayedEndDropAfterLastByte` exited 0 with the client short).
 
 | invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
 |---|---|---|
@@ -1231,7 +1232,7 @@ periods; TCP's `SO_LINGER`); a second close waiting for the first is
 
 | assumption | source |
 |---|---|
-| The relay resets a relayed session's peer when the agent resets it or the agent's link ends, and cuts a relayed session whose peer's connection ended (`RelayCut`, no bound assumed); once the relay read a relayed session's tail and END (its Sync answered: the relayed `CloseReturn`), it delivers them, and the END, whatever the agent does next (lane RELAYCLOSE: a FIN then a failure reads io.EOF, the joint passes the tail before the failure) | relay-core `core/session` (spec relay-core `spec/`), `link` GOAWAY/reset semantics (link `WIRE.md`), link `spec/RelayedClose.tla` (`TailDelivered`) |
+| The relay resets a relayed session's peer when the agent resets it or the agent's link ends, and cuts a relayed session whose peer's connection ended (`RelayCut`, no bound assumed); a relayed session's END is acknowledged (the relayed `CloseReturn`) only once the far end took it: the relay's joint passes the far end's ENDACK on (link FeatureEndAck, a hop's `Config.Hop`); once the relay read the tail and END it delivers them whatever the agent does next (a FIN then a failure reads io.EOF; lane RELAYCLOSE) | relay-core `core/session` (spec relay-core `spec/`), `link` GOAWAY/reset semantics (link `WIRE.md`), link `spec/RelayedClose.tla` (`TailDelivered`) |
 | A pathswitch ABORT reaches a live peer, which answers it; a killed peer answers nothing, and the session ends at its detach bound (`DetachEnd`) | link `pathswitch`, link `spec/DirectPath.tla` (`RLeftAnswer`, `SLeftAnswer`) |
 | The link's end resets a pathswitch session still on its relayed path at the peer, which ends it (`CycleEnd`'s `LinkEnds`); a session moves to a direct path only while not aborted (an aborted Conn takes no path) | relay-core `core/session`; link `pathswitch` (Abort ends the Conn) |
 | A peer may be arbitrarily slow (no fairness on peer steps): a slow peer is a vanished one until it answers | QUIC/TCP give no delivery-time bound |
@@ -1246,7 +1247,7 @@ periods; TCP's `SO_LINGER`); a second close waiting for the first is
 | `CallDrainEnd`, `CallReset`, `CallWaitEnd`, `Cut`, `Abort`, `Register`, `Move` (acceptDirect's Attach) | client/agent/direct_server.go |
 | `TargetReset` (a direct session's), `Propagate` | client/agent/datagram_target.go |
 | `TargetReset` (the cut at either end's Reset) | client/agent/queue.go |
-| `CloseWrite`, `CloseReturn` (Accept's conn's Close waits for `joinTarget`'s report: a direct path's WaitAcked; a relayed agent-link session's CloseWriteSync, `QueueConn.EndDelivered`, or Sync under TLS, `syncAcker`; lane RELAYCLOSE) | client/agent/queue_close.go, client/agent/queue.go |
+| `CloseWrite`, `CloseReturn` (Accept's conn's Close waits for `joinTarget`'s report: a direct path's WaitAcked; relayed, Join's CloseWriteSync onto the agent-link session or TLS on it, which returns at the far end's ENDACK (link FeatureEndAck), `QueueConn.EndDelivered`; lane RELAYCLOSE) | client/agent/queue_close.go, client/agent/queue.go |
 | `Signal`, `PrimaryStart`, `CycleStart`, `CycleEnd` | client/agent/connect.go |
 | `PrimaryStart` (waitIdle), `Drain` | client/agent/move.go |
 | `CloserAwait` (the table's stop) | client/agent/services.go |
