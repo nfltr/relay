@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nfltr/relay/client/pairfile"
 )
 
 // The files of a machine's directory, as enrolment and renewal write them.
@@ -125,7 +127,7 @@ func (m *Identity) Reload(now time.Time) (changed bool, err error) {
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", RootFile, err)
 	}
-	cert, err := readPair(m.dir)
+	_, cert, err := ReadPair(m.dir)
 	if err != nil {
 		return false, err
 	}
@@ -281,49 +283,40 @@ func (m *Identity) OrgID() string { return m.orgID }
 // Verifier is the verifier m checks with (its root, its CRLs).
 func (m *Identity) Verifier() *Verifier { return m.ver }
 
-// pairWait bounds readPair's wait for a pair being replaced: only against a
-// writer that died between its two renames.
-const pairWait = 5 * time.Second
-
-// readPair reads dir's CertFile and KeyFile as one pair. A renewal or an
-// enrolment replaces the key, then the certificate, each by rename
-// (org/orgmachine's writeIdentity), so a read between the two finds a key
-// the certificate does not certify: readPair reads both again until they
-// match, at most pairWait (lane CERTPAIR, guard
-// TestReadPairWaitsForTheWritersCertificate).
-func readPair(dir string) (cert tls.Certificate, err error) {
-	for deadline := time.Now().Add(pairWait); ; time.Sleep(10 * time.Millisecond) {
-		var chain, keyPEM []byte
-		if chain, err = os.ReadFile(filepath.Join(dir, CertFile)); err != nil { // #nosec G304 -- a file of the machine's own directory
-			return cert, notEnrolled(dir, err)
+// Pair is dir's CertFile and KeyFile, replaced (org/orgmachine) and read as
+// one pair: a writer stopped at any step leaves a pair (client/pairfile,
+// spec/pair/MachinePair.tla, lane CERTATOMIC).
+func Pair(dir string) pairfile.Pair {
+	return pairfile.Pair{Key: filepath.Join(dir, KeyFile), Cert: filepath.Join(dir, CertFile), Match: func(chain, key []byte) error {
+		_, err := tls.X509KeyPair(chain, key)
+		if err == nil {
+			return nil
 		}
-		if err = checkKeyMode(filepath.Join(dir, KeyFile)); err != nil {
-			return cert, err
-		}
-		if keyPEM, err = os.ReadFile(filepath.Join(dir, KeyFile)); err != nil { // #nosec G304 -- a file of the machine's own directory
-			return cert, err
-		}
-		if cert, err = tls.X509KeyPair(chain, keyPEM); err == nil {
-			return cert, nil
-		}
+		err = fmt.Errorf("%s: %w", CertFile, err)
 		// crypto/tls's own words for a key of another certificate; the
-		// guard fails if they change.
-		if !strings.Contains(err.Error(), "private key does not match public key") || time.Now().After(deadline) {
-			return cert, fmt.Errorf("%s: %w", CertFile, err)
+		// guard TestReadPairWaitsForTheWritersCertificate fails if they change.
+		if strings.Contains(err.Error(), "private key does not match public key") {
+			return pairfile.Mismatch(err)
 		}
-	}
+		return err
+	}}
 }
 
-// checkKeyMode refuses a key other users can read.
-func checkKeyMode(path string) error {
-	fi, err := os.Stat(path)
+// ReadPair is dir's certificate file (the chain, then nfltr's SSH host
+// certificate) and the TLS certificate of it with the key it certifies
+// (Pair).
+func ReadPair(dir string) (chain []byte, cert tls.Certificate, err error) {
+	chain, key, err := Pair(dir).Read()
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, cert, notEnrolled(dir, err)
+	}
 	if err != nil {
-		return err
+		return nil, cert, err
 	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%s: mode %v, want 0600", path, fi.Mode().Perm())
+	if cert, err = tls.X509KeyPair(chain, key); err != nil {
+		return nil, cert, fmt.Errorf("%s: %w", CertFile, err)
 	}
-	return nil
+	return chain, cert, nil
 }
 
 // Watch reloads every interval until stop is closed; a failed reload

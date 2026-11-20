@@ -14,8 +14,10 @@
 // The certificate files: `nfltr config login` saves the key (machine.key,
 // 0600; or KeyEnv) and the certificate with what the relay answered
 // (machine.json, 0600: Saved) in the nfltr config directory (KeyPath,
-// CertPath, Load, Saved.Store). The process that presents and renews them
-// is client/machinecred; this package stays standard library only, so the
+// CertPath, Load, Saved.Store), the two as one pair (SavePair, LoadPair:
+// client/pairfile). The process that presents and renews them
+// is client/machinecred; this package stays standard library only (and
+// client/pairfile), so the
 // relay's own enrolment (relay-server service-enrol) links it without the
 // agent SDK.
 package machinecert
@@ -65,9 +67,9 @@ func RotationProof(cur *ecdsa.PrivateKey, csr []byte) ([]byte, error) {
 }
 
 // SaveKey writes key to path (PKCS#8 PEM), readable by its owner only,
-// replacing the file whole.
+// replacing the file whole. A key with its certificate is SavePair.
 func SaveKey(path string, key *ecdsa.PrivateKey) error {
-	der, err := x509.MarshalPKCS8PrivateKey(key)
+	b, err := keyPEM(key)
 	if err != nil {
 		return err
 	}
@@ -80,7 +82,7 @@ func SaveKey(path string, key *ecdsa.PrivateKey) error {
 		_ = tmp.Close()
 		return err
 	}
-	if err := pem.Encode(tmp, &pem.Block{Type: "PRIVATE KEY", Bytes: der}); err != nil {
+	if _, err := tmp.Write(b); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -88,6 +90,14 @@ func SaveKey(path string, key *ecdsa.PrivateKey) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+func keyPEM(key *ecdsa.PrivateKey) ([]byte, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return nil, err
+	}
+	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), nil
 }
 
 // LoadKey reads a key SaveKey wrote; a file group or others may read is
@@ -106,6 +116,10 @@ func LoadKey(path string) (*ecdsa.PrivateKey, error) {
 	if err != nil {
 		return nil, err
 	}
+	return parseKey(path, b)
+}
+
+func parseKey(path string, b []byte) (*ecdsa.PrivateKey, error) {
 	blk, _ := pem.Decode(b)
 	if blk == nil {
 		return nil, fmt.Errorf("machine key %s: not PEM", path)

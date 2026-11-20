@@ -1,0 +1,14 @@
+# Planted bugs of pairfile (scripts/go-mutants.sh client/pairfile/testdata/mutants.txt,
+# make test-go-mutants, in make ci), in the format of client/orgid/testdata/mutants.txt;
+# each is a mutant of spec/pair/MachinePair.tla too.
+# key-first: the writer before CERTATOMIC (CERTPAIR), the key over the old one
+# before the certificate; stopped between the two, no pair.
+key-first | pairfile.go | 		{"next", func() error { return write(p.Next(), key) }}, | 		{"next", func() error { return write(p.Key, key) }}, | TestEveryCrashLeavesAPair
+key-first | pairfile.go | 		{"swap", func() error { return rename(p.Next(), p.Key) }}, | 		{"swap", func() error { return nil }}, | TestEveryCrashLeavesAPair
+cert-first | pairfile.go | 		{"next", func() error { return write(p.Next(), key) }}, | 		{"next", func() error { return write(p.Cert, cert) }}, | TestEveryCrashLeavesAPair
+cert-first | pairfile.go | 		{"cert", func() error { return write(p.Cert, cert) }}, | 		{"cert", func() error { return write(p.Next(), key) }}, | TestEveryCrashLeavesAPair
+no-recovery | pairfile.go | 		{"recover", p.recover}, | 		{"recover", func() error { return nil }}, | TestEveryCrashLeavesAPair
+no-next-read | pairfile.go | 		if key, err = readKey(p.Next()); err == nil && p.Match(cert, key) == nil { | 		if false { | TestEveryCrashLeavesAPair
+read-once | pairfile.go | 		if !errors.Is(err, ErrMismatch) || time.Now().After(deadline) { | 		if !deadline.IsZero() { | TestReadWaitsOutAReplacement
+wait-on-any-error | pairfile.go | 		if !errors.Is(err, ErrMismatch) || time.Now().After(deadline) { | 		if time.Now().After(deadline) { | TestReadRefusesAnUnmatchedPair
+no-mode-check | pairfile.go | 	if runtime.GOOS != "windows" && st.Mode().Perm()&0o077 != 0 { | 	if runtime.GOOS == "plan9" { | TestReadRefusesAReadableKey

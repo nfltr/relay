@@ -26,7 +26,6 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -136,7 +135,7 @@ func (m *Machine) Reload(now time.Time) (changed bool, err error) {
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", RootFile, err)
 	}
-	chain, cert, err := readPair(m.dir)
+	chain, cert, err := orgid.ReadPair(m.dir)
 	if err != nil {
 		return false, err
 	}
@@ -392,11 +391,14 @@ func (m *Machine) HostCA(now time.Time) (ssh.PublicKey, error) {
 	return orgpki.HostCA(issuer)
 }
 
+// renewLock serialises the writers of the machine's key and certificate.
+const renewLock = "renew.lock"
+
 // LockRenewal serialises the renewals of this machine's processes (nfltr
 // node and nfltr up may both run): the holder reloads, checks RenewDue
 // again, then renews.
 func (m *Machine) LockRenewal() (unlock func(), err error) {
-	return orgfiles.Lock(filepath.Join(m.dir, "renew.lock"))
+	return orgfiles.Lock(filepath.Join(m.dir, renewLock))
 }
 
 // ErrNotForKey: an answer certifies another key than the one this machine
@@ -457,19 +459,17 @@ func (m *Machine) Install(certDER, issuerDER, hostCert []byte, key ed25519.Priva
 	return err
 }
 
-// writeIdentity writes the key, then the certificate chain and the host
-// certificate: a reader between the two finds a pair that does not match
-// and reads again (readPair).
+// writeIdentity replaces the key and the certificate chain with the host
+// certificate as one pair (orgid.Pair: write-ahead, so a writer stopped at
+// any step leaves a pair; spec/pair/MachinePair.tla, lane CERTATOMIC).
+// Callers hold renew.lock.
 func writeIdentity(dir string, certDER, issuerDER, hostCert []byte, key ed25519.PrivateKey) error {
 	pk, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return err
 	}
-	if err := orgfiles.Write(filepath.Join(dir, KeyFile), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pk}), 0o600); err != nil {
-		return err
-	}
 	host := pem.EncodeToMemory(&pem.Block{Type: HostCertBlock, Bytes: hostCert})
-	return orgfiles.Write(filepath.Join(dir, CertFile), slices.Concat(certPEM(certDER), certPEM(issuerDER), host), 0o600)
+	return orgid.Pair(dir).Write(slices.Concat(certPEM(certDER), certPEM(issuerDER), host), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pk}))
 }
 
 func certPEM(der []byte) []byte {
@@ -490,6 +490,11 @@ func WriteFiles(dir string, e Enrolment) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil { // nosemgrep: incorrect-default-permission -- a directory needs x; 0o700 is owner-only
 		return err
 	}
+	unlock, err := orgfiles.Lock(filepath.Join(dir, renewLock)) // a renewal of a machine already enrolled may run
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	for _, f := range []struct {
 		name string
 		data []byte
@@ -504,52 +509,6 @@ func WriteFiles(dir string, e Enrolment) error {
 		}
 	}
 	return writeIdentity(dir, e.Cert, e.Issuer, e.HostCert, e.Key)
-}
-
-// pairWait bounds readPair's wait for a pair being replaced: only against a
-// writer that died between its two renames.
-const pairWait = 5 * time.Second
-
-// readPair reads dir's CertFile and KeyFile as one pair: writeIdentity
-// replaces the key, then the certificate, each by rename, so a read between
-// the two finds a key the certificate does not certify (another process's
-// renewal: nfltr node, nfltr up and nfltr cat serve each run one). readPair
-// reads both again until they match, at most pairWait (lane CERTPAIR,
-// guard TestReadPairWaitsForTheWritersCertificate; client/orgid's readPair
-// is the same).
-func readPair(dir string) (chain []byte, cert tls.Certificate, err error) {
-	for deadline := time.Now().Add(pairWait); ; time.Sleep(10 * time.Millisecond) {
-		var keyPEM []byte
-		if chain, err = os.ReadFile(filepath.Join(dir, CertFile)); err != nil { // #nosec G304 -- a file of the machine's own directory
-			return nil, cert, notEnrolled(dir, err)
-		}
-		if err = checkKeyMode(filepath.Join(dir, KeyFile)); err != nil {
-			return nil, cert, err
-		}
-		if keyPEM, err = os.ReadFile(filepath.Join(dir, KeyFile)); err != nil { // #nosec G304 -- a file of the machine's own directory
-			return nil, cert, err
-		}
-		if cert, err = tls.X509KeyPair(chain, keyPEM); err == nil {
-			return chain, cert, nil
-		}
-		// crypto/tls's own words for a key of another certificate; the
-		// guard fails if they change.
-		if !strings.Contains(err.Error(), "private key does not match public key") || time.Now().After(deadline) {
-			return nil, cert, fmt.Errorf("%s: %w", CertFile, err)
-		}
-	}
-}
-
-// checkKeyMode refuses a key other users can read.
-func checkKeyMode(path string) error {
-	fi, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	if fi.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%s: mode %v, want 0600", path, fi.Mode().Perm())
-	}
-	return nil
 }
 
 // Watch reloads every interval until stop is closed; a failed reload

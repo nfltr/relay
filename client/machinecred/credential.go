@@ -169,37 +169,39 @@ func sameRelay(host, server string) bool {
 	return strings.TrimPrefix(machinecert.RelayHost(host), "grpc.") == strings.TrimPrefix(machinecert.RelayHost(server), "grpc.")
 }
 
-// pairWait bounds load's wait for a pair being replaced: only against a
-// writer that died between its two renames.
-const pairWait = 5 * time.Second
-
-// load reads dir's certificate and key as one pair. A login replaces the
-// key, then machine.json, each by rename (nfltr's machinecli keep), so a
-// read between the two finds a key the certificate does not certify: load
-// reads both again until they match, at most pairWait (lane CERTPAIR, guard
-// TestLoadWaitsForTheWritersCertificate).
+// load reads dir's certificate and the key it certifies as one pair: a
+// login replaces them write-ahead (machinecert.SavePair), so a reader
+// during a login, or after one stopped at any step, still finds a pair
+// (lane CERTATOMIC, spec/pair/MachinePair.tla; guard
+// TestLoadWaitsForTheWritersCertificate). With machinecert.KeyEnv the
+// certificate must certify that key.
 func load(dir string) *Credential {
-	var s *machinecert.Saved
-	var key *ecdsa.PrivateKey
-	for deadline := time.Now().Add(pairWait); ; time.Sleep(10 * time.Millisecond) {
-		var err error
-		if s, err = machinecert.Load(dir); err != nil {
-			return nil
-		}
-		if key, err = loadKey(dir); err != nil {
-			return nil
-		}
-		if pub, ok := s.Leaf.PublicKey.(*ecdsa.PublicKey); ok && pub.Equal(&key.PublicKey) {
-			break
-		}
-		if time.Now().After(deadline) {
-			return nil
-		}
+	s, key, err := pair(dir)
+	if err != nil {
+		return nil
 	}
 	c := &Credential{key: key, dir: dir, host: s.RelayHost, id: s.MachineID, name: s.Name, s: s}
 	t := s.TLS(key)
 	c.cur.Store(&t)
 	return c
+}
+
+func pair(dir string) (*machinecert.Saved, *ecdsa.PrivateKey, error) {
+	if os.Getenv(machinecert.KeyEnv) == "" {
+		return machinecert.LoadPair(dir)
+	}
+	s, err := machinecert.Load(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	key, err := loadKey(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	if pub, ok := s.Leaf.PublicKey.(*ecdsa.PublicKey); !ok || !pub.Equal(&key.PublicKey) {
+		return nil, nil, errors.New(machinecert.CertPath(dir) + " certifies another key than " + machinecert.KeyEnv)
+	}
+	return s, key, nil
 }
 
 // loadKey is $NFLTR_MACHINE_KEY when set, else dir's machine.key.

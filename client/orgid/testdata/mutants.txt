@@ -49,4 +49,4 @@ uri-host-unchecked | verify.go | 		if u.Scheme == "nfltr" && u.Host != Domain(v.
 # (stale-copy: RevocationBound) or older than the one held (copy-rollback).
 no-copy-read | follow.go | 	if cp, ok := mb.(CRLCopy); ok { | 	if cp, ok := mb.(CRLCopy); false && ok { | TestFollowTakesTheRelayCopyWhileTheMailboxIsDown
 stale-copy | verify.go | 	if !now.Before(crl.NextUpdate) { | 	if false { | TestFollowRefusesAStaleRolledBackOrUnsignedCopy
-read-pair-once | identity.go | 		if !strings.Contains(err.Error(), "private key does not match public key") || time.Now().After(deadline) { | 		if !strings.Contains(err.Error(), "private key does not match public key") || !deadline.IsZero() { | TestReadPairWaitsForTheWritersCertificate
+read-pair-once | identity.go | 		if strings.Contains(err.Error(), "private key does not match public key") { | 		if strings.Contains(err.Error(), "a mismatch never") { | TestReadPairWaitsForTheWritersCertificate

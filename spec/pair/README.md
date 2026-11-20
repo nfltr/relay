@@ -53,10 +53,14 @@ taken only under its mutant), and the traces.
 
 `client/pairfile` built `-tags pairtrace` with `PAIRTRACE=<dir>` writes one
 JSON line per step (`trace_on.go`): the step and what the files are after
-it (the certificate certifies the key, the new key; the new key exists).
+it (the certificate exists; it certifies the key, the new key; the new key
+exists).
 `TraceMachinePair.tla` reads a trace in order: each line must be one of the
 model's steps from the one before (a lock at any point: the writer before
-it stopped), leave the files as that step does, and leave a usable pair.
+it stopped), leave the files as that step does, and leave a usable pair
+once a certificate exists (the model starts enrolled; a first enrolment
+stopped before its certificate leaves the machine not enrolled, and the
+join is run again, as before).
 `spec-pair.sh traces` runs `client/pairfile`'s tests (every crash point of
 `TestEveryCrashLeavesAPair`) that way, then the fixtures: each
 `traces/<Invariant>-*.ndjson` must be rejected by its invariant.

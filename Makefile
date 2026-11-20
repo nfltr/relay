@@ -218,7 +218,8 @@ spec-bindings:
 # organisation mode; client/agent/testdata/queue_mutants.txt: its session
 # queue; client/orgid/testdata/mutants.txt: the organisation
 # checks; client/machinecred/testdata/mutants.txt: the relay credential's
-# key and certificate read as one pair; client/nf1/testdata/mutants.txt: the nf1 transport;
+# key and certificate read as one pair; client/pairfile/testdata/mutants.txt: a
+# key and certificate replaced as one pair; client/nf1/testdata/mutants.txt: the nf1 transport;
 # client/appenrol/testdata/mutants.txt: the sign-in nonce;
 # client/agent/testdata/direct_dgram_mutants.txt: the direct path's
 # datagrams; client/agent/testdata/nf1_anon_mutants.txt: sessions to an
@@ -233,6 +234,7 @@ test-go-mutants:
 	./scripts/go-mutants.sh client/agent/testdata/queue_mutants.txt
 	./scripts/go-mutants.sh client/orgid/testdata/mutants.txt
 	./scripts/go-mutants.sh client/machinecred/testdata/mutants.txt
+	./scripts/go-mutants.sh client/pairfile/testdata/mutants.txt
 	./scripts/go-mutants.sh client/appenrol/testdata/mutants.txt
 	./scripts/go-mutants.sh client/nf1/testdata/mutants.txt
 	./scripts/go-mutants.sh client/p2p/testdata/browser_mutants.txt

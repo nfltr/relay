@@ -4,13 +4,15 @@
 (* one JSON line each, with the files as the step left them:               *)
 (*   ev   lock, recover, next, cert, swap (MachinePair.tla's writer), or   *)
 (*        read (the reader took a pair; from: "key" or "next")            *)
+(*   ce   the certificate exists (not yet: the first enrolment)            *)
 (*   ck   the certificate certifies machine.key                            *)
 (*   cn   ... certifies machine.key.next                                   *)
 (*   nx   machine.key.next exists                                          *)
 (* Read in order, each line must be one of MachinePair.tla's steps from   *)
 (* the step before (a lock at any point: the writer before it stopped,    *)
 (* MachinePair.tla Crash), leave the files as that step does, and leave a *)
-(* usable pair (Usable). TraceDone is violated when every line was read:  *)
+(* usable pair once a certificate exists (Usable; MachinePair.tla starts *)
+(* enrolled). TraceDone is violated when every line was read:  *)
 (* accepted.                                                               *)
 EXTENDS Integers, Sequences, TLC, Json
 
@@ -41,7 +43,7 @@ Bad ==
     IF ~(E.ev \in {"lock", "recover", "next", "cert", "swap", "read"}) THEN {"diverged"}
     ELSE (IF E.ev # "read" /\ ~(pc \in From[E.ev]) THEN {"order"} ELSE {})
          \cup (IF ~Leaves THEN {"order"} ELSE {})
-         \cup (IF ~(E.ck \/ (E.cn /\ E.nx)) THEN {"unusable"} ELSE {})
+         \cup (IF E.ce /\ ~(E.ck \/ (E.cn /\ E.nx)) THEN {"unusable"} ELSE {})
 
 Next ==
     /\ l <= Len(Log) /\ l' = l + 1

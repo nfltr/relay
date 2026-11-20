@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// A renewal in another process replaces the key, then the certificate,
-// each by rename (lane CERTPAIR: nfltr cat serve --ssh failed "machine.pem:
-// tls: private key does not match public key" while another process
-// renewed): a Load between the two waits for the certificate.
+// A Load that read the certificate before another process's whole renewal
+// and the key after it (lane CERTPAIR: nfltr cat serve --ssh failed
+// "machine.pem: tls: private key does not match public key" while another
+// process renewed) reads again; the files here stand for what it read.
 func TestReadPairWaitsForTheWritersCertificate(t *testing.T) {
 	now := time.Now()
 	o := newTestOrg(t, now)
@@ -27,7 +27,7 @@ func TestReadPairWaitsForTheWritersCertificate(t *testing.T) {
 		check(t, os.WriteFile(tmp, data, 0o600))
 		check(t, os.Rename(tmp, filepath.Join(d, file)))
 	}
-	replace(KeyFile) // the writer, between its two renames
+	replace(KeyFile) // read after the renewal
 	done := make(chan *Identity, 1)
 	go func() {
 		m, err := Load(d)
