@@ -426,6 +426,22 @@ func (c *peekConn) CloseWriteSync() error {
 	return nil
 }
 
+// CloseWriteSyncReceived is the session's: tlsend's reports the next
+// hop's receipt through it, so a peerlink.Join onto the TLS ends its hold
+// there, not at the far end's ENDACK (link spec/HopHold.tla, mutant
+// hold-until-ack; lane ENDTRACE: hidden, tlsend fell back to
+// CloseWriteSync). On a conn without one, CloseWriteSync's, then received.
+func (c *peekConn) CloseWriteSyncReceived(received func()) error {
+	if s, ok := c.Conn.(interface{ CloseWriteSyncReceived(func()) error }); ok {
+		return s.CloseWriteSyncReceived(received)
+	}
+	if err := c.CloseWriteSync(); err != nil {
+		return err
+	}
+	received()
+	return nil
+}
+
 func (c *peekConn) Read(p []byte) (int, error) {
 	if len(c.first) > 0 && len(p) > 0 {
 		n := copy(p, c.first)

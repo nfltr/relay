@@ -1273,4 +1273,40 @@ closed by the bound, X keeping the transport). Go mutants:
 |---|---|
 | `XNotify`, `XFin` (the FIN right behind the close_notify) | client/tlsend/tlsend.go (`CloseWrite`, `CloseWriteSyncReceived`), client/nf1/early.go (an early session's `CloseWrite`, `CloseWriteSyncReceived`, `Reset`: its link session's) |
 | `YRecv` (the close_notify's EOF: `notified`), `YClose`, `YClosed` | client/tlsend/tlsend.go (`Read`, `Close`, `rawEnd.takeEnd`) |
-| trace recorder | none yet (lane PIPERESET follow-up): `TestNF1CloseTakesThePeersEnd` and the Go mutant guard the code |
+| trace recorder | client/tlsend/trace_on.go (`-tags relaytrace`), checked by `TraceTLSEnd.tla` (below) |
+| a wrapper over the session passes its end on (`CloseWrite`, `CloseWriteSyncReceived`, `Reset`; no `CloseWriteSync` on a direct path's conn) | client/agent/direct_nf1.go (`detachTap`), client/agent/direct.go (`peekConn`, `pathStream`, `psConn`), client/nf1/early.go |
+
+### TLSEnd traces (lane ENDTRACE)
+
+`client/tlsend` built `-tags relaytrace` with `RELAYTRACE=<dir>` writes
+one file per session (named by the TLS exported keying material, the
+same at both ends) and direction (the first close_notify's: its sender
+is X): X's `Notify` (`XNotify`), `Fin` (`XFin`) and `End` (its
+`CloseWriteSync` returned: n 1 nil, `XRecv` to clean; 0, to reset), Y's
+`EOF` (`YRecv` of the close_notify), `Close` (`YClose`; n 1: it takes the
+transport's end first, the only Close of a Y on a transport that
+acknowledges ends, so n 0 is `close-at-notify`'s) and `Closed`
+(`YClosed`). TLC adds Y's Mux reading the FIN and X's reads while it
+waits for nothing; `keep` is its choice. A direction whose X is no
+tlsend Conn (a plain crypto/tls peer: nfnet's `TestNF1CloseTakesThePeersEnd`
+server) or whose Y's transport acknowledges no end (a direct path) is
+not recorded. `TraceTLSEnd.tla` accepts a trace once every line is taken
+and Y's Close returned, `NoFalseReset` checked on every state.
+`make spec-tetraces` (in `make ci`, and in `spec-traces`): every event the
+module maps is one tlsend records, the fixtures, then
+`TestEndOverALinkSession` (sync, closewrite, crossing) recorded and each
+direction checked. Fixtures (`spec/testdata/`): `accept-tlsend-sync`,
+`accept-tlsend-crossing` (recorded), `accept-tlsend-keep` (X keeps its
+transport: Y's Close by the bound); `reject-tlsend-close-at-notify`
+(recorded with the mutant put back: `Close` n 0),
+`reject-tlsend-close-before-fin` (a whole close reached X before the
+ENDACK: its reset, the order nfltr-pipe saw), `reject-tlsend-unbounded`
+(X keeps its transport and Y's Close never returns),
+`reject-tlsend-unknown-step`.
+
+Close's direct-path exemption (lane ENDTRACE): `syncsEnd` keeps Close
+from taking the end of a conn that acknowledges none (a direct path's
+`psConn`, whose own Close takes the peer's end); waiting `EndBound` there
+failed nfltr-pipe's direct dials. Guards `TestCloseOnADirectPathTakesNoEnd`
+(Go mutant `direct-takes-end`, `client/tlsend/testdata/mutants.txt`) and
+`TestSessionWrappersPassTheEndOn` (`psConn` has no `CloseWriteSync`).

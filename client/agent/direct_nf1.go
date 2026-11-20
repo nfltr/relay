@@ -274,6 +274,15 @@ type detachTap struct {
 	detached atomic.Bool
 }
 
+// CloseWrite and Reset are the session's (psConn's), as pathStream's:
+// tlsend's CloseWrite ends the stream after the close_notify, its Reset
+// aborts it. Hidden behind net.Conn, tlsend's Reset of an anonymous
+// session was psConn's clean Close (lane ENDTRACE, as nf1.AnswerConn's in
+// lane PIPERESET; TestSessionWrappersPassTheEndOn). No CloseWriteSync: a
+// direct path's conn acknowledges no end (tlsend Close's exemption).
+func (t *detachTap) CloseWrite() error { return pathStream{Conn: t.Conn}.CloseWrite() }
+func (t *detachTap) Reset() error      { return pathStream{Conn: t.Conn}.Reset() }
+
 func (t *detachTap) Read(p []byte) (int, error) {
 	n, err := t.Conn.Read(p)
 	if errors.Is(err, pathswitch.ErrDetached) {
