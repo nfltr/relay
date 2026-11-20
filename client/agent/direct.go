@@ -395,6 +395,16 @@ type peekConn struct {
 	first []byte
 }
 
+// CloseWriteSync is the session's (a relayed link session's: TLS on it
+// syncs its end through it, tlsend.Conn.CloseWriteSync); nil on a conn
+// without one.
+func (c *peekConn) CloseWriteSync() error {
+	if s, ok := c.Conn.(interface{ CloseWriteSync() error }); ok {
+		return s.CloseWriteSync()
+	}
+	return nil
+}
+
 func (c *peekConn) Read(p []byte) (int, error) {
 	if len(c.first) > 0 && len(p) > 0 {
 		n := copy(p, c.first)
