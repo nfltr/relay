@@ -50,6 +50,16 @@ proto-gen:
 proto-report:
 	./scripts/proto-report.sh
 
+# The exported API of each module against its latest release tag
+# (<module>/vX.Y.Z; apidiff, pinned in scripts/check-api.sh): the changes
+# must be the ones api/<module>-<tag>.txt lists, which is what the
+# module's next release makes on purpose (docs/v1-api-review.md). A change
+# on purpose: record it there, then UPDATE=1 make check-api. Needs the
+# tags (a full clone) and module downloads for the old side.
+.PHONY: check-api
+check-api:
+	@for m in $(MODULES); do ./scripts/check-api.sh $$m $$m/ $$m || exit 1; done
+
 # Pinned SAST gated by scripts/{gosec,semgrep}-baseline.txt (semgrep needs docker).
 check-gosec:
 	./scripts/check-gosec.sh

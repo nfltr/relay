@@ -67,10 +67,11 @@ const AgentLinkALPN = "nfltr-agent-link/1"
 func AgentLinkALPNs() []string { return []string{"peerlink-chain", AgentLinkALPN} }
 
 // OpenHeader is a session's header for open: its fields without session id
-// and open flag. An open whose exclude list CheckExclude refuses is an
-// error.
+// and open flag. An open whose exclude list is more than MaxExclude
+// agent refs, or holds one that is not a lowercase DNS label or is
+// repeated, is an error.
 func OpenHeader(open *pb.TCPData) ([]byte, error) {
-	if err := CheckExclude(open.GetExclude()); err != nil {
+	if err := checkExclude(open.GetExclude()); err != nil {
 		return nil, err
 	}
 	h := proto.CloneOf(open)
@@ -79,23 +80,23 @@ func OpenHeader(open *pb.TCPData) ([]byte, error) {
 }
 
 // ParseOpenHeader reads a session's header (OpenHeader): a TCPData whose
-// exclude list CheckExclude accepts.
+// exclude list OpenHeader would accept.
 func ParseOpenHeader(header []byte) (*pb.TCPData, error) {
 	f := &pb.TCPData{}
 	if err := proto.Unmarshal(header, f); err != nil {
 		return f, err
 	}
-	return f, CheckExclude(f.GetExclude())
+	return f, checkExclude(f.GetExclude())
 }
 
 // MaxExclude bounds an open's exclude list (pb.TCPData.Exclude): the
 // instances one open of a service name may have failed on.
 const MaxExclude = 16
 
-// CheckExclude accepts an open's exclude list: at most MaxExclude agent
+// checkExclude accepts an open's exclude list: at most MaxExclude agent
 // refs, each a lowercase DNS label (agentservices.ValidLabel), none
 // repeated.
-func CheckExclude(refs []string) error {
+func checkExclude(refs []string) error {
 	if len(refs) > MaxExclude {
 		return fmt.Errorf("dataplane: exclude of %d instances (at most %d)", len(refs), MaxExclude)
 	}

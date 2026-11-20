@@ -72,7 +72,7 @@ func WindowFrame(sid string, n int) *pb.TCPData {
 func ParseWindowFrame(f *pb.TCPData) (string, int, error) { return link.ParseWindow(f.GetData()) }
 
 // ParseCreditHeader parses a CreditHeader value as a window.
-func ParseCreditHeader(s string) (int, error) { return ParseWindow(s) }
+func ParseCreditHeader(s string) (int, error) { return parseWindow(s) }
 
 // bindToken is the agent's credential on its agent link (BindToken).
 type bindToken string

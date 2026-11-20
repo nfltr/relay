@@ -25,8 +25,8 @@ type Header struct {
 	Len    int64
 }
 
-// ReadHeader reads a frame header from r without allocating.
-func ReadHeader(r *bufio.Reader) (Header, error) {
+// readHeader reads a frame header from r without allocating.
+func readHeader(r *bufio.Reader) (Header, error) {
 	var h Header
 	b, err := next(r, 2)
 	if err != nil {
@@ -78,7 +78,7 @@ func next(r *bufio.Reader, n int) ([]byte, error) {
 // ReadFrame reads one frame, unmasking its payload into a new slice the
 // caller owns. A payload over max bytes is an error.
 func ReadFrame(r *bufio.Reader, max int64) (Header, []byte, error) {
-	h, err := ReadHeader(r)
+	h, err := readHeader(r)
 	if err != nil {
 		return h, nil, err
 	}
@@ -90,7 +90,7 @@ func ReadFrame(r *bufio.Reader, max int64) (Header, []byte, error) {
 		return h, nil, err
 	}
 	if h.Masked {
-		Mask(p, h.Key)
+		mask(p, h.Key)
 	}
 	return h, p, nil
 }
@@ -125,13 +125,13 @@ func AppendFrame(dst []byte, op byte, payload []byte, key *[4]byte) []byte {
 	start := len(dst)
 	dst = append(dst, payload...)
 	if key != nil {
-		Mask(dst[start:], *key)
+		mask(dst[start:], *key)
 	}
 	return dst
 }
 
-// Mask XORs b in place with the repeating 4-byte key, from key offset 0.
-func Mask(b []byte, key [4]byte) {
+// mask XORs b in place with the repeating 4-byte key, from key offset 0.
+func mask(b []byte, key [4]byte) {
 	k := uint64(binary.LittleEndian.Uint32(key[:]))
 	k |= k << 32
 	for len(b) >= 8 {

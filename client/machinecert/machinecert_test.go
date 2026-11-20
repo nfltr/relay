@@ -53,7 +53,7 @@ func TestRenewalLoopJitter(t *testing.T) {
 		jitter float64
 		want   time.Duration
 	}{{0, 13*time.Hour + 12*time.Minute}, {1, 14*time.Hour + 24*time.Minute}, {-1, 12 * time.Hour}, {5, 14*time.Hour + 24*time.Minute}, {-5, 12 * time.Hour}} {
-		at := RenewAt(nb, nb.Add(day), tc.jitter)
+		at := renewAt(nb, nb.Add(day), tc.jitter)
 		if got := at.Sub(nb); got != tc.want {
 			t.Errorf("jitter %v: renews %v after issue, want %v", tc.jitter, got, tc.want)
 		}
@@ -266,7 +266,7 @@ func TestRenewalLoopRenewsOnTimeAfterTheHostSlept(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	due := RenewAt(nb, nb.Add(day), 0)
+	due := renewAt(nb, nb.Add(day), 0)
 	if renewedAt.Before(due) || renewedAt.After(due.Add(MaxSleep)) {
 		t.Fatalf("renewed at %v after issue, want %v (+ at most %v)", renewedAt.Sub(nb), due.Sub(nb), MaxSleep)
 	}

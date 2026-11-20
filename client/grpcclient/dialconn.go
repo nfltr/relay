@@ -37,7 +37,7 @@ func DialConn(ctx context.Context, secure bool, tlsCfg *tls.Config, host string,
 
 // dialConn is DialConn through proxy (nil: direct).
 func dialConn(ctx context.Context, proxy *url.URL, secure bool, tlsCfg *tls.Config, host string, port int) (net.Conn, error) {
-	nc, err := DialThrough(ctx, proxy, net.JoinHostPort(host, strconv.Itoa(port)))
+	nc, err := dialThrough(ctx, proxy, net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		return nil, err
 	}
@@ -74,12 +74,12 @@ func RelayTLS(secure bool, tlsCfg *tls.Config, host string) *tls.Config {
 	return tlsCfg
 }
 
-// DialThrough connects to addr directly (proxy nil) or through an http://
+// dialThrough connects to addr directly (proxy nil) or through an http://
 // proxy's CONNECT, with Basic credentials from the proxy URL's user info.
 // It returns once the proxy answered 200: the bytes after it are addr's.
 // Neither golang.org/x/net/proxy (SOCKS5 only) nor the standard library
 // exports an HTTP CONNECT dialer; gRPC's is internal.
-func DialThrough(ctx context.Context, proxy *url.URL, addr string) (net.Conn, error) {
+func dialThrough(ctx context.Context, proxy *url.URL, addr string) (net.Conn, error) {
 	d := &net.Dialer{}
 	if proxy == nil {
 		return d.DialContext(ctx, "tcp", addr)

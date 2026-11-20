@@ -15,7 +15,7 @@ import (
 
 const fuzzMax = 1 << 16
 
-// FuzzReadMessage feeds arbitrary bytes, as a peer would, to ReadHeader,
+// FuzzReadMessage feeds arbitrary bytes, as a peer would, to readHeader,
 // ReadFrame and MessageReader: no panic, no payload over max, and every
 // violation is a CloseError with a code a reader may fail a connection with.
 func FuzzReadMessage(f *testing.F) {
@@ -41,7 +41,7 @@ func FuzzReadMessage(f *testing.F) {
 	f.Fuzz(func(t *testing.T, wire []byte) {
 		r := bufio.NewReader(bytes.NewReader(wire))
 		for {
-			if _, err := ReadHeader(r); err != nil {
+			if _, err := readHeader(r); err != nil {
 				break
 			}
 		}

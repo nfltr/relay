@@ -97,7 +97,7 @@ func NewClientConn(secureConn bool, serverAddress string, serverPort int, opts .
 
 	if secureConn {
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(
-			ExplainTLS(tlsbatch.ClientCredentials(credentials.NewTLS(relayTLSConfig(&cfg)))),
+			explainTLS(tlsbatch.ClientCredentials(credentials.NewTLS(relayTLSConfig(&cfg)))),
 		))
 	} else {
 		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -123,10 +123,10 @@ func relayTLSConfig(cfg *options) *tls.Config {
 	return relaytrust.WithPin(tlsCfg, os.Getenv(relaytrust.PinEnv))
 }
 
-// ExplainTLS returns creds whose handshake errors say what to do when the
+// explainTLS returns creds whose handshake errors say what to do when the
 // relay's certificate is refused (relaytrust.Explain): gRPC reports them only
 // as text. For credentials that honour the relay pin.
-func ExplainTLS(creds credentials.TransportCredentials) credentials.TransportCredentials {
+func explainTLS(creds credentials.TransportCredentials) credentials.TransportCredentials {
 	return explainCreds{TransportCredentials: creds}
 }
 

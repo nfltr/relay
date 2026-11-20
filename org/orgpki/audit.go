@@ -85,8 +85,8 @@ func checkpointMessage(orgID, head string) []byte {
 	return []byte("nfltr-org-checkpoint-v1\x00" + orgID + "\x00" + head)
 }
 
-// SignCheckpoint signs a checkpoint message with the root primary.
-func SignCheckpoint(root crypto.Signer, orgID, head string) ([]byte, error) {
+// signCheckpoint signs a checkpoint message with the root primary.
+func signCheckpoint(root crypto.Signer, orgID, head string) ([]byte, error) {
 	return crypto.SignMessage(root, rand.Reader, checkpointMessage(orgID, head), crypto.SHA256)
 }
 

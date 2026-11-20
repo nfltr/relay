@@ -139,7 +139,7 @@ var renewBindings = map[string]struct {
 	// The root's checkpoint of a head that is not this log's.
 	"renew.head": {ans: func(t *testing.T, o *org, a *IssuerRenewal) {
 		a.Head = strings.Repeat("cd", 32)
-		sig, err := SignCheckpoint(o.root, o.iss.OrgID(), a.Head)
+		sig, err := signCheckpoint(o.root, o.iss.OrgID(), a.Head)
 		if err != nil {
 			t.Fatal(err)
 		}

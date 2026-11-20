@@ -1,0 +1,13 @@
+Incompatible changes:
+- package github.com/nfltr/relay/proto/nfltr/blob/v1: removed
+- ./nfltr/relay/v1.ErrorReason_ERROR_REASON_BLOB_HASH_MISMATCH: removed
+- ./nfltr/relay/v1.ErrorReason_ERROR_REASON_BLOB_NOT_FOUND: removed
+- ./nfltr/relay/v1.ErrorReason_ERROR_REASON_BLOB_UPLOAD_GAP: removed
+- package github.com/nfltr/relay/proto/wire/blobwire: removed
+- ./wire/chunking.AcksUploads: removed
+- ./wire/chunking.ReadChunksStreamingWithContext: removed
+- ./wire/turnwire.ValidateTURNURL: removed
+- ./wire/dataplane.CheckExclude: removed
+- ./wire/dataplane.ParseWindow: removed
+- ./wire/wsframe.Mask: removed
+- ./wire/wsframe.ReadHeader: removed

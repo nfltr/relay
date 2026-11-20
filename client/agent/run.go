@@ -169,7 +169,7 @@ func processStream(
 			}
 			body = bytes.NewReader(msg.Request.Payload)
 		}
-		visitor := UpgradeVisitor(req, msg.Request)
+		visitor := upgradeVisitor(req, msg.Request)
 		if visitor != nil {
 			body = http.NoBody // the visitor's bytes follow the backend's 101
 		}
@@ -226,7 +226,7 @@ func processStream(
 			}
 
 			if resp.StatusCode == http.StatusSwitchingProtocols {
-				SpliceUpgrade(req.Ctx, resp, visitor)
+				spliceUpgrade(req.Ctx, resp, visitor)
 			}
 			n, sendErr := sendResponse(req.Ctx, safeSend, resp, msg, fwd, req.Acks)
 			resp.Body.Close() //nolint:errcheck

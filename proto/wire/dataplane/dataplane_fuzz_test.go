@@ -22,7 +22,7 @@ func FuzzParseWindow(f *testing.F) {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, s string) {
-		w, err := ParseWindow(s)
+		w, err := parseWindow(s)
 		if err != nil {
 			return
 		}

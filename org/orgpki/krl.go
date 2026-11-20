@@ -13,9 +13,9 @@ import (
 	"github.com/stripe/krl"
 )
 
-// HostSerial is the SSH host certificate serial of a machine certificate's
+// hostSerial is the SSH host certificate serial of a machine certificate's
 // X.509 serial: its top 64 bits (of the 128 the issuer draws).
-func HostSerial(sn *big.Int) uint64 {
+func hostSerial(sn *big.Int) uint64 {
 	return binary.BigEndian.Uint64(sn.FillBytes(make([]byte, 16)))
 }
 
@@ -40,7 +40,7 @@ func HostKRL(crlDER []byte, issuer *x509.Certificate) ([]byte, error) {
 	for _, e := range crl.RevokedCertificateEntries {
 		// ssh-keygen refuses serial 0, and ssh refuses every host when it
 		// cannot read the KRL: leave it out (2^-64 per certificate).
-		if s := HostSerial(e.SerialNumber); s != 0 {
+		if s := hostSerial(e.SerialNumber); s != 0 {
 			serials = append(serials, s)
 		}
 	}

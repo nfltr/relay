@@ -101,7 +101,7 @@ type Chunk struct {
 // a non-EOF error.
 //
 // For long-lived streaming responses (SSE, NDJSON) use
-// ReadChunksStreamingWithContext instead — it forwards data without
+// ReadUpgradeChunksWithContext instead — it forwards data without
 // look-ahead buffering.
 // If ctx is cancelled while the producer goroutine is blocked on channel send,
 // the goroutine exits and closes the output channel.
@@ -145,66 +145,6 @@ func ReadChunksWithContext(ctx context.Context, r io.Reader, firstSize, restSize
 				// EOF / ErrUnexpectedEOF / real error — flush prev as last.
 				if prev != nil {
 					if !sendChunk(ctx, ch, Chunk{Payload: prev, Last: true}) {
-						return
-					}
-				}
-				return
-			}
-		}
-	}()
-	return ch
-}
-
-// ReadChunksStreamingWithContext reads r and sends each piece to the returned
-// channel as
-// soon as data is available, without look-ahead buffering. This is critical
-// for long-lived streaming responses such as Server-Sent Events (SSE) and
-// chunked JSON APIs (NDJSON), where individual frames are much smaller than
-// the gRPC message budget and must be forwarded with minimal latency.
-//
-// Unlike ReadChunksWithContext, this function uses r.Read() (not io.ReadFull)
-// and does
-// NOT hold one chunk back; each read result is emitted immediately. The
-// trade-off is that the Last flag is only set when r.Read() returns data and
-// an error (typically EOF) simultaneously. If the reader returns data and nil
-// separately, a zero-payload sentinel chunk with Last=true is emitted after
-// the final data.
-// If ctx is cancelled while the producer goroutine is blocked on channel send,
-// the goroutine exits and closes the output channel.
-func ReadChunksStreamingWithContext(ctx context.Context, r io.Reader, firstSize, restSize int) <-chan Chunk {
-	ch := make(chan Chunk, 2)
-	go func() {
-		defer close(ch)
-		chunkSize := firstSize
-		buf := chunkBufPool.Get().([]byte)
-		if len(buf) < max(firstSize, restSize) {
-			buf = make([]byte, max(firstSize, restSize))
-		}
-		defer chunkBufPool.Put(buf) //nolint:staticcheck // pool reuse is intentional
-		sentAny := false
-		for {
-			n, err := r.Read(buf[:chunkSize])
-			if n > 0 {
-				data := make([]byte, n)
-				copy(data, buf[:n])
-				if err != nil {
-					// Data + EOF in same call: this is the final chunk.
-					if !sendChunk(ctx, ch, Chunk{Payload: data, Last: true}) {
-						return
-					}
-					return
-				}
-				if !sendChunk(ctx, ch, Chunk{Payload: data, Last: false}) {
-					return
-				}
-				sentAny = true
-				chunkSize = restSize
-			}
-			if err != nil {
-				// EOF with no data — send a termination sentinel so the
-				// consumer knows the stream is done.
-				if sentAny {
-					if !sendChunk(ctx, ch, Chunk{Last: true}) {
 						return
 					}
 				}

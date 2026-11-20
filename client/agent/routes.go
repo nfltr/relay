@@ -73,21 +73,21 @@ type resolvedForward struct {
 	rewriteHost bool
 }
 
-// SplitRoute splits a relay request URL (no leading "/", e.g.
+// splitRoute splits a relay request URL (no leading "/", e.g.
 // "api/users?x=1") into its first path segment, which names a route, and
 // the rest ("/users?x=1", or "?x=1"), which a named route forwards.
-func SplitRoute(reqURL string) (first, rest string) {
+func splitRoute(reqURL string) (first, rest string) {
 	if i := strings.IndexAny(reqURL, "/?"); i >= 0 {
 		return reqURL[:i], reqURL[i:]
 	}
 	return reqURL, ""
 }
 
-// TargetURL is the backend URL for a request: rel (its path and query,
+// targetURL is the backend URL for a request: rel (its path and query,
 // with a route's prefix already stripped) appended to the backend URL's own
 // path, so a route to http://host/github sends rel "/tasks" to
 // http://host/github/tasks. rel's query replaces the backend's.
-func TargetURL(backend, rel string) (string, error) {
+func targetURL(backend, rel string) (string, error) {
 	u, err := url.Parse(backend)
 	if err != nil {
 		return "", fmt.Errorf("parse backend URL %q: %w", backend, err)
@@ -120,7 +120,7 @@ func (rt routeTable) forward(reqURL string, service []string) resolvedForward {
 		}
 		return resolvedForward{strippedPath: reqURL}
 	}
-	firstSeg, rest := SplitRoute(reqURL)
+	firstSeg, rest := splitRoute(reqURL)
 
 	if u, ok := rt[firstSeg]; ok && firstSeg != "" {
 		return resolvedForward{

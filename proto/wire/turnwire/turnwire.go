@@ -70,9 +70,9 @@ func ValidateTURNSecret(secret string) error {
 	return nil
 }
 
-// ValidateTURNURL accepts an RFC 7065 TURN URI: turn:|turns: host[:port]
+// validateTURNURL accepts an RFC 7065 TURN URI: turn:|turns: host[:port]
 // with an optional ?transport=udp|tcp and nothing else.
-func ValidateTURNURL(raw string) error {
+func validateTURNURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "turn" && u.Scheme != "turns") || u.Opaque == "" || u.Fragment != "" {
 		return fmt.Errorf("turn: %q is not a turn:/turns: URL (turn:host[:port][?transport=udp|tcp])", raw)
@@ -118,7 +118,7 @@ func ValidateICEServers(servers []ICEServer) error {
 			return fmt.Errorf("turn: an ICE server needs 1-%d URLs", maxTURNURLs)
 		}
 		for _, u := range s.URLs {
-			if err := ValidateTURNURL(u); err != nil {
+			if err := validateTURNURL(u); err != nil {
 				return err
 			}
 		}

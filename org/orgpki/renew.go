@@ -122,7 +122,7 @@ func SignIssuerRenewal(p Pins, root crypto.Signer, req IssuerRenewalRequest, wid
 	if err != nil {
 		return IssuerRenewal{}, err
 	}
-	sig, err := SignCheckpoint(root, p.OrgID, req.Head)
+	sig, err := signCheckpoint(root, p.OrgID, req.Head)
 	if err != nil {
 		return IssuerRenewal{}, fmt.Errorf("root signature: %w", err)
 	}

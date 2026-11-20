@@ -66,7 +66,7 @@ func TestValidateTURNURL(t *testing.T) {
 		"turn:turn.example.com", "turn:10.99.0.3:3478?transport=udp", "turns:turn.example.com:5349?transport=tcp",
 		"turn:[2001:db8::1]:3478",
 	} {
-		if err := ValidateTURNURL(ok); err != nil {
+		if err := validateTURNURL(ok); err != nil {
 			t.Errorf("%s: %v", ok, err)
 		}
 	}
@@ -75,7 +75,7 @@ func TestValidateTURNURL(t *testing.T) {
 		"turn:x?transport=sctp", "turn:x?foo=1", "turn:x#f", "turn:a b", "turn:x\"y", "turn:2001:db8::1",
 		"turn:" + strings.Repeat("a", 600),
 	} {
-		if err := ValidateTURNURL(bad); err == nil {
+		if err := validateTURNURL(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
 	}

@@ -57,7 +57,7 @@ func (i *Issuer) HostCert(leafDER []byte, now time.Time) ([]byte, error) {
 	}
 	c := &ssh.Certificate{
 		Key:             pub,
-		Serial:          HostSerial(leaf.SerialNumber),
+		Serial:          hostSerial(leaf.SerialNumber),
 		CertType:        ssh.HostCert,
 		KeyId:           rec.name,
 		ValidPrincipals: []string{orgid.MachineDNS(rec.name, i.orgID)},
