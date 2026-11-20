@@ -1350,7 +1350,8 @@ transport (a plain crypto/tls peer's `CloseWrite`).
 Witnesses (violated): `W_Clean` (X's end acknowledged), `W_Bound` (Y
 closed by the bound, X keeping the transport). Go mutants:
 `client/nfnet/testdata/mutants.txt` `close-before-fin`
-(`TestNF1CloseTakesThePeersEnd`).
+(`TestNF1CloseTakesThePeersEnd`), `closewrite-tls-only`
+(`TestNF1CloseWriteEndsTheSession`).
 
 ### Environment assumptions
 
@@ -1359,12 +1360,12 @@ closed by the bound, X keeping the transport). Go mutants:
 | A link session is one ordered stream each way; the close_notify record and the FIN written after it arrive in that order | link `WIRE.md` (session frames in order) |
 | A far end's Mux acknowledges a FIN on receipt, and an end it holds before its close (a hop's reader when it takes the end) | link `endack.go` (`AckEnd`, `ackAtClose`, `readEnd`), link `spec/RelayedClose.tla`, `spec/EndAckLeg.tla` |
 | A whole close that reaches the peer before its end's ENDACK ends the peer's `CloseWriteSync` with `ErrReset` | link ENDACKTRUTH (`closeAckErr`), link `spec/RelayedClose.tla` `CClose` |
-| The FIN behind a close_notify arrives within `EndBound` (written right after it on the same stream); later, Close closes anyway | crypto/tls bounds its close_notify write by 5 s (`Conn.closeNotify`) |
+| The FIN behind a close_notify arrives within `EndBound`: `CloseWrite` writes it right after the close_notify on the same stream; later, Close closes anyway. A direct path's conn (no `CloseWriteSync`) is not waited for: its own Close takes the peer's end in the background | crypto/tls bounds its close_notify write by 5 s (`Conn.closeNotify`); client/agent `psConn.Close` |
 
 ### Code map (TLSEnd.tla)
 
 | actions | code |
 |---|---|
-| `XNotify`, `XFin` | client/tlsend/tlsend.go (`CloseWriteSyncReceived`) |
+| `XNotify`, `XFin` (the FIN right behind the close_notify) | client/tlsend/tlsend.go (`CloseWrite`, `CloseWriteSyncReceived`), client/nf1/early.go (an early session's `CloseWrite`, `CloseWriteSyncReceived`, `Reset`: its link session's) |
 | `YRecv` (the close_notify's EOF: `notified`), `YClose`, `YClosed` | client/tlsend/tlsend.go (`Read`, `Close`, `rawEnd.takeEnd`) |
 | trace recorder | none yet (lane PIPERESET follow-up): `TestNF1CloseTakesThePeersEnd` and the Go mutant guard the code |

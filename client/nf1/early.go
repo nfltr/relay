@@ -71,8 +71,18 @@ func (a *AnswerConn) Hints() []byte { return a.hints }
 // session's): its half close with the far end's acknowledgement, and its
 // reset.
 type sessionEnd interface {
+	CloseWrite() error
 	CloseWriteSyncReceived(received func()) error
 	Reset() error
+}
+
+// CloseWrite is the session's half close (its FIN; tlsend's CloseWrite
+// after the close_notify); on a conn without one, nothing.
+func (a *AnswerConn) CloseWrite() error {
+	if s, ok := a.Conn.(sessionEnd); ok { // a link session: its FIN
+		return s.CloseWrite()
+	}
+	return nil
 }
 
 // CloseWriteSyncReceived is the session's (link.Session's): tlsend's

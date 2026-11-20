@@ -17,3 +17,4 @@ reset-is-refusal | nf1.go | 	if _, err := io.ReadFull(tc, v[:]); err != nil && e
 # whole close as a reset, link ENDACKTRUTH), Reset was a clean close.
 early-no-fin | early.go | 	if s, ok := a.Conn.(sessionEnd); ok { // a link session: its FIN, then the far end's ENDACK | 	if s, ok := a.Conn.(sessionEnd); false && ok { | TestAnswerConnPassesTheSessionsEnd
 early-reset-closes | early.go | 	if s, ok := a.Conn.(sessionEnd); ok { // a link session: the peer reads a reset | 	if s, ok := a.Conn.(sessionEnd); false && ok { | TestAnswerConnPassesTheSessionsEnd
+early-closewrite-hidden | early.go | 	if s, ok := a.Conn.(sessionEnd); ok { // a link session: its FIN | 	if s, ok := a.Conn.(sessionEnd); false && ok { | TestAnswerConnPassesTheSessionsEnd

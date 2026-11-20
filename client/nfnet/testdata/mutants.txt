@@ -4,4 +4,7 @@
 # Lane PIPERESET: a Close after the peer's close_notify closed the session
 # whole before the FIN behind it arrived; the peer's CloseWriteSync read it
 # as a reset (link ENDACKTRUTH; nfltr-pipe's relayed dialer exited 6).
-close-before-fin | ../tlsend/tlsend.go | 	if c.raw.notified.Load() { | 	if false { | TestNF1CloseTakesThePeersEnd
+close-before-fin | ../tlsend/tlsend.go | 	if c.raw.notified.Load() && syncsEnd(c.raw.Conn) { | 	if false { | TestNF1CloseTakesThePeersEnd
+# Lane PIPERESET: CloseWrite under TLS was crypto/tls's alone (the
+# close_notify), the FIN left to Close: a peer's Close waited for it.
+closewrite-tls-only | ../tlsend/tlsend.go | 	if cw, ok := c.raw.Conn.(interface{ CloseWrite() error }); ok { | 	if cw, ok := c.raw.Conn.(interface{ CloseWrite() error }); false && ok { | TestNF1CloseWriteEndsTheSession

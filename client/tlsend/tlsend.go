@@ -66,6 +66,20 @@ func (c *Conn) Reset() error {
 	return c.raw.Conn.Close()
 }
 
+// CloseWrite is the half close: the close_notify, then the transport's
+// (a link session's FIN), so the peer's reads and its Close take both
+// (spec/TLSEnd.tla XNotify, XFin; lane PIPERESET: crypto/tls's alone left
+// the FIN to Close, and a peer's Close waited for it).
+func (c *Conn) CloseWrite() error {
+	if err := c.Conn.CloseWrite(); err != nil {
+		return err
+	}
+	if cw, ok := c.raw.Conn.(interface{ CloseWrite() error }); ok {
+		return cw.CloseWrite()
+	}
+	return nil
+}
+
 // CloseWriteSync is the half close (close_notify), then, on a transport
 // that syncs its end (a relayed link session), its CloseWriteSync: nil
 // once the far end took the close_notify and the end (link FeatureEndAck;
@@ -97,8 +111,9 @@ func (c *Conn) CloseWriteSyncReceived(received func()) error {
 
 // Close is the TLS connection's (close_notify, then the transport's
 // close), or after Reset only the transport's. After the peer's
-// close_notify was read it first takes the transport's end behind it
-// (its FIN), within EndBound: a close before it races that FIN, and a
+// close_notify was read it first takes the end of a transport that
+// acknowledges ends (syncsEnd: its FIN behind the close_notify), within
+// EndBound: a close before it races that FIN, and a
 // link peer's CloseWriteSync reads such a close as a reset (link
 // ENDACKTRUTH; lane PIPERESET). crypto/tls reads nothing past the
 // close_notify.
@@ -106,10 +121,22 @@ func (c *Conn) Close() error {
 	if c.raw.reset.Load() {
 		return c.raw.Conn.Close()
 	}
-	if c.raw.notified.Load() {
+	if c.raw.notified.Load() && syncsEnd(c.raw.Conn) {
 		c.raw.takeEnd()
 	}
 	return c.Conn.Close()
+}
+
+// syncsEnd: raw acknowledges its end to the peer (a link session, or a
+// conn passing its CloseWriteSync on), whose wait reads a whole close
+// before it as a reset. A direct path's conn ends its own way (its Close
+// waits for the peer's end in the background).
+func syncsEnd(raw net.Conn) bool {
+	switch raw.(type) {
+	case interface{ CloseWriteSyncReceived(func()) error }, interface{ CloseWriteSync() error }:
+		return true
+	}
+	return false
 }
 
 // EndBound bounds Close's wait for the transport's end after the peer's

@@ -385,7 +385,6 @@ func TestNF1CloseKeepsWhatWasWritten(t *testing.T) {
 	}
 	srv := <-srvc
 	<-raws
-	defer srv.Close() //nolint:errcheck
 	msg := bytes.Repeat([]byte("x"), 1<<20)
 	done := make(chan error, 1)
 	go func() {
@@ -400,6 +399,10 @@ func TestNF1CloseKeepsWhatWasWritten(t *testing.T) {
 	if err != nil || !bytes.Equal(b, msg) {
 		t.Fatalf("server read %d of %d bytes, %v; want them all then EOF", len(b), len(msg), err)
 	}
+	// the server's Close takes the client's FIN: its ENDACK ends the
+	// client's Close (the stand-in is a hop, which acknowledges an end
+	// once its reader took it)
+	_ = srv.Close()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
@@ -482,5 +485,31 @@ func TestNF1CloseTakesThePeersEnd(t *testing.T) {
 	}
 	if err := <-closed; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// CloseWrite under end-to-end TLS is the close_notify, then the
+// transport's FIN (Conn.CloseWrite's contract): the server's session reads
+// its end at once. tlsend's CloseWrite was crypto/tls's alone, the FIN
+// left to Close: a peer's Close after the close_notify then waited for an
+// end that was not sent (lane PIPERESET, spec/TLSEnd.tla XFin).
+func TestNF1CloseWriteEndsTheSession(t *testing.T) {
+	l, _, err := nf1.Mint("relay.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, srvc, raws := nf1Relay(t, l)
+	c := dialNF1Addr(t, cfg, l.Address())
+	srv, raw := <-srvc, <-raws
+	defer srv.Close() //nolint:errcheck
+	if err := c.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	_ = raw.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if b, err := io.ReadAll(srv); err != nil || len(b) != 0 {
+		t.Fatalf("server read %q, %v; want the close_notify's EOF", b, err)
+	}
+	if n, err := raw.Read(make([]byte, 1)); n != 0 || err != io.EOF {
+		t.Fatalf("the server's session read %d, %v; want the client's FIN", n, err)
 	}
 }

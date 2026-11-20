@@ -22,6 +22,11 @@ func (e *endConn) CloseWriteSyncReceived(received func()) error {
 	return nil
 }
 
+func (e *endConn) CloseWrite() error {
+	e.calls = append(e.calls, "CloseWrite")
+	return nil
+}
+
 func (e *endConn) Reset() error {
 	e.calls = append(e.calls, "Reset")
 	return nil
@@ -36,11 +41,15 @@ func TestAnswerConnPassesTheSessionsEnd(t *testing.T) {
 	e := &endConn{}
 	a := any(EarlyAnswer(e, capaddr.Address{}, false, nil))
 	s, ok := a.(interface {
+		CloseWrite() error
 		CloseWriteSyncReceived(func()) error
 		Reset() error
 	})
 	if !ok {
-		t.Fatal("AnswerConn hides its session's CloseWriteSyncReceived and Reset")
+		t.Fatal("AnswerConn hides its session's CloseWrite, CloseWriteSyncReceived and Reset")
+	}
+	if err := s.CloseWrite(); err != nil {
+		t.Fatal(err)
 	}
 	got := false
 	if err := s.CloseWriteSyncReceived(func() { got = true }); err != nil || !got {
@@ -49,7 +58,7 @@ func TestAnswerConnPassesTheSessionsEnd(t *testing.T) {
 	if err := s.Reset(); err != nil {
 		t.Fatal(err)
 	}
-	if len(e.calls) != 2 {
-		t.Fatalf("passed on %v, want both", e.calls)
+	if len(e.calls) != 3 {
+		t.Fatalf("passed on %v, want all three", e.calls)
 	}
 }
