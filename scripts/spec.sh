@@ -35,7 +35,8 @@
 #            trace (client/rpcclient -tags relaytrace) checked against
 #            spec/TraceCallCredit.tla.
 #   dgtraces  client/dgram's traced association tests (DG_TRACE_TESTS,
-#            default TestDatagramAssocTrace, DG_TRACE_COUNT runs, default 3)
+#            default TestDatagramAssocTrace and TestDatagramAssocTraceRevoke,
+#            DG_TRACE_COUNT runs, default 3)
 #            and client/agent's that move direct (DG_DIRECT_TESTS),
 #            each run in its own process with -tags relaytrace, its trace
 #            checked against spec/TraceDatagramAssoc.tla; each
@@ -493,7 +494,7 @@ CONSTANTS
     Amp <- TraceLen
     R = 1
     B <- TraceLen
-    MaxCuts = 0
+    MaxCuts <- TraceLen
     MaxLoss <- TraceLen
     Mutant = "none"
 INIT TraceInit
@@ -506,6 +507,7 @@ INVARIANTS
     NoHOL
     NoReflection
     NoLostOnMove
+    NoDeliverAfterRevoke
     TraceNotDone
 CFG
 	META=$work/states-$(basename "$1") tlc "$cfg" TraceDatagramAssoc.tla >"$1.out" 2>&1 || true
@@ -1063,7 +1065,7 @@ bptraces)
 	exit $fail
 	;;
 dgtraces)
-	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || fail=1
+	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace(Revoke)?\$}" "${DG_TRACE_COUNT:-3}" || fail=1
 	dgrun "${DG_DIRECT_TESTS:-$DGDIRECT}" "${DG_TRACE_COUNT:-3}" agent || fail=1
 	exit $fail
 	;;
@@ -1141,7 +1143,7 @@ traces)
 	clrun "${CL_TRACE_TESTS:-.}" 1
 	ccrun "${CC_TRACE_TESTS:-$CCTESTS}" || exit 1
 	asrun "${AS_TRACE_TESTS:-^TestA2AE2EE}" || exit 1
-	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace\$}" "${DG_TRACE_COUNT:-3}" || exit 1
+	dgrun "${DG_TRACE_TESTS:-^TestDatagramAssocTrace(Revoke)?\$}" "${DG_TRACE_COUNT:-3}" || exit 1
 	dgrun "${DG_DIRECT_TESTS:-$DGDIRECT}" "${DG_TRACE_COUNT:-3}" agent || exit 1
 	prun "${P_TRACE_TESTS:-$PTESTS}" || exit 1
 	stoprun "${STOP_TRACE_TESTS:-$STOPTESTS}" fixtures || exit 1
