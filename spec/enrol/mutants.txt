@@ -57,3 +57,19 @@ no-serve-backstop BackstopBound RevokePush.cfg
 no-follow-backstop BackstopBound RevokePush.cfg
 admit-after-crl NoAdmitAfterLearn RevokePush.cfg
 no-cut NoAdmitAfterLearn RevokePush.cfg
+# CrlCarriers.tla (the CRL on the mailbox and the relay's copy,
+# CrlCarriers.cfg; nfltr docs/decisions/crl-off-mailbox-2026-11-20.md):
+# the copy's CRL kept valid from its read instead of its NextUpdate (a
+# stale CRL accepted), an older one taken from the copy (a revoked machine
+# admitted again by the second path), one the relay made (unsigned); the
+# issuer deciding a renewal by the copy's CRL instead of its log (a revoked
+# machine renews by the second path); mailbox-only is the design before
+# 2026-11-20 (the mailbox the CRL's only carrier); the alert keyed on the
+# mailbox's health.
+stale-copy RevocationBound CrlCarriers.cfg
+copy-rollback RevokedMachineRefused CrlCarriers.cfg
+copy-unsigned RevokedMachineRefused CrlCarriers.cfg
+renew-by-copy NoRenewAfterRevoke CrlCarriers.cfg
+mailbox-only CurrentWithoutMailbox CrlCarriers.cfg
+alert-on-mailbox AlertOnlyOnIssuer CrlCarriers.cfg
+alert-on-mailbox AlertBeforeLapse CrlCarriers.cfg

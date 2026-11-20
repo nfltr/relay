@@ -7,7 +7,8 @@
 #   check     TLC on spec/enrol/Enrol.cfg: every invariant; Rebind.cfg:
 #             the same with a rebind; Join.cfg: the
 #             join by token (Join.tla); RevokePush.cfg: a revoke's events
-#             and backstops (RevokePush.tla).
+#             and backstops (RevokePush.tla); CrlCarriers.cfg: the CRL on
+#             the mailbox and the relay's copy (CrlCarriers.tla).
 #   live      TLC on spec/enrol/EnrolLive.cfg: the temporal properties;
 #             EnrolLoss.cfg: everything with the relay losing messages.
 #   mutants   each line of spec/enrol/mutants.txt must be caught (a line
@@ -39,11 +40,12 @@ dir=spec/enrol
 temporal="TakesEffect MachinesFollowRotation RenewsAfterExpiry"
 witnesses="WitnessRenewed WitnessRenewedAfterExpiry WitnessRevokeSeen WitnessFailClosed WitnessForgedSession WitnessRotated WitnessSessionAfterRotation WitnessRetried@EnrolLoss.cfg WitnessRebound@Rebind.cfg WitnessSessionAfterRebind@Rebind.cfg WitnessRetiredHeld@Rebind.cfg WitnessMoved@Rebind.cfg
 WitnessRetriedJoin@Join.cfg WitnessReissued@Join.cfg WitnessJoinedAfterLoss@Join.cfg WitnessJoinedAfterRotation@Join.cfg WitnessRefusedOther@Join.cfg WitnessRefusedEvil@Join.cfg
-WitnessCutByPush@RevokePush.cfg WitnessServeBackstop@RevokePush.cfg WitnessFollowBackstop@RevokePush.cfg WitnessHeldAfterRevoke@RevokePush.cfg"
+WitnessCutByPush@RevokePush.cfg WitnessServeBackstop@RevokePush.cfg WitnessFollowBackstop@RevokePush.cfg WitnessHeldAfterRevoke@RevokePush.cfg
+WitnessLapsed@CrlCarriers.cfg WitnessCopyWhileMailboxDown@CrlCarriers.cfg WitnessAlert@CrlCarriers.cfg WitnessLearned@CrlCarriers.cfg WitnessRestartWhileIssuerDown@CrlCarriers.cfg"
 
 # modof CFG: the module a config checks (Join*.cfg: Join.tla,
-# RevokePush*.cfg: RevokePush.tla).
-modof() { case ${1:-} in Join*) echo Join ;; RevokePush*) echo RevokePush ;; *) echo Enrol ;; esac; }
+# RevokePush*.cfg: RevokePush.tla, CrlCarriers*.cfg: CrlCarriers.tla).
+modof() { case ${1:-} in Join*) echo Join ;; RevokePush*) echo RevokePush ;; CrlCarriers*) echo CrlCarriers ;; *) echo Enrol ;; esac; }
 
 tlc() {
 	cfg_=$1
@@ -137,6 +139,13 @@ coverage() {
 		echo "coverage: a RevokePush.tla action is never taken"
 		return 1
 	fi
+	# ServeForged: mutant copy-unsigned only.
+	tlc CrlCarriers.cfg -coverage 1 >"$work/cov.out" 2>&1 || { tail -20 "$work/cov.out"; return 1; }
+	grep -E '^<[A-Z][A-Za-z]+(\(.*\))? line' "$work/cov.out"
+	if grep -E '^<[A-Z][A-Za-z]+(\(.*\))? line' "$work/cov.out" | grep -v '^<ServeForged' | grep -qE ': 0:|: 0$'; then
+		echo "coverage: a CrlCarriers.tla action is never taken"
+		return 1
+	fi
 }
 
 # trace F: accepted when every line was read with no violation.
@@ -224,12 +233,12 @@ traces() {
 }
 
 case ${1:-} in
-check) run Enrol.cfg && run Rebind.cfg && run Join.cfg && run RevokePush.cfg ;;
+check) run Enrol.cfg && run Rebind.cfg && run Join.cfg && run RevokePush.cfg && run CrlCarriers.cfg ;;
 live) run EnrolLive.cfg && run EnrolLoss.cfg ;;
 mutants) mutants ;;
 witnesses) witnesses ;;
 coverage) coverage ;;
-ci) run Enrol.cfg && run Rebind.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && run RevokePush.cfg && mutants && witnesses && fixtures ;;
+ci) run Enrol.cfg && run Rebind.cfg && run EnrolLive.cfg && run EnrolLoss.cfg && run Join.cfg && run RevokePush.cfg && run CrlCarriers.cfg && mutants && witnesses && fixtures ;;
 fixtures) fixtures ;;
 traces) traces ;;
 trace) trace "$2" ;;
