@@ -7,7 +7,9 @@ import (
 	"errors"
 	"strings"
 
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/wire/agentwire"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -64,6 +66,28 @@ func FatalClass(err error) Fatal {
 		}
 	}
 	return NotFatal
+}
+
+// IsCredentialEnded reports whether err is the relay's end of a connection
+// it had accepted, for its credential (Unauthenticated, reason
+// ERROR_REASON_UNAUTHENTICATED: relay-core grpcauth.CredentialEndedStatus,
+// sent when the certificate the connection was opened with expires, or the
+// machine is revoked). A loop redials it rather than stop: a holder renews
+// ahead of the expiry and the redial presents the newest certificate; a
+// revoked machine's redial is refused, and that refusal is the fatal one
+// (relay-server spec/MachineAuth.tla AgentStopsOnlyRefused). Only for an
+// accepted connection's end: a refusal at admission stays FatalAuth.
+func IsCredentialEnded(err error) bool {
+	s, ok := status.FromError(err) // unwraps
+	if !ok || err == nil || s.Code() != codes.Unauthenticated {
+		return false
+	}
+	for _, d := range s.Details() {
+		if info, ok := d.(*errdetails.ErrorInfo); ok && info.GetReason() == relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED.String() {
+			return true
+		}
+	}
+	return false
 }
 
 // Hint is what to do about a fatal class; empty for NotFatal.

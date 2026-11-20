@@ -375,8 +375,14 @@ func (a *agent) runWithReconnect(
 			return
 		}
 
-		// Only a fatal class ends the agent; any other error redials.
-		if rpcclient.FatalClass(streamErr) != rpcclient.NotFatal {
+		// Only a fatal class ends the agent; any other error redials. The
+		// relay's end of this accepted connection for its credential (the
+		// certificate it was opened with expired) redials too: the redial
+		// presents the newest certificate, and only its refusal (connectOnce,
+		// below) stops the agent (lane SVCRENEW, guards
+		// TestReconnectAfterCredentialExpiryCut,
+		// TestReconnectStopsWhenTheRedialIsRefused).
+		if rpcclient.FatalClass(streamErr) != rpcclient.NotFatal && !rpcclient.IsCredentialEnded(streamErr) {
 			err := rpcclient.FatalError(streamErr)
 			a.logger.Error("tunnel stream ended with a fatal error", "error", err)
 			a.stopWith(err)

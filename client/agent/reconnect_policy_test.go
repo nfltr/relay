@@ -17,8 +17,10 @@ import (
 
 	"github.com/nfltr/relay/client/relayoutage"
 	"github.com/nfltr/relay/client/rpcclient"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
 	"github.com/nfltr/relay/proto/pb"
 	"github.com/nfltr/relay/proto/wire/agentwire"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -33,12 +35,21 @@ type scriptedRelay struct {
 	dials atomic.Int32
 	drop  chan struct{}
 	next  func() error
+	// admit, when set, refuses stream n (from 1) before accepting it when
+	// it returns an error: a relay's refusal at admission (no header).
+	admit func(n int32) error
 
 	mu sync.Mutex
 	at []time.Time // when each stream came
 }
 
 func (s *scriptedRelay) ConnectHTTP(stream grpc.BidiStreamingServer[pb.HTTPProxyResponse, pb.HTTPProxyRequest]) error {
+	if s.admit != nil {
+		if err := s.admit(s.dials.Load() + 1); err != nil {
+			s.dials.Add(1)
+			return err
+		}
+	}
 	_ = stream.SendHeader(metadata.Pairs("x-resolved-agent-id", "resolved"))
 	s.mu.Lock()
 	s.at = append(s.at, time.Now())
@@ -56,7 +67,11 @@ func (s *scriptedRelay) ConnectHTTP(stream grpc.BidiStreamingServer[pb.HTTPProxy
 
 func startScripted(t *testing.T, next func() error) (*scriptedRelay, *agent, context.CancelFunc) {
 	t.Helper()
-	s := &scriptedRelay{drop: make(chan struct{}), next: next}
+	return startScriptedRelay(t, &scriptedRelay{drop: make(chan struct{}), next: next})
+}
+
+func startScriptedRelay(t *testing.T, s *scriptedRelay) (*scriptedRelay, *agent, context.CancelFunc) {
+	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -178,5 +193,78 @@ func TestReconnectDoesNotSpin(t *testing.T) {
 		if gap := s.at[i].Sub(s.at[i-1]); gap < relayoutage.RedialBase {
 			t.Fatalf("stream %d came %s after the one before; want at least RedialBase %s apart", i+1, gap, relayoutage.RedialBase)
 		}
+	}
+}
+
+// credentialEnded is the relay's end of an accepted connection whose
+// credential expired (relay-core grpcauth.CredentialEndedStatus of
+// identity.ErrExpired).
+func credentialEnded(t *testing.T) error {
+	t.Helper()
+	st, err := status.New(codes.Unauthenticated, "credential expired").
+		WithDetails(&errdetails.ErrorInfo{Reason: relayv1.ErrorReason_ERROR_REASON_UNAUTHENTICATED.String(), Domain: "relay.nfltr.xyz"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return st.Err()
+}
+
+// The relay ends a connection at the expiry of the certificate it was
+// opened with, whatever the holder renewed since (relay-core
+// identity.Hold): the agent connects again, presenting its newest
+// certificate, and goes on (lane SVCRENEW: an agent that stopped on this
+// cut stayed disconnected with a renewed certificate; relay-server spec/MachineAuth.tla
+// AgentStopsOnlyRefused).
+func TestReconnectAfterCredentialExpiryCut(t *testing.T) {
+	t.Parallel()
+	cut := credentialEnded(t)
+	held := make(chan struct{})
+	t.Cleanup(func() { close(held) }) // before the server stops (LIFO)
+	var n atomic.Int32
+	s, a, _ := startScripted(t, func() error {
+		if n.Add(1) == 1 {
+			return cut // stream 2: cut at its certificate's expiry
+		}
+		<-held // stream 3: up
+		return nil
+	})
+	close(s.drop)                            // stream 1 drops: stream 2 comes
+	deadline := time.After(30 * time.Second) // a hang guard only
+	for s.dials.Load() < 3 || !a.Connected() {
+		select {
+		case <-a.Done():
+			t.Fatalf("agent stopped with %v after an expiry cut; want it to connect again", a.Err())
+		case <-deadline:
+			t.Fatalf("%d dials, connected %v; want a third stream, connected", s.dials.Load(), a.Connected())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// After an expiry cut the redial decides: a relay that refuses it (the
+// certificate expired unrenewed) stops the agent with the refusal, so its
+// process exits and is restarted (relay-server spec/MachineAuth.tla
+// Refused).
+func TestReconnectStopsWhenTheRedialIsRefused(t *testing.T) {
+	t.Parallel()
+	cut := credentialEnded(t)
+	s, a, _ := startScriptedRelay(t, &scriptedRelay{drop: make(chan struct{}), next: func() error { return cut },
+		admit: func(n int32) error {
+			if n >= 3 {
+				return cut // refused at admission: no header
+			}
+			return nil
+		}})
+	close(s.drop)
+	select {
+	case <-a.Done():
+	case <-time.After(30 * time.Second):
+		t.Fatalf("agent did not stop after %d dials; want it stopped on the refused redial", s.dials.Load())
+	}
+	if err := a.Err(); status.Code(err) != codes.Unauthenticated || !strings.Contains(err.Error(), "machine certificate") {
+		t.Fatalf("Err = %v, want the refusal with its hint", err)
+	}
+	if n := s.dials.Load(); n != 3 {
+		t.Fatalf("%d dials, want 3 (first, the cut one, the refused redial)", n)
 	}
 }
