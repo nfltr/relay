@@ -1,0 +1,12 @@
+# <mutant> <property>: TLC on MachinePair.cfg's constants with that Mutant
+# must report <property> violated (scripts/spec-pair.sh mutants); a
+# temporal property (ReaderCompletes) runs under LiveSpec.
+# key-first is the writer before CERTATOMIC (CERTPAIR: machine.key, then the
+# certificate, each by rename): a crash between the two left a pair no
+# reader takes, and the machine needed nfltr config login / nfltr org join.
+key-first Usable
+key-first ReaderCompletes
+cert-first Usable
+no-recovery Usable
+no-next-read Usable
+no-next-read ReaderCompletes

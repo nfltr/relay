@@ -272,6 +272,15 @@ spec-orgmove-traces:
 spec-orgmove-repeat:
 	./scripts/spec-orgmove.sh repeat
 
+# spec-pair-ci (in make ci, seconds): a machine's key and certificate
+# replaced as one pair, crash-safe at every step (spec/pair/README.md): the
+# invariant, ReaderCompletes, every mutant, the witnesses, -coverage 1, and
+# client/pairfile's tests built -tags pairtrace against
+# spec/pair/TraceMachinePair.tla with the trace fixtures.
+.PHONY: spec-pair-ci
+spec-pair-ci:
+	./scripts/spec-pair.sh ci
+
 # spec-appenrol-ci (in make ci, about a minute): an app's device enrolled
 # for a person, by sign-in or an admin code, its renewal bounded by the
 # sign-in, revocation by person and by app (spec/appenrol/README.md): the

@@ -92,6 +92,8 @@ jobs:
       - run: make spec spec-mutants spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-stoptraces spec-bptraces
       # the organisation issuer's models (spec/enrol, spec/orgmove)
       - run: make spec-enrol-ci spec-orgmove-ci spec-appenrol-ci
+      # a machine's key and certificate replaced as one pair (spec/pair)
+      - run: make spec-pair-ci
   fuzz:
     runs-on: ubuntu-latest
     steps:
