@@ -368,6 +368,20 @@ func (c *QueueConn) EndDelivered() {
 	}
 }
 
+// endReport is the agent's end's report at its end: nil when Join closed
+// it cleanly with nothing Accept's conn wrote left in the pipe (its peer
+// closed the session whole, and every byte had gone on: nettest's
+// BasicIO), else link.ErrReset.
+func (c *QueueConn) endReport(reset error) error {
+	c.r.mu.Lock()
+	pending := len(c.r.buf) > 0
+	c.r.mu.Unlock()
+	if reset != nil || pending {
+		return link.ErrReset
+	}
+	return nil
+}
+
 // used: the agent's end in use without joinTarget's report (a plain
 // Join): Accept's conn's Close waits for none.
 func (c *QueueConn) used() {
@@ -379,7 +393,7 @@ func (c *QueueConn) used() {
 func (c *QueueConn) end(reset error) {
 	if c.agentSide { // a report not given by now never comes
 		c.cs.decide(false)
-		c.cs.report(link.ErrReset)
+		c.cs.report(c.endReport(reset))
 	}
 	c.once.Do(func() {
 		close(c.done)

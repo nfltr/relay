@@ -87,3 +87,41 @@ func TestQueueRelayedCloseWaitsForTheRelay(t *testing.T) {
 		t.Fatalf("the relay read %q, want the tail", b)
 	}
 }
+
+// TestQueueRelayedPeerCloseThenCloseIsNil: the relay's peer closes the
+// session whole (a dialler's Close); Accept's conn reads EOF and closes
+// with nothing left to send: nil (nettest BasicIO through relay-core),
+// not the reset an unreported end gives.
+func TestQueueRelayedPeerCloseThenCloseIsNil(t *testing.T) {
+	user, agentEnd := queuedPair(t)
+	a, b := net.Pipe()
+	ctx := context.Background()
+	go func() {
+		c, _, err := link.Server(ctx, b, link.Config{Auth: link.NoAuth})
+		if err != nil {
+			return
+		}
+		m := link.NewMux(c)
+		t.Cleanup(func() { _ = m.Close() })
+		_ = m.Serve(func(_ []byte, s *link.Session) {
+			_, _ = s.Write([]byte("bye"))
+			_ = s.Close()
+		})
+	}()
+	c, err := link.Client(ctx, a, link.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := link.NewMux(c)
+	go func() { _ = m.Serve(nil) }()
+	t.Cleanup(func() { _ = m.Close() })
+	s, err := m.Open([]byte("relay"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() { _ = joinTarget(s, ackerOf(s), agentEnd) }()
+	if b, err := io.ReadAll(user); err != nil || string(b) != "bye" {
+		t.Fatalf("read %q, %v", b, err)
+	}
+	waitRet(t, closeAsync(user), nil)
+}
