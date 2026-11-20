@@ -47,8 +47,11 @@ const (
 	// through the renewal window (its mailbox down, the 2026-11-19 outage)
 	// or a machine off for days renews by itself; a superseded serial's key
 	// is retired and never renews once expired (enrol.pv 2).
-	// ponytail: one fixed week; a per-organisation policy if an owner asks.
-	RenewGrace = 7 * 24 * time.Hour
+	// 90 days, as the relay's account certificates (lane SEAMLESS, nfltr
+	// docs/decisions/seamless-certificates-2026-11-20.md): a revoked name is
+	// refused whatever the grace (renew-revoked).
+	// ponytail: one fixed value; a per-organisation policy if an owner asks.
+	RenewGrace = 90 * 24 * time.Hour
 )
 
 const (

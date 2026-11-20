@@ -83,7 +83,7 @@ func TestFleetRenewsWithTheMovedIssuer(t *testing.T) {
 	}
 	before := serial(f.m)
 	f.clk.Add(17 * time.Hour)
-	check(t, f.keeper().renew(f.ctx))
+	check(t, f.keeper().renew(f.ctx, ""))
 	if serial(f.m) == before {
 		t.Fatal("the machine did not renew with the moved issuer")
 	}

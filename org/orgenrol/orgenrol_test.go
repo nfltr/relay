@@ -362,7 +362,7 @@ func TestJoinThenRenewThroughMailboxes(t *testing.T) {
 	f := newFleet(t)
 	before := serial(f.m)
 	f.clk.Add(17 * time.Hour)
-	check(t, f.keeper().renew(f.ctx))
+	check(t, f.keeper().renew(f.ctx, ""))
 	if serial(f.m) == before {
 		t.Fatal("the renewal did not install a new certificate")
 	}
@@ -375,7 +375,7 @@ func TestJoinThenRenewThroughMailboxes(t *testing.T) {
 	})
 	// Not due again: the machine leaves it.
 	again := serial(f.m)
-	check(t, f.keeper().renew(f.ctx))
+	check(t, f.keeper().renew(f.ctx, ""))
 	if serial(f.m) != again {
 		t.Fatal("renewed while not due")
 	}
@@ -409,7 +409,7 @@ func TestRenewAsksAgainAfterALoss(t *testing.T) {
 func TestStaleAnswerRefused(t *testing.T) {
 	f := newFleet(t)
 	f.clk.Add(17 * time.Hour)
-	check(t, f.keeper().renew(f.ctx))
+	check(t, f.keeper().renew(f.ctx, ""))
 	var old []byte
 	f.relay.mu.Lock()
 	for _, e := range f.relay.boxes[orgpki.AnswersMailbox(f.org.id)] {
@@ -429,7 +429,7 @@ func TestStaleAnswerRefused(t *testing.T) {
 	f.relay.mu.Unlock()
 	held := serial(f.m)
 	f.clk.Add(17 * time.Hour)
-	err := f.keeper().renew(f.ctx)
+	err := f.keeper().renew(f.ctx, "")
 	if !errors.Is(err, orgmachine.ErrNotForKey) || serial(f.m) != held {
 		t.Fatalf("installed a stale answer: err %v", err)
 	}

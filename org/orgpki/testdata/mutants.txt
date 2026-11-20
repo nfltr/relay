@@ -79,3 +79,9 @@ rebind-keeps-serials | issuer.go | 		sns := n.serials[:n.retired] // Enrol.tla R
 renew-rebound | issuer.go | 	if n.isRetired(sn) { // Enrol.tla NoRenewOfRetired (mutant renew-rebound): the old machine id's disk | 	if false { | TestRebindRetiresTheOldID
 rebind-keeps-id | issuer.go | 			n.retired, n.machineID, i.crlDue = len(n.serials), e.MachineID, true | 			n.retired, i.crlDue = len(n.serials), true | TestRebindRetiresTheOldID
 rebind-reusable | issuer.go | 	if redeemed { | 	if _ = redeemed; false { | TestRebindTokenRules
+# A move (spec/enrol/Enrol.tla Move, enrol.pv query 20; lane SEAMLESS): the
+# new relay machine id beside the signed renewal (the relay's to change);
+# the move policy not asked (another account's machine takes the name).
+move-id-unsigned | issuer.go | 		msg = moveMessage(req.CSR, req.MachineID) | 		msg = renewMessage(req.CSR) | TestMoveModelBindings
+move-id-unsigned | issuer.go | 	return RenewRequest{Cert: cert, CSR: csr, MachineID: machineID, Sig: ed25519.Sign(current, moveMessage(csr, machineID))} | 	return RenewRequest{Cert: cert, CSR: csr, MachineID: machineID, Sig: ed25519.Sign(current, renewMessage(csr))} | TestMoveModelBindings
+move-any-account | issuer.go | 	if err := i.move(name, id); err != nil { | 	if err := i.move(name, id); false && err != nil { | TestMoveRefusedOutsideThePolicy

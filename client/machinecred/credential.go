@@ -46,26 +46,36 @@ import (
 // as its TLS client certificate, instead of an API key: a machine that
 // holds one for the relay presents only it (chosen once at start, never
 // switched to the key at run time: a fallback would let a revoked machine
-// keep working on its key). Run renews it in place (at 2/3 of its
-// lifetime, +-10 %: machinecert.Loop), so each new connection presents the
-// newest. A refused certificate (revoked, rotated away, expired) ends the
-// command with ErrRefused. No new state machine: renewal is
-// machinecert.Loop (relay-server spec/MachineAuth.tla Renew).
+// keep working on its key). Run renews it in place (at half its lifetime,
+// up to 10 % later: machinecert.Loop), so each new connection presents the
+// newest. An expired one (the machine was off, or the relay's accounts
+// service out of reach) is renewed before a handshake presents it, with
+// the machine's key, while the relay's grace lasts; until it is, the
+// handshake fails as a network error and the caller redials (relay-server
+// spec/MachineAuth.tla Refused, BackAfterExpiry). A refused certificate
+// (revoked, rotated away, past the grace) ends the command with
+// ErrRefused.
 type Credential struct {
 	key      *ecdsa.PrivateKey
 	dir      string
 	host, id string             // the relay's host and the machine: never change
 	name     string             // the machine's name in its account, as loaded
-	s        *machinecert.Saved // the certificate as last saved; Run's goroutine only
+	s        *machinecert.Saved // the certificate as last saved; under mu
 	cur      atomic.Pointer[tls.Certificate]
 	refused  atomic.Bool // the renewal was refused for good
 	running  atomic.Bool // Run started the renewal
 	once     sync.Once
+	mu       sync.Mutex // one renewal at a time (Run's loop, a handshake's); holds s
 }
 
 // ErrRefused ends a command whose machine certificate the relay refused;
 // the API key is never tried instead.
-var ErrRefused = errors.New("the relay refused this machine's certificate (revoked, rotated away or expired): run `nfltr config login` to enrol this machine again")
+var ErrRefused = errors.New("the relay no longer accepts this machine (it was revoked, or off for more than 90 days): run `nfltr config login`")
+
+// ErrRenewing: the machine's certificate expired and its renewal has not
+// gone through yet (the relay or its accounts service does not answer);
+// a redial tries again, nothing to do.
+var ErrRenewing = errors.New("this machine's sign-in expired and is renewing by itself (the relay does not answer yet); nothing to do")
 
 // Refusal is err as the command's error: ErrRefused (err kept) when err is
 // the relay's typed refusal of the credential (gRPC Unauthenticated, or
@@ -125,8 +135,8 @@ func Forget() {
 
 // ForRelay is the credential dir holds for the relay at server (its gRPC
 // address, HTTP address or URL); nil when dir holds no certificate or one
-// for another relay. An expired one is still the credential: the relay
-// refuses it (ErrRefused: enrol again).
+// for another relay. An expired one is still the credential: it is renewed
+// before a handshake presents it (certificate).
 func ForRelay(dir, server string) *Credential {
 	credsMu.Lock()
 	defer credsMu.Unlock()
@@ -226,10 +236,30 @@ func (c *Credential) TLSConfig(base *tls.Config) *tls.Config {
 	if cfg == nil {
 		cfg = &tls.Config{MinVersion: tls.VersionTLS12}
 	}
-	cfg.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-		return c.cur.Load(), nil
+	cfg.GetClientCertificate = func(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+		ctx := cri.Context()
+		if ctx == nil { // a CertificateRequestInfo made outside a handshake
+			ctx = context.Background()
+		}
+		return c.certificate(ctx)
 	}
 	return cfg
+}
+
+// certificate is the certificate a handshake presents: the newest; an
+// expired one is renewed first (MachineAuth.tla Refused: never presented
+// while the relay would renew it), ErrRenewing while that fails. After a
+// final refusal the expired one is presented: the relay refuses it, and
+// that refusal ends the command (ErrRefused).
+func (c *Credential) certificate(ctx context.Context) (*tls.Certificate, error) {
+	t := c.cur.Load()
+	if c.refused.Load() || time.Now().Before(t.Leaf.NotAfter) {
+		return t, nil
+	}
+	if _, err := c.renewOnce(ctx, nil, slog.Default()); err != nil && !c.refused.Load() {
+		return nil, fmt.Errorf("%w: %w", ErrRenewing, err)
+	}
+	return c.cur.Load(), nil
 }
 
 // HTTP/2 health checks on the relay's HTTP calls, as mailboxclient's own
@@ -263,9 +293,9 @@ func (c *Credential) Transport() *http.Transport {
 func (c *Credential) HTTPClient() *http.Client { return &http.Client{Transport: c.Transport()} }
 
 // Run renews the certificate until ctx ends, once per process (later
-// calls return at once). After a final refusal or an expiry the
-// certificate is still presented, the relay refuses it and the command
-// ends with ErrRefused (Refusal).
+// calls return at once). After a final refusal the certificate is still
+// presented, the relay refuses it and the command ends with ErrRefused
+// (Refusal).
 func (c *Credential) Run(ctx context.Context, logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.Default()
@@ -285,24 +315,51 @@ func RenewHTTP() *http.Client {
 }
 
 func (c *Credential) renew(ctx context.Context, logger *slog.Logger) {
-	client := &machinecert.Client{BaseURL: c.s.BaseURL, HTTP: RenewHTTP()}
 	loop := machinecert.Loop{
 		Renew: func(ctx context.Context, cur *machinecert.Cert) (*machinecert.Cert, error) {
-			next, err := client.Renew(ctx, cur, c.key)
-			if err != nil { // each attempt, hours ahead of the expiry (guard TestRenewalFailureIsLoggedWithTheTimeLeft)
-				logger.Warn("machine certificate renewal failed", "machine", c.id, "error", err, "expires_in", time.Until(cur.NotAfter).Truncate(time.Second), "not_after", cur.NotAfter)
-			}
-			return next, err
+			return c.renewOnce(ctx, cur, logger)
 		},
-		Save: func(next *machinecert.Cert) error { return c.save(next, logger) },
+		Save: func(*machinecert.Cert) error { return nil }, // renewOnce saved it
 	}
-	if err := loop.Run(ctx, &c.s.Cert); err != nil && ctx.Err() == nil {
-		c.refused.Store(true)
-		logger.Error("machine certificate not renewed", "error", c.Refusal(err))
+	c.mu.Lock()
+	cur := c.s.Cert
+	c.mu.Unlock()
+	if err := loop.Run(ctx, &cur); err != nil && ctx.Err() == nil {
+		logger.Error("this machine's sign-in was refused", "error", c.Refusal(err))
 	}
 }
 
-// save presents next from now on and writes it to the directory, only
+// renewOnce renews the certificate once, under mu, and saves it; from is
+// the certificate the caller holds (nil: the saved one): a newer one saved
+// since (a handshake's renewal, or Run's) is answered as it is. A final
+// refusal marks the credential refused.
+func (c *Credential) renewOnce(ctx context.Context, from *machinecert.Cert, logger *slog.Logger) (*machinecert.Cert, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if from != nil && c.s.NotAfter.After(from.NotAfter) {
+		saved := c.s.Cert
+		return &saved, nil
+	}
+	cur := c.s.Cert
+	client := &machinecert.Client{BaseURL: c.s.BaseURL, HTTP: RenewHTTP()}
+	next, err := client.Renew(ctx, &cur, c.key)
+	if err != nil {
+		var refused *machinecert.RefusedError
+		if errors.As(err, &refused) && refused.Final() {
+			c.refused.Store(true)
+			return nil, err
+		}
+		// each attempt, hours ahead of the expiry (guard TestRenewalFailureIsLoggedWithTheTimeLeft)
+		logger.Warn("could not renew this machine's sign-in yet (the relay does not answer); retrying, nothing to do", "machine", c.id, "error", err, "expires_in", time.Until(cur.NotAfter).Truncate(time.Second), "not_after", cur.NotAfter)
+		return nil, err
+	}
+	if err := c.save(next, logger); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+// save (under mu) presents next from now on and writes it to the directory, only
 // while the directory still holds this process's pair: after
 // `nfltr config login` put another machine's key or certificate there, a
 // long-running process renewing its own certificate must not write it over

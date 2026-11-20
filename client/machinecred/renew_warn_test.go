@@ -72,7 +72,7 @@ func TestRenewalFailureIsLoggedWithTheTimeLeft(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if line := logs.String(); !strings.Contains(line, "machine certificate renewal failed") || !strings.Contains(line, "expires_in=29m") || !strings.Contains(line, "machine=m-aaaa") {
+	if line := logs.String(); !strings.Contains(line, "could not renew this machine's sign-in yet") || !strings.Contains(line, "expires_in=29m") || !strings.Contains(line, "machine=m-aaaa") {
 		t.Fatalf("warning without the machine and the time left: %s", line)
 	}
 }

@@ -50,7 +50,7 @@ func TestFatalErrorActionable(t *testing.T) {
 	if !errors.Is(err, orig) || status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("FatalError does not unwrap to the original: %v", err)
 	}
-	if !strings.Contains(err.Error(), "bad key") || !strings.Contains(err.Error(), "machine certificate") {
+	if !strings.Contains(err.Error(), "bad key") || !strings.Contains(err.Error(), "nfltr config login") {
 		t.Fatalf("FatalError = %q, want the cause and a hint", err)
 	}
 	plain := errors.New("x")

@@ -94,7 +94,7 @@ func IsCredentialEnded(err error) bool {
 func (f Fatal) Hint() string {
 	switch f {
 	case FatalAuth:
-		return "the relay refused the credential: check the machine certificate (or token) and its permissions"
+		return "the relay refused this machine (revoked, or off for more than 90 days: nfltr config login), or its token lacks the permission"
 	case FatalVersion:
 		return "this client and the relay are incompatible: update the client (or the relay)"
 	case FatalConfig:

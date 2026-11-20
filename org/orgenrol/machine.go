@@ -274,18 +274,24 @@ func followCRL(ctx context.Context, mb Mailbox, m *orgmachine.Machine, every tim
 }
 
 // Keeper keeps a machine current: it follows the CRL and the root
-// (FollowEvery: the backstop) and renews when RenewDue says (at 2/3 of the
+// (FollowEvery: the backstop) and renews when RenewDue says (at half the
 // certificate's lifetime, at once after a rotation), asking again with a
 // new key when no answer came (Enrol.tla Request, mutant no-retry), also
 // past the certificate's NotAfter until orgpki.RenewGrace after it (an
 // issuer out of reach through the renewal window: RenewsAfterExpiry).
 // Failed attempts back off from RetryWait, doubling to FollowEvery, and a
 // change of the machine (a CRL taken: the issuer's mailbox is back) asks
-// again at once.
+// again at once. When the machine's relay machine id is no longer its
+// certificate's (it enrolled with the relay again: nfltr config login),
+// the keeper asks at once to move its name there (Enrol.tla Move), and
+// keeps renewing under the old id when the issuer refuses.
 type Keeper struct {
 	Mailbox Mailbox
 	Machine *orgmachine.Machine
 	Logger  *slog.Logger
+	// RelayMachineID is the machine's relay machine id now (its account
+	// certificate's), "" unknown; nil: no move.
+	RelayMachineID func() string
 	// Now, AnswerWait, RetryWait, FollowEvery: zero is time.Now and the
 	// package's defaults (tests shorten them).
 	Now                                func() time.Time
@@ -341,9 +347,11 @@ func (k Keeper) Run(ctx context.Context) {
 		}, nil, k.Logger)
 	})
 	retry := k.RetryWait
+	refusedMove := "" // a move the issuer refused: renewals keep the old id
 	for ctx.Err() == nil {
 		changed := m.Changed()
-		if d := m.RenewDue(k.Now()).Sub(k.Now()); d > 0 {
+		move := k.moveTo(refusedMove)
+		if d := m.RenewDue(k.Now()).Sub(k.Now()); d > 0 && move == "" {
 			t := time.NewTimer(min(d, k.WakeEvery))
 			select {
 			case <-ctx.Done():
@@ -353,18 +361,22 @@ func (k Keeper) Run(ctx context.Context) {
 			t.Stop()
 			continue
 		}
-		err := k.renew(ctx)
+		err := k.renew(ctx, move)
 		switch cur, _ := m.Current(); {
 		case err == nil || ctx.Err() != nil:
 			retry = k.RetryWait
 			continue
+		case move != "" && errors.Is(err, ErrIssuerRefused):
+			k.Logger.Warn("org: this machine's organisation name did not follow it to its new relay machine id (the issuer's policy); on the issuer's machine: nfltr org token --rebind "+cur.Subject.CommonName+" --machine-id "+move, "error", err)
+			refusedMove, retry = move, k.RetryWait
+			continue
 		case errors.Is(err, ErrExpired):
-			k.Logger.Error("org: this machine's certificate expired more than the renewal grace ago; enrol it again (nfltr org join with a new token)", "not_after", cur.NotAfter.UTC())
+			k.Logger.Error("org: this machine was off for more than "+graceDays+"; join the organisation again with a new token: nfltr org join", "not_after", cur.NotAfter.UTC())
 			retry = k.FollowEvery
 		case !k.Now().Before(cur.NotAfter):
-			k.Logger.Error("org: this machine's certificate expired and its renewal failed (asking again; sessions are refused until it renews)", "error", err, "not_after", cur.NotAfter.UTC(), "renews_until", cur.NotAfter.Add(orgpki.RenewGrace).UTC(), "retry_in", retry)
+			k.Logger.Warn("org: the organisation issuer does not answer yet; asking again (nothing to do: organisation sessions wait until it answers)", "error", err, "not_after", cur.NotAfter.UTC(), "renews_until", cur.NotAfter.Add(orgpki.RenewGrace).UTC(), "retry_in", retry)
 		default:
-			k.Logger.Warn("org: renewal failed (asking again with a new key)", "error", err, "expires_in", cur.NotAfter.Sub(k.Now()).Round(time.Second), "retry_in", retry)
+			k.Logger.Info("org: the organisation issuer does not answer yet; asking again", "error", err, "expires_in", cur.NotAfter.Sub(k.Now()).Round(time.Second), "retry_in", retry)
 		}
 		t := time.NewTimer(retry)
 		select {
@@ -380,11 +392,29 @@ func (k Keeper) Run(ctx context.Context) {
 // ErrExpired: the machine's certificate expired orgpki.RenewGrace ago; the
 // issuer renews it no more (Enrol.tla Renews), so only a new token's
 // enrolment brings it back.
-var ErrExpired = errors.New("the certificate expired more than the renewal grace ago: enrol again with a new token (nfltr org join)")
+var ErrExpired = errors.New("this machine was off for more than " + graceDays + ": join the organisation again with a new token (nfltr org join)")
+
+// graceDays is orgpki.RenewGrace in words.
+var graceDays = fmt.Sprintf("%d days", int(orgpki.RenewGrace.Hours()/24))
+
+// moveTo is the relay machine id to move the name to: the machine's, when
+// it is not its certificate's nor a move the issuer refused; else "".
+func (k Keeper) moveTo(refused string) string {
+	if k.RelayMachineID == nil {
+		return ""
+	}
+	id := k.RelayMachineID()
+	cur, _ := k.Machine.Current()
+	if id == "" || id == refused || id == orgid.MachineID(cur) {
+		return ""
+	}
+	return id
+}
 
 // renew asks the issuer once for a certificate of a new key, signed by the
-// current one, under the machine's renewal lock.
-func (k Keeper) renew(ctx context.Context) error {
+// current one (and naming move, the relay machine id to move to, when set),
+// under the machine's renewal lock.
+func (k Keeper) renew(ctx context.Context, move string) error {
 	m := k.Machine
 	unlock, err := m.LockRenewal()
 	if err != nil {
@@ -395,10 +425,10 @@ func (k Keeper) renew(ctx context.Context) error {
 	if _, err := m.Reload(now); err != nil {
 		return err
 	}
-	if m.RenewDue(now).After(now) {
-		return nil // another process renewed
-	}
 	cur, curKey := m.Current()
+	if move != "" && move == orgid.MachineID(cur) || move == "" && m.RenewDue(now).After(now) {
+		return nil // another process renewed (or moved)
+	}
 	if !now.Before(cur.NotAfter.Add(orgpki.RenewGrace)) {
 		return ErrExpired
 	}
@@ -407,6 +437,9 @@ func (k Keeper) renew(ctx context.Context) error {
 		return err
 	}
 	rr := orgpki.NewRenewRequest(cur.Raw, curKey, csr)
+	if move != "" {
+		rr = orgpki.NewMoveRequest(cur.Raw, curKey, csr, move)
+	}
 	a, err := exchange(ctx, k.Mailbox, m.OrgID(), orgpki.Request{ID: randomID(), Renew: &rr}, k.AnswerWait)
 	if err != nil {
 		return err

@@ -44,3 +44,9 @@ join-skips-issuers | machine.go | 	if rm.Issuers != nil { | 	if false { | TestJo
 holder-read | orgenrol.go | 	envs, _, err := member(mb).Pull(ctx, mailbox, 0, 0, wait) | 	envs, _, err := mb.Pull(ctx, mailbox, 0, 0, wait) | TestIssuerOnAFreshRelayLeavesTheRootReadable
 # RenewsAfterExpiry (2026-11-20): the keeper asks again past the NotAfter, within the grace.
 no-renew-after-expiry | machine.go | 	if !now.Before(cur.NotAfter.Add(orgpki.RenewGrace)) { | 	if !now.Before(cur.NotAfter) { | TestKeeperRenewsAfterAnIssuerOutagePastExpiry
+# A move (spec/enrol/Enrol.tla Move; lane SEAMLESS): the keeper never asks
+# (a re-enrolled machine loses its organisation name until a rebind token);
+# the service's policy admits any id (another account's machine takes the
+# name).
+keeper-no-move | machine.go | 	if id == "" || id == refused || id == orgid.MachineID(cur) { | 	if _ = cur; true { | TestKeeperMovesTheNameAfterAReEnrolment
+move-any-account | issuer.go | 		case got != id: | 		case got == "\x00": | TestKeeperMoveRefusedKeepsTheOldID

@@ -82,7 +82,7 @@ func TestJoinSignInInstallsTheDevice(t *testing.T) {
 	check(t, err)
 	before := serial(m)
 	f.clk.Add(17 * time.Hour)
-	check(t, Keeper{Mailbox: f.relay, Machine: m, Logger: quiet(), Now: f.clk.Now, AnswerWait: hang, RetryWait: 10 * time.Millisecond}.renew(f.ctx))
+	check(t, Keeper{Mailbox: f.relay, Machine: m, Logger: quiet(), Now: f.clk.Now, AnswerWait: hang, RetryWait: 10 * time.Millisecond}.renew(f.ctx, ""))
 	if serial(m) == before {
 		t.Fatal("the device did not renew")
 	}

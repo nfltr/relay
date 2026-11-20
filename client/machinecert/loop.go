@@ -25,7 +25,9 @@ type Loop struct {
 }
 
 // Retry bounds: a failed renewal is retried after RetryMin, doubling up to
-// RetryMax, never past the certificate's expiry.
+// RetryMax, for as long as it takes: also past the certificate's expiry
+// (the relay renews it until its grace ends, relay-server
+// spec/MachineAuth.tla BackAfterExpiry; mutant no-renew-after-expiry).
 const (
 	RetryMin = time.Minute
 	RetryMax = 30 * time.Minute
@@ -40,7 +42,7 @@ const MaxSleep = time.Minute
 
 // Run renews cur at RenewAt (a new jitter each time) and again for each
 // certificate it gets, until ctx ends (nil) or the relay refuses for good
-// (a final RefusedError: enrol again) or the certificate expired unrenewed.
+// (a final RefusedError: revoked, or expired past the relay's grace).
 func (l Loop) Run(ctx context.Context, cur *Cert) error {
 	now, jitter, after := l.Now, l.Jitter, l.After
 	if now == nil {
@@ -83,11 +85,7 @@ func (l Loop) Run(ctx context.Context, cur *Cert) error {
 			if errors.As(err, &refused) && refused.Final() {
 				return err
 			}
-			left := cur.Leaf.NotAfter.Sub(now())
-			if left <= 0 {
-				return errors.Join(errors.New("machinecert: the certificate expired unrenewed"), err)
-			}
-			if !wait(now().Add(min(backoff, left))) {
+			if !wait(now().Add(backoff)) {
 				return nil
 			}
 		}

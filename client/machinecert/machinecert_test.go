@@ -42,9 +42,9 @@ func fakeCert(t *testing.T, nb time.Time) *Cert {
 	return c
 }
 
-// TestRenewalLoopJitter: a certificate renews at 2/3 of its lifetime,
-// +-10 % of that by its jitter (clamped), always inside the relay's
-// renewal window (its last half) and before it expires; the loop waits
+// TestRenewalLoopJitter: a certificate renews at half its lifetime, up
+// to 10 % of it later by its jitter (clamped), always inside the relay's
+// renewal window (its last two thirds) and before it expires; the loop waits
 // that long with a fresh jitter for each certificate, and retries a failed
 // renewal with a doubling backoff until the relay refuses for good.
 func TestRenewalLoopJitter(t *testing.T) {
@@ -52,12 +52,12 @@ func TestRenewalLoopJitter(t *testing.T) {
 	for _, tc := range []struct {
 		jitter float64
 		want   time.Duration
-	}{{0, 16 * time.Hour}, {1, 17*time.Hour + 36*time.Minute}, {-1, 14*time.Hour + 24*time.Minute}, {5, 17*time.Hour + 36*time.Minute}, {-5, 14*time.Hour + 24*time.Minute}} {
+	}{{0, 13*time.Hour + 12*time.Minute}, {1, 14*time.Hour + 24*time.Minute}, {-1, 12 * time.Hour}, {5, 14*time.Hour + 24*time.Minute}, {-5, 12 * time.Hour}} {
 		at := RenewAt(nb, nb.Add(day), tc.jitter)
 		if got := at.Sub(nb); got != tc.want {
 			t.Errorf("jitter %v: renews %v after issue, want %v", tc.jitter, got, tc.want)
 		}
-		if at.Before(nb.Add(day/2)) || !at.Before(nb.Add(day)) {
+		if at.Before(nb.Add(day/3)) || !at.Before(nb.Add(day)) {
 			t.Errorf("jitter %v: %v is outside the renewal window", tc.jitter, at)
 		}
 	}
@@ -97,7 +97,7 @@ func TestRenewalLoopJitter(t *testing.T) {
 	if !errors.As(err, &refused) || refused.Status != http.StatusUnauthorized {
 		t.Fatalf("Run: %v, want the final refusal", err)
 	}
-	want := []time.Duration{17*time.Hour + 36*time.Minute, 14*time.Hour + 24*time.Minute, RetryMin, 2 * RetryMin, 16 * time.Hour, 17*time.Hour + 36*time.Minute}
+	want := []time.Duration{14*time.Hour + 24*time.Minute, 12 * time.Hour, RetryMin, 2 * RetryMin, 13*time.Hour + 12*time.Minute, 14*time.Hour + 24*time.Minute}
 	if len(waits) != len(want) {
 		t.Fatalf("waits %v, want %v", waits, want)
 	}
@@ -242,8 +242,8 @@ func TestRenewalLoopRenewsOnTimeAfterTheHostSlept(t *testing.T) {
 			t.Errorf("a %v timer: a host that sleeps meanwhile wakes it that much late", d)
 		}
 		clock = clock.Add(d)
-		if !slept { // the host sleeps 14 h under the first timer
-			clock, slept = clock.Add(14*time.Hour), true
+		if !slept { // the host sleeps 10 h under the first timer
+			clock, slept = clock.Add(10*time.Hour), true
 		}
 		ch := make(chan time.Time, 1)
 		ch <- clock
@@ -269,5 +269,46 @@ func TestRenewalLoopRenewsOnTimeAfterTheHostSlept(t *testing.T) {
 	due := RenewAt(nb, nb.Add(day), 0)
 	if renewedAt.Before(due) || renewedAt.After(due.Add(MaxSleep)) {
 		t.Fatalf("renewed at %v after issue, want %v (+ at most %v)", renewedAt.Sub(nb), due.Sub(nb), MaxSleep)
+	}
+}
+
+// TestRenewalLoopRetriesPastExpiry (relay-server spec/MachineAuth.tla
+// BackAfterExpiry, mutant no-renew-after-expiry; the 2026-11-20 incident):
+// the relay's accounts service is out of reach until 30 days after the
+// certificate expired; the loop keeps asking, its backoff bounded by
+// RetryMax, and renews once it answers.
+func TestRenewalLoopRetriesPastExpiry(t *testing.T) {
+	nb := time.Unix(1_800_000_000, 0)
+	back := nb.Add(day + 30*day)
+	clock := nb
+	var longest time.Duration
+	after := func(d time.Duration) <-chan time.Time {
+		longest = max(longest, d)
+		clock = clock.Add(d)
+		ch := make(chan time.Time, 1)
+		ch <- clock
+		return ch
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var got *Cert
+	err := Loop{
+		Now: func() time.Time { return clock }, Jitter: func() float64 { return 0 }, After: after,
+		Renew: func(_ context.Context, cur *Cert) (*Cert, error) {
+			if clock.Before(back) {
+				return nil, &RefusedError{Status: http.StatusBadGateway}
+			}
+			return fakeCert(t, clock), nil
+		},
+		Save: func(c *Cert) error { got = c; cancel(); return nil },
+	}.Run(ctx, fakeCert(t, nb))
+	if err != nil {
+		t.Fatalf("Run: %v, want it to renew after the outage", err)
+	}
+	if got == nil || got.Leaf.NotBefore.Before(back.Add(-time.Hour)) {
+		t.Fatalf("renewed %v, want once the relay answered (%v)", got, back)
+	}
+	if longest > RetryMax {
+		t.Fatalf("a wait of %v, want at most RetryMax", longest)
 	}
 }

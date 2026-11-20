@@ -22,6 +22,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"slices"
@@ -349,9 +350,10 @@ func (m *Machine) KRL() (string, error) {
 // OrgID is the organisation's id.
 func (m *Machine) OrgID() string { return m.orgID }
 
-// RenewDue is when this machine renews: at 2/3 of its certificate's
-// lifetime, or now when the certificate is not under the root it trusts
-// (after a rotation; Enrol.tla Request, Due).
+// RenewDue is when this machine renews: at half its certificate's
+// lifetime, up to 10 % of it later (spread by the serial, so a fleet does
+// not renew at once; lane SEAMLESS), or now when the certificate is not
+// under the root it trusts (after a rotation; Enrol.tla Request, Due).
 func (m *Machine) RenewDue(now time.Time) time.Time {
 	m.mu.Lock()
 	leaf, issuer := m.cert.Leaf, m.issuer
@@ -359,7 +361,9 @@ func (m *Machine) RenewDue(now time.Time) time.Time {
 	if m.ver.Issued(leaf, issuer, now) != nil {
 		return now
 	}
-	return leaf.NotBefore.Add(leaf.NotAfter.Sub(leaf.NotBefore) * 2 / 3)
+	life := leaf.NotAfter.Sub(leaf.NotBefore)
+	spread := new(big.Int).Mod(leaf.SerialNumber, big.NewInt(1000)).Int64() // 0..999
+	return leaf.NotBefore.Add(life/2 + life/10*time.Duration(spread)/1000)
 }
 
 // Current is this machine's certificate and its private key.

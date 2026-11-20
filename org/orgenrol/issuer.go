@@ -346,6 +346,9 @@ const spoolDir = "answers"
 // nothing the models protect: it can only refuse, as it can by not
 // carrying the request.
 func (s *service) wrongMachine(ctx context.Context, req orgpki.Request, sender string) (string, error) {
+	if r := req.Renew; r != nil && r.MachineID != "" && senderMachine(sender) != r.MachineID {
+		return fmt.Sprintf("a move to relay machine %s posted by %s: only that machine asks to move a name to it", r.MachineID, cmp.Or(sender, "unknown")), nil
+	}
 	if req.Enrol == nil || s.MachineOf == nil {
 		return "", nil
 	}
@@ -368,6 +371,26 @@ func (s *service) wrongMachine(ctx context.Context, req orgpki.Request, sender s
 		return fmt.Sprintf("the token is for %s, machine %s of the account, but machine %s posted the request: enrol each machine under its name in the account (nfltr machines lists them); make a new token, for %s to join on %s or for this machine's own name", name, id, cmp.Or(from, sender, "unknown"), name, name), nil
 	}
 	return "", nil
+}
+
+// movePolicy admits moving a name to a relay machine id when that id is
+// the issuer's account machine of that name (MachineOf; Enrol.tla Move,
+// MoveOnlyOwnAccount): the default for the account that holds the
+// issuer. nil (no MachineOf): only a rebind token moves a name.
+func (s *service) movePolicy(ctx context.Context) orgpki.MovePolicy {
+	if s.MachineOf == nil {
+		return nil
+	}
+	return func(name, id string) error {
+		got, err := s.MachineOf(ctx, name)
+		switch {
+		case err != nil:
+			return err
+		case got != id:
+			return fmt.Errorf("the issuer's relay account has no machine %s named %s", id, name)
+		}
+		return nil
+	}
 }
 
 // senderMachine is the machine id of a mailbox sender the relay asserts
@@ -396,6 +419,7 @@ func (s *service) decide(ctx context.Context, req orgpki.Request, refuse string,
 		case req.Enrol != nil:
 			der, err = iss.Enrol(*req.Enrol, now)
 		case req.Renew != nil:
+			iss.SetMovePolicy(s.movePolicy(ctx))
 			der, err = iss.Renew(*req.Renew, now)
 		case req.SignIn != nil:
 			// ponytail: fetches the IdP's keys (once per IdP, cached) under the directory's lock

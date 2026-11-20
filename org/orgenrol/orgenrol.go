@@ -6,7 +6,7 @@
 // Fetch, TakeRoot):
 //
 //   - the machine's side: Join (a token's enrolment), and Keep, which
-//     renews at 2/3 of the certificate's lifetime or at once after a
+//     renews at half the certificate's lifetime or at once after a
 //     rotation, and follows the CRL and the root (the issuer's push wakes
 //     a parked long-poll; a fresh read every FollowEvery is the backstop);
 //   - the issuer's side: Serve, which answers requests under the issuer's
@@ -99,12 +99,15 @@ func answerOf(ctx context.Context, mb Mailbox, orgID string, ids []string, wait 
 				return a, fmt.Errorf("the issuer refused: %w", orgpki.ErrSignInEnded)
 			}
 			if a.Refused != "" {
-				return a, fmt.Errorf("the issuer refused: %s", a.Refused)
+				return a, fmt.Errorf("%w: %s", ErrIssuerRefused, a.Refused)
 			}
 			return a, nil
 		}
 	}
 }
+
+// ErrIssuerRefused: the issuer answered the request with a refusal.
+var ErrIssuerRefused = errors.New("the issuer refused")
 
 func randomID() string {
 	b := make([]byte, 16)

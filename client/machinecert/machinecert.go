@@ -5,7 +5,8 @@
 // (relay-server spec/MachineAuth.tla): the machine makes its key and keeps
 // it (NewKey, SaveKey: a 0600 file), sends only a CSR to the relay's
 // accounts service (Client.Enrol with a code or an enrolment token), and
-// renews its 24 h certificate at 2/3 of its lifetime, +-10 % (Loop), or
+// renews its 24 h certificate at half its lifetime, up to 10 % later
+// (Loop; also after it expired, within the relay's grace), or
 // rotates to a new key with the current key's proof (Client.Rotate). The
 // certificate is a TLS client certificate for the relay (Cert.TLS); the
 // relay knows the machine by the one URI SAN spiffe://<domain>/m/<id>.
@@ -169,7 +170,8 @@ func (e *RefusedError) Error() string {
 }
 
 // Final reports whether retrying cannot help: the code or token is spent,
-// the machine revoked, or its key rotated away (enrol again).
+// the machine revoked, its key rotated away, or its certificate expired
+// past the relay's grace (sign in again: nfltr config login).
 func (e *RefusedError) Final() bool {
 	return e.Status == http.StatusUnauthorized || e.Status == http.StatusForbidden || e.Status == http.StatusBadRequest
 }
@@ -192,7 +194,8 @@ func (c *Client) Enrol(ctx context.Context, code, token, name string, key *ecdsa
 }
 
 // Renew asks a new certificate for cur's key (the relay answers 409 until
-// the last half of cur's lifetime).
+// the last two thirds of cur's lifetime; it renews an expired one within
+// its grace).
 func (c *Client) Renew(ctx context.Context, cur *Cert, key *ecdsa.PrivateKey) (*Cert, error) {
 	csr, err := CSR(key)
 	if err != nil {
@@ -252,10 +255,12 @@ func (c *Client) post(ctx context.Context, path string, body any) (*Cert, error)
 }
 
 // RenewAt is when a certificate valid from notBefore to notAfter renews:
-// at 2/3 of its lifetime, moved by jitter (in [-1, 1]) times 10 % of that,
-// so a fleet's machines spread their renewals.
+// at half its lifetime, up to 10 % of it later by jitter (in [-1, 1]: -1
+// at half, 1 at 60 %), so a fleet's machines spread their renewals and
+// half the lifetime is left for retries (the relay takes a renewal in the
+// last two thirds).
 func RenewAt(notBefore, notAfter time.Time, jitter float64) time.Time {
 	jitter = max(-1, min(1, jitter))
-	at := notAfter.Sub(notBefore) * 2 / 3
-	return notBefore.Add(at + time.Duration(float64(at)*0.1*jitter))
+	life := notAfter.Sub(notBefore)
+	return notBefore.Add(life/2 + time.Duration(float64(life)*0.05*(jitter+1)))
 }

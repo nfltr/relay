@@ -44,7 +44,7 @@ func TestFilesAndMessagesUnchanged(t *testing.T) {
 	if !sameRelay("nfltr.xyz", "grpc.nfltr.xyz:443") {
 		t.Error("the hosted relay's gRPC host is not its HTTP host")
 	}
-	const msg = "the relay refused this machine's certificate (revoked, rotated away or expired): run `nfltr config login` to enrol this machine again"
+	const msg = "the relay no longer accepts this machine (it was revoked, or off for more than 90 days): run `nfltr config login`"
 	if ErrRefused.Error() != msg {
 		t.Fatalf("ErrRefused = %q", ErrRefused)
 	}

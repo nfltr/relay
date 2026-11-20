@@ -64,6 +64,10 @@ type RenewRequest struct {
 	Cert []byte `json:"cert"`
 	CSR  []byte `json:"csr"`
 	Sig  []byte `json:"sig"`
+	// MachineID, when set, asks to move the name to this relay machine id
+	// (NewMoveRequest: the machine enrolled with the relay again); Sig is
+	// then over it too (enrol.pv query 20, BIND:move.id).
+	MachineID string `json:"machine_id,omitempty"`
 }
 
 type tokenRec struct {
@@ -116,6 +120,21 @@ type Issuer struct {
 	rules     map[string]SignInRule // by id (signin.go)
 	idps      providers
 	sink      Sink
+	move      MovePolicy // nil: no move without a rebind token
+}
+
+// MovePolicy admits moving name to the relay machine id: nil when id is
+// a machine of the issuer's own relay account by that name (Enrol.tla
+// Move, MoveOnlyOwnAccount). The relay answers it, so it is never the
+// only check: the request is signed by the name's key over the id.
+type MovePolicy func(name, machineID string) error
+
+// SetMovePolicy lets a renewal move its name to a new relay machine id
+// when p admits it (nil: only a rebind token moves a name).
+func (i *Issuer) SetMovePolicy(p MovePolicy) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.move = p
 }
 
 // The kinds of root primary. An organisation has one, recorded in its init
@@ -306,6 +325,12 @@ func mac(key []byte, msg string) []byte {
 func enrolMAC(secret, csr []byte) []byte { return mac(secret, "nfltr-org-enrol-v1\x00"+string(csr)) }
 func renewMessage(csr []byte) []byte     { return append([]byte("nfltr-org-renew-v1\x00"), csr...) }
 
+// moveMessage is what a move's signature covers: the new relay machine id
+// and the CSR (BIND:move.id).
+func moveMessage(csr []byte, machineID string) []byte {
+	return append([]byte("nfltr-org-move-v1\x00"+machineID+"\x00"), csr...)
+}
+
 // TokenName is the name the token id was made for, "" for none.
 func (i *Issuer) TokenName(id string) string {
 	i.mu.Lock()
@@ -450,6 +475,12 @@ func NewEnrolRequest(token string, csr []byte) (EnrolRequest, error) {
 // signed with its current key.
 func NewRenewRequest(cert []byte, current ed25519.PrivateKey, csr []byte) RenewRequest {
 	return RenewRequest{Cert: cert, CSR: csr, Sig: ed25519.Sign(current, renewMessage(csr))}
+}
+
+// NewMoveRequest is NewRenewRequest asking to move the name to the relay
+// machine id (its machine enrolled with the relay again), signed over it.
+func NewMoveRequest(cert []byte, current ed25519.PrivateKey, csr []byte, machineID string) RenewRequest {
+	return RenewRequest{Cert: cert, CSR: csr, MachineID: machineID, Sig: ed25519.Sign(current, moveMessage(csr, machineID))}
 }
 
 // parseCSR: a CSR its key signed (proof of possession), for an Ed25519 key
@@ -604,7 +635,11 @@ func (i *Issuer) Renew(req RenewRequest, now time.Time) ([]byte, error) {
 		}
 		return nil, fmt.Errorf("%w: %w", ErrRefused, ErrSignInEnded)
 	}
-	if !verifyRenewSig(cur.PublicKey, renewMessage(req.CSR), req.Sig) {
+	msg := renewMessage(req.CSR)
+	if req.MachineID != "" {
+		msg = moveMessage(req.CSR, req.MachineID)
+	}
+	if !verifyRenewSig(cur.PublicKey, msg, req.Sig) {
 		i.traceRefused(sn, cur, "other", now)
 		return nil, i.refuse(refusal, "not signed by the certificate's key")
 	}
@@ -613,9 +648,34 @@ func (i *Issuer) Renew(req RenewRequest, now time.Time) ([]byte, error) {
 		i.traceRefused(sn, cur, "other", now)
 		return nil, i.refuse(refusal, "CSR: "+err.Error())
 	}
+	if req.MachineID != "" && req.MachineID != n.machineID {
+		return i.moveName(rec.name, n, req.MachineID, cr.PublicKey, sn, refusal, now)
+	}
 	der, err := i.issue(ActRenewed, rec.name, n.groups, n.machineID, n.dev, cr.PublicKey, "", sn, now)
 	if err == nil {
 		appTraceLine(map[string]any{"ev": "renew", "o": i.orgID, "n": rec.name, "u": n.dev.Person, "a": n.dev.App, "k": orgid.KeyFingerprint(cr.PublicKey), "t": now.Unix()})
+	}
+	return der, err
+}
+
+// moveName moves name to the relay machine id its key asked for (Enrol.tla
+// Move): only when the move policy admits id (MoveOnlyOwnAccount), in one
+// rebound entry, as a rebind token's. Callers hold mu.
+// ponytail: the policy (a relay call) runs under the issuer's lock; the
+// issuer serves one request at a time anyway.
+func (i *Issuer) moveName(name string, n *nameRec, id string, pub crypto.PublicKey, from string, refusal Entry, now time.Time) ([]byte, error) {
+	if err := validMachineID(id); err != nil {
+		return nil, i.refuse(refusal, err.Error())
+	}
+	if i.move == nil {
+		return nil, i.refuse(refusal, "this issuer moves "+name+" to another relay machine only with a rebind token (nfltr org token --rebind)")
+	}
+	if err := i.move(name, id); err != nil {
+		return nil, i.refuse(refusal, fmt.Sprintf("%s does not move to relay machine %s: %v (on the issuer's machine: nfltr org token --rebind %s --machine-id %s)", name, id, err, name, id))
+	}
+	der, err := i.issue(ActRebound, name, n.groups, id, n.dev, pub, "", from, now)
+	if err == nil {
+		traceLine(map[string]any{"ev": "rebind", "o": i.orgID, "n": name, "s": n.serials[len(n.serials)-1], "t": now.Unix()})
 	}
 	return der, err
 }
