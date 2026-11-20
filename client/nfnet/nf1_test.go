@@ -434,3 +434,53 @@ func TestNF1EarlySessionResetIsAReset(t *testing.T) {
 		t.Fatalf("the relay's session ended %v, want a reset", err)
 	}
 }
+
+// A Close after the peer's close_notify takes the peer's end below it too
+// (the transport's FIN, which follows the close_notify) before it closes
+// the session whole: the peer's CloseWriteSync then returns nil. A Close
+// at the close_notify alone (crypto/tls reads no further) raced the FIN
+// in flight, and the peer's wait read the whole close as a reset (link
+// ENDACKTRUTH; lane PIPERESET: nfltr-pipe's relayed dialer exited 6 when
+// the listener's agent closed first). The server here sends its FIN only
+// once the client's Close took its own end's acknowledgement.
+func TestNF1CloseTakesThePeersEnd(t *testing.T) {
+	l, _, err := nf1.Mint("relay.example:443")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, srvc, raws := nf1Relay(t, l)
+	c, err := dial(t, dialer(t, cfg), Target{Kind: AddressTarget, Address: l.Address()}, DialOptions{Direct: DirectOff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, raw := <-srvc, <-raws
+	defer srv.Close() //nolint:errcheck
+	// the close_notify alone
+	if err := srv.(interface{ CloseWrite() error }).CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := io.ReadAll(c); err != nil || len(b) != 0 {
+		t.Fatalf("read %q, %v; want the close_notify's EOF", b, err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- c.Close() }()
+	// the client's close_notify, then its FIN, which the server takes
+	_ = raw.SetReadDeadline(time.Now().Add(10 * time.Second))
+	if b, err := io.ReadAll(srv); err != nil || len(b) != 0 {
+		t.Fatalf("server read %q, %v; want EOF", b, err)
+	}
+	if n, err := raw.Read(make([]byte, 1)); n != 0 || err != io.EOF {
+		t.Fatalf("the server's session read %d, %v; want the client's FIN", n, err)
+	}
+	select { // the client's Close closes now (before) or waits for the server's FIN
+	case err := <-closed:
+		closed <- err
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := raw.CloseWriteSync(); err != nil {
+		t.Fatalf("the server's end: %v, want nil (the client took it before its close)", err)
+	}
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+}

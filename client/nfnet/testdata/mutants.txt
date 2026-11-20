@@ -1,0 +1,7 @@
+# Planted bugs of a session's end under end-to-end TLS (scripts/go-mutants.sh
+# client/nfnet/testdata/mutants.txt, make test-go-mutants, in make ci): each
+# line "<mutant> | <file> | <exact line text> | <replacement> | <test>".
+# Lane PIPERESET: a Close after the peer's close_notify closed the session
+# whole before the FIN behind it arrived; the peer's CloseWriteSync read it
+# as a reset (link ENDACKTRUTH; nfltr-pipe's relayed dialer exited 6).
+close-before-fin | ../tlsend/tlsend.go | 	if c.raw.notified.Load() { | 	if false { | TestNF1CloseTakesThePeersEnd

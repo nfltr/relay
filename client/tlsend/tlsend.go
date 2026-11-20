@@ -17,6 +17,7 @@ import (
 	"io"
 	"net"
 	"sync/atomic"
+	"time"
 )
 
 // ErrTruncated is a TLS stream whose transport ended without the peer's
@@ -95,19 +96,37 @@ func (c *Conn) CloseWriteSyncReceived(received func()) error {
 }
 
 // Close is the TLS connection's (close_notify, then the transport's
-// close), or after Reset only the transport's.
+// close), or after Reset only the transport's. After the peer's
+// close_notify was read it first takes the transport's end behind it
+// (its FIN), within EndBound: a close before it races that FIN, and a
+// link peer's CloseWriteSync reads such a close as a reset (link
+// ENDACKTRUTH; lane PIPERESET). crypto/tls reads nothing past the
+// close_notify.
 func (c *Conn) Close() error {
 	if c.raw.reset.Load() {
 		return c.raw.Conn.Close()
 	}
+	if c.raw.notified.Load() {
+		c.raw.takeEnd()
+	}
 	return c.Conn.Close()
 }
+
+// EndBound bounds Close's wait for the transport's end after the peer's
+// close_notify, as crypto/tls bounds its own close_notify's write (5 s):
+// a peer that ends only its TLS stream (CloseWrite) and keeps the
+// transport costs a Close no more.
+const EndBound = 5 * time.Second
 
 // Read is the TLS connection's, with a transport end as ErrTruncated.
 func (c *Conn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
-	if err == io.EOF && c.raw.ended.Load() {
-		err = ErrTruncated
+	if err == io.EOF {
+		if c.raw.ended.Load() {
+			err = ErrTruncated
+		} else {
+			c.raw.notified.Store(true)
+		}
 	}
 	return n, err
 }
@@ -118,9 +137,25 @@ func (c *Conn) Read(p []byte) (int, error) {
 // the stream ended before the peer's close_notify was read.
 type rawEnd struct {
 	net.Conn
-	eof   bool // the transport's EOF, held for the next read
-	ended atomic.Bool
-	reset atomic.Bool // Conn.Reset: Close sends no close_notify
+	eof      bool // the transport's EOF, held for the next read
+	ended    atomic.Bool
+	reset    atomic.Bool // Conn.Reset: Close sends no close_notify
+	notified atomic.Bool // the peer's close_notify was read (a clean io.EOF)
+}
+
+// takeEnd reads the transport to its end (the peer's FIN after its
+// close_notify; nothing else comes), within EndBound.
+func (r *rawEnd) takeEnd() {
+	if r.eof || r.ended.Load() {
+		return
+	}
+	_ = r.Conn.SetReadDeadline(time.Now().Add(EndBound))
+	b := make([]byte, 512)
+	for {
+		if _, err := r.Conn.Read(b); err != nil {
+			return
+		}
+	}
 }
 
 func (r *rawEnd) Read(p []byte) (int, error) {
