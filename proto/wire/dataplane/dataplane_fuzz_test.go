@@ -13,53 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-
-	"github.com/nfltr/relay/proto/pb"
-	"google.golang.org/protobuf/proto"
 )
-
-// countingReader counts the bytes a decoder consumed.
-type countingReader struct {
-	r io.Reader
-	n int
-}
-
-// Read: io.Reader over r, counting. allow:wrapper
-func (c *countingReader) Read(b []byte) (int, error) {
-	n, err := c.r.Read(b)
-	c.n += n
-	return n, err
-}
-
-// FuzzSendRecvRoundTrip: any frame Send writes, Recv reads back equal.
-func FuzzSendRecvRoundTrip(f *testing.F) {
-	f.Add("7", []byte("hello"), "", "", false, false)
-	f.Add("7", []byte(nil), "agent", "localhost:22", true, false)
-	f.Add("_heartbeat", []byte(nil), "", "", false, false)
-	f.Add(strings.Repeat("s", 256), []byte("x"), "", "", false, true)
-	f.Fuzz(func(t *testing.T, sid string, data []byte, agent, target string, open, closed bool) {
-		want := &pb.TCPData{SessionId: sid, Data: data, AgentId: agent, TargetAddr: target, Open: open, Close: closed}
-		var wire bytes.Buffer
-		s := recordingV2(t, &wire)
-		if err := s.Send(want); err != nil {
-			return // proto.Marshal refuses invalid UTF-8 strings
-		}
-		if err := s.Flush(); err != nil {
-			t.Fatal(err)
-		}
-		cr := &countingReader{r: bytes.NewReader(wire.Bytes())}
-		got, err := scripted(t, cr, io.Discard).Recv()
-		if err != nil {
-			t.Fatalf("Recv of a sent frame: %v", err)
-		}
-		if !proto.Equal(got, want) {
-			t.Fatalf("got %v, want %v", got, want)
-		}
-		if cr.n != wire.Len() {
-			t.Fatalf("Recv consumed %d of %d bytes", cr.n, wire.Len())
-		}
-	})
-}
 
 // FuzzParseWindow: a CreditHeader value is accepted only as a decimal in
 // the window range.
@@ -105,7 +59,7 @@ func FuzzUpgradeReply(f *testing.F) {
 		}
 		_ = m.Close()
 		if perr != nil || resp.StatusCode != http.StatusSwitchingProtocols ||
-			!strings.EqualFold(resp.Header.Get("Upgrade"), UpgradeToken) || m.c.Credit().PeerWindow() < minWindow || m.c.Credit().PeerWindow() > maxWindow {
+			!strings.EqualFold(resp.Header.Get("Upgrade"), UpgradeToken) {
 			t.Fatalf("upgraded on %q", reply)
 		}
 	})

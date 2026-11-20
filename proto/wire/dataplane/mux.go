@@ -19,17 +19,18 @@ type Session = link.Session
 // sessions, which queue them as frames).
 type OwnedWriter = link.OwnedWriter
 
-// Mux carries sessions over a Conn, each a net.Conn: tcp-connect's tunnels
-// to the relay. A session's open is an OPEN frame whose header is the open
-// TCPData without its session id and open flag (Conn.Send's encoding).
+// Mux carries sessions over a link connection, each a net.Conn:
+// tcp-connect's tunnels to the relay. A session's open is an OPEN frame
+// whose header is the open TCPData without its session id and open flag
+// (OpenHeader).
 type Mux struct {
 	m *link.Mux
-	c *Conn
+	c *link.Conn
 }
 
 // NewMux returns a Mux over c.
-func NewMux(c *Conn) *Mux {
-	return &Mux{m: link.NewMux(c.Conn), c: c}
+func NewMux(c *link.Conn) *Mux {
+	return &Mux{m: link.NewMux(c), c: c}
 }
 
 // Open starts a session whose open carries open's fields (the agent and

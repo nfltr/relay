@@ -77,7 +77,7 @@ func Upgrade(ctx context.Context, nc net.Conn, host, token string, window int) (
 	if err != nil {
 		return nil, nil, err
 	}
-	return NewMux(Wrap(c)), hdr, nil
+	return NewMux(c), hdr, nil
 }
 
 // RequestUpgrade is Upgrade's HTTP exchange alone: the request and the
@@ -136,5 +136,5 @@ func Accept(ctx context.Context, nc net.Conn, window int, e2eePolicy string) (*M
 	if err != nil {
 		return nil, err
 	}
-	return NewMux(Wrap(c)), nil
+	return NewMux(c), nil
 }

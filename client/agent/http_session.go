@@ -13,8 +13,8 @@ import (
 )
 
 // HTTP on link sessions (client generation 3): the relay opens a session
-// to dataplane.HTTPSessionTarget on one of the agent's TCP streams (a link
-// data connection first) and writes HTTP/1.1 requests into it; the agent
+// to dataplane.HTTPSessionTarget on one of the agent's TCP streams (the agent
+// link first) and writes HTTP/1.1 requests into it; the agent
 // serves them with net/http.
 
 // HTTPSessionsOnly is the HTTPSessionsHeader value of a tunnel that serves

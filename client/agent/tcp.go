@@ -41,8 +41,8 @@ const tcpWriteBatch = 256 << 10
 // on a gRPC stream of a relay that keeps no per-session credit there. The
 // stream's receive loop waits on a session holding this much unwritten
 // data only while its target keeps taking, and at most tcpSessionStall
-// (resetSession). Sessions with credit (a data connection, a gRPC stream
-// whose relay announced its window) queue up to tcpDataWindow and the
+// (resetSession). Sessions with credit (a gRPC stream whose relay
+// announced its window) queue up to tcpDataWindow and the
 // loop never waits.
 // ponytail: against such a relay a target slower than its sender still
 // paces the stream's other sessions; a relay with credit removes the wait.
@@ -60,8 +60,7 @@ var tcpRelayBufPool = sync.Pool{
 	New: func() any { return make([]byte, tcpRelayBufSize) },
 }
 
-// tcpStream is a ConnectTCP gRPC stream or a data connection
-// (github.com/nfltr/relay/proto/wire/dataplane).
+// tcpStream is a ConnectTCP gRPC stream.
 type tcpStream interface {
 	Send(*pb.TCPData) error
 	Recv() (*pb.TCPData, error)
@@ -75,8 +74,7 @@ type tcpTunnel struct {
 	// sendCh feeds the stream's only sender: grpc-go forbids concurrent
 	// SendMsg on one stream, and every session's reader shares this stream.
 	// The queue also lets a reader read its next chunk while the previous
-	// one is being sent. Unused on a data connection: sessions write it
-	// themselves (enqueue).
+	// one is being sent.
 	sendCh   chan *pb.TCPData
 	stop     chan struct{} // closed when runTCPTunnel returns
 	sendDone chan struct{} // closed when the sender stops
@@ -98,10 +96,8 @@ type tcpTunnel struct {
 
 	growth *tcpStreamGrowth // shared by the agent's streams
 
-	// dc is the stream when it is a data connection (tcp_dataplane.go).
-	dc *dataplane.Conn
-	// cr is the per-session credit: dc's, or a gRPC stream's whose relay
-	// announced its window (dataplane.CreditHeader); nil without credit.
+	// cr is the per-session credit of a gRPC stream whose relay announced
+	// its window (dataplane.CreditHeader); nil without credit.
 	cr *link.Credit
 }
 
@@ -220,18 +216,6 @@ func (t *tcpTunnel) send(f *pb.TCPData) error {
 }
 
 func (t *tcpTunnel) enqueue(f *pb.TCPData) error {
-	if t.dc != nil {
-		// Written inline, or with other sessions' frames when a write is
-		// in flight (dataplane.Conn): no hand-off to the sender.
-		err := t.dc.Send(f)
-		if err == nil {
-			err = t.dc.Flush()
-		}
-		if err != nil {
-			_ = t.dc.Close()
-		}
-		return err
-	}
 	select {
 	case t.sendCh <- f:
 		return nil
@@ -586,14 +570,9 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 	// one stream, as before. A relay that also sends a bind token gets the
 	// further streams each on a connection of its own, so they stop sharing
 	// one HTTP/2 writer and reader at each end; it retires them once idle.
-	// A relay that also offers the data plane (tcpDataPlaneHeader) takes
-	// those connections as data connections: session frames without gRPC
-	// or HTTP/2. One that fails falls back to gRPC for the tunnel's life.
 	extraCtx, stopExtra := context.WithCancel(streamCtx)
 	defer stopExtra()
 	var token string // written before growth.want, read after
-	var data bool    // the relay takes data connections (dataplane.Header); likewise
-	var noData atomic.Bool
 	if growth == nil {
 		growth = &tcpStreamGrowth{}
 	}
@@ -601,14 +580,6 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 		return serveTCPStream(ctx, st, targets, nil, e2eeTLS, logger, growth, nil)
 	}
 	growth.open = func() {
-		if data && dial.Data != nil && !noData.Load() {
-			err := serveDataConn(extraCtx, dial, token, serve, growth.st())
-			if err == nil {
-				return
-			}
-			logger.Debug("tcp tunnel: data connection failed; further streams use gRPC", "error", err)
-			noData.Store(true)
-		}
 		if token == "" || dial.GRPC == nil {
 			extra, err := client.ConnectTCP(extraCtx)
 			if err != nil {
@@ -660,7 +631,6 @@ func runTCPTunnel(ctx context.Context, client pb.DispatcherClient, dial RelayDia
 			}
 		}
 		close(parkDone)
-		data = dataplane.PickVersion(md.Get(dataplane.Header)) > 0
 		offer := dataplane.ParseAgentLinkOffer(md.Get(dataplane.AgentLinkHeader), md.Get(dataplane.AgentLinkQUICHeader))
 		if targets.qad != nil && offer.QUICPort > 0 && dial.QUIC != nil {
 			targets.qad.Store(&qadTarget{addr: net.JoinHostPort(dial.QUIC.Host, strconv.Itoa(offer.QUICPort)), tls: dial.QUIC.TLS})
@@ -741,14 +711,11 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 		halfSent: make(map[*bytequeue.Queue]*halfEnd),
 		growth:   growth,
 	}
-	t.dc, _ = stream.(*dataplane.Conn)
-	if t.dc == nil { // a data connection is written inline (enqueue)
-		go t.runSender()
-	}
+	go t.runSender()
 	defer close(t.stop)
 	defer t.closeAll()
-	t.endAck = t.dc == nil && streamEndAck(stream)
-	if t.cr = t.streamCredit(stream); t.cr != nil && t.dc == nil {
+	t.endAck = streamEndAck(stream)
+	if t.cr = t.streamCredit(stream); t.cr != nil {
 		defer t.cr.Close() // senders waiting for credit give up
 	}
 
@@ -784,7 +751,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 		}
 		id := frame.GetSessionId()
 		switch {
-		case id == dataplane.WindowSID && t.cr != nil && t.dc == nil:
+		case id == dataplane.WindowSID && t.cr != nil:
 			sid, n, err := dataplane.ParseWindowFrame(frame)
 			if err == nil {
 				err = t.cr.Grant(sid, n)
@@ -817,7 +784,7 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 			q := t.openSession(id)
 			switch p.kind {
 			case sessionHTTP:
-				// HTTP sessions take a further stream (a data connection)
+				// HTTP sessions take a further stream (an auxiliary one)
 				// from the first one on; an idle agent holds none, and a
 				// relay without HTTP sessions (nfltr-relay <= v0.15) never
 				// makes it open one.
@@ -879,10 +846,8 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 				continue
 			}
 			if t.cr != nil {
-				if t.dc == nil { // a data connection charges its own frames
-					if err := t.cr.Received(id, len(frame.Data)); err != nil {
-						return err
-					}
+				if err := t.cr.Received(id, len(frame.Data)); err != nil {
+					return err
 				}
 				q.Push(frame.Data) // within its credit: never waits
 				continue
@@ -897,14 +862,10 @@ func serveTCPStream(ctx context.Context, stream tcpStream, targets sessionTarget
 	}
 }
 
-// streamCredit is the per-session credit of t's stream: a data
-// connection's, or a gRPC stream's whose relay announced its window in its
-// response header (dataplane.CreditHeader); nil without. Its window
+// streamCredit is the per-session credit of t's stream, a gRPC stream
+// whose relay announced its window in its response header (dataplane.CreditHeader); nil without. Its window
 // updates go out as control frames on the stream (dataplane.WindowFrame).
 func (t *tcpTunnel) streamCredit(stream tcpStream) *link.Credit {
-	if t.dc != nil {
-		return t.dc.Credit()
-	}
 	h, ok := stream.(interface{ Header() (metadata.MD, error) })
 	if !ok {
 		return nil

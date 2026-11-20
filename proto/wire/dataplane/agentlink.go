@@ -24,7 +24,7 @@ import (
 // (peerlink/quiclink) on its UDP port. A connection authenticates with the
 // bind token of the agent's ConnectTCP primary stream and lives no longer
 // than that stream. A session's header is its open TCPData without session
-// id and open flag (OpenHeader), as on a data connection.
+// id and open flag (OpenHeader), as on a /connect data connection.
 //
 // The agent asks for it with AgentLinkHeader in its ConnectTCP request
 // metadata (its transport: AgentLinkTCP, AgentLinkQUIC or "auto"); a relay
@@ -51,8 +51,8 @@ const (
 )
 
 // AgentLinkMagic opens an agent-link connection on the relay's gRPC port,
-// after TLS and before the link hello: a data connection starts with the
-// link's Magic, gRPC with "PRI ".
+// after TLS and before the link hello: gRPC starts with "PRI ", and a bare
+// link hello (Magic: an agent data connection, retired) is refused.
 const AgentLinkMagic = "NFAL"
 
 // AgentLinkALPN is the agent link's application protocol on QUIC, for a

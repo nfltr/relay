@@ -18,9 +18,8 @@ import (
 // life.
 type Stats struct {
 	// The transports the agent's sessions ride: the agent link over
-	// link/TLS/TCP (TCP) or QUIC, data connections (DataConn), and the
-	// gRPC streams (GRPC).
-	TCP, QUIC, DataConn, GRPC TransportStats
+	// link/TLS/TCP (TCP) or QUIC, and the gRPC streams (GRPC).
+	TCP, QUIC, GRPC TransportStats
 	// Reconnects counts the agent's new relay connections by why the one
 	// before ended.
 	Reconnects Reconnects
@@ -32,11 +31,11 @@ type Stats struct {
 // TransportStats is one transport's part of Stats.
 //
 // Conns is a gauge: for TCP and QUIC the agent-link connections up, for
-// DataConn the data connections open, for GRPC the relay connections the
+// GRPC the relay connections the
 // relay accepted (Agent.Connected).
 //
 // ConnStats is what the transport counts: all of it for QUIC
-// (quiclink.Node.Stats) and DataConn (link.Conn.Stats); for TCP the
+// (quiclink.Node.Stats); for TCP the
 // sessions, aborts and credit waits (link.Observer: peerlink keeps no
 // byte counters); for GRPC the credit waits of streams whose relay
 // announced a window (link.Credit). Bytes a transport does not count stay
@@ -63,14 +62,13 @@ type Fallbacks struct {
 
 // Transports named to WithLinkObserver.
 const (
-	ObserveTCP      = "tcp"      // the agent link over link/TLS/TCP
-	ObserveDataConn = "dataconn" // data connections
-	ObserveGRPC     = "grpc"     // credit waits on the gRPC streams
+	ObserveTCP  = "tcp"  // the agent link over link/TLS/TCP
+	ObserveGRPC = "grpc" // credit waits on the gRPC streams
 )
 
 // WithLinkObserver gives the agent's link connections a link.Observer
-// each: every event of the agent link over TCP (ObserveTCP), of data
-// connections (ObserveDataConn), and the credit waits of the gRPC streams
+// each: every event of the agent link over TCP (ObserveTCP) and the
+// credit waits of the gRPC streams
 // (ObserveGRPC); QUIC has no Observer (Stats has its counters). fn is
 // called once per connection or stream, never per event; the Observer's
 // methods run on the connection's goroutines and must not block (PingRTT
@@ -82,7 +80,7 @@ func WithLinkObserver(fn func(transport string) link.Observer) Option {
 // stats is an agent's counters (Stats). A nil *stats counts nothing, so
 // paths without an agent (RunTCPTunnel) need no check.
 type stats struct {
-	tcp, quic, dataConn, grpc transportCounters
+	tcp, quic, grpc transportCounters
 
 	move, drain, lost, dialError atomic.Uint64
 	quicToTCP, linkToGRPC        atomic.Uint64
@@ -175,7 +173,7 @@ func (s *stats) snapshot(grpcConns int64) Stats {
 		return Stats{}
 	}
 	st := Stats{
-		TCP: s.tcp.snapshot(), QUIC: s.quic.snapshot(), DataConn: s.dataConn.snapshot(), GRPC: s.grpc.snapshot(),
+		TCP: s.tcp.snapshot(), QUIC: s.quic.snapshot(), GRPC: s.grpc.snapshot(),
 		Reconnects: Reconnects{Move: s.move.Load(), Drain: s.drain.Load(), Lost: s.lost.Load(), DialError: s.dialError.Load()},
 		Fallbacks:  Fallbacks{QUICToTCP: s.quicToTCP.Load(), LinkToGRPC: s.linkToGRPC.Load()},
 	}
@@ -196,13 +194,6 @@ func (s *stats) quicC() *transportCounters {
 		return nil
 	}
 	return &s.quic
-}
-
-func (s *stats) dataConnC() *transportCounters {
-	if s == nil {
-		return nil
-	}
-	return &s.dataConn
 }
 
 func (s *stats) grpcC() *transportCounters {

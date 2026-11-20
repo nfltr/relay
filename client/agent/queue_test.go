@@ -158,7 +158,7 @@ func waitUntilQueued(t *testing.T, q *SessionQueue, n int) {
 	t.Fatalf("queue never held %d sessions", n)
 }
 
-// The frame streams (ConnectTCP, data connections) queue the same way:
+// The frame streams (ConnectTCP) queue the same way:
 // no answer frame until Accept; a client's reset is the accepted conn's
 // link.ErrReset, never io.EOF.
 func TestQueueFrameSessions(t *testing.T) {

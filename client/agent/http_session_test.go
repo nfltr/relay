@@ -7,9 +7,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -144,20 +144,19 @@ func TestHTTPSessionsValue(t *testing.T) {
 	}
 }
 
-// TestNoDataConnectionUntilAnHTTPSession: against a relay that offers data
-// connections and no agent link (nfltr-relay v0.15 and older, which never
-// opens an HTTP session), an agent that serves HTTP sessions opens no data
-// connection while idle; its first HTTP session opens one.
-func TestNoDataConnectionUntilAnHTTPSession(t *testing.T) {
+// TestNoAuxConnectionUntilAnHTTPSession: against a relay that asks for
+// further streams and offers no agent link, an agent that serves HTTP
+// sessions opens no auxiliary connection while idle; its first HTTP
+// session opens one.
+func TestNoAuxConnectionUntilAnHTTPSession(t *testing.T) {
 	var dials atomic.Int32
-	dial := RelayDialer{Data: func(ctx context.Context) (net.Conn, error) {
+	dial := RelayDialer{GRPC: func() (*grpc.ClientConn, error) {
 		dials.Add(1)
-		<-ctx.Done()
-		return nil, ctx.Err()
+		return nil, errors.New("test: no relay")
 	}}
 	st := newChanStream(t, 8, 64)
 	defer st.closeIn()
-	relay := &primaryClient{st: st, md: metadata.Pairs(tcpStreamsHeader, "4", tcpBindHeader, "tok", dataplane.Header, "2")}
+	relay := &primaryClient{st: st, md: metadata.Pairs(tcpStreamsHeader, "4", tcpBindHeader, "tok")}
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	go func() {
@@ -165,12 +164,12 @@ func TestNoDataConnectionUntilAnHTTPSession(t *testing.T) {
 	}()
 	time.Sleep(300 * time.Millisecond)
 	if n := dials.Load(); n != 0 {
-		t.Fatalf("%d data connections while idle", n)
+		t.Fatalf("%d auxiliary connections while idle", n)
 	}
 	st.in <- &pb.TCPData{SessionId: "h1", Open: true, TargetAddr: dataplane.HTTPSessionTarget}
 	for deadline := time.Now().Add(5 * time.Second); dials.Load() == 0; time.Sleep(10 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatal("no data connection after an HTTP session")
+			t.Fatal("no auxiliary connection after an HTTP session")
 		}
 	}
 }

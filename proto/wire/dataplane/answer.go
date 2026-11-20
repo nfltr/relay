@@ -21,12 +21,12 @@ import (
 // opener waits for the far side's answer.
 //
 // On a leg whose two sides negotiated link.FeatureChain (link v0.10.0:
-// data connections, agent links over TCP, QUIC links that negotiated
+// /connect data connections, agent links over TCP, QUIC links that negotiated
 // quiclink.ALPNChain, the replica link) the answer is link's own: the
 // accepter's Accept, or a refusal (Refusal, link.Abort.Refused) whose
 // code is AbortCode(reason); a reset after the open carries a code too.
 //
-// On any other leg (gRPC and data connection frame streams, which are not
+// On any other leg (gRPC frame streams, which are not
 // link sessions, and a peer that does not announce FeatureChain: nfltr
 // before v2.2.0, nfltr-relay before v0.22.0) the answer is in band, as
 // before: the first bytes the far side sends on a session whose open asked

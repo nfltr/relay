@@ -4,16 +4,11 @@
 package agent
 
 import (
-	"context"
-	"crypto/tls"
-	"net"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nfltr/link"
-	"github.com/nfltr/relay/proto/pb"
-	"github.com/nfltr/relay/proto/wire/dataplane"
 )
 
 // eventCounter is a caller's Observer (WithLinkObserver) counting what it
@@ -73,7 +68,7 @@ func TestStatsObserverCountsForwardsAndAllocatesNothing(t *testing.T) {
 	}
 	var nilStats *stats // no agent (RunTCPTunnel): counts nothing, forwards nowhere
 	nilStats.observer(ObserveGRPC, nilStats.grpcC(), nil, true).CreditWait(time.Second)
-	nilStats.dataConnC().track(func() link.ConnStats { return link.ConnStats{} })()
+	nilStats.tcpC().track(func() link.ConnStats { return link.ConnStats{} })()
 }
 
 // TestStatsSourcesNeverGoBack: a source's counters stay in Stats after it
@@ -91,60 +86,5 @@ func TestStatsSourcesNeverGoBack(t *testing.T) {
 	got := tc.snapshot()
 	if got.BytesIn != 15 || got.BytesOut != 20 || got.SessionsOpened != 1 || got.QueuedBytes != 0 {
 		t.Fatalf("ended %+v", got)
-	}
-}
-
-// tokenAuth is a relay's side of a data connection's bind in a test: any
-// token binds.
-type tokenAuth struct{}
-
-func (tokenAuth) Hello(context.Context, tls.ConnectionState) (byte, []byte, error) {
-	return link.MethodToken, nil, nil
-}
-
-func (tokenAuth) Verify(context.Context, tls.ConnectionState, byte, []byte) (link.Identity, error) {
-	return link.Identity{}, nil
-}
-
-// TestDataConnStats: a data connection counts into Stats.DataConn while
-// open and after, and its events reach the caller's Observer.
-func TestDataConnStats(t *testing.T) {
-	agentSide, relaySide := net.Pipe()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	got := make(chan error, 1)
-	go func() {
-		c, _, err := link.Server(ctx, relaySide, link.Config{Auth: tokenAuth{}})
-		if err == nil {
-			_, err = dataplane.Wrap(c).Recv()
-			_ = c.Close()
-		}
-		got <- err
-	}()
-	next := &eventCounter{}
-	st := &stats{observe: func(string) link.Observer { return next }}
-	dial := RelayDialer{Data: func(context.Context) (net.Conn, error) { return agentSide, nil }}
-	err := serveDataConn(ctx, dial, "token", func(s tcpStream) error {
-		if n := st.snapshot(0).DataConn.Conns; n != 1 {
-			t.Errorf("conns while open %d", n)
-		}
-		if err := s.Send(&pb.TCPData{SessionId: fingerprintControlSessionID, TargetAddr: "x:1"}); err != nil {
-			return err
-		}
-		_ = s.(*dataplane.Conn).Flush()
-		if err := <-got; err != nil {
-			t.Error(err)
-		}
-		return nil
-	}, st)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := st.snapshot(0).DataConn
-	if s.Conns != 0 || s.BytesOut == 0 {
-		t.Fatalf("after %+v", s)
-	}
-	if next.events.Load() == 0 {
-		t.Fatal("the caller's Observer saw nothing")
 	}
 }

@@ -23,17 +23,17 @@ type RelayDialer struct {
 	// GRPC opens a gRPC connection for auxiliary ConnectTCP streams.
 	GRPC func() (*grpc.ClientConn, error)
 	// Data opens a connection to the relay's gRPC port, its TLS
-	// handshake done (grpcclient.DialConn): a data connection. Nil, or a
-	// relay that does not offer them, leaves auxiliary gRPC connections.
+	// handshake done (grpcclient.DialConn): the agent link over TCP. Nil
+	// leaves the agent link to QUIC, else auxiliary gRPC connections.
 	Data func(context.Context) (net.Conn, error)
-	// Liveness is a version-2 data connection's: both ends ping it and
-	// end it once the relay is silent for its interval plus timeout. Zero
-	// is link.LivenessDefault; the agent passes its Config.Liveness.
+	// Liveness is the agent link's: both ends ping it and end it once the
+	// relay is silent for its interval plus timeout. Zero is
+	// link.LivenessDefault; the agent passes its Config.Liveness.
 	Liveness link.Liveness
 	// Transport is the agent link's (TransportTCP, TransportQUIC,
 	// TransportAuto; "" is TransportTCP): asked of a relay that takes the
-	// agent link, the agent's sessions ride it instead of data
-	// connections. Without Data (and QUIC) the agent asks for none.
+	// agent link, the agent's sessions ride it. Without Data (and QUIC)
+	// the agent asks for none.
 	Transport string
 	// QUIC reaches the relay over QUIC for TransportQUIC and
 	// TransportAuto; nil: TCP only.
@@ -44,54 +44,24 @@ type RelayDialer struct {
 	park *linkPark
 }
 
-// tcpDataWindow is the agent's window per session on a data connection:
-// what it queues for one session's target at most (relay tcpDataWindow).
+// tcpDataWindow is the agent's window per session on its agent link and
+// its gRPC streams with credit: what it queues for one session's target at most (relay tcpDataWindow).
 // A session that may go direct keeps the same window on both of its
 // paths (pathswitch.Config.Window, the direct QUIC stream's window), so
 // one transfer is never bounded at 1 MiB per round trip
 // (TestDirectPathWindowIsTheDataWindow, docs/performance.md).
 const tcpDataWindow = 16 << 20
 
-// tcpDataMaxSessions is how many sessions the relay may have open on one
-// data connection (version 2): the relay places them, so as many as the
+// tcpDataMaxSessions is how many sessions the relay may have open on the
+// agent link: the relay places them, so as many as the
 // wire carries.
 const tcpDataMaxSessions = 1 << 20
 
-// dataHelloTimeout bounds opening and binding a data connection.
+// dataHelloTimeout bounds opening and binding the agent link.
 const dataHelloTimeout = 10 * time.Second
 
-// serveDataConn opens a data connection with dial.Data, binds it to the primary stream with token and serves it
-// until it ends or ctx (the primary's) is done. It fails when the
-// connection or the binding fails.
-// st, when set, counts it (Stats.DataConn).
-func serveDataConn(ctx context.Context, dial RelayDialer, token string, serve func(tcpStream) error, st *stats) error {
-	dctx, cancel := context.WithTimeout(ctx, dataHelloTimeout)
-	defer cancel()
-	nc, err := dial.Data(dctx)
-	if err != nil {
-		return err
-	}
-	defer nc.Close() //nolint:errcheck
-	dc, err := dataplane.Dial(dctx, nc, token, link.Config{
-		Window: tcpDataWindow, MaxSessions: tcpDataMaxSessions, Liveness: dial.Liveness,
-		Observer: st.observer(ObserveDataConn, nil, nil, false),
-	})
-	if err != nil {
-		return err
-	}
-	defer dc.Close() //nolint:errcheck
-	tc := st.dataConnC()
-	tc.conn(1)
-	defer tc.conn(-1)
-	defer tc.track(dc.Stats)()
-	stop := context.AfterFunc(ctx, func() { _ = dc.Close() })
-	defer stop()
-	_ = serve(dc)
-	return nil
-}
-
-// isSessionData reports whether f carries a session's data, which a data
-// connection sends only on credit (control frames carry none).
+// isSessionData reports whether f carries a session's data, which a
+// stream with credit sends only on credit (control frames carry none).
 func isSessionData(f *pb.TCPData) bool {
 	return len(f.GetData()) > 0 && !strings.HasPrefix(f.GetSessionId(), "_")
 }

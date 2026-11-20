@@ -15,7 +15,6 @@ cd "$(dirname "$0")/.."
 TARGETS=(
 	"proto ./wire/wsframe FuzzReadMessage"
 	"proto ./wire/wsframe FuzzFrameRoundTrip"
-	"proto ./wire/dataplane FuzzSendRecvRoundTrip"
 	"proto ./wire/dataplane FuzzParseWindow"
 	"proto ./wire/dataplane FuzzUpgradeReply"
 	"proto ./wire/dataplane FuzzReadAnswer"

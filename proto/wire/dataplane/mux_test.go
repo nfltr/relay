@@ -28,12 +28,50 @@ import (
 // sessions with accept.
 func muxPair(t *testing.T, accept func(*pb.TCPData, *Session)) *Mux {
 	t.Helper()
-	a, b := v2pair(t)
+	a, b := linkPair(t)
 	client, server := NewMux(a), NewMux(b)
 	go func() { _ = client.Serve(nil) }()
 	go func() { _ = server.Serve(accept) }()
 	t.Cleanup(func() { _ = client.Close(); _ = server.Close() })
 	return client
+}
+
+// linkPair binds two link connections over a TCP loopback connection.
+func linkPair(t *testing.T) (dialer, listener *link.Conn) {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close() //nolint:errcheck
+	rc := make(chan *link.Conn, 1)
+	go func() {
+		nc, err := ln.Accept()
+		if err != nil {
+			t.Error(err)
+			rc <- nil
+			return
+		}
+		c, _, err := link.Server(context.Background(), nc, link.Config{Window: testWindow, Auth: link.NoAuth})
+		if err != nil {
+			t.Error(err)
+		}
+		rc <- c
+	}()
+	nc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer, err = link.Client(context.Background(), nc, link.Config{Window: testWindow, Liveness: link.LivenessFast, Auth: link.NoAuth})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener = <-rc
+	if listener == nil {
+		t.FailNow()
+	}
+	t.Cleanup(func() { _ = dialer.Close(); _ = listener.Close() })
+	return dialer, listener
 }
 
 // echoAccept echoes every session except those whose agent is "nope",
@@ -92,7 +130,7 @@ func TestMuxMaxSessions(t *testing.T) {
 		_ = s.Close()
 	})
 	var first *Session
-	for i := range MaxSessions {
+	for i := range link.MaxSessions {
 		s, err := client.Open(&pb.TCPData{AgentId: "a"})
 		if err != nil {
 			t.Fatalf("session %d: %v", i, err)
@@ -102,8 +140,8 @@ func TestMuxMaxSessions(t *testing.T) {
 			first = s
 		}
 	}
-	if _, err := client.Open(&pb.TCPData{AgentId: "a"}); !errors.Is(err, ErrFull) {
-		t.Fatalf("session past MaxSessions: %v, want ErrFull", err)
+	if _, err := client.Open(&pb.TCPData{AgentId: "a"}); !errors.Is(err, link.ErrFull) {
+		t.Fatalf("session past link.MaxSessions: %v, want link.ErrFull", err)
 	}
 	_ = first.Close()
 	s, err := client.Open(&pb.TCPData{AgentId: "a"})
@@ -149,9 +187,6 @@ func TestUpgrade(t *testing.T) {
 	if !IsUpgrade(req) || IsOldUpgrade(req) || req.URL.Path != UpgradePath || req.Header.Get("Authorization") != "Bearer key" ||
 		agentwire.ParseGeneration(req.Header.Values(agentwire.GenerationKey)) != agentwire.Generation {
 		t.Fatalf("upgrade request %s %s %v", req.Method, req.URL, req.Header)
-	}
-	if m.c.Credit().PeerWindow() != 2*testWindow || m.c.Credit().Window() != testWindow {
-		t.Fatalf("windows %d/%d", m.c.Credit().Window(), m.c.Credit().PeerWindow())
 	}
 	go func() { _ = m.Serve(nil) }()
 	s, err := m.Open(&pb.TCPData{AgentId: "echo"})
@@ -202,7 +237,7 @@ func TestUpgrade(t *testing.T) {
 // deadline, then aborts it link.CodeDrainDeadline; Drain returns
 // context.DeadlineExceeded for the cut.
 func TestMuxDrain(t *testing.T) {
-	a, b := v2pair(t)
+	a, b := linkPair(t)
 	client, server := NewMux(a), NewMux(b)
 	go func() { _ = client.Serve(nil) }()
 	go func() { _ = server.Serve(echoAccept) }()
@@ -254,7 +289,7 @@ func TestMuxDrain(t *testing.T) {
 
 // TestPoolPastMaxSessions: a client's link.Pool over upgraded data
 // connections (RequestUpgrade in its Dial, ClientConfig its Link) opens
-// past one connection's MaxSessions on a second, and fails ErrFull only
+// past one connection's link.MaxSessions on a second, and fails link.ErrFull only
 // with both full (link spec/Pool.tla FullOnlyAtMax; nfltr's tcp-connect).
 func TestPoolPastMaxSessions(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -305,15 +340,15 @@ func TestPoolPastMaxSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := range 2 * MaxSessions {
+	for i := range 2 * link.MaxSessions {
 		s, err := p.Open(context.Background(), header)
 		if err != nil {
-			t.Fatalf("session %d of %d on two connections: %v", i+1, 2*MaxSessions, err)
+			t.Fatalf("session %d of %d on two connections: %v", i+1, 2*link.MaxSessions, err)
 		}
 		t.Cleanup(func() { _ = s.Close() })
 	}
-	if _, err := p.Open(context.Background(), header); !errors.Is(err, ErrFull) {
-		t.Fatalf("a session past both connections' MaxSessions: %v, want ErrFull", err)
+	if _, err := p.Open(context.Background(), header); !errors.Is(err, link.ErrFull) {
+		t.Fatalf("a session past both connections' link.MaxSessions: %v, want link.ErrFull", err)
 	}
 	if got, _ := policies.Load().(string); got != "allow" {
 		t.Fatalf("101's E2EE policy %q, want allow", got)
