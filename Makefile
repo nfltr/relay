@@ -180,7 +180,7 @@ spec-astraces:
 	./scripts/spec.sh astraces
 # client/rpcclient's two-agent and concurrent-sender calls against
 # spec/TraceCallCredit.tla, TraceCallCreditBoth.tla and
-# TraceCallCreditSenders.tla (about 2 min; nightly: spec-traces runs it).
+# TraceCallCreditSenders.tla (about 25 s on the runner; nightly: spec-traces runs it).
 spec-cctraces:
 	./scripts/spec.sh ccruns
 # client/dgram's association traces against spec/TraceDatagramAssoc.tla

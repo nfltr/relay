@@ -440,7 +440,7 @@ traces` also checks that every step `TraceCallCredit.tla` takes is one
 `traceCC` records.
 
 Both directions and several senders (lane TRACEGAPS, 2026-11-21):
-`make spec-cctraces` (`scripts/spec.sh ccruns`, about 2 min; nightly,
+`make spec-cctraces` (`scripts/spec.sh ccruns`, about 25 s on the runner; nightly,
 `spec-traces` runs it) runs client/rpcclient's tests `CCTESTS` (two agents
 over an in-order bridge: `TestFullRoundTrip`, `TestCallCreditBothWaysGrant`
 (requests past `RequestWindow`, responses past `ResponseWindow`),
