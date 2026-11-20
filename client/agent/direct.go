@@ -452,8 +452,11 @@ func newPSConn(c *pathswitch.Conn, first net.Conn) *psConn { return &psConn{Conn
 // the END: a caller that ends the stream under it or exits right after
 // Close loses none of them (TestPSConnCloseDeliversTheTail). When the
 // session fails first, nothing is heard from the peer for
-// pathswitch.Config.Linger (it is gone: TestPSConnCloseGonePeerWithinLinger)
-// or psCloseBound passes, it resets the session and returns an error: the
+// pathswitch.Config.Linger (it is gone: TestPSConnCloseGonePeerWithinLinger),
+// nothing is acknowledged for pathswitch.Config.Detach while the peer
+// keeps answering (WaitAcked's progress rule: a broken or hostile peer
+// holds no Close longer; link spec/RelayedClose.tla, mutant
+// liveness-counts-as-progress) or psCloseBound passes, it resets the session and returns an error: the
 // peer may not hold them (TestPSConnCloseReportsAnUnackedEnd). Then, in
 // the background, pathswitch's Close waits for the peer's end (crypto/tls
 // sends close_notify above but never ends the stream under it, so each
@@ -472,8 +475,9 @@ func (c *psConn) Close() error {
 }
 
 // psCloseBound: how long Close waits for the peer to acknowledge its end
-// while the peer keeps answering: a full window (tcpDataWindow, 16 MiB)
-// at 256 kbit/s. A gone peer ends the wait at Linger; a 30 s bound reset
+// while acknowledgements keep advancing: a full window (tcpDataWindow,
+// 16 MiB) at 256 kbit/s. A gone peer ends the wait at Linger, one that
+// acknowledges nothing at Detach; a 30 s bound on the whole wait reset
 // a lossy direct session still delivering its tail (lane DIRECTCLOSE:
 // net-100mbit-150ms-loss1-direct, 4 MiB took 33 s).
 const psCloseBound = 10 * time.Minute

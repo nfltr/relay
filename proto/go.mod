@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.29.0
-	github.com/nfltr/link v0.12.19-0.20261120041657-52a444dd65b5
+	github.com/nfltr/link v0.12.19-0.20261120042746-255efbdca00d
 	google.golang.org/genproto/googleapis/api v0.0.0-20260803160001-6ac0973c030d
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.11
