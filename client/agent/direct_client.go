@@ -394,7 +394,7 @@ func (s *DirectSession) loop(proof uint64) {
 	}()
 	s.c.WaitAcked(proof, e2eeHeaderTimeout) // past it the agent's handshake failed: the session ends
 	for {
-		if reason, n := s.tryDirect(); reason != "" && reason != "backoff" {
+		if reason, n := s.tryDirect(); reason != "" && reason != "backoff" && !s.ended() {
 			s.emit(PathEvent{Path: PathRelayed, Reason: reason, Attempts: n})
 		}
 		s.pair.mu.Lock()

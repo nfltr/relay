@@ -479,6 +479,7 @@ type psConn struct {
 	*pathswitch.Conn
 	first    net.Conn
 	deadline atomic.Pointer[time.Timer]
+	closed   atomic.Bool // Close or Reset began: this end is over before Done
 }
 
 func newPSConn(c *pathswitch.Conn, first net.Conn) *psConn { return &psConn{Conn: c, first: first} }
@@ -501,6 +502,7 @@ func newPSConn(c *pathswitch.Conn, first net.Conn) *psConn { return &psConn{Conn
 // meanwhile) and ends the session cleanly, or resets it once the peer is
 // silent for its Linger.
 func (c *psConn) Close() error {
+	c.closed.Store(true)
 	_ = c.CloseRead()
 	_ = c.CloseWrite()
 	if !c.WaitAcked(c.Written()+1, psCloseBound) { // +1: the END
@@ -529,6 +531,7 @@ func (c *psConn) RemoteAddr() net.Addr { return c.first.RemoteAddr() }
 // lost path and failed only at its detach bound
 // (TestPSConnResetReachesAPeerBeforeExit).
 func (c *psConn) Reset() error {
+	c.closed.Store(true)
 	c.Abort()
 	t := time.NewTimer(psResetBound)
 	defer t.Stop()

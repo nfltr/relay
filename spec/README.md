@@ -1091,6 +1091,15 @@ spec` checks `PunchRound.cfg` (a pair a punch passes) and
 ticks each per attempt, a direct one-way delay of 1, the Initial
 retransmitted every 2, an attempt's bound 4, an exchange's 7.
 
+A session that ends while its round runs (a short transfer toward a pair
+no punch passes) starts no further attempt and reports no path for the
+attempt its end cut, from its Close on (a client's clean end closes
+`Done` only a detach bound later; `TestDirectPunchRoundStopsWhenTheSessionEnds`,
+Go mutants `round-past-end`, `round-done-only`; found in the NAT lab: 64 MiB sessions that ended
+at 11 s reported `relayed/withheld` after three attempts). Not modelled:
+stopping early only shortens a behaviour, and every invariant holds on
+its prefixes.
+
 | invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
 |---|---|---|
 | `RetryBound` | at most MaxAttempts (3) attempts per round | `unbounded` |

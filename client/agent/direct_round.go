@@ -23,7 +23,9 @@ type punchAttempt struct {
 
 // punchRound punches p up to punchAttempts times; p.mu held. It returns
 // the last attempt's reason ("" when one won) and how many it made. The
-// session runs relayed meanwhile (the round never holds it: NeverHeld).
+// session runs relayed meanwhile (the round never holds it: NeverHeld),
+// and a session that ended starts no further attempt (its loop reports
+// nothing for it: TestDirectPunchRoundStopsWhenTheSessionEnds).
 func (s *DirectSession) punchRound(p *directPair) (reason string, n int) {
 	tr := traceRound()
 	defer tr.end()
@@ -35,7 +37,7 @@ func (s *DirectSession) punchRound(p *directPair) (reason string, n int) {
 		} else {
 			s.d.count(reason)
 		}
-		if reason != ReasonNoAnswer || n == punchAttempts {
+		if reason != ReasonNoAnswer || n == punchAttempts || s.ended() {
 			return reason, n
 		}
 	}
@@ -53,4 +55,19 @@ func syncWait(ctx context.Context, rtt time.Duration) time.Duration {
 	case <-ctx.Done():
 	}
 	return wait
+}
+
+// ended reports whether the session is over: closed or reset here (a
+// client's clean end closes Done only a detach bound after Close), or
+// ended.
+func (s *DirectSession) ended() bool {
+	if s.nc.closed.Load() {
+		return true
+	}
+	select {
+	case <-s.c.Done():
+		return true
+	default:
+		return false
+	}
 }

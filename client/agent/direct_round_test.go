@@ -144,3 +144,37 @@ func TestDirectPunchRoundEndsRelayedAfterThreeAttempts(t *testing.T) {
 		t.Fatalf("punches %v, want %d no_answer", st.Punches, punchAttempts)
 	}
 }
+
+// TestDirectPunchRoundStopsWhenTheSessionEnds: a session closed while its
+// round runs (a short transfer toward a pair no punch passes) starts no
+// further attempt and reports no path for it, also before its Done (a
+// client's clean end closes Done a detach bound after Close): the attempt
+// the end cut is not the relay withholding the exchange (NAT lab, a
+// 64 MiB session closed at 11 s reported relayed/withheld after 3).
+func TestDirectPunchRoundStopsWhenTheSessionEnds(t *testing.T) {
+	r, dc, attempts := dropRig(t, 300*time.Millisecond)
+	dc.drop.Store(true)
+	cut, closed := make(chan struct{}), make(chan struct{})
+	r.d.attempted = func(next func(punchAttempt)) func(punchAttempt) {
+		return func(a punchAttempt) {
+			next(a)
+			if a.n == 1 { // the session is closed before the round decides
+				close(cut)
+				<-closed
+			}
+		}
+	}(r.d.attempted)
+	_, tc, events := r.session(t)
+	<-cut
+	_ = tc.Close() // returns once the agent has the end; Done closes a detach bound later
+	close(closed)
+	time.Sleep(3 * r.d.punchBound) // a second attempt, had one started, ends within this
+	if as := attempts(); len(as) != 1 {
+		t.Fatalf("%d attempts, want 1: the round stops once its session was closed", len(as))
+	}
+	select {
+	case e := <-events:
+		t.Fatalf("path event %+v after the session was closed", e)
+	default:
+	}
+}

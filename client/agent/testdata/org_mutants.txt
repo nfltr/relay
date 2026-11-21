@@ -67,7 +67,10 @@ nf1-direct-no-pin | direct_nf1.go | 			if err := addr.VerifyConnection(cs); err 
 trickle-wait-qad | direct.go | 	go func() { wg.Wait(); close(ch) }() | 	wg.Wait(); close(ch) | TestDirectSilentQADDelaysNoPunch
 trickle-no-room | direct.go | 	first = first[:min(len(first), quiclink.MaxCandidates-len(slow))] | 	first = first[:min(len(first), quiclink.MaxCandidates)] | TestGatherKeepsRoomForTheSlowCandidates
 # A punch round (direct_round.go; spec/PunchRound.tla RetryBound,
-# InitialAfterProbe): retries after no answer, the dial rtt/2 after the sync.
-round-no-retry | direct_round.go | 		if reason != ReasonNoAnswer || n == punchAttempts { | 		if true { | TestDirectPunchRetriesAfterNoAnswer
-round-unbounded | direct_round.go | 		if reason != ReasonNoAnswer || n == punchAttempts { | 		if reason != ReasonNoAnswer { | TestDirectPunchRoundEndsRelayedAfterThreeAttempts
+# InitialAfterProbe): retries after no answer, none once the session
+# ended, the dial rtt/2 after the sync.
+round-no-retry | direct_round.go | 		if reason != ReasonNoAnswer || n == punchAttempts || s.ended() { | 		if true { | TestDirectPunchRetriesAfterNoAnswer
+round-unbounded | direct_round.go | 		if reason != ReasonNoAnswer || n == punchAttempts || s.ended() { | 		if reason != ReasonNoAnswer { | TestDirectPunchRoundEndsRelayedAfterThreeAttempts
+round-past-end | direct_round.go | 		if reason != ReasonNoAnswer || n == punchAttempts || s.ended() { | 		if reason != ReasonNoAnswer || n == punchAttempts { | TestDirectPunchRoundStopsWhenTheSessionEnds
 round-dial-at-sync | direct_round.go | 	wait := rtt / 2 | 	wait := rtt * 0 | TestDirectPunchRetriesAfterNoAnswer
+round-done-only | direct_round.go | 	if s.nc.closed.Load() { | 	if false { | TestDirectPunchRoundStopsWhenTheSessionEnds
