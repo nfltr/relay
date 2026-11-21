@@ -33,7 +33,7 @@ if [[ -n "${GOSEC_JSON:-}" ]]; then
     cp "${GOSEC_JSON}" "${out}"
 else
     bin="${GOSEC_CACHE}/gosec"
-    if ! go version -m "${bin}" 2>/dev/null | grep -q "github.com/securego/gosec/v2[[:space:]]*${VERSION}"; then
+    if ! go version -m "${bin}" 2>/dev/null | grep "github.com/securego/gosec/v2[[:space:]]*${VERSION}" >/dev/null; then
         mkdir -p "${GOSEC_CACHE}/src"
         printf 'module gosecbuild\n\ngo 1.27.0\n' >"${GOSEC_CACHE}/src/go.mod"
         printf '//go:build tools\n\npackage tools\n\nimport _ "github.com/securego/gosec/v2/cmd/gosec"\n' >"${GOSEC_CACHE}/src/tools.go"

@@ -41,7 +41,7 @@ legacy="onprem""link" # split so this file does not match the legacy-name check
 LC_ALL=C && export LC_ALL # sort and comm agree on order
 
 # A requested target's run ("target", make ci-request TARGET=) is not a CI result.
-green() { grep -F "\"repo\":\"$repo\",\"sha\":\"$1\"" "$results" 2>/dev/null | grep -vF '"target":' | grep -qF '"ok":true'; }
+green() { grep -F "\"repo\":\"$repo\",\"sha\":\"$1\"" "$results" 2>/dev/null | grep -vF '"target":' | grep -F '"ok":true' >/dev/null; }
 
 # docs_only: 0 when every path on stdin matches $docsonly.
 docs_only() {

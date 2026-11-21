@@ -253,7 +253,7 @@ replay() {
 	local rc n
 	rc=$(sed -n 1p "$1")
 	n=$(sed -n 2p "$1")
-	tail -n +3 "$1" | head -c "$n"
+	tail -n +3 "$1" | { head -c "$n"; cat >/dev/null; }
 	tail -n +3 "$1" | tail -c +$((n + 1)) >&2
 	return "$rc"
 }

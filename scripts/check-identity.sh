@@ -18,7 +18,7 @@ if [ "$(git cat-file -t "$obj")" = tag ]; then
 	body=$(git cat-file tag "$obj")
 	tagger=$(printf '%s\n' "$body" | sed -n 's/^tagger \(.*>\) [0-9]* [-+][0-9]*$/\1/p')
 	[ "$tagger" = "$want" ] || { echo "tag $obj: tagger $tagger, want $want" >&2; bad=1; }
-	if printf '%s\n' "$body" | sed '1,/^$/d' | grep -qi '^co-authored-by:'; then
+	if printf '%s\n' "$body" | sed '1,/^$/d' | grep -i '^co-authored-by:' >/dev/null; then
 		echo "tag $obj: Co-Authored-By in its message" >&2
 		bad=1
 	fi

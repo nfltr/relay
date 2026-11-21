@@ -327,6 +327,13 @@ spec-appenrol-ci:
 spec-appenrol-traces:
 	./scripts/spec-appenrol.sh traces
 
+# Early-exit pipes under pipefail (scripts/check-grepq.sh, a copy of
+# nfltr's, kept identical): `producer | grep -q` reads SIGPIPE (141) as "not
+# found"; the self-test reproduces the race.
+.PHONY: check-grepq
+check-grepq:
+	./scripts/check-grepq.sh self-test
+	./scripts/check-grepq.sh
 # Spec drift (scripts/check-spec-drift.sh, a copy of nfltr's, kept
 # identical; its test is nfltr's scripts/check_spec_drift_test.sh): every
 # spec README's code-map entry exists, and the commits since origin/main

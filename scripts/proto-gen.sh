@@ -23,7 +23,7 @@ fi
 cd "$root/proto"
 "$buf" generate
 find nfltr -name '*.go' | while read -r f; do
-	if ! head -3 "$f" | grep -q SPDX-License-Identifier; then
+	if ! head -3 "$f" | grep SPDX-License-Identifier >/dev/null; then
 		{ printf '// Copyright 2026 nfltr\n// SPDX-License-Identifier: Apache-2.0\n\n'; cat "$f"; } >"$f.tmp" && mv "$f.tmp" "$f"
 	fi
 done

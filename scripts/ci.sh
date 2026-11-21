@@ -48,7 +48,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
-WF="${CI_WORKFLOW:-$(ls .github/workflows/*.yml .github/workflows/*.yaml 2>/dev/null | head -n 1)}"
+WF="${CI_WORKFLOW:-$(ls .github/workflows/*.yml .github/workflows/*.yaml 2>/dev/null | sed -n 1p)}"
 
 # parse <workflow>: the steps as <dir>\t<command>; exit 1 with a reason on
 # anything outside the supported subset.
@@ -342,13 +342,13 @@ exec_test() {
 	t=$(date +%s)
 	out="$(CI_MEM_MB=5120 CI_JOB_MEM_MB=3072 CI_JOBS=3 execute "$(printf 'a\t.\tsleep 1; echo A=$CI_MEM_BUDGET_MB\nb\t.\tsleep 1\n')")" ||
 		{ printf 'ci.sh exec-test: a memory-bound run failed:\n%s\n' "$out" >&2; rm -rf "$d"; return 1; }
-	[ $(($(date +%s) - t)) -ge 2 ] && printf '%s\n' "$out" | grep -qx 'ci: 2 steps in 2 jobs, at most 1 at once (5120 MiB, 5120 MiB a job)' &&
-		printf '%s\n' "$out" | grep -qx 'A=5120' ||
+	[ $(($(date +%s) - t)) -ge 2 ] && printf '%s\n' "$out" | grep -x 'ci: 2 steps in 2 jobs, at most 1 at once (5120 MiB, 5120 MiB a job)' >/dev/null &&
+		printf '%s\n' "$out" | grep -x 'A=5120' >/dev/null ||
 		{ printf 'ci.sh exec-test: 5120 MiB at 3072 MiB a job ran jobs at once:\n%s\n' "$out" >&2; rm -rf "$d"; return 1; }
 	out="$(CI_MEM_MB=6144 CI_JOB_MEM_MB=3072 CI_JOBS=3 execute "$(printf 'a\t.\ttrue\n')")" &&
-		printf '%s\n' "$out" | grep -qx 'ci: 1 steps in 1 jobs, at most 2 at once (6144 MiB, 3072 MiB a job)' &&
+		printf '%s\n' "$out" | grep -x 'ci: 1 steps in 1 jobs, at most 2 at once (6144 MiB, 3072 MiB a job)' >/dev/null &&
 		out="$(CI_MEM_MB=1024 CI_JOB_MEM_MB=3072 CI_JOBS=3 execute "$(printf 'a\t.\ttrue\n')")" &&
-		printf '%s\n' "$out" | grep -qx 'ci: 1 steps in 1 jobs, at most 1 at once (1024 MiB, 1024 MiB a job)' ||
+		printf '%s\n' "$out" | grep -x 'ci: 1 steps in 1 jobs, at most 1 at once (1024 MiB, 1024 MiB a job)' >/dev/null ||
 		{ printf 'ci.sh exec-test: memory plan:\n%s\n' "$out" >&2; rm -rf "$d"; return 1; }
 	# A failing step fails the run at once, the job's later steps and the jobs
 	# not started are not run, a running job is stopped (with its children),
@@ -360,10 +360,10 @@ exec_test() {
 		return 1
 	fi
 	[ $(($(date +%s) - t)) -le 1 ] || { echo "ci.sh exec-test: a failure waited for the other jobs" >&2; rm -rf "$d"; return 1; }
-	printf '%s\n' "$out" | grep -qx 'ci: FAIL step 2/4: echo B1; exit 3 (after [0-9]*s)' &&
-		printf '%s\n' "$out" | grep -qx 'B1' &&
-		printf '%s\n' "$out" | grep -qx 'ci: job a stopped: job b failed' &&
-		printf '%s\n' "$out" | grep -qx 'ci: job c not run: job b failed' ||
+	printf '%s\n' "$out" | grep -x 'ci: FAIL step 2/4: echo B1; exit 3 (after [0-9]*s)' >/dev/null &&
+		printf '%s\n' "$out" | grep -x 'B1' >/dev/null &&
+		printf '%s\n' "$out" | grep -x 'ci: job a stopped: job b failed' >/dev/null &&
+		printf '%s\n' "$out" | grep -x 'ci: job c not run: job b failed' >/dev/null ||
 		{ printf 'ci.sh exec-test: failure output:\n%s\n' "$out" >&2; rm -rf "$d"; return 1; }
 	sleep 2.5
 	[ ! -e "$d/late" ] && [ ! -e "$d/after" ] && [ ! -e "$d/c" ] ||
@@ -387,7 +387,7 @@ run() {
 	# The jobs share this checkout: a step that changes it may race another
 	# job, so name what changed (the stamp needs a clean tree anyway).
 	[ -z "$key" ] || [ -z "$(git status --porcelain 2>/dev/null)" ] ||
-		{ echo "ci: warning: the run changed the checkout:"; git status --porcelain | head -n 20; }
+		{ echo "ci: warning: the run changed the checkout:"; git status --porcelain | sed -n 1,20p; }
 	if [ -n "$key" ]; then
 		mkdir -p "$STAMPS" && : >"$STAMPS/$key"
 		find "$STAMPS" -type f -mtime +30 -delete 2>/dev/null || true

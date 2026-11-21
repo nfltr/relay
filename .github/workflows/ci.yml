@@ -83,6 +83,7 @@ jobs:
       # the models' bindings against the code (spec/proverif/README.md "Bindings")
       - run: make spec-bindings
       - run: make check-spec-drift
+      - run: make check-grepq
       # each module's API changes since its latest tag are the ones api/ lists
       - run: make check-api
       - run: make check-spec-actions
