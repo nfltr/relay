@@ -56,8 +56,12 @@ proto-report:
 # module's next release makes on purpose (docs/v1-api-review.md). A change
 # on purpose: record it there, then UPDATE=1 make check-api. Needs the
 # tags (a full clone) and module downloads for the old side.
-.PHONY: check-api
-check-api:
+.PHONY: check-api test-check-api
+# test-check-api: check-api fails, never passes, in a clone without the tags.
+test-check-api:
+	./scripts/check-api_test.sh
+
+check-api: test-check-api
 	@for m in $(MODULES); do ./scripts/check-api.sh $$m $$m/ $$m || exit 1; done
 
 # Pinned SAST gated by scripts/{gosec,semgrep}-baseline.txt (semgrep needs docker).
