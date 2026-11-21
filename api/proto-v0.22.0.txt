@@ -1,0 +1,4 @@
+Compatible changes:
+- ./wire/dataplane.EndDoneFrame: added
+- ./wire/dataplane.EndDoneHeader: added
+- ./wire/dataplane.EndDoneSID: added
