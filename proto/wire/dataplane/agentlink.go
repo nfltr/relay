@@ -30,8 +30,8 @@ import (
 // metadata (its transport: AgentLinkTCP, AgentLinkQUIC or "auto"); a relay
 // that takes it answers with the same header in its response, one value
 // per transport it takes, and AgentLinkQUICHeader its UDP port when it
-// takes QUIC. A relay that answers neither leaves the agent on data
-// connections and gRPC streams.
+// takes QUIC. A relay that answers neither leaves the agent on auxiliary
+// gRPC streams (agent data connections are retired).
 const (
 	AgentLinkHeader     = "x-nfltr-agent-link"
 	AgentLinkQUICHeader = "x-nfltr-agent-link-quic"
