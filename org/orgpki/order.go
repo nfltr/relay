@@ -38,7 +38,7 @@ type Order struct {
 	OrgID    string    `json:"org_id"`
 	Act      string    `json:"act"`
 	Name     string    `json:"name"`
-	Serial   string    `json:"serial"` // a certificate of the name's current enrolment (since its last rebind)
+	Serial   string    `json:"serial"` // a certificate of the name's current enrolment (since its last rebind), as StatusMember.Serial
 	NotAfter time.Time `json:"not_after"`
 }
 

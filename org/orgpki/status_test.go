@@ -9,6 +9,7 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"regexp"
@@ -44,8 +45,8 @@ func TestSignedStatusListsMembersAndTokens(t *testing.T) {
 	if !iss.NotAfter.Equal(o.iss.Cert().NotAfter) || st.OrgID != o.iss.OrgID() || st.Head != o.iss.Head() {
 		t.Fatalf("status %+v: not the issuer's", st)
 	}
-	if len(st.Members) != 1 || st.Members[0].Name != "web-1" || st.Members[0].Serial != web.SerialNumber.Text(16) || !st.Members[0].Revoked || st.Members[0].MachineID != "m-web-1" {
-		t.Fatalf("members %+v, want web-1 revoked at serial %s", st.Members, web.SerialNumber.Text(16))
+	if len(st.Members) != 1 || st.Members[0].Name != "web-1" || st.Members[0].Serial != hex.EncodeToString(web.SerialNumber.Bytes()) || !st.Members[0].Revoked || st.Members[0].MachineID != "m-web-1" {
+		t.Fatalf("members %+v, want web-1 revoked at serial %s", st.Members, hex.EncodeToString(web.SerialNumber.Bytes()))
 	}
 	if len(st.Tokens) != 1 || st.Tokens[0].Name != "db-1" || strings.Contains(string(s.Body), tok) {
 		t.Fatalf("tokens %+v: want db-1's id, never the token", st.Tokens)
@@ -152,16 +153,16 @@ func orderBindings(t *testing.T) {
 	web, _ := o.enrol(t, "web-1", "web")
 	db, _ := o.enrol(t, "db-1", "db")
 	other := newOrg(t)
-	ib, _ := json.Marshal(honest(o, "web-1", web.SerialNumber.Text(16)))
+	ib, _ := json.Marshal(honest(o, "web-1", hex.EncodeToString(web.SerialNumber.Bytes())))
 	byIssuer := SignedOrder{Body: ib, Sig: ed25519.Sign(o.iss.key, append([]byte(orderPrefix), ib...))}
-	foreign := honest(o, "web-1", web.SerialNumber.Text(16))
+	foreign := honest(o, "web-1", hex.EncodeToString(web.SerialNumber.Bytes()))
 	foreign.OrgID = other.iss.OrgID()
 	for name, s := range map[string]SignedOrder{
 		// BIND:dash.ordersig: the organisation root's signature
-		"ordersig: another root's":   sign(o, other.root, honest(o, "web-1", web.SerialNumber.Text(16))),
+		"ordersig: another root's":   sign(o, other.root, honest(o, "web-1", hex.EncodeToString(web.SerialNumber.Bytes()))),
 		"ordersig: the issuer's key": byIssuer,
 		// BIND:dash.serial: a serial of the name's current enrolment
-		"serial: another member's": sign(o, o.root, honest(o, "web-1", db.SerialNumber.Text(16))),
+		"serial: another member's": sign(o, o.root, honest(o, "web-1", hex.EncodeToString(db.SerialNumber.Bytes()))),
 		"serial: none of it":       sign(o, o.root, honest(o, "web-1", "ff")),
 		// BIND:dash.org: of this organisation
 		"org: another organisation's": sign(o, o.root, foreign),
@@ -170,7 +171,7 @@ func orderBindings(t *testing.T) {
 			t.Errorf("%s: applied, want refused", name)
 		}
 	}
-	ok := sign(o, o.root, honest(o, "web-1", web.SerialNumber.Text(16)))
+	ok := sign(o, o.root, honest(o, "web-1", hex.EncodeToString(web.SerialNumber.Bytes())))
 	if name, err := o.iss.ApplyOrder(ok, t0); err != nil || name != "web-1" {
 		t.Fatalf("the honest order: %q, %v", name, err)
 	}

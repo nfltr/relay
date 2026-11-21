@@ -17,4 +17,5 @@ Compatible changes:
 - ./orgpki.StatusMember: added
 - ./orgpki.StatusToken: added
 - ./orgpki.VerifyStatus: added
+- ./orgenrol.SendOrder: added
 - ./orgenrol.StatusCopyWriter: added

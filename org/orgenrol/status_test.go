@@ -5,12 +5,13 @@ package orgenrol
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"slices"
 	"testing"
 	"time"
 
-	"github.com/nfltr/relay/client/mailboxclient"
 	"github.com/nfltr/relay/org/orgissuer"
 	"github.com/nfltr/relay/org/orgpki"
 )
@@ -85,36 +86,14 @@ func TestServiceAppliesTheRootsOrder(t *testing.T) {
 	f.org.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) {
 		pins = orgpki.Pins{OrgID: iss.OrgID(), Root: iss.Root(), Issuer: iss.Cert()}
 	})
-	serial := f.joined.Cert.SerialNumber.Text(16)
+	serial := hex.EncodeToString(f.joined.Cert.SerialNumber.Bytes())
 	o, err := orgpki.RevokeOrder(pins, f.org.rootKey, "web-1", serial, f.clk.Now())
 	check(t, err)
-	post := func(id string) orgpki.Answer {
-		t.Helper()
-		data, err := json.Marshal(orgpki.Request{ID: id, Order: &o})
-		check(t, err)
-		_, err = f.relay.Append(f.ctx, orgpki.EnrolMailbox(f.org.id), data, mailboxclient.AppendOptions{})
-		check(t, err)
-		deadline := time.Now().Add(hang)
-		for time.Now().Before(deadline) {
-			f.relay.mu.Lock()
-			for _, e := range f.relay.boxes[orgpki.AnswersMailbox(f.org.id)] {
-				var a orgpki.Answer
-				if json.Unmarshal(e.Payload, &a) == nil && a.ID == id {
-					f.relay.mu.Unlock()
-					return a
-				}
-			}
-			f.relay.mu.Unlock()
-			time.Sleep(10 * time.Millisecond)
-		}
-		t.Fatalf("no answer to %s", id)
-		return orgpki.Answer{}
+	if name, err := SendOrder(f.ctx, f.relay, f.org.id, o, hang); err != nil || name != "web-1" {
+		t.Fatalf("the order: %q, %v", name, err)
 	}
-	if a := post("order-1"); a.Revoked != "web-1" || a.Refused != "" {
-		t.Fatalf("the order's answer: %+v", a)
-	}
-	if a := post("order-2"); a.Revoked != "" || a.Refused == "" {
-		t.Fatalf("the same order again: %+v, want refused", a)
+	if name, err := SendOrder(f.ctx, f.relay, f.org.id, o, hang); !errors.Is(err, ErrIssuerRefused) || name != "" {
+		t.Fatalf("the same order again: %q, %v, want refused", name, err)
 	}
 	deadline := time.Now().Add(hang)
 	for st := f.status(t); st == nil || len(st.Members) == 0 || !st.Members[0].Revoked; st = f.status(t) {
