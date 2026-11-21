@@ -118,6 +118,50 @@ func (i *Issuer) SealMachineKey(tokenID string, cert []byte, keyID string, km []
 	return k, nil
 }
 
+// MoveKeyID is what a move's sealed key is signed with in place of a
+// token id: the move request's signature, which only the name's current
+// key makes (a2a_keytransfer.pv Move, mv.key; lane CERTGAPS).
+func MoveKeyID(req RenewRequest) string {
+	sum := sha256.Sum256(req.Sig)
+	return "move." + hex.EncodeToString(sum[:])
+}
+
+// SealMovedKey is SealMachineKey for a move's answer (an issuer with an
+// A2A root, the name's machine enrolled with the relay again): cert must be
+// the certificate this issuer issued for req, of the request's key under
+// the request's machine id; the key is sealed to it and signed with
+// MoveKeyID(req) (a2a_keytransfer.pv Move, mv.sig; mutant
+// move-unsigned-key: the machine takes only this signature).
+func (i *Issuer) SealMovedKey(req RenewRequest, cert []byte, keyID string, km []byte) (SealedKey, error) {
+	if req.MachineID == "" {
+		return SealedKey{}, fmt.Errorf("%w: not a move", ErrRefused)
+	}
+	cr, err := parseCSR(req.CSR)
+	if err != nil {
+		return SealedKey{}, err
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	c, err := x509.ParseCertificate(cert)
+	if err != nil {
+		return SealedKey{}, err
+	}
+	sum := sha256.Sum256(cert)
+	rec := i.certs[hex.EncodeToString(c.SerialNumber.Bytes())]
+	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) || rec.key != orgid.KeyFingerprint(cr.PublicKey) || orgid.MachineID(c) != req.MachineID {
+		return SealedKey{}, fmt.Errorf("%w: not a certificate this issuer issued for that move", ErrRefused)
+	}
+	if err := machineKeyID(c, keyID); err != nil {
+		return SealedKey{}, err
+	}
+	k := SealedKey{KeyID: keyID}
+	if k.Sealed, err = sealTo(c, keyID, km); err != nil {
+		return SealedKey{}, err
+	}
+	k.Sig = ed25519.Sign(i.key, machineKeyMessage(MoveKeyID(req), cert, k))
+	return k, nil
+}
+
 // SealToMachine seals km, the machine key of keyID (cert's machine id
 // and a generation), to the key machine certificate cert certifies: the
 // seal of SealMachineKey, unsigned, for a caller that checked cert itself

@@ -355,6 +355,14 @@ func (m *Machine) RenewDue(now time.Time) time.Time {
 	return leaf.NotBefore.Add(life/2 + life/10*time.Duration(spread)/1000)
 }
 
+// Root is the organisation's root certificate this machine holds.
+func (m *Machine) Root() (*x509.Certificate, error) {
+	m.mu.Lock()
+	der := m.root
+	m.mu.Unlock()
+	return x509.ParseCertificate(der)
+}
+
 // Current is this machine's certificate and its private key.
 func (m *Machine) Current() (*x509.Certificate, ed25519.PrivateKey) {
 	m.mu.Lock()

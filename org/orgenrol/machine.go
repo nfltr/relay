@@ -319,6 +319,12 @@ type Keeper struct {
 	// RelayMachineID is the machine's relay machine id now (its account
 	// certificate's), "" unknown; nil: no move.
 	RelayMachineID func() string
+	// MachineKey takes the A2A machine key a move's answer seals (an
+	// issuer with an A2A root: the new id's key, its id <machine id>.<gen>),
+	// opened only as this machine's own request's (nfltr
+	// spec/proverif/a2a_keytransfer.pv Move, mv.key); nil: not taken. Its
+	// error is logged: the machine moved, without its key.
+	MachineKey func(keyID string, key []byte) error
 	// Now, AnswerWait, RetryWait, FollowEvery: zero is time.Now and the
 	// package's defaults (tests shorten them).
 	Now                                func() time.Time
@@ -471,7 +477,30 @@ func (k Keeper) renew(ctx context.Context, move string) error {
 	if err != nil {
 		return err
 	}
-	return m.Install(a.Cert, a.Issuer, a.HostCert, key, k.Now())
+	if err := m.Install(a.Cert, a.Issuer, a.HostCert, key, k.Now()); err != nil {
+		return err
+	}
+	if move != "" && a.MachineKey != nil && k.MachineKey != nil {
+		if err := k.takeMachineKey(*a.MachineKey, rr, a, key); err != nil {
+			k.Logger.Warn("org: moved to relay machine "+move+" without its A2A key", "error", err)
+		}
+	}
+	return nil
+}
+
+// takeMachineKey opens a move's sealed A2A key as the answer to rr (the
+// certificate just installed, under the organisation's root) and hands it
+// to MachineKey.
+func (k Keeper) takeMachineKey(sk orgpki.SealedKey, rr orgpki.RenewRequest, a orgpki.Answer, key ed25519.PrivateKey) error {
+	root, err := k.Machine.Root()
+	if err != nil {
+		return err
+	}
+	km, err := orgpki.OpenMachineKey(sk, orgpki.MoveKeyID(rr), a.Cert, a.Issuer, root, key, k.Now())
+	if err != nil {
+		return err
+	}
+	return k.MachineKey(sk.KeyID, km)
 }
 
 // JoinSignIn enrols this device into dir by a person's sign-in

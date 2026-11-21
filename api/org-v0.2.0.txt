@@ -1,0 +1,5 @@
+Compatible changes:
+- ./orgenrol.Keeper.MachineKey: added
+- ./orgpki.(*Issuer).SealMovedKey: added
+- ./orgpki.MoveKeyID: added
+- ./orgmachine.(*Machine).Root: added

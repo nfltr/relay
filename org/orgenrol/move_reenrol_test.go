@@ -86,12 +86,38 @@ func TestKeeperMoveRefusedKeepsTheOldID(t *testing.T) {
 	})
 }
 
-// An issuer with an A2A root (MachineKey) moves no name: its machine keys
-// are re-keyed only on an enrolment (the rebind token's).
-func TestNoMoveWithAnA2ARoot(t *testing.T) {
-	s := &service{MachineOf: func(context.Context, string) (string, error) { return web1, nil },
-		MachineKey: func(string, string, time.Time) (string, []byte, error) { return "", nil, nil }}
-	if s.movePolicy(t.Context()) != nil {
-		t.Fatal("a move policy with an A2A root")
+// An issuer with an A2A root moves the name too, and its answer carries
+// the new id's A2A key, which the keeper takes (spec/proverif in nfltr
+// a2a_keytransfer.pv Move; lane CERTGAPS: before, such an issuer moved no
+// name and the machine needed a rebind token).
+func TestKeeperMoveCarriesTheA2AKey(t *testing.T) {
+	const newID = "m-nnnnnnnnnnnnnnnnnnnnnnnnnn"
+	acct := &account{id: map[string]string{"web-1": web1}}
+	f := newFleetWith(t, func(f *fleet) {
+		f.relay.from = web1
+		f.machineOf = acct.of
+	})
+	acct.set("web-1", newID)
+	f.relay.mu.Lock()
+	f.relay.from = newID
+	f.relay.mu.Unlock()
+	f.clk.Add(20 * 24 * time.Hour)
+	var mu sync.Mutex
+	var gotID string
+	var gotKey []byte
+	k := f.keeper()
+	k.RelayMachineID = func() string { return newID }
+	k.MachineKey = func(keyID string, key []byte) error {
+		mu.Lock()
+		defer mu.Unlock()
+		gotID, gotKey = keyID, key
+		return nil
 	}
+	keep(t, f.ctx, k)
+	eventually(t, "the name moved with its new id's A2A key", func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		cur, _ := f.m.Current()
+		return orgid.MachineID(cur) == newID && gotID == newID+".1" && string(gotKey) == "km of "+newID
+	})
 }

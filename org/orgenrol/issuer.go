@@ -409,13 +409,11 @@ func (s *service) wrongMachine(ctx context.Context, req orgpki.Request, sender s
 // movePolicy admits moving a name to a relay machine id when that id is
 // the issuer's account machine of that name (MachineOf; Enrol.tla Move,
 // MoveOnlyOwnAccount): the default for the account that holds the
-// issuer. nil (no MachineOf, or MachineKey set): only a rebind token
-// moves a name. ponytail: an A2A root's machine keys are keyed by machine
-// id and re-keyed only on an enrolment (MachineKey's RebindMachineKey), so
-// a move would leave the new id keyless; sealing a key into a renewal's
-// answer lifts this.
+// issuer. nil (no MachineOf): only a rebind token moves a name. With an
+// A2A root (MachineKey) the move's answer carries the new id's key
+// (decide; nfltr spec/proverif a2a_keytransfer.pv Move, lane CERTGAPS).
 func (s *service) movePolicy(ctx context.Context) orgpki.MovePolicy {
-	if s.MachineOf == nil || s.MachineKey != nil {
+	if s.MachineOf == nil {
 		return nil
 	}
 	return func(name, id string) error {
@@ -476,11 +474,24 @@ func (s *service) decide(ctx context.Context, req orgpki.Request, refuse string,
 		if a.HostCert, err = iss.HostCert(der, now); err != nil {
 			return err
 		}
-		if req.Enrol != nil && s.MachineKey != nil {
-			// The certificate is issued: a key not sealed (an id issued
-			// before is not sealed again) leaves the answer without it, never unanswered.
-			if a.MachineKey, err = s.sealMachineKey(iss, req.Enrol.TokenID, der, now); err != nil {
+		// The certificate is issued: a key not sealed (an id issued
+		// before is not sealed again) leaves the answer without it, never unanswered.
+		switch {
+		case s.MachineKey == nil:
+		case req.Enrol != nil:
+			if a.MachineKey, err = s.sealMachineKey(der, now, func(keyID string, km []byte) (orgpki.SealedKey, error) {
+				return iss.SealMachineKey(req.Enrol.TokenID, der, keyID, km)
+			}); err != nil {
 				s.Logger.Warn("org issuer: enrolled without its A2A key", "error", err)
+			}
+		case req.Renew != nil && req.Renew.MachineID != "" && iss.NameOfMachine(req.Renew.MachineID) != "":
+			// a move (the renewal's certificate is of the request's id): the
+			// new id's key, its store entry replacing the old id's (a2akeys
+			// RebindMachineKey; a2a_keytransfer.pv Move)
+			if a.MachineKey, err = s.sealMachineKey(der, now, func(keyID string, km []byte) (orgpki.SealedKey, error) {
+				return iss.SealMovedKey(*req.Renew, der, keyID, km)
+			}); err != nil {
+				s.Logger.Warn("org issuer: moved without its A2A key", "error", err)
 			}
 		}
 		return nil
@@ -491,9 +502,9 @@ func (s *service) decide(ctx context.Context, req orgpki.Request, refuse string,
 	return json.Marshal(a)
 }
 
-// sealMachineKey is the enrolled machine key sealed to its
-// certificate's key; none for a certificate without a machine id.
-func (s *service) sealMachineKey(iss *orgpki.Issuer, tokenID string, der []byte, now time.Time) (*orgpki.SealedKey, error) {
+// sealMachineKey is the machine key of an enrolled or moved certificate
+// sealed (by seal) to its key; none for a certificate without a machine id.
+func (s *service) sealMachineKey(der []byte, now time.Time, seal func(keyID string, km []byte) (orgpki.SealedKey, error)) (*orgpki.SealedKey, error) {
 	c, err := x509.ParseCertificate(der)
 	if err != nil || orgid.MachineID(c) == "" {
 		return nil, err
@@ -502,7 +513,7 @@ func (s *service) sealMachineKey(iss *orgpki.Issuer, tokenID string, der []byte,
 	if err != nil {
 		return nil, fmt.Errorf("the machine's A2A key: %w", err)
 	}
-	k, err := iss.SealMachineKey(tokenID, der, keyID, km)
+	k, err := seal(keyID, km)
 	return &k, err
 }
 
