@@ -1069,6 +1069,76 @@ the trace can break: `reject-directpunch-untagged` (OnlyTagged),
 non-LAN winner). The Go mutants `prflx-*` in
 `client/agent/testdata/org_mutants.txt` plant the code's bugs.
 
+## PunchRound.tla: a punch round's timing and retries
+
+Design: nfltr `docs/decisions/direct-punch-timing-2026-11-21.md` (lane
+HOLEPUNCH). The layer above `DirectPunch.tla`: one pair's round of
+attempts, each a fresh control exchange over the relay. The client times
+its request until the agent's offer (the relay's round trip, rtt), sends
+its candidates (the sync) and dials them rtt/2 later; the agent probes the
+client's candidates as soon as it reads them, about rtt/2 after the sync.
+So the agent's first probe has left its NAT when the client's first QUIC
+Initial reaches it, and the first Initial passes instead of a retransmit
+one PTO (about 300 ms) later. An attempt that no candidate answered is
+retried with a new exchange and a new rtt, at most three attempts per
+round; a refused certificate, a withheld exchange or an offer's refusal
+ends the round relayed at once. Prior art: a coordinated simultaneous open
+timed from a round trip measured over the relayed channel, with up to
+three attempts (the decision doc's prior-art section). The attempt's dials
+are `DirectPunch.tla`; here only its end and its first Initial. `make
+spec` checks `PunchRound.cfg` (a pair a punch passes) and
+`PunchRoundSym.cfg` (one no punch passes): relay one-way delays 1 or 3
+ticks each per attempt, a direct one-way delay of 1, the Initial
+retransmitted every 2, an attempt's bound 4, an exchange's 7.
+
+| invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
+|---|---|---|
+| `RetryBound` | at most MaxAttempts (3) attempts per round | `unbounded` |
+| `RetryOnlyNoAnswer` | a retry follows only an attempt no candidate answered | `retry-refused` |
+| `InitialAfterProbe` | the client's first Initial reaches the agent's NAT once the agent's first probe left it | `dial-before-sync`, `stale-rtt` (the first attempt's rtt reused), `asymmetry` (Delays {1, 5}: the assumption broken) |
+| `FirstInitialWins` | a won attempt won on its first Initial | (follows from the above) |
+| `NeverHeld`, `DirectOnlyWon` | the session runs relayed until the round moves it, never held by it | `block-during-punch` |
+| `Ends` (liveness) | every round ends, direct or relayed, whatever the peer does (it may vanish mid-exchange or mid-punch) | `no-fallback`, `wait-vanished` (no exchange bound) |
+
+Witnesses (each violated): `W_DirectFirst`, `W_DirectRetry` (direct after
+a lost attempt), `W_VanishedRelayed`, `W_Refused`, and in
+`PunchRoundSym.cfg` `W_RelayedAfterRetries`. TLC 2026-11-21 (`-coverage
+1`): `PunchRound.cfg` 5,282 distinct states, depth 56, every action taken;
+`PunchRoundSym.cfg` 5,698, depth 54, every action but `Win` (no punch
+passes there).
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| The relay's one-way delays differ by at most twice the direct one-way delay (`Delays` against `Dd`); they may change between attempts | measured round trips are symmetric on average (RFC 6349 section 3.2, RTT as the basis of timing); mutant `asymmetry` shows what breaks past it: a retransmit, not a failure |
+| The agent answers a request and probes on reading the sync at once | `directServer.control`: gather's host candidates are immediate, the slow ones trickle |
+| A NAT lets a punch through (cone) or never (symmetric); the network may drop every packet of an attempt | RFC 4787 (mapping and filtering behaviour) |
+| A QUIC client retransmits its Initial each PTO until its handshake bound | RFC 9002 section 6.2 |
+| The control session ends at its bound (15 s) when the peer is gone | `directControlBound`, `context.AfterFunc` closing it |
+
+### Code map (PunchRound.tla)
+
+| actions | code |
+|---|---|
+| `Start`, `NoAnswer`, `Refused` (the round, its retries) | client/agent/direct_client.go (`punchRound`) |
+| `Sync`, `Dial`, `Withheld` (the exchange, rtt, the wait) | client/agent/direct_client.go (`punch`) |
+| `Vanish` (the agent's side of an exchange) | client/agent/direct_server.go |
+
+| trace recorder | client/agent/trace_round_on.go |
+
+### PunchRound traces
+
+`make spec-ptraces` checks them with the DirectPunch ones, from the same
+test runs: every round writes `punchround-<pid>-<n>.ndjson` (Start with the
+attempt, Sync with the measured rtt, Dial with the wait and the time since
+the sync, then Win, NoAnswer, Refused or Withheld), checked by
+`spec/TracePunchRound.tla` (TLC chooses the delays, the clock, the losses
+and a vanishing; each Dial's wait must be at least half its rtt and the
+time since the sync at least the wait). Rejected fixtures, one per
+invariant a trace can break: `reject-punchround-unbounded` (RetryBound),
+`-retry-refused` (RetryOnlyNoAnswer), `-dial-early` (InitialAfterProbe).
+
 ## AgentStop.tla: an agent's stop, its drain and its grace
 
 Lane STOPSPEC, after lanes SENDCUT (a killed receiver's direct session held

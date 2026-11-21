@@ -6,7 +6,8 @@
 #   check    TLC on spec/A2ASession.cfg, spec/CallCredit.cfg,
 #            spec/CallCreditBoth.cfg, spec/CallCreditSenders.cfg,
 #            spec/UDPFlow.cfg, spec/UDPFlowLive.cfg, spec/DatagramAssoc*.cfg,
-#            spec/BrowserPeer.cfg, spec/DirectPunch.cfg, spec/AgentStop*.cfg and
+#            spec/BrowserPeer.cfg, spec/DirectPunch.cfg, spec/PunchRound*.cfg,
+#            spec/AgentStop*.cfg and
 #            spec/TLSEnd.cfg:
 #            their invariants and liveness
 #            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg,
@@ -832,7 +833,7 @@ CCTESTS='^(TestCallCreditBothWaysGrant|TestCallCreditCallerLeavesStuckHandler|Te
 DGDIRECT='^(TestDatagramDirectMovesAndFallsBack|TestDatagramDirectOnlyOnceTheAgentAttached)$'
 case ${1:-} in
 check)
-	cfgs="CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch AgentStop AgentStopNoDrain AgentStopLate AgentStopClose TLSEnd"
+	cfgs="CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch PunchRound PunchRoundSym AgentStop AgentStopNoDrain AgentStopLate AgentStopClose TLSEnd"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	for c in $cfgs; do
 		m=${c%Large}
@@ -843,6 +844,7 @@ check)
 		m=${m%NoDrain}
 		m=${m%Late}
 		m=${m%Close}
+		m=${m%Sym}
 		echo "== $c.cfg"
 		st=0
 		tlc $c.cfg $m.tla >"$work/out" 2>&1 || st=$?
@@ -1002,6 +1004,25 @@ mutants)
 	for w in W_PrflxWon W_OfferedWon W_Relayed W_RogueRefused W_LoserClosed W_LanReplaced W_NonLanWon W_TrickledWon W_LanBeforeQAD; do
 		expect witness:DP-$w -e "s/^    TypeOK\$/    $w/"
 	done
+	cfg=
+	model=PunchRound
+	# A punch round's timing and retries (design, lane HOLEPUNCH): each
+	# failure the round prevents, put in; unbounded and no-fallback need a
+	# pair no punch passes.
+	for m in dial-before-sync stale-rtt retry-refused wait-vanished block-during-punch; do
+		expect PR:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
+	done
+	# The relay's asymmetry past twice the direct delay: the first Initial
+	# can beat the probe (the assumption InitialAfterProbe needs).
+	expect PR:asymmetry -e 's/Delays = {1, 3}/Delays = {1, 5}/'
+	for w in W_DirectFirst W_DirectRetry W_VanishedRelayed W_Refused; do
+		expect witness:PR-$w -e "s/^    TypeOK\$/    $w/"
+	done
+	cfg=PunchRoundSym
+	for m in unbounded no-fallback; do
+		expect PR:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
+	done
+	expect witness:PR-W_RelayedAfterRetries -e 's/^    TypeOK$/    W_RelayedAfterRetries/'
 	cfg=
 	model=BrowserPeer
 	# An nf1 address in a browser (design, lane BROWSERPEER): each failure
