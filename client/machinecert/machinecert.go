@@ -24,6 +24,7 @@ package machinecert
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -193,11 +194,28 @@ func (e *RefusedError) Final() bool {
 }
 
 // Client calls the relay's machine routes at BaseURL (the relay's
-// https:// URL) with HTTP (nil: a client trusting the relay's pinned
-// certificate, relaytrust.PinEnv).
+// https:// URL) with HTTP (nil: a minute's timeout). An HTTP without a
+// Transport (nil, or one that sets only a timeout) gets the relay's
+// transport, trusting its pinned certificate from the first call: Pin,
+// else relaytrust.PinEnv (relaytrust.Transport; lane PINENROL: a timeout
+// alone used Go's default transport, which trusts no pin).
 type Client struct {
 	BaseURL string
+	Pin     string
 	HTTP    *http.Client
+}
+
+// httpClient is the client post uses: HTTP, with the relay's transport
+// when it has none.
+func (c *Client) httpClient() *http.Client {
+	hc := http.Client{Timeout: time.Minute}
+	if c.HTTP != nil {
+		hc = *c.HTTP
+	}
+	if hc.Transport == nil {
+		hc.Transport = relaytrust.Transport(cmp.Or(strings.TrimSpace(c.Pin), os.Getenv(relaytrust.PinEnv)))
+	}
+	return &hc
 }
 
 // Enrol exchanges an enrolment code or token (name names the machine a
@@ -245,11 +263,7 @@ func (c *Client) post(ctx context.Context, path string, body any) (*Cert, error)
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	hc := c.HTTP
-	if hc == nil {
-		hc = &http.Client{Transport: relaytrust.Transport(os.Getenv(relaytrust.PinEnv))}
-	}
-	resp, err := hc.Do(req)
+	resp, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
