@@ -1,4 +1,8 @@
 Compatible changes:
+- ./mailboxclient.Client.DropOrgWish: added
 - ./mailboxclient.Client.OrgStatus: added
+- ./mailboxclient.Client.OrgWishes: added
 - ./mailboxclient.Client.PutOrgStatus: added
 - ./mailboxclient.OrgStatusPath: added
+- ./mailboxclient.OrgWish: added
+- ./mailboxclient.OrgWishesPath: added
