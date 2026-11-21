@@ -390,7 +390,12 @@ func (c *Credential) renew(ctx context.Context, logger *slog.Logger) {
 func (c *Credential) renewOnce(ctx context.Context, from *machinecert.Cert, logger *slog.Logger) (*machinecert.Cert, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if from != nil && c.s.NotAfter.After(from.NotAfter) {
+	// Another renewal went through while this one waited for mu: a
+	// handshake's (from nil) needs only an unexpired certificate, Run's
+	// one newer than its own (guard
+	// TestExpiredCertificateRenewsOnceForConcurrentHandshakes: renewing
+	// again drew 409 renew_too_early).
+	if (from != nil && c.s.NotAfter.After(from.NotAfter)) || (from == nil && time.Now().Before(c.s.NotAfter)) {
 		saved := c.s.Cert
 		return &saved, nil
 	}
