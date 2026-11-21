@@ -107,14 +107,21 @@ func (i *Issuer) SealMachineKey(tokenID string, cert []byte, keyID string, km []
 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) || rec.token == "" || rec.token != tokenID {
 		return SealedKey{}, fmt.Errorf("%w: not a certificate this issuer issued for that token", ErrRefused)
 	}
+	return i.sealSigned(c, cert, tokenID, keyID, km)
+}
+
+// sealSigned seals km to c's key under keyID (c's machine id and a
+// generation) and signs it with id, the request's (a token id, MoveKeyID).
+func (i *Issuer) sealSigned(c *x509.Certificate, cert []byte, id, keyID string, km []byte) (SealedKey, error) {
 	if err := machineKeyID(c, keyID); err != nil {
 		return SealedKey{}, err
 	}
 	k := SealedKey{KeyID: keyID}
+	var err error
 	if k.Sealed, err = sealTo(c, keyID, km); err != nil {
 		return SealedKey{}, err
 	}
-	k.Sig = ed25519.Sign(i.key, machineKeyMessage(tokenID, cert, k))
+	k.Sig = ed25519.Sign(i.key, machineKeyMessage(id, cert, k))
 	return k, nil
 }
 
@@ -151,15 +158,7 @@ func (i *Issuer) SealMovedKey(req RenewRequest, cert []byte, keyID string, km []
 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) || rec.key != orgid.KeyFingerprint(cr.PublicKey) || orgid.MachineID(c) != req.MachineID {
 		return SealedKey{}, fmt.Errorf("%w: not a certificate this issuer issued for that move", ErrRefused)
 	}
-	if err := machineKeyID(c, keyID); err != nil {
-		return SealedKey{}, err
-	}
-	k := SealedKey{KeyID: keyID}
-	if k.Sealed, err = sealTo(c, keyID, km); err != nil {
-		return SealedKey{}, err
-	}
-	k.Sig = ed25519.Sign(i.key, machineKeyMessage(MoveKeyID(req), cert, k))
-	return k, nil
+	return i.sealSigned(c, cert, MoveKeyID(req), keyID, km)
 }
 
 // SealToMachine seals km, the machine key of keyID (cert's machine id

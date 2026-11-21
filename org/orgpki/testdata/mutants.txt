@@ -34,6 +34,9 @@ seal-to-request-key | machinekey.go | 	if rec == nil || rec.digest != hex.Encode
 seal-other-key-id | machinekey.go | 	if err := machineKeyID(c, keyID); err != nil { | 	if err := error(nil); err != nil { | TestSealOnlyToCertifiedKey
 unsigned-key | machinekey.go | 	if ipub, ok := ic.PublicKey.(ed25519.PublicKey); !ok || !ed25519.Verify(ipub, machineKeyMessage(tokenID, cert, k), k.Sig) { | 	if false { | TestA2AKeyTransferModelBindings
 any-token | machinekey.go | 	return slices.Concat(machineKeyInfo(cert, k.KeyID), []byte("\x00"+tokenID+"\x00"), k.Sealed) | 	return slices.Concat(machineKeyInfo(cert, k.KeyID), []byte("\x00\x00"), k.Sealed) | TestA2AKeyTransferModelBindings
+# The move's answer's K_m (lane CERTGAPS; nfltr spec/proverif/a2a_keytransfer.pv Move):
+move-seal-any-request | machinekey.go | 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) || rec.key != orgid.KeyFingerprint(cr.PublicKey) || orgid.MachineID(c) != req.MachineID { | 	if _ = cr; rec == nil || rec.digest != hex.EncodeToString(sum[:]) { | TestSealMovedKeyOnlyForItsMove
+move-unsigned-key | machinekey.go | 	return "move." + hex.EncodeToString(sum[:]) | 	return "move." + hex.EncodeToString(sum[:0]) | TestMovedMachineOpensItsNewIDsKey
 hostcert-not-from-log | hostcert.go | 	case rec == nil || rec.digest != hex.EncodeToString(sum[:]): | 	case rec == nil && len(sum) > 0: | TestHostCertForAnotherNameRefused
 hostcert-revoked | hostcert.go | 	case i.names[rec.name].revoked: | 	case false: | TestHostCertRevokedOrExpiredRefused
 hostcert-any-signer | hostcert.go | 	if !checker.IsHostAuthority(c.SignatureKey, "") { | 	if false { | TestCheckHostCertRefusesOtherSignerOrKey
