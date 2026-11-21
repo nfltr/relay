@@ -59,6 +59,9 @@ type relay struct {
 	// fails); the relay's CRL copy (copies: copyRelay) still serves.
 	down   bool
 	copies map[string][]byte
+	// statuses: the relay's copy of each organisation's signed status
+	// (copyRelay.PutOrgStatus).
+	statuses map[string][]byte
 }
 
 func newRelay() *relay {

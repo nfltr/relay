@@ -28,7 +28,18 @@ const maxOrgCRL = 64 << 10
 // OrgCRL is the relay's copy for orgID (an orgid.CRLMessage, JSON); nil
 // when the relay holds none.
 func (c Client) OrgCRL(ctx context.Context, orgID string) ([]byte, error) {
-	code, data, err := c.raw(ctx, http.MethodGet, OrgCRLPath(orgID), nil)
+	return c.orgCopy(ctx, OrgCRLPath(orgID), maxOrgCRL)
+}
+
+// PutOrgCRL keeps msg (an orgid.CRLMessage, JSON) as the relay's copy for
+// orgID.
+func (c Client) PutOrgCRL(ctx context.Context, orgID string, msg []byte) error {
+	return c.putOrgCopy(ctx, OrgCRLPath(orgID), msg)
+}
+
+// orgCopy reads a copy route (nil: none held), at most limit bytes.
+func (c Client) orgCopy(ctx context.Context, path string, limit int64) ([]byte, error) {
+	code, data, err := c.raw(ctx, http.MethodGet, path, nil, limit)
 	switch {
 	case err != nil:
 		return nil, err
@@ -40,17 +51,15 @@ func (c Client) OrgCRL(ctx context.Context, orgID string) ([]byte, error) {
 	return data, nil
 }
 
-// PutOrgCRL keeps msg (an orgid.CRLMessage, JSON) as the relay's copy for
-// orgID.
-func (c Client) PutOrgCRL(ctx context.Context, orgID string, msg []byte) error {
-	code, data, err := c.raw(ctx, http.MethodPut, OrgCRLPath(orgID), msg)
+func (c Client) putOrgCopy(ctx context.Context, path string, msg []byte) error {
+	code, data, err := c.raw(ctx, http.MethodPut, path, msg, maxOrgCRL)
 	if err == nil && code/100 != 2 {
 		err = decodeError(code, data)
 	}
 	return err
 }
 
-func (c Client) raw(ctx context.Context, method, path string, body []byte) (int, []byte, error) {
+func (c Client) raw(ctx context.Context, method, path string, body []byte, limit int64) (int, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, method, strings.TrimRight(c.ProxyURL, "/")+path, bytes.NewReader(body))
 	if err != nil {
 		return 0, nil, err
@@ -68,6 +77,6 @@ func (c Client) raw(ctx context.Context, method, path string, body []byte) (int,
 		return 0, nil, err
 	}
 	defer resp.Body.Close() //nolint:errcheck
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxOrgCRL+1))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	return resp.StatusCode, data, err
 }

@@ -53,6 +53,16 @@ type CRLCopyWriter interface {
 	PutOrgCRL(ctx context.Context, orgID string, msg []byte) error
 }
 
+// StatusCopyWriter is a Mailbox that also keeps the relay's copy of the
+// organisation's signed status (mailboxclient.Client.PutOrgStatus;
+// relay-server /api/v1/org-status/<org id>; nfltr
+// docs/decisions/org-dashboard-2026-11-21.md): what the dashboard and
+// `nfltr org status --relay` read. The issuer puts it when it changes and
+// every few minutes (the copy is in the relay's process).
+type StatusCopyWriter interface {
+	PutOrgStatus(ctx context.Context, orgID string, msg []byte) error
+}
+
 // serveLock: the file a Service holds while it serves its directory.
 const serveLock = "serve.lock"
 
@@ -151,6 +161,10 @@ type service struct {
 	// The CRL last put on the relay's copy, and when (putCopy).
 	copyCRL []byte
 	copyAt  time.Time
+	// The status last put on the relay's copy (its body without At), and
+	// when (putStatus).
+	copyStatus   []byte
+	copyStatusAt time.Time
 	// pubs: the round's publishes since its read, -1 before it read
 	// (the OrgHolds trace's write line).
 	pubs int
@@ -580,6 +594,7 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 		s.pubs++
 		s.pubRoot, s.pubRootAt = slices.Concat(root, issuers), now
 	}
+	s.putStatus(ctx, now)
 	if crlErr != nil {
 		return crlErr
 	}
@@ -645,6 +660,45 @@ func (s *service) putCopy(ctx context.Context, crl, issuer []byte, now time.Time
 	if err != nil && ctx.Err() == nil {
 		s.Logger.Warn("org issuer: the relay's copy of the CRL not kept (tried again within "+copyEvery.String()+"; members still read the mailbox)", "error", err)
 	}
+}
+
+// putStatus puts the issuer's signed status on the relay's copy when the
+// Mailbox keeps one, when it changed (its At aside) or copyEvery passed. A
+// failure is logged (a relay that holds another organisation for this
+// account refuses it: one organisation per account).
+func (s *service) putStatus(ctx context.Context, now time.Time) {
+	w, ok := s.Mailbox.(StatusCopyWriter)
+	if !ok {
+		return
+	}
+	var st orgpki.SignedStatus
+	err := s.with(func(iss *orgpki.Issuer, _ *orgissuer.Store) (err error) {
+		st, err = iss.SignedStatus(now)
+		return err
+	})
+	key := statusContent(st.Body)
+	if err != nil || (bytes.Equal(key, s.copyStatus) && now.Sub(s.copyStatusAt) < copyEvery) {
+		return
+	}
+	s.copyStatus, s.copyStatusAt = key, now
+	data, err := json.Marshal(st)
+	if err == nil {
+		err = w.PutOrgStatus(ctx, s.org, data)
+	}
+	if err != nil && ctx.Err() == nil {
+		s.Logger.Warn("org issuer: the relay's copy of the organisation status not kept (tried again within "+copyEvery.String()+")", "error", err)
+	}
+}
+
+// statusContent is a status body without its At: what changed means.
+func statusContent(body []byte) []byte {
+	var st orgpki.Status
+	if json.Unmarshal(body, &st) != nil {
+		return nil
+	}
+	st.At = time.Time{}
+	b, _ := json.Marshal(st)
+	return b
 }
 
 // publish keeps msg as mailbox's one message (replace key); the append
