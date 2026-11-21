@@ -47,6 +47,27 @@ func EndAckFrame(sid string) *pb.TCPData {
 	return &pb.TCPData{SessionId: EndAckSID, Data: []byte(sid)}
 }
 
+// EndDoneHeader, "1" in an agent's ConnectTCP request metadata and echoed
+// in the relay's response header (each with EndAckHeader), says both sides
+// report a session's half close delivered (EndDoneFrame): a closer's
+// wait for its end (the relay's in-process conn's CloseWriteSync, the
+// agent's accepted conn's Close) returns nil only once the peer's app
+// took every byte and the end. An ack (EndAckFrame) is a receipt only:
+// holds and a session's clean end stay on it (relay-core spec/AgentLink.tla
+// DoneTruth, mutants done-on-receipt and hold-on-done).
+const EndDoneHeader = "x-nfltr-tcp-end-done"
+
+// EndDoneSID is the session id of the control frame that reports a
+// session's half close delivered (EndDoneFrame).
+const EndDoneSID = "_enddone"
+
+// EndDoneFrame reports sid's half close delivered: the sender's onward
+// conn took every byte before it and the end (a link session's
+// CloseWriteSync returned nil; a target's CloseWrite did).
+func EndDoneFrame(sid string) *pb.TCPData {
+	return &pb.TCPData{SessionId: EndDoneSID, Data: []byte(sid)}
+}
+
 // HTTPSessionTarget is the target of a session that carries HTTP/1.1 to the
 // agent's own HTTP server: the relay's reverse proxy writes requests into
 // it and the agent serves them with net/http, in place of HTTP requests as
