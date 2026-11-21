@@ -1,4 +1,6 @@
 Compatible changes:
-- ./nfnet.ErrMachineRefused: added
 - ./machinecert.Client.Pin: added
 - ./machinecred.(*Credential).SetSignIn: added
+- ./nfnet.ErrMachineRefused: added
+- ./nfnet.Event.Attempts: added
+- ./agent.PathEvent.Attempts: added

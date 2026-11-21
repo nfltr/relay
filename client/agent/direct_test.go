@@ -594,7 +594,7 @@ func TestDirectPairDeathBacksOffWhateverItsNoticeOrder(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 		before := r.d.Stats().Punches["ok"]
-		if reason := ds.tryDirect(); reason != "backoff" {
+		if reason, _ := ds.tryDirect(); reason != "backoff" {
 			t.Errorf("a try past a death: %q, want backoff", reason)
 		}
 		if after := r.d.Stats().Punches["ok"]; after != before {

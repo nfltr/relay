@@ -1,0 +1,4 @@
+{"ev":"Start","att":1}
+{"ev":"Sync","rtt_us":400}
+{"ev":"Dial","rtt_us":400,"wait_us":0,"since_us":5}
+{"ev":"Win","reason":""}

@@ -1,0 +1,5 @@
+{"ev":"Start","att":1}
+{"ev":"Sync","rtt_us":400}
+{"ev":"Dial","rtt_us":400,"wait_us":200,"since_us":201}
+{"ev":"Refused","reason":"refused_cert"}
+{"ev":"Start","att":2}

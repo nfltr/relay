@@ -268,6 +268,7 @@ type Event struct {
 	Instance, Path    string
 	Reason            string         // a path event's: why it is relayed ("" when direct)
 	Peer              netip.AddrPort // a direct path event's: the peer's address (zero when relayed)
+	Attempts          int            // a path event's: the punch round's attempts behind it (0: none)
 	BytesIn, BytesOut int64
 	Err               *Error
 }
@@ -286,7 +287,7 @@ func (c *Conn) emit(e Event) {
 
 // onPath reports a direct path's move as a path event.
 func (c *Conn) onPath(p agent.PathEvent) {
-	c.emit(Event{Kind: "path", Path: p.Path, Reason: p.Reason, Peer: p.Peer})
+	c.emit(Event{Kind: "path", Path: p.Path, Reason: p.Reason, Peer: p.Peer, Attempts: p.Attempts})
 }
 
 // fail types a read's or write's error: a deadline and our own Close come

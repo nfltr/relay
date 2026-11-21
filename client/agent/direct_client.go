@@ -92,6 +92,10 @@ type PathEvent struct {
 	Path   string
 	Reason string
 	Peer   netip.AddrPort
+	// Attempts is the punch round's attempts that led to this event (at
+	// most three); 0 when the event followed none (a session that joined
+	// the pair's connection, a fallback, a backoff).
+	Attempts int
 }
 
 // DirectStats are a client's direct-path counts: bytes per path (path
@@ -128,6 +132,10 @@ type DirectClient struct {
 	// ended: whether a pair's connection is over, its context's word (a
 	// test's stand-in: quic-go ends a dying connection's streams first)
 	ended func(*quic.Conn) bool
+	// punchBound: one attempt's dials (the design's 5 s)
+	punchBound time.Duration
+	// attempted: tests see each punch attempt's account
+	attempted func(punchAttempt)
 
 	directSent, directRecv, relayedSent, relayedRecv atomic.Uint64
 
@@ -160,9 +168,9 @@ type directPair struct {
 	sni     string    // ... the server name of its last punch (the punching session's); mu
 }
 
-// directBackoff is the wait after the nth failed punch toward a pair (at
-// most three punches in ten minutes after the first two: the design's
-// bound).
+// directBackoff is the wait after the nth failed punch round toward a
+// pair (at most three rounds in ten minutes after the first two: the
+// design's bound; a round is up to punchAttempts attempts).
 var directBackoff = []time.Duration{20 * time.Second, time.Minute, 10 * time.Minute}
 
 // NewDirectClient opens the client's endpoint.
@@ -171,7 +179,7 @@ func NewDirectClient(cfg DirectClientConfig) (*DirectClient, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, anonBound: nf1AnonDirectBound, repunch: directBackoff[0], qadGrace: 250 * time.Millisecond, ended: connEnded, pairs: map[string]*directPair{}, punches: map[string]uint64{},
+	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, anonBound: nf1AnonDirectBound, repunch: directBackoff[0], qadGrace: 250 * time.Millisecond, ended: connEnded, punchBound: 5 * time.Second, pairs: map[string]*directPair{}, punches: map[string]uint64{},
 		qad: map[string]uint64{}, sessions: map[*DirectSession]struct{}{}}
 	d.node, err = quiclink.New(quiclink.Config{Dial: d.dial, Liveness: link.LivenessFast, Datagrams: true, Window: tcpDataWindow})
 	if err != nil {
@@ -386,8 +394,8 @@ func (s *DirectSession) loop(proof uint64) {
 	}()
 	s.c.WaitAcked(proof, e2eeHeaderTimeout) // past it the agent's handshake failed: the session ends
 	for {
-		if reason := s.tryDirect(); reason != "" && reason != "backoff" {
-			s.emit(PathEvent{Path: PathRelayed, Reason: reason})
+		if reason, n := s.tryDirect(); reason != "" && reason != "backoff" {
+			s.emit(PathEvent{Path: PathRelayed, Reason: reason, Attempts: n})
 		}
 		s.pair.mu.Lock()
 		wait := max(time.Until(s.pair.next), 0) // a past (or no) backoff: try again, never wait for a move that will not come (a try that found the death before its notice: TestDirectPairDeathBacksOffWhateverItsNoticeOrder)
@@ -409,30 +417,28 @@ func (s *DirectSession) loop(proof uint64) {
 }
 
 // tryDirect moves the session onto the pair's direct connection, punched
-// first when there is none; "" when it moved, else why not.
-func (s *DirectSession) tryDirect() string {
+// first when there is none; "" when it moved, else why not, and the
+// attempts its punch round made (0: none).
+func (s *DirectSession) tryDirect() (string, int) {
 	p := s.pair
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	var st peerlink.Session
+	attempts := 0
 	for punched := false; ; {
 		s.noticeDeath(p)
 		if p.q == nil {
 			if punched || time.Now().Before(p.next) {
-				return "backoff"
+				return "backoff", 0
 			}
 			punched = true
 			p.punched = time.Now()
-			reason := s.punch(p)
-			if reason == "" {
-				s.d.count("ok")
-			} else {
-				s.d.count(reason)
-			}
+			var reason string
+			reason, attempts = s.punchRound(p)
 			if reason != "" {
 				p.fails++
 				p.next = time.Now().Add(directBackoff[min(p.fails, len(directBackoff))-1])
-				return reason
+				return reason, attempts
 			}
 			p.fails = 0
 		}
@@ -454,7 +460,7 @@ func (s *DirectSession) tryDirect() string {
 		case <-s.c.Done():
 		}
 		if s.noticeDeath(p); p.q != nil {
-			return ReasonNoAnswer
+			return ReasonNoAnswer, attempts
 		}
 	}
 	tc := &tokenCheck{pathStream: pathStream{Conn: st, sent: &s.d.directSent, recv: &s.d.directRecv}, ready: make(chan struct{})}
@@ -465,7 +471,7 @@ func (s *DirectSession) tryDirect() string {
 		heard.Store(true)
 		s.dg.bound(tc) // the agent attached before its token: datagrams go direct from now on
 		s.directOnce.Do(func() { close(s.direct) })
-		s.emit(PathEvent{Path: PathDirect, Peer: peer})
+		s.emit(PathEvent{Path: PathDirect, Peer: peer, Attempts: attempts})
 	}
 	qk := p.qk
 	if q, ok := st.(*quiclink.Session); ok {
@@ -477,9 +483,9 @@ func (s *DirectSession) tryDirect() string {
 		s.moving(e, heard)
 		return pathToken(s.key, roleClient, e, qk)
 	}); err != nil {
-		return ReasonNoAnswer
+		return ReasonNoAnswer, attempts
 	}
-	return ""
+	return "", attempts
 }
 
 // noticeDeath drops p's connection once it died; p.mu held. The next
@@ -509,8 +515,18 @@ func (s *DirectSession) moving(e uint64, heard *atomic.Bool) {
 	}
 }
 
-// punch runs one control exchange and the punch it starts; p.mu held.
-func (s *DirectSession) punch(p *directPair) string {
+// punch runs one control exchange and the punch it starts, attempt n of
+// its round; p.mu held. The request to the offer is the relay's round
+// trip; the client dials half of it after its sync (its candidates).
+func (s *DirectSession) punch(p *directPair, n int, tr roundTrace) (reason string) {
+	acct := punchAttempt{n: n}
+	defer func() {
+		tr.result(reason)
+		if f := s.d.attempted; f != nil {
+			acct.reason = reason
+			f(acct)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(context.Background(), directControlBound)
 	defer cancel()
 	tc, err := s.d.control(ctx, p)
@@ -522,9 +538,11 @@ func (s *DirectSession) punch(p *directPair) string {
 	defer stop()
 	enc, r := json.NewEncoder(tc), bufio.NewReader(io.LimitReader(tc, 8<<10))
 	var offer directOffer
+	sent := time.Now()
 	if enc.Encode(directRequest{Service: s.service}) != nil || readJSONLine(r, &offer) != nil {
 		return ReasonWithheld
 	}
+	acct.rtt = time.Since(sent)
 	if offer.Error != "" {
 		return offer.Error
 	}
@@ -554,6 +572,8 @@ func (s *DirectSession) punch(p *directPair) string {
 	if enc.Encode(out) != nil {
 		return ReasonWithheld
 	}
+	synced := time.Now()
+	tr.sync(acct.rtt)
 	go sendLate(tc, mine, late)
 	go s.d.ep.readLate(r, func(a netip.AddrPort) {
 		select {
@@ -566,6 +586,9 @@ func (s *DirectSession) punch(p *directPair) string {
 	if p.nf1 != nil {
 		p.sni = nf1SNI(s.key)
 	}
+	acct.wait = syncWait(ctx, acct.rtt)
+	acct.sinceSync = time.Since(synced)
+	tr.dial(acct.rtt, acct.wait, acct.sinceSync)
 	q, err := s.d.dialPair(ctx, p, learned)
 	if err != nil {
 		if p.refused.Load() {
@@ -595,7 +618,7 @@ func connEnded(q *quic.Conn) bool { return q.Context().Err() != nil }
 // endpoint (punch, 5 s) and keeps the connection's exporter for the
 // tokens.
 func (d *DirectClient) dialPair(ctx context.Context, p *directPair, learned <-chan netip.AddrPort) (*quic.Conn, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, d.punchBound)
 	defer cancel()
 	q, err := d.ep.punch(ctx, p.cands, learned, d.punchTLS(p), d.node.QUICConfig())
 	if err != nil {

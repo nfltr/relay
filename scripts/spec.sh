@@ -520,6 +520,38 @@ CFG
 	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
 }
 
+# prtrace FILE: TLC on a recorded PunchRound trace
+# (spec/TracePunchRound.tla, PunchRound.cfg's constants); 0 when accepted.
+# Its TLC output: FILE.out.
+prtrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Delays = {1, 3}
+    Dd = 1
+    PTO = 2
+    PunchBound = 4
+    CtlBound = 7
+    MaxAttempts = 3
+    Kind = "cone"
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    RetryBound
+    RetryOnlyNoAnswer
+    InitialAfterProbe
+    NeverHeld
+    DirectOnlyWon
+    FirstInitialWins
+    TraceNotDone
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TracePunchRound.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceNotDone is violated' "$1.out"
+}
+
 # prun TESTS: the fixtures, then client/agent's tests TESTS, each in its
 # own process with the recorder; every punch's trace checked.
 prun() {
@@ -536,8 +568,22 @@ prun() {
 		grep -q 'distinct states found' "$work/$(basename "$f").out" || { echo "$f: TLC failed:"; tail -20 "$work/$(basename "$f").out"; return 1; }
 		echo "$f: rejected"
 	done
+	prgo=$(grep -ohE '"ev": "[A-Za-z]+"|ev := "[A-Za-z]+"|ev = "[A-Za-z]+"' client/agent/trace_round_on.go | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u)
+	for e in $(grep -oE 'E\.ev = "[A-Za-z]+"' spec/TracePunchRound.tla | grep -ohE '"[A-Za-z]+"' | tr -d '"' | sort -u); do
+		echo "$prgo" | grep -qx "$e" || { echo "spec/TracePunchRound.tla: event $e is recorded by no trace line of client/agent"; return 1; }
+	done
+	for f in spec/testdata/reject-punchround-*.ndjson; do
+		cp "$f" "$work/"
+		if prtrace "$work/$(basename "$f")"; then
+			echo "$f: accepted, want rejected"
+			return 1
+		fi
+		grep -q 'distinct states found' "$work/$(basename "$f").out" || { echo "$f: TLC failed:"; tail -20 "$work/$(basename "$f").out"; return 1; }
+		echo "$f: rejected"
+	done
 	(cd client && go test -c -tags relaytrace -o "$work/agent.test" ./agent/) || return 1
 	nt=0
+	nr=0
 	for t in $("$work/agent.test" -test.list "$1"); do
 		d=$work/ptraces/$t
 		mkdir -p "$d"
@@ -556,9 +602,20 @@ prun() {
 				fail=1
 			fi
 		done
+		for f in "$d"/punchround-*.ndjson; do
+			[ -s "$f" ] || continue
+			nr=$((nr + 1))
+			if prtrace "$f"; then
+				echo "round trace $t $(basename "$f"): $(wc -l <"$f" | tr -d ' ') lines: accepted"
+			else
+				echo "round trace $t $(basename "$f"): REJECTED"
+				grep -E 'Error|unknown event' "$f.out" | head -5
+				fail=1
+			fi
+		done
 	done
-	echo "$nt traces"
-	[ "$nt" -gt 0 ] || fail=1
+	echo "$nt traces, $nr round traces"
+	[ "$nt" -gt 0 ] && [ "$nr" -gt 0 ] || fail=1
 	return $fail
 }
 
@@ -823,8 +880,8 @@ cfg=
 STOPCI='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession|TestDirectStopRefusesLateSessions)$'
 STOPTESTS='^(TestDirectStopsWaitOneGrace|TestDirectTargetResetResetsTheSession|TestDirectStopRefusesLateSessions|TestDirectStopDrainsThenResets|TestStopResetsDirectSessionsBeforeClose)$'
 # The punch tests ptraces records: a learned winner, an offered winner, a
-# refused rogue, a re-punch.
-PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectPunchPrefersLAN|TestDirectMappedAgentGoesDirect|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain)$'
+# refused rogue, a re-punch, a retried round, a round that ends relayed.
+PTESTS='^(TestDirectSymmetricAgentGoesDirectPeerReflexively|TestDirectPunchPrefersLAN|TestDirectMappedAgentGoesDirect|TestDirectSessionMovesAndFallsBack|TestDirectModelBindings|TestDirectAgentRebindDirectAgain|TestDirectPunchRetriesAfterNoAnswer|TestDirectPunchRoundEndsRelayedAfterThreeAttempts)$'
 # client/agent's tests that move an association direct: their DatagramAssoc
 # traces (BindA, BindC, the direct carriers, PathLoss).
 # The CallCredit tests of client/rpcclient whose two agents (or several
