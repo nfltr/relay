@@ -80,7 +80,7 @@ func (c *Conn) trace(ev string, n int) {
 		if d.x == 0 && ev == "Notify" {
 			d.x = id
 		}
-		if d.x != id {
+		if d.x != id || d.y == -1 { // d.y -1: the file is dropped (a direct path's Y)
 			return
 		}
 	default:
@@ -96,8 +96,9 @@ func (c *Conn) trace(ev string, n int) {
 				d.y = -1
 				if d.f != nil {
 					_ = d.f.Close()
-					_ = os.Remove(d.path)
+					d.f = nil
 				}
+				_ = os.Remove(d.path)
 				return
 			}
 		}

@@ -1292,7 +1292,9 @@ close_notify, 1 trace in about 60 on the box) and X's reads while it
 waits for nothing; `keep` is its choice. A direction whose X is no
 tlsend Conn (a plain crypto/tls peer: nfnet's `TestNF1CloseTakesThePeersEnd`
 server) or whose Y's transport acknowledges no end (a direct path) is
-not recorded. `TraceTLSEnd.tla` accepts a trace once every line is taken
+not recorded: Y's first step drops its file, and X's later steps (its
+`End`) record nothing (`TestTraceEndAfterOutOfScopeY`; they wrote to the
+closed file and panicked, lane TLSENDTRACE). `TraceTLSEnd.tla` accepts a trace once every line is taken
 and Y's Close returned, `NoFalseReset` checked on every state.
 `make spec-tetraces` (in `make ci`, and in `spec-traces`): every event the
 module maps is one tlsend records, the fixtures, then
