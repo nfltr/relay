@@ -806,6 +806,11 @@ func (i *Issuer) traceRefused(sn string, cur *x509.Certificate, why string, now 
 func (i *Issuer) Revoke(name string, now time.Time) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
+	return i.revokeName(name, now)
+}
+
+// revokeName is Revoke with i.mu held.
+func (i *Issuer) revokeName(name string, now time.Time) error {
 	switch n := i.names[name]; {
 	case n == nil:
 		return fmt.Errorf("%s is not enrolled", name)

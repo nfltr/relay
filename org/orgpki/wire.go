@@ -33,6 +33,9 @@ type Request struct {
 	Renew *RenewRequest `json:"renew,omitempty"`
 	// SignIn is an enrolment by a person's sign-in (ID: random, the device's own).
 	SignIn *SignInRequest `json:"sign_in,omitempty"`
+	// Order is the root's order (order.go), posted by the root's machine
+	// (nfltr org approve; ID: random).
+	Order *SignedOrder `json:"order,omitempty"`
 }
 
 // Answer is the issuer's answer to request ID: the certificate and the
@@ -49,6 +52,8 @@ type Answer struct {
 	Refused    string     `json:"refused,omitempty"`
 	// SignInEnded: the refusal is ErrSignInEnded (the device signs in again).
 	SignInEnded bool `json:"sign_in_ended,omitempty"`
+	// Revoked is the name an order revoked.
+	Revoked string `json:"revoked,omitempty"`
 }
 
 // RootMessage is the organisation's current root and its recovery, and

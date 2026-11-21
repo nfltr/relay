@@ -28,11 +28,9 @@
    message, as a relay can, and requiring a refusal):
      BIND:dash.statussig  the reader takes a status only under the issuer key in its root-signed certificate (checksign(s, p))
      BIND:dash.notafter   ... and shows the NotAfter of that certificate, no other field (na)
-   and, once the revoke order is code (nfltr org-dashboard-2026-11-21.md
-   "Code order" 2; each becomes a BIND row then):
-     PLANNED:dash.ordersig  the issuer applies only an order the root signed (checksign(o, pk(kroot)))
-     PLANNED:dash.serial    ... to the enrolment it names (x = s)
-     PLANNED:dash.org       ... of its own organisation (lOrder carries the organisation id in the code) *)
+     BIND:dash.ordersig   the issuer applies only an order the root signed (checksign(o, pk(kroot)))
+     BIND:dash.serial     ... to the enrolment it names (x = s)
+     BIND:dash.org        ... of its own organisation (lOrder carries the organisation id in the code) *)
 
 free c: channel.
 

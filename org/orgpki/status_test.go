@@ -4,7 +4,9 @@
 package orgpki
 
 import (
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/json"
@@ -67,7 +69,7 @@ func TestOrgDashModelBindings(t *testing.T) {
 		model = append(model, string(m[1]))
 	}
 	slices.Sort(model)
-	if rows := []string{"dash.notafter", "dash.statussig"}; !slices.Equal(model, rows) {
+	if rows := []string{"dash.notafter", "dash.ordersig", "dash.org", "dash.serial", "dash.statussig"}; !slices.Equal(model, rows) {
 		t.Fatalf("%s BIND ids %v, rows %v: each binding of the model needs one row", dashModel, model, rows)
 	}
 	o := newOrg(t)
@@ -125,5 +127,57 @@ func TestOrgDashModelBindings(t *testing.T) {
 	}
 	if _, _, err := VerifyStatus(honest, otherRoot); err == nil {
 		t.Error("a status under another root: taken, want refused")
+	}
+	orderBindings(t)
+}
+
+// orderBindings: the revoke order's rows (order.go).
+func orderBindings(t *testing.T) {
+	sign := func(o *org, root crypto.Signer, ord Order) SignedOrder {
+		t.Helper()
+		body, err := json.Marshal(ord)
+		if err != nil {
+			t.Fatal(err)
+		}
+		sig, err := crypto.SignMessage(root, rand.Reader, append([]byte(orderPrefix), body...), crypto.SHA256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return SignedOrder{Body: body, Sig: sig}
+	}
+	honest := func(o *org, name, serial string) Order {
+		return Order{OrgID: o.iss.OrgID(), Act: ActRevokeOrder, Name: name, Serial: serial, NotAfter: t0.Add(OrderLife)}
+	}
+	o := newOrg(t)
+	web, _ := o.enrol(t, "web-1", "web")
+	db, _ := o.enrol(t, "db-1", "db")
+	other := newOrg(t)
+	ib, _ := json.Marshal(honest(o, "web-1", web.SerialNumber.Text(16)))
+	byIssuer := SignedOrder{Body: ib, Sig: ed25519.Sign(o.iss.key, append([]byte(orderPrefix), ib...))}
+	foreign := honest(o, "web-1", web.SerialNumber.Text(16))
+	foreign.OrgID = other.iss.OrgID()
+	for name, s := range map[string]SignedOrder{
+		// BIND:dash.ordersig: the organisation root's signature
+		"ordersig: another root's":   sign(o, other.root, honest(o, "web-1", web.SerialNumber.Text(16))),
+		"ordersig: the issuer's key": byIssuer,
+		// BIND:dash.serial: a serial of the name's current enrolment
+		"serial: another member's": sign(o, o.root, honest(o, "web-1", db.SerialNumber.Text(16))),
+		"serial: none of it":       sign(o, o.root, honest(o, "web-1", "ff")),
+		// BIND:dash.org: of this organisation
+		"org: another organisation's": sign(o, o.root, foreign),
+	} {
+		if _, err := o.iss.ApplyOrder(s, t0); err == nil {
+			t.Errorf("%s: applied, want refused", name)
+		}
+	}
+	ok := sign(o, o.root, honest(o, "web-1", web.SerialNumber.Text(16)))
+	if name, err := o.iss.ApplyOrder(ok, t0); err != nil || name != "web-1" {
+		t.Fatalf("the honest order: %q, %v", name, err)
+	}
+	if _, err := o.iss.ApplyOrder(ok, t0); err == nil {
+		t.Error("the same order again: applied, want refused (revoked already)")
+	}
+	if _, err := o.iss.ApplyOrder(ok, t0.Add(OrderLife)); err == nil {
+		t.Error("a void order: applied, want refused")
 	}
 }

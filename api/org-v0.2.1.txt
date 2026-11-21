@@ -1,8 +1,16 @@
 Compatible changes:
+- ./orgpki.(*Issuer).ApplyOrder: added
 - ./orgpki.(*Issuer).SignedStatus: added
+- ./orgpki.ActRevokeOrder: added
+- ./orgpki.Answer.Revoked: added
 - ./orgpki.CheckStatusSignature: added
 - ./orgpki.ErrStatus: added
 - ./orgpki.MaxStatusMembers: added
+- ./orgpki.Order: added
+- ./orgpki.OrderLife: added
+- ./orgpki.Request.Order: added
+- ./orgpki.RevokeOrder: added
+- ./orgpki.SignedOrder: added
 - ./orgpki.SignedStatus: added
 - ./orgpki.Status: added
 - ./orgpki.StatusCRL: added

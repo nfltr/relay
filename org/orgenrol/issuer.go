@@ -465,6 +465,11 @@ func (s *service) decide(ctx context.Context, req orgpki.Request, refuse string,
 		var der []byte
 		var err error
 		switch {
+		case req.Order != nil: // the root's order (OrgDash.tla Apply): no certificate
+			if a.Revoked, err = iss.ApplyOrder(*req.Order, now); err != nil {
+				a.Refused = err.Error()
+			}
+			return nil
 		case req.Enrol != nil:
 			iss.SetMovePolicy(s.movePolicy(ctx)) // binds the join's stated id (Join.tla Issue)
 			der, err = iss.Enrol(*req.Enrol, now)
@@ -475,7 +480,7 @@ func (s *service) decide(ctx context.Context, req orgpki.Request, refuse string,
 			// ponytail: fetches the IdP's keys (once per IdP, cached) under the directory's lock
 			der, err = iss.EnrolSignIn(ctx, *req.SignIn, now)
 		default:
-			err = errors.New("neither an enrolment, a renewal nor a sign-in")
+			err = errors.New("neither an enrolment, a renewal, a sign-in nor an order")
 		}
 		if err != nil {
 			a.Refused, a.SignInEnded = err.Error(), errors.Is(err, orgpki.ErrSignInEnded)

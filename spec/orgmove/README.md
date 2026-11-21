@@ -216,8 +216,8 @@ are `spec/proverif/orgdash.pv`.
 | Publish | `orgenrol` `putStatus`: `orgpki.Issuer.SignedStatus` put on the relay's copy |
 | Read | `orgpki.VerifyStatus` (the root pin, the issuer key, NotAfter from the certificate) |
 | AskRevoke, AskRenew | the dashboard's Revoke and Renew (`POST /api/v1/dashboard/org/<org>/wishes`) |
-| Approve | `nfltr org approve` on the root's machine (code order 2, 3) |
-| Apply | the issuer service's orders box (code order 2, 3; `InstallRenewal` for answers) |
+| Approve | `orgpki.RevokeOrder` (the root's signature), run by `nfltr org approve` on the root's machine; the renewal's one-touch answer is code order 3 |
+| Apply | `orgpki.Issuer.ApplyOrder` (the root's signature, the organisation, the order's life, a serial of the name's current enrolment), from a request on the enrol drop box (`orgenrol` decide, `Request.Order`); answers: code order 3 (`InstallRenewal`) |
 | Forge, Replay, RelayWish, Move | the relay: a status of its own, an older one with its wrapper edited, any wish, a machine's account group |
 | PutOther | a second organisation's status put into the account: refused (relay-server `org_status.go`) |
 | WishRevoke, WishRenew | mutants only; coverage skips them |
@@ -387,4 +387,5 @@ yet (the hosting lanes H2, H3).
 | OrgHosted.tla | org/orgissuer/store.go |
 | TraceOrgHosted.tla | client/orgid/verify.go |
 | OrgDash.tla | org/orgpki/status.go |
+| OrgDash.tla | org/orgpki/order.go |
 | OrgDash.tla | org/orgenrol/issuer.go |

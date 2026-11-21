@@ -841,9 +841,8 @@ Neither key leaves its machine (8, 9). Mutants: `forged-status-accepted`,
 `no-owner-gate` (3, 6), `renew-without-root` (5). The state (who asked
 what when, replays, one organisation per account) is
 `spec/orgmove/OrgDash.tla`. Bindings: `BIND:dash.statussig`,
-`BIND:dash.notafter` (`org/orgpki` `TestOrgDashModelBindings`); the
-order's (`dash.ordersig`, `dash.serial`, `dash.org`) are listed PLANNED
-until the order is code.
+`BIND:dash.notafter`, `BIND:dash.ordersig`, `BIND:dash.serial`,
+`BIND:dash.org` (`org/orgpki` `TestOrgDashModelBindings`).
 
 ### orgmove.pv: moving an organisation's issuer (`org/`)
 
@@ -994,6 +993,7 @@ Environment assumptions of these models, beside the table above:
 | enrol.pv | client/orgid/verify.go |
 | orgmove.pv | org/orgpki/renew.go |
 | orgdash.pv | org/orgpki/status.go |
+| orgdash.pv | org/orgpki/order.go |
 | orgmove.pv | org/orgissuer/bundle.go |
 | orghosted.pv | client/orgid/verify.go |
 | orghosted.pv | client/orgid/hosted_bindings_test.go |
