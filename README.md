@@ -127,16 +127,20 @@ end at the relay itself. The full example is
 
 ## Compatibility
 
-The protocol is additive within a major version. A relay advertises its
-features (`x-nfltr-relay-features` and `GET /api/v1/relay/info`); a client
-asks for the features it needs and fails closed, naming the missing feature,
-when the relay lacks one.
+The protocol is additive within a major version. Every call to the relay
+carries the session handshake (`nfltr.relay.v1` `Hello` and `Welcome`, the
+binary metadata `nfltr-hello-bin` and `nfltr-welcome-bin`): a relay refuses
+a call without a `Hello`, and a client fails closed on a reply without a
+`Welcome` (`agentwire.RelayTooOld`). Optional features are
+response headers of the connect (for example `x-nfltr-agent-link`,
+`x-nfltr-label-updates`): a client uses one only when the relay answers
+with it.
 
 ## Development
 
 ```sh
 make ci                         # everything the CI workflow runs, read from it (the gate; GitHub Actions is not)
-make build vet test test-race   # both modules (go.work joins them)
+make build vet test test-race   # the three modules (go.work joins them)
 make fuzz-short                 # every fuzz target, FUZZTIME each (default 10s)
 make proto-gen                  # regenerate proto/nfltr/** and proto/pb (needs buf, protoc and the protoc-gen-* plugins)
 make proto-report               # buf lint + breaking of proto/pb vs PROTO_BASELINE (report only)
