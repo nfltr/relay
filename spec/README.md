@@ -1283,10 +1283,12 @@ one file per session (named by the TLS exported keying material, the
 same at both ends) and direction (the first close_notify's: its sender
 is X): X's `Notify` (`XNotify`), `Fin` (`XFin`) and `End` (its
 `CloseWriteSync` returned: n 1 nil, `XRecv` to clean; 0, to reset), Y's
-`EOF` (`YRecv` of the close_notify), `Close` (`YClose`; n 1: it takes the
+`EOF` (its app read the close_notify its Mux took: `yeof`), `Close` (`YClose`; n 1: it takes the
 transport's end first, the only Close of a Y on a transport that
 acknowledges ends, so n 0 is `close-at-notify`'s) and `Closed`
-(`YClosed`). TLC adds Y's Mux reading the FIN and X's reads while it
+(`YClosed`). TLC adds Y's Mux reading the close_notify and the FIN
+(`YRecv`: the ENDACK X's `End` takes may come before Y's app reads the
+close_notify, 1 trace in about 60 on the box) and X's reads while it
 waits for nothing; `keep` is its choice. A direction whose X is no
 tlsend Conn (a plain crypto/tls peer: nfnet's `TestNF1CloseTakesThePeersEnd`
 server) or whose Y's transport acknowledges no end (a direct path) is
@@ -1296,7 +1298,8 @@ and Y's Close returned, `NoFalseReset` checked on every state.
 module maps is one tlsend records, the fixtures, then
 `TestEndOverALinkSession` (sync, closewrite, crossing) recorded and each
 direction checked. Fixtures (`spec/testdata/`): `accept-tlsend-sync`,
-`accept-tlsend-crossing` (recorded), `accept-tlsend-keep` (X keeps its
+`accept-tlsend-crossing` (recorded), `accept-tlsend-end-before-eof`
+(recorded: `End` before `EOF`), `accept-tlsend-keep` (X keeps its
 transport: Y's Close by the bound); `reject-tlsend-close-at-notify`
 (recorded with the mutant put back: `Close` n 0),
 `reject-tlsend-close-before-fin` (a whole close reached X before the

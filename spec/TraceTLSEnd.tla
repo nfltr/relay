@@ -9,7 +9,7 @@
 (* (Close, YClose: n 1 it takes the transport's end first, the only Close *)
 (* of a Y on a transport that acknowledges ends; n 0 is close-at-notify's) *)
 (* and its whole close (Closed, YClosed). Not logged, so TLC adds them:  *)
-(* Y's Mux reading the FIN (YRecv of it) and X's Mux reading a frame      *)
+(* Y's Mux reading the close_notify and the FIN (YRecv), X's reading a frame *)
 (* while X waits for nothing. keep is TLC's choice (a Fin logged: FALSE). Accepted when TLC  *)
 (* reaches the trace's end with Y's Close returned (YCloses on the         *)
 (* finished run): TraceUnfinished violated.                                *)
@@ -24,15 +24,18 @@ traceVars == <<vars, l>>
 
 E == Log[l]
 
+\* Y's Mux takes the close_notify's bytes and the FIN behind it (YRecv)
+\* before Y's app reads the close_notify (EOF): the ENDACK X's wait ends
+\* at (End) can come before that read.
 Env ==
-    \/ x2y # <<>> /\ Head(x2y) = "fin" /\ YRecv
+    \/ x2y # <<>> /\ YRecv
     \/ xs # "wait" /\ XRecv
 
 Step ==
     CASE E.ev = "Notify" -> XNotify
       [] E.ev = "Fin" -> XFin
       [] E.ev = "End" -> XRecv /\ xs = "wait" /\ xs' = IF E.n = 1 THEN "clean" ELSE "reset"
-      [] E.ev = "EOF" -> x2y # <<>> /\ Head(x2y) = "cn" /\ YRecv
+      [] E.ev = "EOF" -> yeof /\ UNCHANGED vars  \* Y's app reads the close_notify its Mux took (Env)
       [] E.ev = "Close" -> YClose /\ E.n = 1   \* n 0: Close at the close_notify (close-at-notify's YClose)
       [] E.ev = "Closed" -> YClosed
       [] OTHER -> Print(<<"unknown event", E>>, FALSE)
