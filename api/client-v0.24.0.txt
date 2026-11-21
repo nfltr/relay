@@ -1,2 +1,4 @@
 Compatible changes:
+- ./nfnet.ErrMachineRefused: added
 - ./machinecert.Client.Pin: added
+- ./machinecred.(*Credential).SetSignIn: added

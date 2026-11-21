@@ -208,8 +208,16 @@ func (d *Dialer) certRefusal(err error) error {
 	if !refused {
 		return err
 	}
-	return &Error{Code: CodeAuth, Message: "the relay refused this machine's certificate (revoked, rotated away or expired): " + err.Error(), Err: err}
+	return &Error{Code: CodeAuth, Message: ErrMachineRefused.Error(), Err: fmt.Errorf("%w: %w", ErrMachineRefused, err)}
 }
+
+// ErrMachineRefused is the relay's refusal of Config.ClientCert (an
+// *Error CodeAuth wraps it): plain words, one line; the relay's answer is
+// its cause, and the program adds its sign-in command (lane CERTGAPS:
+// "the relay refused this machine's certificate ...: dataplane: relay
+// answered the upgrade with 401" named none). machinecred.ErrRefused's
+// words.
+var ErrMachineRefused = errors.New("the relay no longer accepts this machine (revoked, or offline for more than 90 days)")
 
 // relayTLS is the TLS configuration for the relay at addr: RelayTLS's (or
 // the system roots), its ServerName addr's host when unset.

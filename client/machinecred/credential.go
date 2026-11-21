@@ -62,18 +62,45 @@ type Credential struct {
 	name      string             // the machine's name in its account, as loaded
 	s         *machinecert.Saved // the certificate as last saved; under mu
 	cur       atomic.Pointer[tls.Certificate]
-	refused   atomic.Bool        // the renewal was refused for good
-	running   atomic.Bool        // Run started the renewal
-	runMu     sync.Mutex         // holds holders, stopRenew, renewed
-	holders   int                // Run calls not stopped yet
-	stopRenew context.CancelFunc // ends the renewer
-	renewed   chan struct{}      // closed when the renewer has finished
-	mu        sync.Mutex         // one renewal at a time (Run's loop, a handshake's); holds s
+	refused   atomic.Bool            // the renewal was refused for good
+	signIn    atomic.Pointer[string] // SetSignIn's command
+	running   atomic.Bool            // Run started the renewal
+	runMu     sync.Mutex             // holds holders, stopRenew, renewed
+	holders   int                    // Run calls not stopped yet
+	stopRenew context.CancelFunc     // ends the renewer
+	renewed   chan struct{}          // closed when the renewer has finished
+	mu        sync.Mutex             // one renewal at a time (Run's loop, a handshake's); holds s
 }
 
 // ErrRefused ends a command whose machine certificate the relay refused;
 // the API key is never tried instead.
-var ErrRefused = errors.New("the relay no longer accepts this machine (it was revoked, or off for more than 90 days): run `nfltr config login`")
+// Its words name no program's command and no certificate: the program
+// names its sign-in command (SetSignIn), which Refusal's error ends with
+// (lane CERTGAPS: past the grace nfltr up printed the command four times,
+// with the relay's answer and its "certificate").
+var ErrRefused = errors.New("the relay no longer accepts this machine (revoked, or offline for more than 90 days)")
+
+// SetSignIn names the command that signs this machine in again (nfltr's
+// depends on the relay in use): Refusal's error ends "sign in again: cmd".
+func (c *Credential) SetSignIn(cmd string) { c.signIn.Store(&cmd) }
+
+// refusal is Refusal's error: ErrRefused and the sign-in command, one
+// line; the relay's answer is its cause (errors.As, a debug log), not its
+// words.
+type refusal struct {
+	signIn string
+	cause  error
+}
+
+func (r *refusal) Error() string {
+	if r.signIn == "" {
+		return ErrRefused.Error()
+	}
+	return ErrRefused.Error() + ": sign in again: " + r.signIn
+}
+
+func (r *refusal) Is(target error) bool { return target == ErrRefused }
+func (r *refusal) Unwrap() error        { return r.cause }
 
 // ErrRenewing: the machine's certificate expired and its renewal has not
 // gone through yet (the relay or its accounts service does not answer);
@@ -90,7 +117,11 @@ func (c *Credential) Refusal(err error) error {
 		return err
 	}
 	if c.refused.Load() || refusedByRelay(err) {
-		return fmt.Errorf("%w: %w", ErrRefused, err)
+		r := &refusal{cause: err}
+		if p := c.signIn.Load(); p != nil {
+			r.signIn = *p
+		}
+		return r
 	}
 	return err
 }
@@ -379,7 +410,14 @@ func (c *Credential) renew(ctx context.Context, logger *slog.Logger) {
 	cur := c.s.Cert
 	c.mu.Unlock()
 	if err := loop.Run(ctx, &cur); err != nil && ctx.Err() == nil {
-		logger.Error("this machine's sign-in was refused", "error", c.Refusal(err))
+		// A warning: the command's own error (Refusal) is the one line
+		// that names the way out.
+		var refused *machinecert.RefusedError
+		status := 0
+		if errors.As(err, &refused) {
+			status = refused.Status
+		}
+		logger.Warn("this machine's sign-in was refused; its next connection to the relay ends the command", "reason", ErrRefused.Error(), "status", status)
 	}
 }
 

@@ -10,6 +10,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/nfltr/relay/client/machinecert"
 )
 
 // TestRefusalOnlyForTheCertificate (pubcheck 2026-11-18): the relay's
@@ -24,5 +26,25 @@ func TestRefusalOnlyForTheCertificate(t *testing.T) {
 	denied := fmt.Errorf("agent: %w", status.Error(codes.PermissionDenied, "agent name not allowed for this credential"))
 	if err := c.Refusal(denied); errors.Is(err, ErrRefused) {
 		t.Fatalf("PermissionDenied: %v, want the relay's refusal as it is", err)
+	}
+}
+
+// Past the grace the command's error is one plain line that names the
+// program's sign-in command once and no certificate; the relay's answer
+// (its own words) stays the cause (lane CERTGAPS, CERTPROOF's row 9).
+func TestRefusalIsOnePlainLine(t *testing.T) {
+	answer := &machinecert.RefusedError{Status: 401, Message: "machine_offline_too_long: this machine's certificate expired more than 90 days ago; run `nfltr config login` on it"}
+	c := &Credential{}
+	c.refused.Store(true)
+	if got := c.Refusal(answer).Error(); got != ErrRefused.Error() {
+		t.Fatalf("no sign-in command: %q", got)
+	}
+	c.SetSignIn("nfltr config login")
+	err := c.Refusal(fmt.Errorf("agent: %w", answer))
+	if want := ErrRefused.Error() + ": sign in again: nfltr config login"; err.Error() != want {
+		t.Fatalf("refusal %q, want %q", err, want)
+	}
+	if !errors.Is(err, ErrRefused) || !errors.Is(err, answer) || errors.Is(c.Refusal(err), answer) != true || c.Refusal(err) != err {
+		t.Fatalf("the refusal lost ErrRefused or its cause: %v", err)
 	}
 }

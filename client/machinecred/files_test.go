@@ -44,7 +44,7 @@ func TestFilesAndMessagesUnchanged(t *testing.T) {
 	if !sameRelay("nfltr.xyz", "grpc.nfltr.xyz:443") {
 		t.Error("the hosted relay's gRPC host is not its HTTP host")
 	}
-	const msg = "the relay no longer accepts this machine (it was revoked, or off for more than 90 days): run `nfltr config login`"
+	const msg = "the relay no longer accepts this machine (revoked, or offline for more than 90 days)"
 	if ErrRefused.Error() != msg {
 		t.Fatalf("ErrRefused = %q", ErrRefused)
 	}

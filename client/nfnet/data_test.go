@@ -195,4 +195,8 @@ func TestClientCertReachesTheRelay(t *testing.T) {
 		RelayTLS: relaytrust.WithPin(&tls.Config{ServerName: "127.0.0.1", MinVersion: tls.VersionTLS12}, relaytrust.Fingerprint(refusing.Certificate().Raw))}
 	_, err = dialer(t, cfg).E2EEPolicy(t.Context())
 	wantCode(t, "refused certificate", err, CodeAuth, "")
+	// One plain line, the relay's answer its cause (lane CERTGAPS).
+	if !errors.Is(err, ErrMachineRefused) || err.Error() != ErrMachineRefused.Error() || strings.Contains(err.Error(), "certificate") {
+		t.Fatalf("refusal words: %q", err)
+	}
 }
