@@ -26,6 +26,10 @@
 #             OrgHosted.cfg, OrgHostedLive.cfg, each line of
 #             spec/orgmove/hosted-mutants.txt caught, its witnesses
 #             reached, -coverage 1, hfixtures (in ci).
+#   dash      the organisation in the dashboard (spec/orgmove/OrgDash.tla):
+#             OrgDash.cfg, OrgDashLive.cfg, each line of
+#             spec/orgmove/dash-mutants.txt caught, its witnesses reached,
+#             -coverage 1 (in ci).
 #   restore   a restore from a backup (OrgMove.tla Revive):
 #             OrgMoveRestore.cfg, each line of
 #             spec/orgmove/restore-mutants.txt caught, its witnesses
@@ -82,6 +86,17 @@ hosted_spec() {
 	mfile=hosted-mutants.txt
 	witnesses="WitnessHostedServes WitnessMovedOff WitnessStolenSession WitnessRevokedCut WitnessOwnerActivated WitnessRenewed WitnessRevokedRemoteRenewal WitnessResigned"
 	covskip="SelfRenew|AutoActivate"
+}
+
+# OrgDash.tla: WishRevoke and WishRenew are taken only under a mutant.
+dash_spec() {
+	spec=OrgDash
+	actprops=""
+	temporal="RevokeTakesEffect RenewCompletes"
+	mfile=dash-mutants.txt
+	witnesses="WitnessRevokedFromDashboard WitnessRenewed WitnessForgedRefused WitnessReplayShown WitnessStaleOrderRefused WitnessRelayWishDeclined WitnessSecondOrgRefused WitnessGroupMismatch"
+	covskip="WishRevoke|WishRenew"
+	cfg=""
 }
 
 tlc() {
@@ -340,7 +355,9 @@ coverage) coverage ;;
 ci) run OrgMove.cfg && run OrgMoveLive.cfg && mutants && witnesses && coverage && fixtures && ofixtures &&
 	holds_spec && run OrgHolds.cfg && run OrgHoldsLive.cfg && mutants && witnesses && coverage &&
 	hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage && fixtures hosted &&
+	dash_spec && run OrgDash.cfg && run OrgDashLive.cfg && mutants && witnesses && coverage &&
 	spec=OrgMove && restore_spec && run OrgMoveRestore.cfg && mutants && witnesses && coverage ;;
+dash) dash_spec && run OrgDash.cfg && run OrgDashLive.cfg && mutants && witnesses && coverage ;;
 restore) restore_spec && run OrgMoveRestore.cfg && mutants && witnesses && coverage ;;
 hosted) hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage && fixtures hosted ;;
 hfixtures) fixtures hosted ;;

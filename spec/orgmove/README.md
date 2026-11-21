@@ -183,6 +183,65 @@ line of `hosted-mutants.txt`, the witnesses and `-coverage 1`:
 | the hosted machine holds no root key and no recovery key | Compromise | `spec/proverif/orghosted.pv` 2, 3 |
 | the relay may withhold the root's CRL indefinitely; liveness assumes it carries it in the end | Deliver, RevokeTakesEffect | the threat model |
 
+## `OrgDash.tla`: the organisation in the dashboard (lane ORGDESIGN)
+
+The design is nfltr's `docs/decisions/org-dashboard-2026-11-21.md`. The
+issuer signs a status (its certificate, members, unused tokens, CRL) and
+puts it on the relay's copy; a pinned reader (`nfltr org status --relay`,
+the dashboard page's check) shows it. Revoke and Renew in the dashboard
+post wishes the relay carries to the root's machine; the root signs an
+order (revoke an enrolment) or an answer (the renewal) only after the
+owner's approval on a prompt naming the act, one Touch ID for a renewal's
+signatures; the issuer applies only root-signed ones. One set of groups:
+a member certificate's group is the issuer's token's, within its bound,
+never the relay's account record. One organisation per account. The
+attacker owns the relay: it forges or replays statuses, edits the
+unsigned wrapper, posts any wish and replays any order. Its signatures
+are `spec/proverif/orgdash.pv`.
+
+| property | means | mutant that breaks it |
+|---|---|---|
+| ShownSigned | a status a reader shows is one the issuer signed (replay aside) | `forged-status-accepted` |
+| ShownNotAfterTrue | the days left shown are an issuer certificate's NotAfter | `notafter-unsigned` (read from the relay's wrapper) |
+| RevokedOnlyApproved | an enrolment is revoked only by the order of the owner's request naming that enrolment | `relay-only-revoke` (the issuer acts on the wish), `no-owner-gate`, `order-by-name` (a replayed order revokes the name's later enrolment) |
+| RenewOnlyByRoot, NotAfterMonotone | the issuer's NotAfter is one the root signed and never goes back | `renew-without-root`, `install-old` |
+| RootSignsOnlyAsked | the root signs a renewal only for a Renew the owner pressed | `no-owner-gate` |
+| CertInBound, CertGroupsFromIssuer | a member certificate's group is in the issuer's bound and is the issuer's token's | `group-outside-bound`, `relay-chosen-group` |
+| OneOrgPerAccount, AccountGroupsOneBound | an account holds one organisation, so one bound names its groups | `two-orgs` |
+| RevokeTakesEffect, RenewCompletes (LiveSpec) | the owner's request takes effect once the relay carries the order | `no-apply-orders` |
+
+| Action | design (org-dashboard-2026-11-21.md "Flows") |
+|---|---|
+| Token, Enrol | `nfltr org token --groups` (within the bound, `MakeToken`), a machine's enrolment (a new one only after a revocation: a rebind) |
+| Publish | `orgenrol` `putStatus`: `orgpki.Issuer.SignedStatus` put on the relay's copy |
+| Read | `orgpki.VerifyStatus` (the root pin, the issuer key, NotAfter from the certificate) |
+| AskRevoke, AskRenew | the dashboard's Revoke and Renew (`POST /api/v1/dashboard/org/<org>/wishes`) |
+| Approve | `nfltr org approve` on the root's machine (code order 2, 3) |
+| Apply | the issuer service's orders box (code order 2, 3; `InstallRenewal` for answers) |
+| Forge, Replay, RelayWish, Move | the relay: a status of its own, an older one with its wrapper edited, any wish, a machine's account group |
+| PutOther | a second organisation's status put into the account: refused (relay-server `org_status.go`) |
+| WishRevoke, WishRenew | mutants only; coverage skips them |
+
+`OrgDash.cfg` (one name enrolled twice, groups g1 g2 with g1 in the bound,
+two time steps): 225280 states, about 12 s; `OrgDashLive.cfg` (one group,
+one enrolment): about 16 s; every line of `dash-mutants.txt`, the
+witnesses (`WitnessRevokedFromDashboard`, `WitnessRenewed`,
+`WitnessForgedRefused`, `WitnessReplayShown`, `WitnessStaleOrderRefused`,
+`WitnessRelayWishDeclined`, `WitnessSecondOrgRefused`,
+`WitnessGroupMismatch`) and `-coverage 1`: `scripts/spec-orgmove.sh dash`,
+in `ci`.
+
+| assumption | relied on by | source |
+|---|---|---|
+| the owner approves on the root's machine only an act they asked for: the prompt names organisation, act, name and serial (or groups and head) | Approve | the design; the helper's batch prompt (hosted `deploy/release/approval-signer.swift`) |
+| the root's and the issuer's machines are honest; the relay and the dashboard's code are not | every action | the threat model; `orgdash.pv` |
+| Ed25519 and the root's ECDSA are unforgeable | Read, Apply | `orgdash.pv` |
+| a reader pins the organisation root (a member's `trust`, the CLI); the browser only checks the signature, as it runs the relay's code | Read | org-dashboard-2026-11-21.md "What a relay can and cannot do" |
+
+Not traced yet: the status's put and read are code (orgenrol, orgpki) but
+the acts (Approve, Apply) are not; the trace recorder comes with code
+order 2 (`ORGMOVETRACE` lines `status`, `order`), named there as the gap.
+
 ## Running
 
 `scripts/spec-orgmove.sh ci` (`make spec-orgmove-ci`, in `make ci`, about a
@@ -327,3 +386,5 @@ yet (the hosting lanes H2, H3).
 | OrgHosted.tla | org/orgenrol/machine.go |
 | OrgHosted.tla | org/orgissuer/store.go |
 | TraceOrgHosted.tla | client/orgid/verify.go |
+| OrgDash.tla | org/orgpki/status.go |
+| OrgDash.tla | org/orgenrol/issuer.go |

@@ -826,6 +826,25 @@ earlier serials, and the issuer refusing to renew one, is
 root the pinned recovery key certifies (8); the join's retries, the revoke
 and a renewal since are `spec/enrol/Join.tla`.
 
+### orgdash.pv: the organisation in the dashboard (`org/`)
+
+nfltr `docs/decisions/org-dashboard-2026-11-21.md`. The attacker owns the
+relay and the dashboard. The issuer signs its status; a pinned reader
+shows only a list the issuer signed with its root-signed certificate's
+NotAfter (1, witness 2). The root signs a revoke order only for an
+enrolment the owner asked to revoke, and the issuer revokes only that
+enrolment (3, witness 4). The root answers the issuer's own signed
+request only for a Renew the owner pressed, both signatures under one
+approval, and the issuer installs only that answer (5, 6, witness 7).
+Neither key leaves its machine (8, 9). Mutants: `forged-status-accepted`,
+`notafter-unsigned` (1), `relay-only-revoke`, `order-by-name` (3),
+`no-owner-gate` (3, 6), `renew-without-root` (5). The state (who asked
+what when, replays, one organisation per account) is
+`spec/orgmove/OrgDash.tla`. Bindings: `BIND:dash.statussig`,
+`BIND:dash.notafter` (`org/orgpki` `TestOrgDashModelBindings`); the
+order's (`dash.ordersig`, `dash.serial`, `dash.org`) are listed PLANNED
+until the order is code.
+
 ### orgmove.pv: moving an organisation's issuer (`org/`)
 
 An organisation's issuer moving to another machine. The new machine
@@ -974,6 +993,7 @@ Environment assumptions of these models, beside the table above:
 | enrol.pv | org/orgpki/issuer.go |
 | enrol.pv | client/orgid/verify.go |
 | orgmove.pv | org/orgpki/renew.go |
+| orgdash.pv | org/orgpki/status.go |
 | orgmove.pv | org/orgissuer/bundle.go |
 | orghosted.pv | client/orgid/verify.go |
 | orghosted.pv | client/orgid/hosted_bindings_test.go |

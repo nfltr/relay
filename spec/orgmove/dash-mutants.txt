@@ -1,0 +1,18 @@
+# <mutant> <property> [<cfg>]: TLC on OrgDash.cfg's constants (or <cfg>'s)
+# with that Mutant must report <property> violated (scripts/spec-orgmove.sh
+# dash); RevokeTakesEffect and RenewCompletes run under LiveSpec.
+forged-status-accepted ShownSigned
+notafter-unsigned ShownNotAfterTrue
+relay-only-revoke RevokedOnlyApproved
+no-owner-gate RevokedOnlyApproved
+no-owner-gate RootSignsOnlyAsked
+order-by-name RevokedOnlyApproved
+renew-without-root RenewOnlyByRoot
+install-old NotAfterMonotone
+group-outside-bound CertInBound
+relay-chosen-group CertGroupsFromIssuer
+relay-chosen-group CertInBound
+two-orgs OneOrgPerAccount
+two-orgs AccountGroupsOneBound
+no-apply-orders RevokeTakesEffect OrgDashLive.cfg
+no-apply-orders RenewCompletes OrgDashLive.cfg

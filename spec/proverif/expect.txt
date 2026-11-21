@@ -273,3 +273,15 @@ app_enrol no-nonce-check,nonce-relay-key-only FTFTFFFF
 app_enrol user-from-request FFFTFFFF
 app_enrol renew-takes-attrs FFFFFFFF
 app_enrol no-app-check TTFTFFFF
+#
+# orgdash.pv: the organisation in the dashboard (nfltr
+# docs/decisions/org-dashboard-2026-11-21.md). 1 status signed, 2 witness,
+# 3 revoke only as asked, 4 witness, 5 renewal only the root's, 6 approval
+# only for a Renew pressed, 7 witness, 8-9 keys stay.
+orgdash - TFTFTTFTT
+orgdash forged-status-accepted FFTFTTFTT
+orgdash notafter-unsigned FFTFTTFTT
+orgdash relay-only-revoke TFFFTTFTT
+orgdash order-by-name TFFFTTFTT
+orgdash no-owner-gate TFFFTFFTT
+orgdash renew-without-root TFTFFTFTT
