@@ -1,0 +1,12 @@
+Compatible changes:
+- ./orgpki.(*Issuer).SignedStatus: added
+- ./orgpki.CheckStatusSignature: added
+- ./orgpki.ErrStatus: added
+- ./orgpki.MaxStatusMembers: added
+- ./orgpki.SignedStatus: added
+- ./orgpki.Status: added
+- ./orgpki.StatusCRL: added
+- ./orgpki.StatusMember: added
+- ./orgpki.StatusToken: added
+- ./orgpki.VerifyStatus: added
+- ./orgenrol.StatusCopyWriter: added

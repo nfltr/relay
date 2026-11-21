@@ -1,0 +1,4 @@
+Compatible changes:
+- ./mailboxclient.Client.OrgStatus: added
+- ./mailboxclient.Client.PutOrgStatus: added
+- ./mailboxclient.OrgStatusPath: added
