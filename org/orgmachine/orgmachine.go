@@ -195,7 +195,7 @@ func (m *Machine) Reload(now time.Time) (changed bool, err error) {
 	// not taken (older, lapsed) changes nothing.
 	newStatus := false
 	if st, err := os.ReadFile(filepath.Join(m.dir, StatusFile)); err == nil { // #nosec G304 -- a file of the machine's own directory
-		newStatus, _ = m.rules.Take(st, m.ver.Root(), m.orgID, now)
+		newStatus, _ = m.rules.Take(st, m.ver, now)
 	}
 	if newCRL || newCert || newIssuers || newStatus {
 		m.signal()
@@ -212,7 +212,7 @@ func (m *Machine) Reload(now time.Time) (changed bool, err error) {
 // unexpired) and keeps it in status.json; Changed, so open sessions are
 // checked again against its rules.
 func (m *Machine) TakeStatus(msg []byte, now time.Time) (bool, error) {
-	took, err := m.rules.Take(msg, m.ver.Root(), m.orgID, now)
+	took, err := m.rules.Take(msg, m.ver, now)
 	if !took || err != nil {
 		return took, err
 	}
@@ -235,8 +235,11 @@ func (m *Machine) signal() {
 
 // takeRoot takes der as the organisation's root when it is not the one
 // held: a rotation (Enrol.tla TakeRoot). The CRLs under the old root go
-// with it, so the CRL is taken again (the new issuer's). It signals
-// Changed: sessions under the old root are checked again and cut.
+// with it, so the CRL is taken again (the new issuer's), and so do its
+// access rules: the rules end with their root (orgid.Rules), and the kept
+// status.json goes, so no later process takes them again (lane SECFIX,
+// review S5; GroupMirror.tla PeerRotate). It signals Changed: sessions
+// under the old root are checked again and cut.
 func (m *Machine) takeRoot(der []byte) (bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -246,6 +249,7 @@ func (m *Machine) takeRoot(der []byte) (bool, error) {
 	if err := m.ver.TakeRotation(der); err != nil {
 		return false, err
 	}
+	_ = os.Remove(filepath.Join(m.dir, StatusFile)) // one left behind is refused anyway: its issuer is not the new root's
 	m.root, m.crl, m.issuers = der, nil, nil
 	m.signal()
 	return true, nil

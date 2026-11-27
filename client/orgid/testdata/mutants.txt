@@ -60,8 +60,8 @@ client-tickets-on | identity.go | 		SessionTicketsDisabled: true, | 		SessionTic
 # issuer chained to the root, newer only, fail closed past its life, and a
 # principal matched only by its own kind.
 rule-unsigned | policy.go | 	if !RootSigned(root, append([]byte(PolicyPrefix), sp.Body...), sp.Sig) { | 	if false { | TestSvcAccessModelBindingsPolicy
-peer-rule-unsigned | policy.go | 	if err := iss.CheckSignatureFrom(root); err != nil { | 	if err := iss.CheckSignatureFrom(root); false && err != nil { | TestAccessRulesFromTheSignedStatus
-peer-rule-older | policy.go | 	if old := r.held; old != nil && (h.policy.Number < old.policy.Number || h.policy.Number == old.policy.Number && !h.at.After(old.at)) { | 	if old := r.held; false && old != nil { | TestAccessRulesFromTheSignedStatus
+peer-rule-unsigned | policy.go | 	_, err = v.verify(iss, nil, "", now) | 	_, err = v.verify(iss, nil, "", now); err = nil | TestAccessRulesFromTheSignedStatus
+peer-rule-older | policy.go | 	if old := r.held; old != nil && old.root.Equal(h.root) && (h.policy.Number < old.policy.Number || h.policy.Number == old.policy.Number && !h.at.After(old.at)) { | 	if old := r.held; false && old != nil { | TestAccessRulesFromTheSignedStatus
 peer-rule-no-expiry | policy.go | 	case !now.Before(pol.until): | 	case false: | TestAccessRulesFromTheSignedStatus
 rule-kind-confusion | policy.go | 		return slices.Contains(c.Groups, n) | 		return slices.Contains(c.Groups, n) || c.Name == n | TestSvcAccessModelBindingsPolicy
 rule-any-service | policy.go | 		return (r.Service == service || r.Service == AnyService) && matches(r.Who, client) && matches(r.Where, self) | 		return matches(r.Who, client) && matches(r.Where, self) | TestSvcAccessModelBindingsPolicy
@@ -69,3 +69,10 @@ rule-any-place | policy.go | 		return (r.Service == service || r.Service == AnyS
 approver-any-service | policy.go | 		return a.Where == where && a.Service == service && slices.Contains(a.People, person) | 		return a.Where == where && slices.Contains(a.People, person) | TestSvcAccessModelBindingsPolicy
 client-no-grant | grant.go | 		g := m.grantFor(cert.Leaf, service, where, time.Now()) | 		g := (*x509.Certificate)(nil); _ = where | TestGrantSessionAdmittedAndCut
 identity-audit-nowhere | identity.go | 	m.log = &orgaudit.Log{Dir: dir, Signer: m.current} | 	m.log = &orgaudit.Log{Dir: filepath.Join(dir, "elsewhere"), Signer: m.current} | TestIdentitySessionAudited
+# Rules end with their root (lane SECFIX, review S5; relay-server
+# spec/GroupMirror.tla RulesFollowRotation, mutant rules-survive-rotation
+# there): a rotated-out root's rules admit no one and do not outrank the
+# new root's by their number; a status only from an issuer in force.
+rules-survive-rotation | policy.go | 	case pol == nil || !pol.root.Equal(root): | 	case pol == nil: | TestAccessRulesEndAtRootRotation
+rules-old-root-number | policy.go | 	if old := r.held; old != nil && old.root.Equal(h.root) && (h.policy.Number < old.policy.Number || h.policy.Number == old.policy.Number && !h.at.After(old.at)) { | 	if old := r.held; old != nil && (h.policy.Number < old.policy.Number || h.policy.Number == old.policy.Number && !h.at.After(old.at)) { | TestAccessRulesEndAtRootRotation
+status-issuer-bare-signature | policy.go | 	_, err = v.verify(iss, nil, "", now) | 	err = iss.CheckSignatureFrom(root) | TestAccessRulesEndAtRootRotation
