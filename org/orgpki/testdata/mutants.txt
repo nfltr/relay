@@ -174,3 +174,6 @@ act-no-head | people.go | 	case i.heads[a.Head] < i.rosterLine || i.heads[a.Head
 act-head-any-line | people.go | 	case i.heads[a.Head] < i.rosterLine || i.heads[a.Head] == 0: | 	case i.heads[a.Head] == 0: | TestPeopleModelBindings
 roster-line-not-moved | issuer.go | 		i.rosterLine = i.heads[i.head] | 		_ = 0 | TestPeopleModelBindings
 roster-line-not-replayed | issuer.go | 			i.rosterLine = n + 1 | 			_ = n | TestPeopleModelBindings
+# OrgMove.tla OfferAny (spec/orgmove/restore-mutants.txt): a restore takes
+# the newest of the relay's CRL and the members' (lane SECFIX2, review S8).
+restore-older-crl | restore.go | 	for n, der := range append([][]byte{crlDER}, fleet...) { | 	for n, der := range [][]byte{crlDER} { | TestRestoreTakesTheFleetsNewerCRL

@@ -39,25 +39,36 @@ const RestoreQuiet = 2 * CRLEvery
 // issuer may still publish).
 var ErrNotQuiet = errors.New("the published CRL was signed less than 2 hours ago: an issuer may still publish (delete the old machine first; restore once no CRL was published for 2 hours)")
 
-// Restore commits the restored line from crl, the newest CRL the relay
-// holds for the organisation (orgenrol.PublishedRevocationList): it must
-// be signed by this issuer's key and RestoreQuiet old at now. Run before the fence
-// (nfltr org move send --restored); after it commit refuses it.
-func (i *Issuer) Restore(crlDER []byte, now time.Time) error {
-	crl, err := x509.ParseRevocationList(crlDER)
-	if err != nil {
-		return fmt.Errorf("the published CRL: %w", err)
-	}
+// Restore commits the restored line from the newest of crl, the CRL the
+// relay holds for the organisation (orgenrol.PublishedRevocationList),
+// and fleet, CRLs members hold (a member's crl.der): each must be signed
+// by this issuer's key, and the newest RestoreQuiet old at now and not
+// older than the copy's own. A relay that withholds the newest CRL from
+// the restore is outvoted by a member's (OrgMove.tla OfferAny,
+// IssuerNotBehindFleet, mutant restore-older-crl; lane SECFIX2, review
+// S8): the restored line keeps that CRL's revocations and resumes above
+// its Number, which the fleet then takes. Run before the fence (nfltr org
+// move send --restored); after it commit refuses it. LastCRL then names
+// the CRL taken.
+func (i *Issuer) Restore(crlDER []byte, now time.Time, fleet ...[]byte) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	if err := crl.CheckSignatureFrom(i.cert); err != nil {
-		return fmt.Errorf("the published CRL is not this issuer's (rotated or renewed to another key since the copy: not restorable): %w", err)
-	}
-	if crl.Number == nil || !crl.Number.IsInt64() || crl.Number.Sign() < 0 {
-		return errors.New("the published CRL has no Number")
+	var crl *x509.RevocationList
+	for n, der := range append([][]byte{crlDER}, fleet...) {
+		what := "the published CRL"
+		if n > 0 {
+			what = fmt.Sprintf("member CRL %d", n)
+		}
+		c, err := i.restorable(der, what)
+		if err != nil {
+			return err
+		}
+		if crl == nil || c.Number.Cmp(crl.Number) > 0 {
+			crl = c
+		}
 	}
 	if crl.Number.Int64() < i.crlNumber {
-		return fmt.Errorf("the relay holds CRL #%s, older than the copy's own #%d: not the newest the fleet holds; not restored", crl.Number, i.crlNumber)
+		return fmt.Errorf("the newest CRL given, #%s, is older than the copy's own #%d: not the newest the fleet holds; not restored", crl.Number, i.crlNumber)
 	}
 	if now.Sub(crl.ThisUpdate) < RestoreQuiet {
 		return fmt.Errorf("%w: CRL #%s signed at %s, restorable from %s", ErrNotQuiet, crl.Number, crl.ThisUpdate.UTC().Format(time.RFC3339), crl.ThisUpdate.Add(RestoreQuiet).UTC().Format(time.RFC3339))
@@ -67,6 +78,22 @@ func (i *Issuer) Restore(crlDER []byte, now time.Time) error {
 		sns = append(sns, hex.EncodeToString(e.SerialNumber.Bytes()))
 	}
 	return i.commit(Entry{Time: now, Act: ActRestored, Number: crl.Number.Int64(), NotAfter: crl.NextUpdate, Serials: sns})
+}
+
+// restorable parses der, a CRL this issuer's key signed with a Number.
+// Callers hold mu.
+func (i *Issuer) restorable(der []byte, what string) (*x509.RevocationList, error) {
+	crl, err := x509.ParseRevocationList(der)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", what, err)
+	}
+	if err := crl.CheckSignatureFrom(i.cert); err != nil {
+		return nil, fmt.Errorf("%s is not this issuer's (rotated or renewed to another key since the copy: not restorable): %w", what, err)
+	}
+	if crl.Number == nil || !crl.Number.IsInt64() || crl.Number.Sign() < 0 {
+		return nil, fmt.Errorf("%s has no Number", what)
+	}
+	return crl, nil
 }
 
 // applyRestored is apply's restored line.

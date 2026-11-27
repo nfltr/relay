@@ -14,6 +14,7 @@ import (
 	"crypto/hpke"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
@@ -194,20 +195,34 @@ func Send(configDir string, to ReceiveKey, now time.Time) ([]byte, error) {
 
 // Restore is a restore from a backup's first step, `nfltr org move send
 // --restored` on the copy restore-secrets set aside (spec/orgmove/OrgMove.tla
-// Revive): under the directory's lock the copy takes crl, the newest CRL
-// the relay holds (orgenrol.PublishedRevocationList; lapsed, this issuer's:
-// orgpki.Issuer.Restore). Send then signs the CRL above it and fences.
-func Restore(configDir string, crl []byte, now time.Time) error {
+// Revive): under the directory's lock the copy takes the newest of crl,
+// the CRL the relay holds (orgenrol.PublishedRevocationList), fleet,
+// members' CRLs the operator gives (a member's crl.der), and this
+// machine's own member CRL when it holds one of this issuer
+// (orgid.Dir(configDir)'s crl.der): a relay withholding the newest CRL
+// is outvoted (OrgMove.tla OfferAny; lane SECFIX2, review S8;
+// orgpki.Issuer.Restore). Send then signs the CRL above it and fences. It
+// returns the Number of the CRL taken.
+func Restore(configDir string, crl []byte, now time.Time, fleet ...[]byte) (int64, error) {
 	s, err := Lock(Dir(configDir))
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer s.Unlock()
 	iss, err := s.Open()
 	if err != nil {
-		return err
+		return 0, err
 	}
-	return iss.Restore(crl, now)
+	if own, err := os.ReadFile(filepath.Join(orgid.Dir(configDir), orgid.CRLFile)); err == nil { // #nosec G304 -- this machine's own member directory
+		if c, err := x509.ParseRevocationList(own); err == nil && c.CheckSignatureFrom(iss.Cert()) == nil {
+			fleet = append(fleet, own)
+		}
+	}
+	if err := iss.Restore(crl, now, fleet...); err != nil {
+		return 0, err
+	}
+	n, _ := iss.LastCRL()
+	return n, nil
 }
 
 // bundle is the tar of the bundle's members.
