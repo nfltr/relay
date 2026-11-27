@@ -230,6 +230,27 @@ func verifyJWT(jwt string, jwks []byte, aud string, now time.Time) (assertionCla
 	return cl, nil
 }
 
+// verifyOnce is verifyJWT with the app's replay check, the one the
+// organisation guide asks of an app beyond loopback: seen keeps the jti of
+// each assertion taken until its exp; a jti taken before is refused
+// (lane SECFIX2, review S17).
+func verifyOnce(seen map[string]int64, jwt string, jwks []byte, aud string, now time.Time) (assertionClaims, error) {
+	cl, err := verifyJWT(jwt, jwks, aud, now)
+	if err != nil {
+		return cl, err
+	}
+	for j, exp := range seen {
+		if now.Unix() >= exp {
+			delete(seen, j)
+		}
+	}
+	if _, ok := seen[cl.Jti]; ok || cl.Jti == "" {
+		return cl, fmt.Errorf("jti %q taken before: a replay", cl.Jti)
+	}
+	seen[cl.Jti] = cl.Exp
+	return cl, nil
+}
+
 var svcAccessBindings = map[string]func(*testing.T){
 	// The app gets the admitted certificate's name, person and groups and
 	// the session's service, whatever identity headers the client sent, on
@@ -322,11 +343,24 @@ var svcAccessBindings = map[string]func(*testing.T){
 		if _, err := verifyJWT(pg, jwks, "pg", time.Now().Add(AssertionLife+time.Second)); err == nil {
 			t.Error("an assertion was good past its exp")
 		}
+		// Each request's assertion has a jti of its own: an app that keeps
+		// them takes the next request's and refuses a replay of the first
+		// within its life (mutant jti-fixed).
+		seen := map[string]int64{}
+		if _, err := verifyOnce(seen, pg, jwks, "pg", time.Now()); err != nil {
+			t.Fatalf("the first assertion: %v", err)
+		}
+		if _, err := verifyOnce(seen, jwtOf("pg"), jwks, "pg", time.Now()); err != nil {
+			t.Errorf("the next request's assertion: %v", err)
+		}
+		if _, err := verifyOnce(seen, pg, jwks, "pg", time.Now()); err == nil {
+			t.Error("a replayed assertion was taken again within its life")
+		}
 	},
 }
 
 func equalClaims(a, b assertionClaims) bool {
-	return slices.Equal(a.Groups, b.Groups) && a.Iss == b.Iss && a.Sub == b.Sub && a.Aud == b.Aud && a.Machine == b.Machine && a.Person == b.Person && a.Iat == b.Iat && a.Exp == b.Exp
+	return a.Jti != "" && slices.Equal(a.Groups, b.Groups) && a.Iss == b.Iss && a.Sub == b.Sub && a.Aud == b.Aud && a.Machine == b.Machine && a.Person == b.Person && a.Iat == b.Iat && a.Exp == b.Exp
 }
 
 // keepAliveApp is a target that answers every request of a connection
