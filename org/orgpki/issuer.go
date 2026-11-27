@@ -726,7 +726,7 @@ func (i *Issuer) Renew(req RenewRequest, now time.Time) ([]byte, error) {
 	}
 	refusal.Name = rec.name
 	n := i.names[rec.name]
-	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn && !i.askedAgain(n, sn, req.CSR, now)) {
+	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || !i.newestKey(n, rec) && !i.askedAgain(n, sn, req.CSR, now)) {
 		i.traceRefused(sn, cur, "expired", now)
 		return nil, i.refuse(refusal, fmt.Sprintf("the certificate expired at %s, more than %s ago or superseded by a newer one; the organisation's owner reissues the name (nfltr org token --rebind %s --machine-id %s), then nfltr org join on the machine", rec.notAfter.UTC().Format(time.RFC3339), RenewGrace, rec.name, n.machineID))
 	}
@@ -784,6 +784,17 @@ func (i *Issuer) askedAgain(n *nameRec, sn string, csr []byte, now time.Time) bo
 	}
 	cr, err := parseCSR(csr)
 	return err == nil && orgid.KeyFingerprint(cr.PublicKey) == newest.key
+}
+
+// newestKey reports whether rec's key is the key of its name's newest
+// serial: the newest itself, or a sibling the issuer answered the same
+// request with twice (a backlog of the request and its retry, after an
+// outage), which the machine took (Enrol.tla NewestKey, mutant
+// grace-newest-serial; lane ORGRENEW). A revoked or rebound name is refused
+// after this check. Callers hold mu.
+func (i *Issuer) newestKey(n *nameRec, rec *certRec) bool {
+	newest := i.certs[n.serials[len(n.serials)-1]]
+	return newest != nil && newest.key == rec.key
 }
 
 // moveName moves name to the relay machine id its key asked for (Enrol.tla

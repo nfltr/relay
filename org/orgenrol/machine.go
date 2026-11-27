@@ -428,6 +428,10 @@ func (k Keeper) Run(ctx context.Context) {
 		case errors.Is(err, ErrExpired):
 			k.Logger.Error("org: this machine was off for more than "+graceDays+"; on the issuer's machine: nfltr org token --rebind "+cur.Subject.CommonName+" --machine-id "+orgid.MachineID(cur)+", then nfltr org join here", "not_after", cur.NotAfter.UTC())
 			retry = k.FollowEvery
+		case errors.Is(err, ErrIssuerRefused):
+			// The issuer answered: no to this certificate (revoked, rebound,
+			// or past the grace), not an outage; its reason names the fix.
+			k.Logger.Error("org: the organisation issuer refused this machine's renewal; asking again (the refusal names the fix)", "error", err, "not_after", cur.NotAfter.UTC(), "retry_in", retry)
 		case !k.Now().Before(cur.NotAfter):
 			k.Logger.Warn("org: the organisation issuer does not answer yet; asking again (nothing to do: organisation sessions wait until it answers)", "error", err, "not_after", cur.NotAfter.UTC(), "renews_until", cur.NotAfter.Add(orgpki.RenewGrace).UTC(), "retry_in", retry)
 		default:

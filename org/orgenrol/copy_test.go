@@ -14,6 +14,9 @@ import (
 
 var errMailboxDown = errors.New("mailbox: 502 bad gateway")
 
+// errDeaf: the relay refuses the reader's credential (relay.deaf).
+var errDeaf = errors.New("mailbox: 403 invalid credential")
+
 // copyRelay is the test relay with its copy of each organisation's CRL
 // (relay-server /api/v1/org-crl/<org id>): the issuer puts it
 // (CRLCopyWriter), members read it (CRLCopy). A fleet without it has the

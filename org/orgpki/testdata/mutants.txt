@@ -10,10 +10,11 @@
 # session-level mutants no-expiry-timer and no-cut-on-update (the
 # verifier's callers, orgmachine).
 no-name-constraint | profile.go | 		PermittedDNSDomainsCritical: true, PermittedDNSDomains: []string{orgid.Domain(orgID)}, |  | TestForgedNameRefused
-renew-expired | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn && !i.askedAgain(n, sn, req.CSR, now)) { | 	if false { | TestExpiredRefused
-renew-past-grace | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn && !i.askedAgain(n, sn, req.CSR, now)) { | 	if !now.Before(rec.notAfter) && n.serials[len(n.serials)-1] != sn && !i.askedAgain(n, sn, req.CSR, now) { | TestExpiredRefused
-grace-any-serial | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn && !i.askedAgain(n, sn, req.CSR, now)) { | 	if !now.Before(rec.notAfter.Add(RenewGrace)) { | TestRenewInTheGraceOnlyTheNewest
-no-renew-after-expiry | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn && !i.askedAgain(n, sn, req.CSR, now)) { | 	if !now.Before(rec.notAfter) { | TestRenewInTheGraceOnlyTheNewest
+renew-expired | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || !i.newestKey(n, rec) && !i.askedAgain(n, sn, req.CSR, now)) { | 	if false { | TestExpiredRefused
+renew-past-grace | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || !i.newestKey(n, rec) && !i.askedAgain(n, sn, req.CSR, now)) { | 	if !now.Before(rec.notAfter) && !i.newestKey(n, rec) && !i.askedAgain(n, sn, req.CSR, now) { | TestExpiredRefused
+grace-any-serial | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || !i.newestKey(n, rec) && !i.askedAgain(n, sn, req.CSR, now)) { | 	if !now.Before(rec.notAfter.Add(RenewGrace)) { | TestRenewInTheGraceOnlyTheNewest
+grace-newest-serial | issuer.go | 	return newest != nil && newest.key == rec.key | 	return newest != nil && newest == rec | TestRenewTheBacklogsSiblingAfterTheNotAfter
+no-renew-after-expiry | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || !i.newestKey(n, rec) && !i.askedAgain(n, sn, req.CSR, now)) { | 	if !now.Before(rec.notAfter) { | TestRenewInTheGraceOnlyTheNewest
 no-repeat | issuer.go | 	return err == nil && orgid.KeyFingerprint(cr.PublicKey) == newest.key | 	return err == nil && cr == nil | TestRenewAskedAgainAfterTheNotAfter
 repeat-any-key | issuer.go | 	return err == nil && orgid.KeyFingerprint(cr.PublicKey) == newest.key | 	return err == nil && cr != nil | TestRenewAskedAgainAfterTheNotAfter
 revoke-current-only | issuer.go | 			sns = n.serials | 			sns = n.serials[len(n.serials)-1:] | TestRevokedRefused

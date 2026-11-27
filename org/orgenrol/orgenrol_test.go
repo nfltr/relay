@@ -55,6 +55,9 @@ type relay struct {
 	from string
 	// late delays a pull's delivery from the mailboxes it names.
 	late func(mailbox string) time.Duration
+	// deaf refuses every pull from the mailboxes it names (the issuer's
+	// expired relay certificate: 403 on every read, appends still taken).
+	deaf func(mailbox string) bool
 	// down: the mailbox service is down (every append, pull and ack
 	// fails); the relay's CRL copy (copies: copyRelay) still serves.
 	down   bool
@@ -109,6 +112,10 @@ func (r *relay) Pull(ctx context.Context, box string, after uint64, _ int, wait 
 		if r.down {
 			r.mu.Unlock()
 			return nil, "", errMailboxDown
+		}
+		if r.deaf != nil && r.deaf(box) {
+			r.mu.Unlock()
+			return nil, "", errDeaf
 		}
 		var out []mailboxclient.Envelope
 		if !(r.withhold != nil && r.withhold(box) && after > 0) {
@@ -443,6 +450,48 @@ func TestRenewAsksAgainAfterALoss(t *testing.T) {
 // Repeat, mutants new-key-per-retry, no-repeat; lane CANARYCERT: the
 // v2.1.80 canary's machines were refused for good, "superseded by a newer
 // one").
+// The issuer cannot read its requests (2026-11-21T18:46Z to
+// 2026-11-22T17:12Z: its relay certificate expired, every pull refused)
+// while the machines keep asking, for longer than the renewal window and
+// the certificate's life; back, it answers the whole backlog. The machine
+// renews, and renews again past that certificate's NotAfter though a
+// retry's answer is the name's newest serial (the metrics sidecar and the
+// VM's access agent, stranded so on v2.1.79; lane ORGRENEW 2026-11-27;
+// mutants new-key-per-retry, grace-newest-serial).
+func TestRenewAfterADeafIssuerAnswersTheBacklog(t *testing.T) {
+	f := newFleetWith(t, func(f *fleet) { f.copy = true })
+	before := serial(f.m)
+	var asked atomic.Int32
+	f.relay.mu.Lock()
+	f.relay.deaf = func(box string) bool { return box == orgpki.EnrolMailbox(f.org.id) }
+	f.relay.fail = func(box string) error {
+		if box == orgpki.EnrolMailbox(f.org.id) {
+			asked.Add(1)
+		}
+		return nil
+	}
+	f.relay.mu.Unlock()
+	f.clk.Add(orgpki.MachineLife + time.Hour) // the outage outlasts the certificate
+	k := f.keeper()
+	k.AnswerWait = 50 * time.Millisecond
+	keep(t, f.ctx, k)
+	eventually(t, "the keeper asks again and again while the issuer is deaf", func() bool { return asked.Load() > 3 })
+	f.relay.mu.Lock()
+	f.relay.deaf = nil
+	f.relay.mu.Unlock()
+	eventually(t, "renewed once the issuer reads again", func() bool { return serial(f.m) != before })
+	if cur, _ := f.m.Current(); !cur.NotAfter.After(f.clk.Now()) {
+		t.Fatalf("the renewed certificate ends %s, before now %s", cur.NotAfter, f.clk.Now())
+	}
+	// The backlog's answers to the same key are several serials; the one
+	// the machine holds need not be the newest. Past its NotAfter it still
+	// renews (Enrol.tla NewestKey, mutant grace-newest-serial).
+	again := serial(f.m)
+	cur, _ := f.m.Current()
+	f.clk.Add(cur.NotAfter.Add(time.Hour).Sub(f.clk.Now()))
+	eventually(t, "renewed past the NotAfter of the serial it holds", func() bool { return serial(f.m) != again })
+}
+
 func TestRenewAfterAnAnswerNotTakenPastExpiry(t *testing.T) {
 	f := newFleet(t)
 	var dropped atomic.Bool
@@ -884,6 +933,24 @@ func TestFollowCRLWarnsOfAStaleCRL(t *testing.T) {
 	}()
 	defer func() { cancel(); <-done }()
 	eventually(t, "the stale CRL warning", func() bool { return strings.Contains(logs.String(), "nfltr org serve") })
+}
+
+// A renewal the issuer refuses is logged as a refusal with the issuer's
+// reason, never as an issuer that does not answer (canary-linux and the
+// metrics sidecar logged "does not answer yet ... nothing to do" for days
+// while the issuer refused them; lane ORGRENEW 2026-11-27).
+func TestKeeperLogsARefusalAsARefusal(t *testing.T) {
+	f := newFleet(t)
+	f.org.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) { check(t, iss.Revoke("web-1", f.clk.Now())) })
+	f.clk.Add(17 * time.Hour)
+	var logs syncBuf
+	k := f.keeper()
+	k.Logger = slog.New(slog.NewTextHandler(&logs, nil))
+	keep(t, f.ctx, k)
+	eventually(t, "the refusal logged", func() bool { return strings.Contains(logs.String(), "refused this machine's renewal") })
+	if out := logs.String(); strings.Contains(out, "does not answer") || !strings.Contains(out, "revoked") {
+		t.Fatalf("a refusal logged as an outage, or without the issuer's reason:\n%s", out)
+	}
 }
 
 // syncBuf is a bytes.Buffer a logger writes while the test reads it.

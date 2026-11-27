@@ -290,6 +290,44 @@ func TestRenewAskedAgainAfterTheNotAfter(t *testing.T) {
 	refused(t, "asked again RenewGrace after the NotAfter", err)
 }
 
+// Enrol.tla NewestKey (mutant grace-newest-serial; lane ORGRENEW): after
+// an outage the issuer answers a request and its retry for the same key
+// at once, two serials; the machine takes the first. Past its NotAfter
+// that sibling renews (its key is the newest serial's), where the issuer
+// before refused it as superseded and stranded the machine; a revoked
+// name's sibling is still refused.
+func TestRenewTheBacklogsSiblingAfterTheNotAfter(t *testing.T) {
+	for _, revoke := range []bool{false, true} {
+		o := newOrg(t)
+		web, k := o.enrol(t, "web-1", "web")
+		pending := newKey(t)
+		at := web.NotAfter.Add(-time.Hour)
+		held, err := o.iss.Renew(NewRenewRequest(web.Raw, k, csr(t, pending, "web-1")), at)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := o.iss.Renew(NewRenewRequest(web.Raw, k, csr(t, pending, "web-1")), at); err != nil {
+			t.Fatal(err) // the retry's answer, the name's newest serial
+		}
+		sib, err := x509.ParseCertificate(held)
+		if err != nil {
+			t.Fatal(err)
+		}
+		late := sib.NotAfter.Add(time.Hour)
+		if revoke {
+			if err := o.iss.Revoke("web-1", late); err != nil {
+				t.Fatal(err)
+			}
+		}
+		_, err = o.iss.Renew(NewRenewRequest(held, pending, csr(t, newKey(t), "web-1")), late)
+		if revoke {
+			refused(t, "a revoked name's sibling", err)
+		} else if err != nil {
+			t.Fatalf("the backlog's sibling, an hour past its NotAfter: %v", err)
+		}
+	}
+}
+
 // Members refuse a CRL whose issuer certificate expired (orgid.Verifier.
 // TakeCRL), so the issuer signs none past its NotAfter (ErrIssuerExpired)
 // and commits nothing; the renewal makes the CRL due at once, as does a
