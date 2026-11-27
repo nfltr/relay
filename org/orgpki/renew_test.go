@@ -217,7 +217,7 @@ func TestReadPinsReplaysSignInRules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	inv, err := SignPeople(PeopleAct{OrgID: o.iss.OrgID(), Act: PeopleInvite, Person: "ana@example.com", Role: RoleMember, InviteKey: key}, o.root, nil, t0)
+	inv, err := SignPeople(PeopleAct{OrgID: o.iss.OrgID(), Head: o.iss.Head(), Act: PeopleInvite, Person: "ana@example.com", Role: RoleMember, InviteKey: key}, o.root, nil, t0)
 	if err != nil {
 		t.Fatal(err)
 	}

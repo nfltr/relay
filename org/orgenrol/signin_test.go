@@ -146,7 +146,9 @@ func TestSendPeopleAnswersTheRemoval(t *testing.T) {
 	invite := f.invite(t, "alice@example.com", orgpki.RoleMember)
 	_, err = JoinSignIn(f.ctx, f.relay, filepath.Join(t.TempDir(), "device"), f.org.pins, f.org.id, "people", idp.Token(idp.Claims("nfltr", nonce)), invite, ko, kr.Public(), hang, f.clk.Now)
 	check(t, err)
-	remove, err := orgpki.SignPeople(orgpki.PeopleAct{OrgID: f.org.id, Act: orgpki.PeopleRemove, Person: "alice@example.com"}, f.org.rootKey, nil, f.clk.Now())
+	var head string // the signer reads it from the status (PeopleAct.Head)
+	f.org.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) { head = iss.Head() })
+	remove, err := orgpki.SignPeople(orgpki.PeopleAct{OrgID: f.org.id, Head: head, Act: orgpki.PeopleRemove, Person: "alice@example.com"}, f.org.rootKey, nil, f.clk.Now())
 	check(t, err)
 	r, err := SendPeople(f.ctx, f.relay, f.org.id, remove, hang)
 	if err != nil || r.Person != "alice@example.com" || len(r.Filed) != 1 || r.Filed[0].Name != "nfltr-1" {
