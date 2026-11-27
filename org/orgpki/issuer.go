@@ -557,6 +557,36 @@ func NewEnrolRequestFor(token string, csr []byte, machineID string) (EnrolReques
 	return r, nil
 }
 
+// answerMAC is the token's MAC over an enrolment answer's certificate
+// and issuer certificate (each DER, so the concatenation is unambiguous).
+func answerMAC(secret, cert, issuer []byte) []byte {
+	return mac(secret, "nfltr-org-answer-v1\x00"+string(cert)+string(issuer))
+}
+
+// AnswerMAC is the issuer's side: Answer.TokenMAC of an enrolment under
+// token id tokenID answered with cert and issuer.
+func (i *Issuer) AnswerMAC(tokenID string, cert, issuer []byte) []byte {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return answerMAC(i.tokenSecret(tokenID), cert, issuer)
+}
+
+// CheckAnswerMAC is the machine's side: an error unless tokenMAC is
+// token's MAC over cert and issuer (AnswerMAC). Only the issuer and the
+// token's holder can make it: an answer the relay forged under a root
+// whose keys it holds (one superseded after the token was made) is
+// refused (Join.tla JoinedByIssuer).
+func CheckAnswerMAC(token string, cert, issuer, tokenMAC []byte) error {
+	_, _, secret, _, err := parseToken(token)
+	if err != nil {
+		return err
+	}
+	if !hmac.Equal(tokenMAC, answerMAC(secret, cert, issuer)) {
+		return errors.New("the answer is not under the token's MAC: not the issuer's")
+	}
+	return nil
+}
+
 // NewRenewRequest is the machine's side of a renewal: csr for its new key,
 // signed with its current key.
 func NewRenewRequest(cert []byte, current ed25519.PrivateKey, csr []byte) RenewRequest {

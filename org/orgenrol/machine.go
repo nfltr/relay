@@ -173,6 +173,10 @@ func Join(ctx context.Context, mb Mailbox, dir string, pins Pins, token string, 
 		}
 		return Joined{}, err
 	}
+	if err := orgpki.CheckAnswerMAC(token, a.Cert, a.Issuer, a.TokenMAC); err != nil { // Join.tla JoinedByIssuer
+		traceJoinEnd(orgID, dir, er.TokenID, "failed", a)
+		return Joined{}, fmt.Errorf("the answer: %w", err)
+	}
 	if err := orgmachine.Checked(ver, a.Cert, a.Issuer, a.HostCert, key, "", now()); err != nil {
 		traceJoinEnd(orgID, dir, er.TokenID, "failed", a)
 		return Joined{}, fmt.Errorf("the answer: %w", err)
@@ -557,9 +561,16 @@ func (k Keeper) takeMachineKey(sk orgpki.SealedKey, rr orgpki.RenewRequest, a or
 func JoinSignIn(ctx context.Context, mb Mailbox, dir string, pins Pins, orgID, rule, idToken, invite string, key ed25519.PrivateKey, relayKey crypto.PublicKey, wait time.Duration, now func() time.Time) (*x509.Certificate, error) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	ver, _, rm, cm, err := trust(ctx, mb, orgID, pins, time.Time{}, wait, now) // a sign-in names no root: the pins only (lane SECFIX, review S9 residual)
+	ver, root, rm, cm, err := trust(ctx, mb, orgID, pins, time.Time{}, wait, now)
 	if err != nil {
 		return nil, err
+	}
+	// A sign-in names no token, so no root NotBefore: it is held to the
+	// pinned root, a rotation since refused, an older root too (Join.tla
+	// SignIn, mutant signin-any-recovery; lane SECFIX2, review S9). A
+	// sign-in link made after a rotation pins the new root.
+	if orgid.Fingerprint(root) != pins.Root {
+		return nil, fmt.Errorf("the organisation's root (of %s) is not the pinned one: a sign-in takes only the root its link names (sign in again with a link made since the rotation)", root.NotBefore.UTC().Format(time.RFC3339))
 	}
 	csr, err := csrOf(key)
 	if err != nil {

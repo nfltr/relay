@@ -64,10 +64,15 @@ type Request struct {
 // (SealMachineKey; OpenMachineKey on the machine). Every certificate comes
 // with its SSH host certificate (HostCert; CheckHostCert on the machine).
 type Answer struct {
-	ID         string     `json:"id"`
-	Cert       []byte     `json:"cert,omitempty"`
-	Issuer     []byte     `json:"issuer,omitempty"`
-	HostCert   []byte     `json:"host_cert,omitempty"` // SSH wire form (Issuer.HostCert)
+	ID       string `json:"id"`
+	Cert     []byte `json:"cert,omitempty"`
+	Issuer   []byte `json:"issuer,omitempty"`
+	HostCert []byte `json:"host_cert,omitempty"` // SSH wire form (Issuer.HostCert)
+	// TokenMAC is an enrolment answer's MAC under its token (AnswerMAC):
+	// the join takes no answer the relay made, under a root it holds the
+	// keys of (spec/enrol/Join.tla InstallForged, mutant answer-unmacd;
+	// lane SECFIX2, review S9).
+	TokenMAC   []byte     `json:"token_mac,omitempty"`
 	MachineKey *SealedKey `json:"machine_key,omitempty"`
 	Refused    string     `json:"refused,omitempty"`
 	// SignInEnded: the refusal is ErrSignInEnded (the device signs in again).
