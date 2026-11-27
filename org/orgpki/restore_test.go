@@ -241,6 +241,50 @@ func TestRestoreAdoptsNothingElse(t *testing.T) {
 	}
 }
 
+// IssuerNotBehindFleet (OrgMove.tla OfferAny, mutant restore-older-crl;
+// lane SECFIX2, review S8): the relay offers the restore an older CRL
+// than a member holds; the restore takes the member's, so a revocation
+// after the copy stays listed and the restored issuer's next CRL is one
+// the fleet takes. A member CRL of another issuer is refused.
+func TestRestoreTakesTheFleetsNewerCRL(t *testing.T) {
+	o := newOrg(t)
+	cert, key := o.enrol(t, "web-1", "web")
+	l := backup(o)
+	older := o.published(t, t0) // #1: what the relay hands the restore
+	if err := o.iss.Revoke("web-1", t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	member := o.published(t, t0.Add(time.Hour)) // #2: the fleet took it
+	at := t0.Add(4 * time.Hour)
+	lines := append([][]byte(nil), l.copy...)
+	n, err := Open(lines, l.o.iss.key, func([]byte) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Restore(older, at, newOrg(t).published(t, t0)); err == nil || !strings.Contains(err.Error(), "member CRL 1 is not this issuer's") {
+		t.Fatalf("a member CRL of another issuer: %v", err)
+	}
+	if err := n.Restore(older, at, member); err != nil {
+		t.Fatal(err)
+	}
+	if num, _ := n.LastCRL(); num != 2 {
+		t.Fatalf("restored at CRL #%d: below the fleet's #2", num)
+	}
+	der, err := n.CRL(at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := o.ver.TakeCRL(der, n.Cert(), at); err != nil {
+		t.Fatalf("the fleet refuses the restored issuer's CRL: %v", err)
+	}
+	if _, err := o.ver.Check(cert, n.Cert(), orgid.Peer{}, at); err == nil {
+		t.Fatal("a machine revoked after the copy is admitted under the restored issuer")
+	}
+	if _, err := n.Renew(NewRenewRequest(cert.Raw, key, csr(t, newKey(t), "web-1")), at); !errors.Is(err, ErrRefused) {
+		t.Fatalf("a machine revoked after the copy renews: %v", err)
+	}
+}
+
 // Restore refuses a CRL signed less than RestoreQuiet ago (an issuer may
 // still publish; a restore no longer waits for its day-long lapse), one
 // older than the copy's own (not the newest), another issuer's, and a

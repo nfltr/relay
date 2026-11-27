@@ -85,7 +85,8 @@ func TestRestoreFromABackupBehindThePublishedCRL(t *testing.T) {
 	clk.Add(2 * time.Hour)
 	der, err := PublishedRevocationList(t.Context(), r, root, clk.Now())
 	check(t, err)
-	check(t, orgissuer.Restore(backup, der, clk.Now()))
+	_, err = orgissuer.Restore(backup, der, clk.Now())
+	check(t, err)
 	stopNew := serve(t.Context(), moveTo(t, r, o.id, filepath.Join(backup, "org"), o.pins.Root, clk.Now()))
 	t.Cleanup(stopNew)
 
