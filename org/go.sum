@@ -30,8 +30,8 @@ github.com/nfltr/link/peerlink/quiclink v0.10.0 h1:t+zzECXWq7MCDKfhsqAUkAJfMALGo
 github.com/nfltr/link/peerlink/quiclink v0.10.0/go.mod h1:nYeG5qigy1Mf+/7ogVNtMHcWnbzh7hoK1ZBRvlcirtw=
 github.com/nfltr/quic-go v0.63.1-nfltr.11 h1:ODa52zros4c+8jP1Dvo55lii78lspVV2XUaoEyQMK7E=
 github.com/nfltr/quic-go v0.63.1-nfltr.11/go.mod h1:aCcZDnvYqlhb79qzzyvg5+pkAVu3JCsGDEKOoYKqnTk=
-github.com/nfltr/relay/client v0.27.1 h1:EhfAEZteMknVpUmTJ6JQXMUwro8v4qzTY0vQ6iV7kyU=
-github.com/nfltr/relay/client v0.27.1/go.mod h1:78a+AUR6JhttmIqNXN2LHRmcg4rTsG+U33EeIXncM/I=
+github.com/nfltr/relay/client v0.28.0 h1:LYSwULWazRGs9HWWHRPuQpQX5E8ljzcBaDB/X5PPR1k=
+github.com/nfltr/relay/client v0.28.0/go.mod h1:My1efuk7y7Fn4cDc2vTiIx7XWvSQuFeJvj5J92vn5bM=
 github.com/nfltr/relay/proto v0.23.0 h1:c2Mus8UcI+POh9BaMwPTuw2/DNZVUFdclfBghC+zM1E=
 github.com/nfltr/relay/proto v0.23.0/go.mod h1:ItMoabr8sEfvIQTDdNo0b+42i+OuHs7eaOQ1n50rxiA=
 github.com/stripe/krl v0.0.0-20250403164848-fcf8101b2f53 h1:+t8tvRqwYsJyN2t9/ZA0D96X9RfN/iFA+uSMX0mOdsA=
