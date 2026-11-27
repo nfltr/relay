@@ -152,8 +152,9 @@ const badGateway = "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nCont
 // and body framing go on as the client sent them, over a connection of the session's own. Responses are
 // copied back as bytes. The client's end of input half-closes the backend
 // connection, whose remaining responses still reach the client; a session
-// ends when the backend closes. An upgrade (WebSocket) or CONNECT turns the
-// rest of the session into a byte copy.
+// ends when the backend closes. The backend's 101 to an upgrade (WebSocket) or
+// 2xx to a CONNECT turns the rest of the session into a byte copy
+// (switchWatch); after any other answer the next request is read as one.
 //
 // A session whose first request is also its last (Connection: close, no
 // body) goes over the shared pool of backend connections instead
@@ -183,9 +184,11 @@ func serveE2EEStream(client net.Conn, addr, host string, visitor netip.Addr, log
 	defer func() { _ = backend.Close() }()
 
 	responses := make(chan struct{})
+	sw := newSwitchWatch()
 	go func() {
 		defer close(responses)
-		_ = copyPooled(client, backend)
+		_ = copyPooled(watchedWriter{Writer: client, w: sw}, backend)
+		sw.end()
 		// The backend is done: so is the session. Closing the client also
 		// ends a request read still waiting on it.
 		_ = client.Close()
@@ -193,14 +196,16 @@ func serveE2EEStream(client net.Conn, addr, host string, visitor netip.Addr, log
 
 	bw := bufio.NewWriter(backend)
 	for ; err == nil; req, err = http.ReadRequest(br) {
+		ch := sw.expect(req)
 		if writeStreamRequest(bw, req, host, visitor) != nil {
 			break
 		}
-		if req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" {
+		if sw.switched(ch) { // the backend's 101 (or 2xx to CONNECT), not the client's ask
 			_, _ = io.Copy(backend, br)
 			break
 		}
 	} // err: the client's end of input, or a request the backend could not take either
+	sw.requestsEnd()
 	if tc, ok := backend.(*net.TCPConn); ok {
 		_ = tc.CloseWrite()
 	}

@@ -79,11 +79,21 @@ round-done-only | direct_round.go | 	if s.nc.closed.Load() { | 	if false { | Tes
 # queries 5-6, mutants header-from-client and jwt-no-aud there): the
 # client's identity headers deleted (every spelling), the assertion's
 # audience the session's service, the PROXY v2 header sent.
-header-from-client | org_identity.go | 		if strings.HasPrefix(n, "nfltr-") || strings.HasPrefix(n, "x-nfltr-") { | 		if false && strings.HasPrefix(n, "nfltr-") { | TestSvcAccessModelBindings
-header-underscore | org_identity.go | 		n := strings.ReplaceAll(strings.ToLower(k), "_", "-") | 		n := strings.ToLower(k) | TestSvcAccessModelBindings
+header-from-client | org_identity.go | 	return strings.HasPrefix(n, "nfltr-") || strings.HasPrefix(n, "x-nfltr-") | 	return false && strings.HasPrefix(n, "nfltr-") | TestSvcAccessModelBindings
+header-underscore | org_identity.go | 	n := strings.ReplaceAll(strings.ToLower(name), "_", "-") | 	n := strings.ToLower(name) | TestSvcAccessModelBindings
 jwt-no-aud | org_identity.go | 	body, err := json.Marshal(assertionClaims{Iss: a.iss, Sub: sub, Aud: c.service, Machine: c.machine, Person: c.person, | 	body, err := json.Marshal(assertionClaims{Iss: a.iss, Sub: sub, Aud: "pg", Machine: c.machine, Person: c.person, | TestSvcAccessModelBindings
 proxy-no-header | org_identity.go | 		_, err := target.Write(proxyV2Header(c)) | 		_, err := 0, error(nil) | TestSvcAccessModelBindings
 identity-off | org.go | 	if p.ident != IdentityOff { // IdentityOff reads nothing of the caller | 	if false { | TestSvcAccessModelBindings
+# Every request of a session is rewritten until the app switches protocol
+# (http_switch.go; svc_access.pv README, lane SECFIX, review S2, S17): a
+# raw copy only after the app's 101 or 2xx to CONNECT, on the identity
+# path and the E2EE stream path; no identity trailer or Connection token;
+# switched bytes go on as they come.
+switch-unanswered | http_switch.go | 	if ch == nil { | 	if true { return ch != nil }; if ch == nil { | TestSvcAccessModelBindings
+stream-switch-unanswered | e2ee_session.go | 		if sw.switched(ch) { // the backend's 101 (or 2xx to CONNECT), not the client's ask | 		if ch != nil { | TestE2EEStreamRefusedUpgrade
+trailer-from-client | org_identity.go | 		dropIdentity(b.req.Trailer) | 		_ = b.req.Trailer | TestSvcAccessModelBindings
+connection-token | org_identity.go | 				if tok = strings.TrimSpace(tok); tok != "" && !isIdentity(tok) { | 				if tok = strings.TrimSpace(tok); tok != "" { | TestSvcAccessModelBindings
+switched-buffered | org_identity.go | 			_, err := io.Copy(out, br) // each read as it comes: a frame waits for no other | 			_, err := io.Copy(w, br); _ = w.Flush() | TestIdentityHTTPUpgrade
 # The session audit (OrgAuditor; nfltr docs/decisions/service-access-2026-11-25.md "SA5").
 audit-no-bytes | org.go | 		e.In, e.Out = tc.Bytes() | 		_ = tc | TestOrgSessionAudited
 audit-no-revoke-reason | org.go | 				cut(orgaudit.ReasonRevoked) | 				cut(orgaudit.ReasonExpiry) | TestOrgSessionAudited

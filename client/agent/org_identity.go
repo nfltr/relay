@@ -116,35 +116,46 @@ func withIdentity(mode Identity, tc *tlsend.Conn, target net.Conn, o Org, c call
 		}
 		a := assertion{o: o, iss: leaf.Subject.CommonName} // a renewal keeps the name
 		pr, pw := io.Pipe()
+		sw := newSwitchWatch()
 		go func() {
-			_ = pw.CloseWithError(rewriteRequests(bufio.NewReader(tc), bufio.NewWriter(pw), func(h http.Header) error {
+			_ = pw.CloseWithError(rewriteRequests(bufio.NewReader(tc), pw, sw, func(h http.Header) error {
 				return setIdentity(h, c, a, time.Now())
 			}))
 		}()
-		return &identityConn{Conn: tc, r: pr}, nil
+		return &identityConn{Conn: tc, r: pr, sw: sw}, nil
 	}
 	return tc, nil
 }
 
 // identityConn is the session's TLS conn whose reads are its requests as
-// rewriteRequests passed them on; Close also ends that goroutine.
+// rewriteRequests passed them on and whose writes (the app's responses)
+// sw sees; Close also ends those goroutines.
 type identityConn struct {
 	*tlsend.Conn
-	r *io.PipeReader
+	r  *io.PipeReader
+	sw *switchWatch
 }
 
 func (c *identityConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
+func (c *identityConn) Write(p []byte) (int, error) {
+	return watchedWriter{Writer: c.Conn, w: c.sw}.Write(p)
+}
+
 func (c *identityConn) Close() error {
 	_ = c.r.Close()
+	c.sw.end()
 	return c.Conn.Close()
 }
 
-// rewriteRequests writes the HTTP/1 requests read from br to w, each
-// after set changed its header, as the stream path does
-// (writeStreamRequest); after an upgrade or CONNECT the rest goes on as
-// bytes. nil at the client's end between requests.
-func rewriteRequests(br *bufio.Reader, w *bufio.Writer, set func(http.Header) error) error {
+// rewriteRequests writes the HTTP/1 requests read from br to out, each
+// after set changed its header and with no identity trailer, as the
+// stream path does (writeStreamRequest); once the app switched protocols
+// (sw) the rest goes on as bytes. nil at the client's end between
+// requests.
+func rewriteRequests(br *bufio.Reader, out io.Writer, sw *switchWatch, set func(http.Header) error) error {
+	defer sw.requestsEnd()
+	w := bufio.NewWriter(out)
 	for {
 		req, err := http.ReadRequest(br)
 		if err == io.EOF {
@@ -156,27 +167,69 @@ func rewriteRequests(br *bufio.Reader, w *bufio.Writer, set func(http.Header) er
 		if err := set(req.Header); err != nil {
 			return err
 		}
+		dropIdentity(req.Trailer) // the Trailer line names none
+		if req.Body != http.NoBody {
+			req.Body = identityTrailers{req.Body, req}
+		}
+		ch := sw.expect(req)
 		if err := writeStreamRequest(w, req, "", netip.Addr{}); err != nil {
 			return err
 		}
-		if req.Method == http.MethodConnect || req.Header.Get("Upgrade") != "" {
-			_, err := io.Copy(w, br)
-			if err == nil {
-				err = w.Flush()
-			}
+		if sw.switched(ch) {
+			_, err := io.Copy(out, br) // each read as it comes: a frame waits for no other
 			return err
 		}
 	}
 }
 
-// setIdentity deletes every header of h whose name, underscores read as
-// dashes, starts with Nfltr- or X-Nfltr- (a CGI or nginx backend reads
-// Nfltr_Person as Nfltr-Person), then sets c's.
-func setIdentity(h http.Header, c caller, a assertion, now time.Time) error {
+// identityTrailers is a request's body that drops its identity trailers
+// once read: the client's trailers arrive at the body's end.
+type identityTrailers struct {
+	io.ReadCloser
+	req *http.Request
+}
+
+func (b identityTrailers) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	if err == io.EOF {
+		dropIdentity(b.req.Trailer)
+	}
+	return n, err
+}
+
+// isIdentity: name, underscores read as dashes, starts with Nfltr- or
+// X-Nfltr- (a CGI or nginx backend reads Nfltr_Person as Nfltr-Person).
+func isIdentity(name string) bool {
+	n := strings.ReplaceAll(strings.ToLower(name), "_", "-")
+	return strings.HasPrefix(n, "nfltr-") || strings.HasPrefix(n, "x-nfltr-")
+}
+
+// dropIdentity deletes every identity header of h.
+func dropIdentity(h http.Header) {
 	for k := range h {
-		n := strings.ReplaceAll(strings.ToLower(k), "_", "-")
-		if strings.HasPrefix(n, "nfltr-") || strings.HasPrefix(n, "x-nfltr-") {
+		if isIdentity(k) {
 			delete(h, k)
+		}
+	}
+}
+
+// setIdentity deletes every identity header of h and every Connection
+// token naming one (a hop would drop the agent's header it names), then
+// sets c's.
+func setIdentity(h http.Header, c caller, a assertion, now time.Time) error {
+	dropIdentity(h)
+	if v, ok := h["Connection"]; ok {
+		var keep []string
+		for _, f := range v {
+			for tok := range strings.SplitSeq(f, ",") {
+				if tok = strings.TrimSpace(tok); tok != "" && !isIdentity(tok) {
+					keep = append(keep, tok)
+				}
+			}
+		}
+		delete(h, "Connection")
+		if len(keep) > 0 {
+			h["Connection"] = []string{strings.Join(keep, ", ")}
 		}
 	}
 	jwt, err := a.sign(c, now)

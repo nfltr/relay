@@ -254,9 +254,40 @@ var svcAccessBindings = map[string]func(*testing.T){
 				}
 			}
 		}
+		// An upgrade the app refuses (it answers 200 and keeps the
+		// connection) leaves the session HTTP: the next request is
+		// rewritten too, and no trailer or Connection token names an
+		// identity header (the agent's would be dropped as hop-by-hop).
+		reqs := make(chan *http.Request, 4)
+		ur := newIDRig(t, IdentityHTTP, func(string) string { return keepAliveApp(t, reqs) })
+		tc := ur.open(t, "pg", ur.bob)
+		br := bufio.NewReader(tc)
+		up := hostile("/upgrade")
+		up.Header.Set("Upgrade", "x")
+		up.Header.Set("Connection", "Upgrade, Nfltr-Person")
+		next := hostile("/next")
+		next.Header.Set("Connection", "keep-alive, Nfltr-Person, X-Nfltr-Caller")
+		next.TransferEncoding, next.ContentLength = []string{"chunked"}, -1
+		next.Body = io.NopCloser(strings.NewReader("body"))
+		next.Trailer = http.Header{"Nfltr-Person": {"eve@acme.com"}, "X-Nfltr-Caller": {"eve"}}
+		for _, req := range []*http.Request{up, next} {
+			httpRoundTrip(t, tc, br, req)
+			got := <-reqs
+			if h := identityOf(got.Header); !maps.Equal(h, map[string]string{"nfltr-machine": "bob-mac", "nfltr-person": "bob@acme.com", "nfltr-groups": "db,dev", "nfltr-service": "pg"}) {
+				t.Errorf("%s after a refused upgrade: the app got %v", req.URL.Path, h)
+			}
+			if h := identityOf(got.Trailer); len(h) != 0 {
+				t.Errorf("%s: the app got trailers %v", req.URL.Path, h)
+			}
+			for _, v := range got.Header["Connection"] {
+				if strings.Contains(strings.ToLower(v), "nfltr") {
+					t.Errorf("%s: Connection %q names an identity header", req.URL.Path, v)
+				}
+			}
+		}
 		tlvs := make(chan map[byte]string, 1)
 		pr := newIDRig(t, IdentityProxyV2, func(string) string { return proxyV2Target(t, tlvs) })
-		tc := pr.open(t, "pg", pr.bob)
+		tc = pr.open(t, "pg", pr.bob)
 		if _, err := io.WriteString(tc, "Nfltr-Machine: eve\r\n"); err != nil {
 			t.Fatal(err)
 		}
@@ -296,6 +327,37 @@ var svcAccessBindings = map[string]func(*testing.T){
 
 func equalClaims(a, b assertionClaims) bool {
 	return slices.Equal(a.Groups, b.Groups) && a.Iss == b.Iss && a.Sub == b.Sub && a.Aud == b.Aud && a.Machine == b.Machine && a.Person == b.Person && a.Iat == b.Iat && a.Exp == b.Exp
+}
+
+// keepAliveApp is a target that answers every request of a connection
+// 200, an upgrade too (it ignores Upgrade), and hands each to reqs once
+// its body and trailers are read.
+func keepAliveApp(t *testing.T, reqs chan<- *http.Request) string {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close() //nolint:errcheck
+		br := bufio.NewReader(c)
+		for {
+			req, err := http.ReadRequest(br)
+			if err != nil {
+				return
+			}
+			_, _ = io.Copy(io.Discard, req.Body)
+			reqs <- req
+			if _, err := io.WriteString(c, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"); err != nil {
+				return
+			}
+		}
+	}()
+	return ln.Addr().String()
 }
 
 // proxyV2Target is a target that reads one PROXY v2 header and sends its
@@ -399,12 +461,17 @@ func TestIdentityHTTPUpgrade(t *testing.T) {
 	if err != nil || resp.StatusCode != http.StatusSwitchingProtocols {
 		t.Fatalf("upgrade: %v %v", resp, err)
 	}
-	if _, err := io.WriteString(tc, "GET / HTTP/1.1\r\nNfltr-Machine: raw\r\n\r\n"); err != nil {
+	const raw = "GET / HTTP/1.1\r\nNfltr-Machine: raw\r\n\r\n"
+	if _, err := io.WriteString(tc, raw); err != nil {
 		t.Fatal(err)
 	}
+	echo := make([]byte, len(raw)) // before the client's end: a frame goes on as it comes
+	if _, err := io.ReadFull(br, echo); err != nil || string(echo) != raw {
+		t.Fatalf("after the upgrade: %q, %v", echo, err)
+	}
 	_ = tc.(interface{ CloseWrite() error }).CloseWrite()
-	if got, err := io.ReadAll(br); err != nil || string(got) != "GET / HTTP/1.1\r\nNfltr-Machine: raw\r\n\r\n" {
-		t.Fatalf("after the upgrade: %q, %v", got, err)
+	if got, err := io.ReadAll(br); err != nil || len(got) != 0 {
+		t.Fatalf("after the client's end: %q, %v", got, err)
 	}
 }
 
