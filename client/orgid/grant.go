@@ -180,7 +180,7 @@ func admitClient(ver *Verifier, rules *Rules, certs []*x509.Certificate, self Ch
 	if err != nil {
 		return time.Time{}, "", err
 	}
-	until, rule, err := rules.admit(id, self, services, now)
+	until, rule, err := rules.admit(id, self, services, ver.Root(), now)
 	if err == nil || len(certs) == 2 {
 		return until, "rule " + rule.Who + " " + rule.Where + " " + rule.Service, err
 	}

@@ -116,3 +116,48 @@ func TestPolicyValid(t *testing.T) {
 		t.Error("number 0 valid")
 	}
 }
+
+// The access rules end with the root they were signed under (lane SECFIX,
+// review S5; GroupMirror.tla RulesFollowRotation): after a rotation no
+// rule of the old root admits, and the new root's status is taken whatever
+// number the old root's holder put on its rules. A status is taken only
+// from an issuer the verifier would admit: unexpired, not on the root's
+// CRL of issuers.
+func TestAccessRulesEndAtRootRotation(t *testing.T) {
+	now := time.Now()
+	o := newTestOrg(t, now)
+	d := t.TempDir()
+	o.enrolDir(t, filepath.Join(d, "web"), "web", now, "web")
+	web := load(t, filepath.Join(d, "web"))
+	rules := []Rule{{Who: "group:db", Where: "group:web", Service: "pg"}}
+	planted := o.policy(t, Policy{Number: 1000, Rules: rules}) // the old root's key signs any number
+	next := now.Add(crlLife)
+	if took, err := web.TakeStatus(o.status(t, now.Add(-time.Minute), next, &planted), now); !took || err != nil {
+		t.Fatalf("the old root's status: %v %v", took, err)
+	}
+	o.rotate(t, now.Add(time.Minute))
+	if took, err := web.TakeRotation(o.root.Raw); !took || err != nil {
+		t.Fatalf("rotation: %v %v", took, err)
+	}
+	if _, err := web.TakeCRL(o.crl(t, now), o.iss.Raw, now); err != nil {
+		t.Fatal(err)
+	}
+	cli := mint(t, leafTemplate(t, o.orgID, "cli", []string{"db"}, now), o.iss, newKey(t).Public(), o.issKey)
+	chain := []*x509.Certificate{cli, o.iss}
+	if _, err := web.CheckClient(chain, []string{"pg"}, now); err == nil || !strings.Contains(err.Error(), "no access rules") {
+		t.Fatalf("a rule of the rotated-out root: %v, want no rules", err)
+	}
+	fresh := o.policy(t, Policy{Number: 2, Rules: rules})
+	if took, err := web.TakeStatus(o.status(t, now, next, &fresh), now); !took || err != nil {
+		t.Fatalf("the new root's status after the old root's number 1000: %v %v", took, err)
+	}
+	if _, err := web.CheckClient(chain, []string{"pg"}, now); err != nil {
+		t.Fatalf("by the new root's rule: %v", err)
+	}
+	// An issuer the root revoked signs no status the machine takes.
+	check(t, web.ver.TakeIssuerCRL(o.issuersCRL(t, 1, now, nil, o.iss)))
+	later := o.policy(t, Policy{Number: 3, Rules: rules})
+	if took, err := web.TakeStatus(o.status(t, now.Add(time.Minute), next, &later), now); took || err == nil {
+		t.Fatalf("a status of a revoked issuer: %v %v, want refused", took, err)
+	}
+}

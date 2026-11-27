@@ -458,6 +458,33 @@ func TestMachineAdmitsByTheRules(t *testing.T) {
 	}
 }
 
+// The access rules end with the root that signed them (lane SECFIX, review
+// S5; relay-server spec/GroupMirror.tla RulesFollowRotation): a rotation
+// drops status.json, so no process of the machine takes the old root's
+// rules again (client/orgid TestAccessRulesEndAtRootRotation: they admit no
+// one under the new root).
+func TestMachineRulesEndAtRootRotation(t *testing.T) {
+	now := time.Now()
+	o := orgmachinetest.New(t, now)
+	d := t.TempDir()
+	o.Enrol(t, filepath.Join(d, "web"), "web", now, "web")
+	web := open(t, filepath.Join(d, "web"))
+	o.Allow(t, now.Add(time.Second), orgid.Rule{Who: "group:db", Where: "machine:web", Service: "pg"})
+	if changed, err := web.Reload(time.Now()); err != nil || !changed {
+		t.Fatalf("Reload: changed %v, %v", changed, err)
+	}
+	status := filepath.Join(d, "web", orgmachine.StatusFile)
+	if _, err := os.Stat(status); err != nil {
+		t.Fatal(err)
+	}
+	if took, err := web.TakeRotation(o.Rotate(t, now.Add(time.Minute)).Raw); !took || err != nil {
+		t.Fatalf("rotation: %v %v", took, err)
+	}
+	if _, err := os.Stat(status); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("%s after the rotation: %v, want gone", orgmachine.StatusFile, err)
+	}
+}
+
 // RenewDue is the earlier of the two certificates' half lives (up to a
 // tenth later), so a machine renews both before ssh would refuse it
 // (spec/enrol/CertRide.tla HostRideOutage): the host certificate's

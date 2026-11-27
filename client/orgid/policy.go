@@ -218,13 +218,16 @@ func StatusIssuer(body, sig []byte) (*x509.Certificate, error) {
 type heldPolicy struct {
 	at, until time.Time
 	policy    Policy
+	root      *x509.Certificate // the root it was taken under: its rules end with it
 }
 
 // statusPolicy is the policy of a relay org orgpki.SignedStatus (JSON)
 // when the status is the organisation's: signed by an issuer certificate
-// root signed, of orgID, unexpired at now, carrying a policy root signed
-// (none: no rules). Freshness is the caller's (newer At only).
-func statusPolicy(msg []byte, root *x509.Certificate, orgID string, now time.Time) (heldPolicy, error) {
+// v would admit (under its root, unexpired at now, not on the root's CRL
+// of issuers: review S5), of v's organisation, unexpired at now, carrying
+// a policy the root signed (none: no rules). Freshness is the caller's
+// (newer At only).
+func statusPolicy(msg []byte, v *Verifier, now time.Time) (heldPolicy, error) {
 	var sm struct {
 		Body []byte `json:"body"`
 		Sig  []byte `json:"sig"`
@@ -236,8 +239,12 @@ func statusPolicy(msg []byte, root *x509.Certificate, orgID string, now time.Tim
 	if err != nil {
 		return heldPolicy{}, fmt.Errorf("%w: the status: %v", ErrPolicy, err)
 	}
-	if err := iss.CheckSignatureFrom(root); err != nil {
-		return heldPolicy{}, fmt.Errorf("%w: the status's issuer certificate is not the organisation root's: %v", ErrPolicy, err)
+	v.mu.Lock()
+	root, orgID := v.root, v.orgID
+	_, err = v.verify(iss, nil, "", now)
+	v.mu.Unlock()
+	if err != nil {
+		return heldPolicy{}, fmt.Errorf("%w: the status's issuer certificate is not one of the organisation root's in force: %v", ErrPolicy, err)
 	}
 	var st struct {
 		OrgID string    `json:"org_id"`
@@ -260,7 +267,7 @@ func statusPolicy(msg []byte, root *x509.Certificate, orgID string, now time.Tim
 	if !now.Before(until) {
 		return heldPolicy{}, fmt.Errorf("%w: the status of %s lapsed at %s", ErrPolicy, st.At.Format(time.RFC3339), until.Format(time.RFC3339))
 	}
-	h := heldPolicy{at: st.At, until: until}
+	h := heldPolicy{at: st.At, until: until, root: root}
 	if st.Policy != nil {
 		if h.policy, err = VerifyPolicy(*st.Policy, root, orgID); err != nil {
 			return heldPolicy{}, err
@@ -280,12 +287,14 @@ type Rules struct {
 
 // Take takes the organisation's signed status msg (relay org
 // orgpki.SignedStatus, JSON; the relay's copy) for its access rules: one
-// the root's issuer signed, of orgID, unexpired, newer than the one held
-// (GroupMirror.tla PeerTake: mutants peer-rule-unsigned, peer-rule-older):
-// higher rules, or the same under a later status.
-// took: it is newer, the caller's sessions are to be checked again.
-func (r *Rules) Take(msg []byte, root *x509.Certificate, orgID string, now time.Time) (took bool, err error) {
-	h, err := statusPolicy(msg, root, orgID, now)
+// an issuer of v's root signed, of v's organisation, unexpired, newer
+// than the one held under that root (GroupMirror.tla PeerTake: mutants
+// peer-rule-unsigned, peer-rule-older): higher rules, or the same under a
+// later status. Rules held under a rotated-out root are replaced whatever
+// their number (RulesFollowRotation). took: it is newer, the caller's
+// sessions are to be checked again.
+func (r *Rules) Take(msg []byte, v *Verifier, now time.Time) (took bool, err error) {
+	h, err := statusPolicy(msg, v, now)
 	if err != nil {
 		return false, err
 	}
@@ -294,29 +303,25 @@ func (r *Rules) Take(msg []byte, root *x509.Certificate, orgID string, now time.
 	// Newer: higher rules (the issuer numbers them up only), or the same
 	// rules under a later status (a later life). A status the relay
 	// replays is not newer.
-	if old := r.held; old != nil && (h.policy.Number < old.policy.Number || h.policy.Number == old.policy.Number && !h.at.After(old.at)) {
+	if old := r.held; old != nil && old.root.Equal(h.root) && (h.policy.Number < old.policy.Number || h.policy.Number == old.policy.Number && !h.at.After(old.at)) {
 		return false, nil
 	}
 	r.held = &h
 	return true, nil
 }
 
-// Admit admits client (a checked certificate) to one of services on self
+// admit admits client (a checked certificate) to one of services on self
 // (the serving machine's name and groups) by a rule (GroupMirror.tla
-// PeerRuleAdmits): fail closed with no rules or lapsed ones. until is the
-// earlier of the client certificate's and the rules' ends.
-func (r *Rules) Admit(client, self Checked, services []string, now time.Time) (until time.Time, err error) {
-	until, _, err = r.admit(client, self, services, now)
-	return until, err
-}
-
-// admit is Admit with the rule that admitted.
-func (r *Rules) admit(client, self Checked, services []string, now time.Time) (until time.Time, rule Rule, err error) {
+// PeerRuleAdmits) taken under root, the one the verifier pins now: fail
+// closed with no rules, lapsed ones or a rotated-out root's
+// (RulesFollowRotation). until is the earlier of the client certificate's
+// and the rules' ends; rule is the one that admitted.
+func (r *Rules) admit(client, self Checked, services []string, root *x509.Certificate, now time.Time) (until time.Time, rule Rule, err error) {
 	r.mu.Lock()
 	pol := r.held
 	r.mu.Unlock()
 	switch {
-	case pol == nil:
+	case pol == nil || !pol.root.Equal(root):
 		return time.Time{}, Rule{}, errors.New("no access rules from the organisation's status yet: fail closed (the agent reads it from the relay)")
 	case !now.Before(pol.until):
 		return time.Time{}, Rule{}, fmt.Errorf("the organisation's access rules lapsed at %s (status of %s): fail closed until the issuer is heard from", pol.until.Format(time.RFC3339), pol.at.Format(time.RFC3339))

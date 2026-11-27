@@ -32,6 +32,7 @@ type Org struct {
 	root    *x509.Certificate
 	rootKey *ecdsa.PrivateKey
 	rec     *x509.Certificate
+	recKey  ed25519.PrivateKey
 	dirs    []string // every machine directory, for CRL updates
 }
 
@@ -59,7 +60,25 @@ func New(t testing.TB, now time.Time) *Org {
 	check(t, err)
 	iss, err := orgpki.Open(lines, ikey, func([]byte) error { return nil })
 	check(t, err)
-	return &Org{Issuer: iss, root: root, rootKey: rk, rec: rec}
+	return &Org{Issuer: iss, root: root, rootKey: rk, rec: rec, recKey: recKey}
+}
+
+// Rotate is the owner's rotation at now: the recovery key certifies a new
+// root, which certifies a new issuer. It returns the new root, the
+// certificate machines take (Machine.TakeRotation).
+func (o *Org) Rotate(t testing.TB, now time.Time) *x509.Certificate {
+	t.Helper()
+	nk, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	check(t, err)
+	id, err := orgid.OrgIDOfRoot(o.root)
+	check(t, err)
+	cross, err := orgpki.CrossSign(o.rec, o.recKey, nk.Public(), id, now)
+	check(t, err)
+	_, ik, err := ed25519.GenerateKey(rand.Reader)
+	check(t, err)
+	check(t, o.Issuer.Rotate(cross, "test-2", nk, ik, Groups, now))
+	o.root, o.rootKey = cross, nk
+	return cross
 }
 
 func check(t testing.TB, err error) {

@@ -7,9 +7,9 @@
 client-no-name-check | orgmachine.go | 	id, err := m.ver.Check(certs[0], certs[1], orgid.Peer{Name: name}, now) | 	id, err := m.ver.Check(certs[0], certs[1], orgid.Peer{}, now) | TestNamedMachineAndGroup
 client-skips-check | orgmachine.go | 			return until, fmt.Errorf("the server is not machine %s of the organisation: %w", name, err) | 			_ = err | TestNamedMachineAndGroup
 group-dial-skips-check | orgmachine.go | 			return until, fmt.Errorf("the server is not a machine of group %s: %w", group, err) | 			_ = err | TestGroupDialChecksTheGroup
-no-rule-check | ../../client/orgid/grant.go | 	until, rule, err := rules.admit(id, self, services, now) | 	until, rule, err := id.Until, Rule{}, error(nil) | TestMachineAdmitsByTheRules
+no-rule-check | ../../client/orgid/grant.go | 	until, rule, err := rules.admit(id, self, services, ver.Root(), now) | 	until, rule, err := id.Until, Rule{}, error(nil) | TestMachineAdmitsByTheRules
 status-not-kept | orgmachine.go | 	if err := orgfiles.Write(filepath.Join(m.dir, StatusFile), msg, 0o600); err != nil { | 	if err := error(nil); err != nil { | TestMachineAdmitsByTheRules
-status-not-reloaded | orgmachine.go | 		newStatus, _ = m.rules.Take(st, m.ver.Root(), m.orgID, now) | 		_ = st | TestMachineAdmitsByTheRules
+status-not-reloaded | orgmachine.go | 		newStatus, _ = m.rules.Take(st, m.ver, now) | 		_ = st | TestMachineAdmitsByTheRules
 no-expiry-timer | orgmachine.go | 	t := time.NewTimer(time.Until(until)) | 	t := time.NewTimer(time.Hour) | TestHoldEndsAtUntil
 no-cut-on-update | orgmachine.go | 			u, cerr := check(time.Now()) | 			u, cerr := until, error(nil) | TestRevocationCutsHeldSession
 reload-skips-crl | orgmachine.go | 		if err := m.ver.TakeCRL(crl, issuer, now); err != nil { | 		if false && m.ver.TakeCRL(crl, issuer, now) != nil { | TestRevocationCutsHeldSession
@@ -18,3 +18,6 @@ install-any-host-cert | orgmachine.go | 	if _, err := orgpki.CheckHostCert(hostC
 read-pair-once | ../../client/orgid/identity.go | 		if strings.Contains(err.Error(), "private key does not match public key") { | 		if strings.Contains(err.Error(), "a mismatch never") { | TestReadPairWaitsForTheWritersCertificate
 renew-at-expiry | orgmachine.go | 		return from.Add(life/2 + life/10*time.Duration(spread)/1000) | 		return from.Add(life + life/10*time.Duration(spread)/1000) | TestRenewDueAtHalfLife
 client-tickets-on | orgmachine.go | 		SessionTicketsDisabled: true, | 		SessionTicketsDisabled: false, | TestOrgClientTLSHasNoTickets
+# A rotation drops status.json (lane SECFIX, review S5; relay-server
+# spec/GroupMirror.tla PeerRotate).
+status-survives-rotation | orgmachine.go | 	_ = os.Remove(filepath.Join(m.dir, StatusFile)) // one left behind is refused anyway: its issuer is not the new root's | 	_ = 0 | TestMachineRulesEndAtRootRotation

@@ -376,12 +376,12 @@ func (m *Identity) CheckClient(certs []*x509.Certificate, services []string, now
 
 // TakeStatus takes the organisation's signed status (relay org
 // orgpki.SignedStatus, JSON; the relay's copy) for its access rules: one
-// the root's issuer signed, of this organisation, unexpired, newer than
+// an issuer of the root signed, of this organisation, unexpired, newer than
 // the one held (GroupMirror.tla PeerTake: mutants peer-rule-unsigned,
-// peer-rule-older). A taken status is a change (Changed): open sessions
+// peer-rule-older). Rules end with their root (a rotation). A taken status is a change (Changed): open sessions
 // are checked again against its rules.
 func (m *Identity) TakeStatus(msg []byte, now time.Time) (bool, error) {
-	took, err := m.rules.Take(msg, m.ver.Root(), m.orgID, now)
+	took, err := m.rules.Take(msg, m.ver, now)
 	if took {
 		m.mu.Lock()
 		m.signal()
