@@ -73,6 +73,10 @@ reissue-after-renewal NoRetiredKeyRevived Join.cfg
 pin-root-only RefusedOnlyForCause Join.cfg
 any-root JoinRootsAreOwners Join.cfg
 older-root JoinRootNotOlder JoinOlder.cfg
+# lane SECFIX2, review S9: a token join takes only an answer under the
+# token's MAC; a sign-in is held to its pinned root.
+answer-unmacd JoinedByIssuer Join.cfg
+signin-any-recovery JoinRootNotOlder JoinSignIn.cfg
 # the join's relay machine id (lane LOGINREDS): bind-none is the code
 # before (a login's certificate named no id, so the first serve moved the
 # name while a second serve read the pair); bind-unmacd binds an id the
