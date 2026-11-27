@@ -13,8 +13,11 @@
 // through the relay (Follow).
 //
 // It issues nothing: making roots, issuers and machine certificates,
-// enrolment, renewal and the issuer stay in nfltr. It reads this
-// machine's key only to present its certificate in TLS.
+// enrolment, renewal and the issuer stay in relay org (nfltr runs them). A
+// machine where only an SDK program serves runs relay org orgenrol's
+// Keeper itself: it renews, follows the CRL and ships the machine's audit
+// log (Identity.Audit). It reads this machine's key only to present its
+// certificate in TLS and sign its audit lines.
 package orgid
 
 import (

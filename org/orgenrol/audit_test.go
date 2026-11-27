@@ -9,17 +9,21 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/nfltr/relay/client/mailboxclient"
 	"github.com/nfltr/relay/client/orgaudit"
+	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/orgissuer"
 	"github.com/nfltr/relay/org/orgpki"
 )
@@ -272,3 +276,87 @@ func TestKeeperClosesAKilledProcesssSession(t *testing.T) {
 		t.Fatalf("findings %q", findings(v))
 	}
 }
+
+// TestKeeperShipsABacklogAndRotates is the rotation end to end: a log over
+// auditRotateAt (an issuer out of reach while the sessions went on) ships
+// in shipMax posts one after another, not one per ShipEvery (the code
+// before took 30 s a post), every answered post rotating the file past
+// what the issuer holds (spec/AuditLog.tla Ship, Rotate): the issuer
+// holds every session with no finding (no gap, no new log: OneLog,
+// NothingLost), the file is cut to under auditRotateAt with the log going
+// on, and a session after the rotation chains on at the issuer.
+func TestKeeperShipsABacklogAndRotates(t *testing.T) {
+	f := newFleet(t)
+	cert, key := f.m.Current()
+	var buf bytes.Buffer
+	s := orgaudit.Signing{Log: "backlog0123456789abcdef", Machine: cert.Subject.CommonName, Cert: cert, Key: key, At: f.clk.Now()}
+	n := 0
+	for buf.Len() <= auditRotateAt+shipMax/2 {
+		n++
+		ses := orgaudit.Session{ID: fmt.Sprintf("s%05d", n), Service: "pg", Who: orgaudit.Who{Name: "ci-1"}, By: "rule group:ops", Opened: f.clk.Now().UTC()}
+		for _, r := range []orgaudit.Record{ses.Open(), ses.Close(orgaudit.End{Closed: f.clk.Now().UTC(), Reason: orgaudit.ReasonClosed})} {
+			s.Seq++
+			line, err := orgaudit.Line(r, s)
+			check(t, err)
+			buf.Write(append(line, '\n'))
+			s.Prev = orgaudit.Hash(line)
+		}
+	}
+	local := filepath.Join(f.dir, orgaudit.LogFile)
+	check(t, os.WriteFile(local, buf.Bytes(), 0o600))
+	keep(t, f.ctx, f.keeper())
+	eventually(t, "every session of the backlog at the issuer", func() bool { return len(f.audit(t, f.clk.Now()).Sessions) == n })
+	if v := f.audit(t, f.clk.Now()); v.Findings != nil {
+		t.Fatalf("findings %q", findings(v))
+	}
+	eventually(t, "the machine's cursor at the file's end", func() bool {
+		var at shipped
+		fi, err := os.Stat(local)
+		return err == nil && readJSON(filepath.Join(f.dir, shipFile), &at) == nil && at.Offset == fi.Size()
+	})
+	fi, err := os.Stat(local)
+	check(t, err)
+	first, err := os.ReadFile(local)
+	check(t, err)
+	r, err := orgaudit.Parse(first[:bytes.IndexByte(first, '\n')])
+	check(t, err)
+	if fi.Size() > auditRotateAt || r.Seq == 1 || r.Log != s.Log {
+		t.Fatalf("after the backlog: the file %d bytes (rotated past %d), its first line seq %d of log %s", fi.Size(), auditRotateAt, r.Seq, r.Log)
+	}
+	f.session(t, "ssh", true)
+	eventually(t, "the session after the rotation at the issuer", func() bool {
+		v := f.audit(t, f.clk.Now())
+		return len(v.Sessions) == n+1 && v.Sessions[n].Close != nil
+	})
+	if v := f.audit(t, f.clk.Now()); v.Findings != nil {
+		t.Fatalf("after the rotation: findings %q", findings(v))
+	}
+}
+
+// TestSDKOnlyMachineShipsItsAudit: on a machine where only an SDK program
+// serves (relay client orgid.Identity through nfnet.Listen, no nfltr), the
+// keeper that program runs ships Identity's lines: Keeper.Run, which it
+// runs anyway (orgid renews nothing; the keeper renews and follows the
+// CRL). Identity's sessions reach the issuer, and the keeper's round in
+// the same process does not close the session Identity still serves
+// (another owner lock of the process: AuditLog.tla LiveOpenNotClosed).
+func TestSDKOnlyMachineShipsItsAudit(t *testing.T) {
+	f := newFleet(t)
+	id, err := orgid.Load(f.dir)
+	check(t, err)
+	leaf, _ := f.m.Current()
+	certs := []*x509.Certificate{leaf, f.m.Issuer()}
+	id.Audit(certs, "pg", []string{"pg"}, f.clk.Now())(orgaudit.End{Closed: f.clk.Now().Add(time.Second), In: 3, Reason: orgaudit.ReasonClosed})
+	end := id.Audit(certs, "ssh", []string{"ssh"}, f.clk.Now())
+	defer runtime.KeepAlive(end)
+	keep(t, f.ctx, f.keeper())
+	eventually(t, "the SDK's sessions at the issuer", func() bool { return len(f.audit(t, f.clk.Now()).Sessions) == 2 })
+	v := f.audit(t, f.clk.Now())
+	if v.Findings != nil || v.Sessions[0].Close == nil || v.Sessions[0].Close.In != 3 || v.Sessions[1].Open.Service != "ssh" || v.Sessions[1].Close != nil {
+		t.Fatalf("the issuer's view: %+v, findings %q", v.Sessions, findings(v))
+	}
+}
+
+// The SDK program's keeper talks to the relay with the SDK's mailbox
+// client (orgid.go: a machine without nfltr runs Keeper itself).
+var _ Mailbox = (*mailboxclient.Client)(nil)

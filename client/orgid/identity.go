@@ -362,9 +362,11 @@ func (m *Identity) current() (*x509.Certificate, ed25519.PrivateKey) {
 // Audit records a session certs opened to service, one of services
 // (agent.OrgAuditor), in the machine's audit log, the one relay org
 // orgmachine.Machine writes (orgaudit.Log): its open line now, its close
-// line at the end it returns. The machine's keeper (relay org orgenrol,
-// in nfltr up and nfltr cat serve) ships it to the issuer and closes the
-// sessions of a process that ended without closing them.
+// line at the end it returns. The machine's keeper (relay org orgenrol's
+// Keeper: in nfltr up and nfltr cat serve, or in the SDK program itself on
+// a machine without nfltr) ships it to the issuer at its next round
+// (orgaudit.ShipEvery) and closes the sessions of a process that ended
+// without closing them.
 func (m *Identity) Audit(certs []*x509.Certificate, service string, services []string, opened time.Time) func(orgaudit.End) {
 	leaf, _ := m.current()
 	self := Checked{Name: leaf.Subject.CommonName, Groups: leaf.Subject.OrganizationalUnit}

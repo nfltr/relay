@@ -81,3 +81,6 @@ seq-skips | ../../client/orgaudit/log.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.S
 no-chain-written | ../../client/orgaudit/log.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, Hash(last) | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, "" | TestAuditReachesTheIssuer
 audit-keeper-no-recovery | auditship.go | 		if _, err := m.CloseLost(now()); err != nil { | 		if _, err := 0, error(nil); err != nil { | TestKeeperClosesAKilledProcesssSession
 audit-move-no-sessions | ../orgissuer/bundle.go | 	if dir, base := path.Split(name); dir == "org/" && slices.Contains(auditFiles, base) { | 	if dir, base := path.Split(name); dir == "org/" && slices.Contains(auditFiles, base) && false { | TestAuditFollowsTheMove
+# A backlog over shipMax (an issuer back after an outage) ships post after
+# post, not one per ShipEvery (lane SA5TRACE).
+audit-backlog-waits | auditship.go | 			if more { // a backlog over shipMax: the next post now (TestKeeperShipsABacklogAndRotates) | 			if false && more { | TestKeeperShipsABacklogAndRotates

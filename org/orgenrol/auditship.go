@@ -52,7 +52,7 @@ func shipAudit(ctx context.Context, mb Mailbox, m *orgmachine.Machine, wait time
 		if _, err := m.CloseLost(now()); err != nil {
 			logger.Warn("org: a gone process's open sessions were not closed (again next round)", "error", err)
 		}
-		switch posted, err := shipOnce(ctx, mb, m, now().Sub(beat) >= orgaudit.BeatEvery, wait, now); {
+		switch posted, more, err := shipOnce(ctx, mb, m, now().Sub(beat) >= orgaudit.BeatEvery, wait, now); {
 		case errors.Is(err, orgfiles.ErrLocked): // another process of the machine ships
 		case err != nil:
 			if ctx.Err() == nil {
@@ -60,6 +60,9 @@ func shipAudit(ctx context.Context, mb Mailbox, m *orgmachine.Machine, wait time
 			}
 		case posted:
 			beat = now()
+			if more { // a backlog over shipMax: the next post now (TestKeeperShipsABacklogAndRotates)
+				continue
+			}
 		}
 		t := time.NewTimer(orgaudit.ShipEvery)
 		select {
@@ -72,41 +75,42 @@ func shipAudit(ctx context.Context, mb Mailbox, m *orgmachine.Machine, wait time
 }
 
 // shipOnce posts what is unacknowledged (or, with beat, the head alone)
-// and takes the issuer's answer. posted: a post was answered.
-func shipOnce(ctx context.Context, mb Mailbox, m *orgmachine.Machine, beat bool, wait time.Duration, now func() time.Time) (posted bool, err error) {
+// and takes the issuer's answer. posted: a post was answered; more: it
+// carried shipMax bytes, so lines may wait behind them.
+func shipOnce(ctx context.Context, mb Mailbox, m *orgmachine.Machine, beat bool, wait time.Duration, now func() time.Time) (posted, more bool, err error) {
 	dir := m.Dir()
 	unlock, err := orgfiles.TryLock(filepath.Join(dir, shipLock))
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	defer unlock()
 	var at shipped
 	if err := readJSON(filepath.Join(dir, shipFile), &at); err != nil {
-		return false, err
+		return false, false, err
 	}
-	lines, end, err := unshipped(dir, &at)
+	lines, end, full, err := unshipped(dir, &at)
 	if err != nil || len(lines) == 0 && !beat {
-		return false, err
+		return false, false, err
 	}
 	last, err := orgaudit.Last(dir)
 	if err != nil || last == nil {
-		return false, err
+		return false, false, err
 	}
 	if len(lines) > 0 {
 		last = lines[len(lines)-1]
 	}
 	lr, err := orgaudit.Parse(last)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	cert, key := m.Current()
 	head, err := orgaudit.SignHead(orgaudit.Signing{Log: lr.Log, Seq: lr.Seq, Prev: orgaudit.Hash(last), Machine: lr.Machine, Cert: cert, Key: key, At: now()})
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	sealed, err := orgpki.SealAudit(m.Issuer(), orgpki.AuditBatch{Lines: lines, Head: head})
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	// A batch's id is its lines (a retry is answered as the first post);
 	// a beat's its time.
@@ -116,53 +120,55 @@ func shipOnce(ctx context.Context, mb Mailbox, m *orgmachine.Machine, beat bool,
 	}
 	a, err := exchange(ctx, mb, m.OrgID(), orgpki.Request{ID: id, Audit: &orgpki.AuditRequest{Sealed: sealed}}, wait)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	if a.Audit == nil {
-		return false, errors.New("the issuer's answer names no audit position")
+		return false, false, errors.New("the issuer's answer names no audit position")
 	}
 	// The issuer took what verified and logged the rest: either way
 	// these lines are done (the machine's own copy keeps them).
 	at.Log, at.Offset = lr.Log, end
 	if err := writeJSON(filepath.Join(dir, shipFile), at); err != nil {
-		return true, err
+		return true, false, err
 	}
 	_, err = orgaudit.Rotate(dir, at.Offset, auditRotateAt, func(cut int64) error {
 		at.Offset -= cut
 		return writeJSON(filepath.Join(dir, shipFile), at)
 	})
-	return true, err
+	return true, full, err
 }
 
 // unshipped are the complete lines of dir's audit log after at (at most
-// shipMax bytes) and where they end. A log whose first line is not of
-// at's log (the file replaced) is shipped from its start.
-func unshipped(dir string, at *shipped) ([][]byte, int64, error) {
+// shipMax bytes), where they end and whether shipMax bytes were read
+// (full). A log whose first line is not of at's log (the file replaced) is
+// shipped from its start.
+func unshipped(dir string, at *shipped) ([][]byte, int64, bool, error) {
 	f, err := os.Open(filepath.Join(dir, orgaudit.LogFile)) // #nosec G304 -- the machine's own directory
 	if os.IsNotExist(err) {
-		return nil, at.Offset, nil
+		return nil, at.Offset, false, nil
 	}
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	defer f.Close()
 	first := make([]byte, 2048)
 	n, err := f.ReadAt(first, 0)
 	if err != nil && err != io.EOF {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	if r, err := orgaudit.Parse(first[:max(bytes.IndexByte(first[:n], '\n'), 0)]); err != nil || r.Log != at.Log {
 		at.Offset = 0
 	}
 	buf := make([]byte, shipMax)
 	n, err = f.ReadAt(buf, at.Offset)
+	full := n == len(buf)
 	if err != nil && err != io.EOF {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	buf = buf[:bytes.LastIndexByte(buf[:n], '\n')+1]
 	var lines [][]byte
 	for l := range bytes.Lines(buf) {
 		lines = append(lines, bytes.TrimSuffix(l, []byte("\n")))
 	}
-	return lines, at.Offset + int64(len(buf)), nil
+	return lines, at.Offset + int64(len(buf)), full, nil
 }
