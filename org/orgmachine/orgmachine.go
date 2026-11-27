@@ -99,6 +99,9 @@ func Open(dir string) (*Machine, error) {
 		return nil, err
 	}
 	m := &Machine{dir: dir, ver: ver, orgID: orgID, root: root.Raw, changed: make(chan struct{}), audited: make(chan struct{}, 1)}
+	if err := orgid.LoadMarks(dir, ver, &m.rules); err != nil {
+		return nil, err
+	}
 	if _, err := m.Reload(time.Now()); err != nil {
 		return nil, err
 	}
@@ -198,6 +201,9 @@ func (m *Machine) Reload(now time.Time) (changed bool, err error) {
 		m.signal()
 	}
 	m.mu.Unlock()
+	if newCRL || newStatus {
+		_ = orgid.KeepMarks(m.dir, m.ver, &m.rules) // the process that wrote the files kept them
+	}
 	// A KRL that cannot be written now is written at the next Reload;
 	// KRL (nfltr cat ssh, nfltr org trust) reports the error.
 	_ = m.keepKRL()
@@ -214,6 +220,9 @@ func (m *Machine) TakeStatus(msg []byte, now time.Time) (bool, error) {
 		return took, err
 	}
 	if err := orgfiles.Write(filepath.Join(m.dir, StatusFile), msg, 0o600); err != nil {
+		return true, err
+	}
+	if err := orgid.KeepMarks(m.dir, m.ver, &m.rules); err != nil {
 		return true, err
 	}
 	m.mu.Lock()
@@ -312,6 +321,9 @@ func (m *Machine) takeCRL(crl []byte, issuer *x509.Certificate, now time.Time) (
 		return false, err
 	}
 	if err := orgfiles.Write(filepath.Join(m.dir, CRLFile), crl, 0o600); err != nil {
+		return false, err
+	}
+	if err := orgid.KeepMarks(m.dir, m.ver, &m.rules); err != nil {
 		return false, err
 	}
 	m.crl, m.krl = crl, hostKRL(crl, issuer)
@@ -612,7 +624,7 @@ var errNoChain = errors.New("the peer presented no organisation certificate and 
 
 // CheckClient admits a client to one of services on this machine
 // (agent.Org): its certificate checked (chain, NotAfter, CRL), then a rule
-// of the organisation's access rules (orgid.Rules.Admit, TakeStatus), else
+// of the organisation's access rules (orgid.AdmitClient, TakeStatus), else
 // a grant it presented (orgid.AdmitClient).
 func (m *Machine) CheckClient(certs []*x509.Certificate, services []string, now time.Time) (time.Time, error) {
 	m.mu.Lock()

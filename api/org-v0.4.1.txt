@@ -1,0 +1,3 @@
+Compatible changes:
+- ./orgmachine/orgmachinetest.(*Org).Rotate: added
+- ./orgpki.PeopleAct.Head: added

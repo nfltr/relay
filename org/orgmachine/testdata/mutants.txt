@@ -21,3 +21,6 @@ client-tickets-on | orgmachine.go | 		SessionTicketsDisabled: true, | 		SessionT
 # A rotation drops status.json (lane SECFIX, review S5; relay-server
 # spec/GroupMirror.tla PeerRotate).
 status-survives-rotation | orgmachine.go | 	_ = os.Remove(filepath.Join(m.dir, StatusFile)) // one left behind is refused anyway: its issuer is not the new root's | 	_ = 0 | TestMachineRulesEndAtRootRotation
+# A fresh process takes no list older than the newest taken (lane SECFIX,
+# review S10; client/orgid MarksFile).
+machine-marks-not-loaded | orgmachine.go | 	if err := orgid.LoadMarks(dir, ver, &m.rules); err != nil { | 	if err := error(nil); err != nil { | TestMachineMarksHoldAcrossARestart

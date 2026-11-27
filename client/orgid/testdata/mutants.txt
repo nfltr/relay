@@ -75,3 +75,10 @@ client-no-grant | grant.go | 		g := m.grantFor(cert.Leaf, service, where, time.N
 rules-survive-rotation | policy.go | 	case pol == nil || !pol.root.Equal(root): | 	case pol == nil: | TestAccessRulesEndAtRootRotation
 rules-old-root-number | policy.go | 	if old := r.held; old != nil && old.root.Equal(h.root) && (h.policy.Number < old.policy.Number || h.policy.Number == old.policy.Number && !h.at.After(old.at)) { | 	if old := r.held; old != nil && (h.policy.Number < old.policy.Number || h.policy.Number == old.policy.Number && !h.at.After(old.at)) { | TestAccessRulesEndAtRootRotation
 status-issuer-bare-signature | policy.go | 	_, err = v.verify(iss, nil, "", now) | 	err = iss.CheckSignatureFrom(root) | TestAccessRulesEndAtRootRotation
+# The newest list, rules and status a machine took, and the clock's floor,
+# hold across a restart (MarksFile; lane SECFIX, review S10, S18).
+marks-not-loaded | identity.go | 	if err := LoadMarks(dir, ver, &m.rules); err != nil { | 	if err := error(nil); err != nil { | TestMarksHoldAcrossARestart
+crl-below-floor | verify.go | 	if crl.Number.Cmp(big.NewInt(v.floorCRL)) < 0 { | 	if false { | TestMarksHoldAcrossARestart
+clock-unchecked | verify.go | 	if now.Add(clockSkew).Before(v.seen) { | 	if false { | TestMarksHoldAcrossARestart
+rules-below-floor | policy.go | 	if r.floorRoot == Fingerprint(h.root) && (h.policy.Number < r.floorNum || h.at.Before(r.floorAt)) { | 	if false { | TestMarksHoldAcrossARestart
+seen-not-moved | verify.go | 	v.seen = maxTime(v.seen, crl.ThisUpdate) | 	_ = v.seen | TestMarksHoldAcrossARestart

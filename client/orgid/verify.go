@@ -56,6 +56,8 @@ type Verifier struct {
 	recovery *x509.Certificate
 	crls     map[string]*crlState // by issuer key fingerprint
 	issuers  *crlState            // the root's CRL of issuers (nil: none taken; serials of issuer certificates)
+	floorCRL int64                // the newest CRL number this machine took under the root (MarksFile)
+	seen     time.Time            // the newest ThisUpdate taken: a clock before it fails closed (MarksFile)
 }
 
 // NewVerifier pins an organisation from its root's and recovery's
@@ -121,6 +123,12 @@ func (v *Verifier) TakeCRL(der []byte, issuer *x509.Certificate, now time.Time) 
 	if crl.Number == nil {
 		return errors.New("CRL has no number")
 	}
+	if crl.Number.Cmp(big.NewInt(v.floorCRL)) < 0 {
+		return fmt.Errorf("CRL %s is older than the newest this machine took (%d): a replay", crl.Number, v.floorCRL)
+	}
+	if err := v.clockOK(now); err != nil {
+		return err
+	}
 	if !now.Before(crl.NextUpdate) {
 		traceLine(map[string]any{"ev": "take", "v": fmt.Sprintf("%p", v), "k": KeyFingerprint(issuer.PublicKey), "num": crl.Number.Int64(), "next": crl.NextUpdate.Unix(), "t": now.Unix(), "rev": []string{}, "ok": false})
 		return errors.New("CRL is past its NextUpdate")
@@ -140,6 +148,7 @@ func (v *Verifier) TakeCRL(der []byte, issuer *x509.Certificate, now time.Time) 
 		s.revoked[e.SerialNumber.String()] = true
 	}
 	v.crls[fp] = s
+	v.seen = maxTime(v.seen, crl.ThisUpdate)
 	line["ok"] = true
 	traceLine(line)
 	return nil
@@ -222,7 +231,7 @@ func (v *Verifier) TakeRotation(der []byte) error {
 	if err := checkRotation(c, v.recovery, v.root, v.orgID); err != nil {
 		return err
 	}
-	v.root, v.crls, v.issuers = c, map[string]*crlState{}, nil
+	v.root, v.crls, v.issuers, v.floorCRL = c, map[string]*crlState{}, nil, 0
 	traceLine(map[string]any{"ev": "rotate", "v": fmt.Sprintf("%p", v)})
 	return nil
 }
@@ -319,6 +328,9 @@ func (v *Verifier) check(leaf, issuer *x509.Certificate, want Peer, now time.Tim
 	if crl == nil {
 		return Checked{}, "nocrl", errors.New("no CRL of the issuer: fail closed")
 	}
+	if err := v.clockOK(now); err != nil {
+		return Checked{}, "clock", err
+	}
 	if !now.Before(crl.next) {
 		return Checked{}, "lapsed", errors.New("the issuer's CRL lapsed: fail closed")
 	}
@@ -332,6 +344,16 @@ func (v *Verifier) check(leaf, issuer *x509.Certificate, want Peer, now time.Tim
 		}
 	}
 	return Checked{Name: leaf.Subject.CommonName, Groups: slices.Clone(groups), MachineID: MachineID(leaf), Person: person, App: app, Serial: leaf.SerialNumber, Until: until}, "", nil
+}
+
+// clockOK fails a clock more than clockSkew before the newest list taken:
+// set back, it would honour a lapsed list or certificate again (review
+// S18). Callers hold mu.
+func (v *Verifier) clockOK(now time.Time) error {
+	if now.Add(clockSkew).Before(v.seen) {
+		return fmt.Errorf("the clock (%s) is before the newest revocation list this machine took (%s): fail closed until it is set", now.UTC().Format(time.RFC3339), v.seen.UTC().Format(time.RFC3339))
+	}
+	return nil
 }
 
 // issuerOf is the issuer of chain's leaf: a leaf, not a CA, under an

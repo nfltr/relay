@@ -90,6 +90,9 @@ func Load(dir string) (*Identity, error) {
 		return nil, err
 	}
 	m := &Identity{dir: dir, ver: ver, orgID: orgID, root: root.Raw, changed: make(chan struct{})}
+	if err := LoadMarks(dir, ver, &m.rules); err != nil {
+		return nil, err
+	}
 	if _, err := m.Reload(time.Now()); err != nil {
 		return nil, err
 	}
@@ -168,6 +171,7 @@ func (m *Identity) Reload(now time.Time) (changed bool, err error) {
 			newCRL = false
 		} else {
 			m.crl = crl
+			_ = KeepMarks(m.dir, m.ver, &m.rules) // the process that wrote crl.der kept them
 		}
 	}
 	newCert := m.cert == nil || string(m.cert.Certificate[0]) != string(cert.Certificate[0])
@@ -247,6 +251,9 @@ func (m *Identity) TakeCRL(crl, issuerDER []byte, now time.Time) (bool, error) {
 		return false, err
 	}
 	if err := writeFile(filepath.Join(m.dir, CRLFile), crl); err != nil {
+		return false, err
+	}
+	if err := KeepMarks(m.dir, m.ver, &m.rules); err != nil {
 		return false, err
 	}
 	m.crl = crl
@@ -383,6 +390,9 @@ func (m *Identity) CheckClient(certs []*x509.Certificate, services []string, now
 func (m *Identity) TakeStatus(msg []byte, now time.Time) (bool, error) {
 	took, err := m.rules.Take(msg, m.ver, now)
 	if took {
+		if err := KeepMarks(m.dir, m.ver, &m.rules); err != nil {
+			return true, err
+		}
 		m.mu.Lock()
 		m.signal()
 		m.mu.Unlock()

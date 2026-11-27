@@ -485,6 +485,40 @@ func TestMachineRulesEndAtRootRotation(t *testing.T) {
 	}
 }
 
+// A fresh process takes no list older than the newest the machine took
+// (orgid.MarksFile; lane SECFIX, review S10): crl.der put back to an
+// older one (a backup, another process) leaves a revoked client refused.
+func TestMachineMarksHoldAcrossARestart(t *testing.T) {
+	now := time.Now()
+	o := orgmachinetest.New(t, now)
+	d := t.TempDir()
+	o.Enrol(t, filepath.Join(d, "web"), "web", now, "web")
+	lost := o.Enrol(t, filepath.Join(d, "lost"), "lost", now, "db")
+	allowDB(t, o, now)
+	crl := filepath.Join(d, "web", orgmachine.CRLFile)
+	old, err := os.ReadFile(crl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := open(t, filepath.Join(d, "web"))
+	o.Revoke(t, "lost", now.Add(time.Second))
+	if changed, err := web.Reload(time.Now()); err != nil || !changed {
+		t.Fatalf("Reload: %v %v", changed, err)
+	}
+	crt, _ := web.Certificate()
+	iss, _ := x509.ParseCertificate(crt.Certificate[1])
+	if _, err := web.CheckClient([]*x509.Certificate{lost, iss}, []string{"db"}, time.Now()); err == nil {
+		t.Fatal("a revoked client admitted")
+	}
+	if err := os.WriteFile(crl, old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	again := open(t, filepath.Join(d, "web"))
+	if _, err := again.CheckClient([]*x509.Certificate{lost, iss}, []string{"db"}, time.Now()); err == nil {
+		t.Error("a fresh process took the older crl.der and admitted the revoked client")
+	}
+}
+
 // RenewDue is the earlier of the two certificates' half lives (up to a
 // tenth later), so a machine renews both before ssh would refuse it
 // (spec/enrol/CertRide.tla HostRideOutage): the host certificate's
