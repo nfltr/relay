@@ -63,3 +63,16 @@ func SendGrant(ctx context.Context, mb Mailbox, orgID string, g orgpki.GrantRequ
 	}
 	return *a.Grant, nil
 }
+
+// SendPeople posts a people act (orgpki.SignPeople: the root's, or an
+// admin machine's; nfltr people invite|set|remove) on orgID's enrol drop
+// box and waits up to wait for the issuer's answer: for a removal, what it
+// filed (every machine of the person); or ErrIssuerRefused with its reason
+// (spec/people/People.tla AuthorizedActs).
+func SendPeople(ctx context.Context, mb Mailbox, orgID string, p orgpki.PeopleRequest, wait time.Duration) (orgpki.Removal, error) {
+	a, err := exchange(ctx, mb, orgID, orgpki.Request{ID: randomID(), People: &p}, wait)
+	if err != nil || a.Removal == nil {
+		return orgpki.Removal{}, err
+	}
+	return *a.Removal, nil
+}

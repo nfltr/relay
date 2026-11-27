@@ -118,8 +118,39 @@ func (f *fleet) invite(t *testing.T, person, role string) string {
 	check(t, err)
 	pr, err := orgpki.SignPeople(orgpki.PeopleAct{OrgID: f.org.id, Act: orgpki.PeopleInvite, Person: person, Role: role, InviteKey: key}, f.org.rootKey, nil, f.clk.Now())
 	check(t, err)
-	if _, err := exchange(f.ctx, f.relay, f.org.id, orgpki.Request{ID: randomID(), People: &pr}, hang); err != nil {
-		t.Fatalf("the invite: %v", err)
+	if r, err := SendPeople(f.ctx, f.relay, f.org.id, pr, hang); err != nil || r.Person != "" {
+		t.Fatalf("the invite: %+v, %v", r, err)
 	}
 	return invite
+}
+
+// SendPeople carries the root's people acts to the issuer and back: a
+// removal answers what it filed (every machine of the person), and the
+// same removal again is the issuer's refusal (People.tla Offboard,
+// RemovedStaysOut).
+func TestSendPeopleAnswersTheRemoval(t *testing.T) {
+	f := newFleet(t)
+	idp := idptest.New("alice@example.com")
+	defer idp.Close()
+	f.org.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) {
+		check(t, iss.AddSignInRule(orgpki.SignInRule{ID: "people", Issuer: idp.URL, ClientIDs: []string{"nfltr"}, App: "nfltr", Groups: []string{"web"}}, f.clk.Now()))
+	})
+	kr, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	check(t, err)
+	_, ko, err := ed25519.GenerateKey(rand.Reader)
+	check(t, err)
+	nonce, err := appenrol.Nonce(kr.Public(), ko.Public())
+	check(t, err)
+	invite := f.invite(t, "alice@example.com", orgpki.RoleMember)
+	_, err = JoinSignIn(f.ctx, f.relay, filepath.Join(t.TempDir(), "device"), f.org.pins, f.org.id, "people", idp.Token(idp.Claims("nfltr", nonce)), invite, ko, kr.Public(), hang, f.clk.Now)
+	check(t, err)
+	remove, err := orgpki.SignPeople(orgpki.PeopleAct{OrgID: f.org.id, Act: orgpki.PeopleRemove, Person: "alice@example.com"}, f.org.rootKey, nil, f.clk.Now())
+	check(t, err)
+	r, err := SendPeople(f.ctx, f.relay, f.org.id, remove, hang)
+	if err != nil || r.Person != "alice@example.com" || len(r.Filed) != 1 || r.Filed[0].Name != "nfltr-1" {
+		t.Fatalf("the removal: %+v, %v", r, err)
+	}
+	if _, err := SendPeople(f.ctx, f.relay, f.org.id, remove, hang); !errors.Is(err, ErrIssuerRefused) {
+		t.Fatalf("the removal again: %v, want refused", err)
+	}
 }

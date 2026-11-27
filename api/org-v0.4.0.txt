@@ -1,4 +1,19 @@
 Compatible changes:
+- ./orgmachine.(*Machine).Audit: added
+- ./orgmachine.(*Machine).Audited: added
+- ./orgmachine.(*Machine).Issuer: added
+- ./orgmachine.(*Machine).CloseLost: added
+- ./orgenrol.AuditSession: added
+- ./orgenrol.AuditSink: added
+- ./orgenrol.AuditView: added
+- ./orgenrol.ConfigFile: added
+- ./orgenrol.ExportAudit: added
+- ./orgenrol.HeadsFile: added
+- ./orgenrol.ReadAudit: added
+- ./orgenrol.SendPeople: added
+- ./orgenrol.SessionsFile: added
+- ./orgenrol.SetAuditSink: added
+- ./orgenrol.SinkCursorFile: added
 - ./orgpki.(*Issuer).AuditChecker: added
 - ./orgpki.(*Issuer).OpenAudit: added
 - ./orgpki.(*Issuer).RefuseAudit: added
@@ -11,17 +26,3 @@ Compatible changes:
 - ./orgpki.LogChecker: added
 - ./orgpki.Request.Audit: added
 - ./orgpki.SealAudit: added
-- ./orgmachine.(*Machine).Audit: added
-- ./orgmachine.(*Machine).Audited: added
-- ./orgmachine.(*Machine).Issuer: added
-- ./orgmachine.(*Machine).CloseLost: added
-- ./orgenrol.AuditSession: added
-- ./orgenrol.AuditSink: added
-- ./orgenrol.AuditView: added
-- ./orgenrol.ConfigFile: added
-- ./orgenrol.ExportAudit: added
-- ./orgenrol.HeadsFile: added
-- ./orgenrol.ReadAudit: added
-- ./orgenrol.SessionsFile: added
-- ./orgenrol.SetAuditSink: added
-- ./orgenrol.SinkCursorFile: added
