@@ -35,6 +35,10 @@ grace-any-serial GraceOnlyNewest EnrolLoss.cfg
 # request asked again for any key (the old disk's rotated-out key renews).
 new-key-per-retry RenewsAfterExpiry EnrolLoss.cfg
 no-repeat RenewsAfterExpiry EnrolLoss.cfg
+# A stale serial strands the machine (lane ORGRENEW): the issuer renews an
+# expired certificate only when it is the name's newest serial, not when its
+# key is the newest's; a backlog answered twice leaves it holding a sibling.
+grace-newest-serial RenewsAfterExpiry EnrolDeaf.cfg
 repeat-any-key GraceOnlyNewest
 # a rebind (nfltr docs/decisions/org-rebind-2026-11-17.md): the CRL it
 # signs lists none of the name's earlier serials; the issuer renews one.

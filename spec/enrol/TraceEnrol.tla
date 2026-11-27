@@ -65,7 +65,10 @@ RenewGrace == 7776000
 \* the same serial for the same key.
 NewestOf == certs[<<E.o, newest[<<E.o, From.n>>]>>]
 Repeated == "k" \in DOMAIN E /\ NewestOf.from = E.from /\ NewestOf.k = E.k /\ (NewestOf.exp > E.t \/ NewestOf.exp + RenewGrace > E.t)
-Renewable == From.exp > E.t \/ (From.exp + RenewGrace > E.t /\ <<E.o, From.n>> \in DOMAIN newest /\ (newest[<<E.o, From.n>>] = E.from \/ Repeated))
+\* Or its key is the newest serial's (Enrol.tla NewestKey: the machine took
+\* one of a backlog's answers for its key; lane ORGRENEW 2026-11-27).
+SameKey == From.k = NewestOf.k
+Renewable == From.exp > E.t \/ (From.exp + RenewGrace > E.t /\ <<E.o, From.n>> \in DOMAIN newest /\ (newest[<<E.o, From.n>>] = E.from \/ SameKey \/ Repeated))
 RenewOK == InLog /\ From.n = E.n /\ Renewable /\ ~IsRevoked(E.o, E.n)
 \* An enrolment: a token's first is enrol.pv's; answered again (Join.tla
 \* Reissues), only for the key it enrolled, of a name not revoked whose

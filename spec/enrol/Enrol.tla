@@ -24,6 +24,14 @@
 \* newest serial, issued from the same certificate, again (Repeat), also
 \* after that certificate expired (lane CANARYCERT, nfltr
 \* docs/decisions/org-renew-answer-again-2026-11-22.md).
+\* A machine also asks again while its request still waits in the
+\* mailbox (its answer wait ran out: an issuer that cannot read, as on
+\* 2026-11-21/22); back, the issuer answers the backlog in order, each ask
+\* a serial for the same key (Issue's twice). The machine installs one,
+\* not always the newest: an expired certificate therefore renews when
+\* its key is the name's newest key (NewestKey), not only when it is the
+\* newest serial (mutant grace-newest-serial, the issuer before lane
+\* ORGRENEW 2026-11-27: the access agent and the metrics sidecar).
 \*
 \* A rebind (nfltr docs/decisions/org-rebind-2026-11-17.md; RFC 7030
 \* simplereenroll) moves an enrolled name to a new relay machine id: the
@@ -72,6 +80,7 @@ CONSTANTS
     MaxKeys,      \* keys a machine makes without a loss (renewal requests + 1: state bound)
     MaxLost,      \* requests or answers the relay loses
     MaxRebinds,   \* 0 or 1: whether a machine is rebound (Rebind.cfg; state bound)
+    Backlog,      \* the issuer may answer a request and its retry at once (Issue's twice; EnrolDeaf.cfg)
     Mutant
 
 Machines == 1..NM
@@ -127,6 +136,9 @@ NotExpired(i, t) == certs[i].exp > t
 \* before 2026-11-20) never.
 InGrace(i, t) == certs[i].exp + RenewGrace > t
 Newest(i) == \A j \in SerialsOf(certs[i].m) : j <= i
+\* i's key is the key of the name's newest serial: its holder is the
+\* machine, whichever of the backlog's answers it installed.
+NewestKey(i) == \A j \in SerialsOf(certs[i].m) : (Newest(j) => certs[j].key = certs[i].key)
 \* The machine asks while its certificate is valid or in the grace.
 Renewable(i, t) ==
     \/ NotExpired(i, t)
@@ -137,7 +149,7 @@ Renews(i, t) ==
     \/ NotExpired(i, t)
     \/ /\ Mutant # "no-renew-after-expiry"
        /\ Mutant = "renew-past-grace" \/ InGrace(i, t)
-       /\ Mutant = "grace-any-serial" \/ Newest(i)
+       /\ Mutant = "grace-any-serial" \/ IF Mutant = "grace-newest-serial" THEN Newest(i) ELSE NewestKey(i)
 \* A request asked again (Request: the key the machine waits for): the
 \* name's newest serial was issued from the request's certificate for the
 \* request's key, which the CSR's signature proves the asker holds, so the
@@ -273,16 +285,21 @@ Request(m) ==
 \* forged one is IssueForged). Under check-at-request it decides by the
 \* state when the request was posted (a revoke while the request sat in
 \* the mailbox is missed). It takes the request (acks it) and posts the
-\* answer.
-Issue(r) ==
+\* answer; twice: the request was asked again while it waited (the
+\* machine's answer wait ran out), and the issuer, reading the mailbox in
+\* order, answers the retry right after it, a second serial for the same
+\* key.
+Issue(r, twice) ==
     /\ r \in reqs
     /\ IF Mutant = "check-at-request" THEN r.ok
        ELSE Mutant = "renew-revoked" \/ Unrevoked(r.m)
     /\ Renews(r.from, now) \/ Repeat(r, now) \/ Unpresented(r, now)
     /\ Mutant = "renew-rebound" \/ ~Retired(r.from)
-    /\ certs' = Append(certs, [m |-> r.m, iss |-> now, exp |-> now + CertLife, root |-> root, forged |-> FALSE, key |-> r.key, from |-> r.from])
+    /\ twice => Backlog /\ r.key # 0
+    /\ LET c == [m |-> r.m, iss |-> now, exp |-> now + CertLife, root |-> root, forged |-> FALSE, key |-> r.key, from |-> r.from]
+       IN certs' = IF twice THEN Append(Append(certs, c), c) ELSE Append(certs, c)
     /\ reqs' = reqs \ {r}
-    /\ ans' = ans \cup {Len(certs) + 1}
+    /\ ans' = ans \cup IF twice THEN {Len(certs) + 1, Len(certs) + 2} ELSE {Len(certs) + 1}
     /\ UNCHANGED <<now, cur, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, want, lost, rebound, rebindCrl, moves, reissued>>
 
 \* Under renew-forged the issuer also renews a forged certificate the
@@ -305,12 +322,13 @@ Install(m, i) ==
     /\ UNCHANGED <<now, certs, revokedAt, crls, seen, maxSeen, vroot, root, stolen, evil, sess, keys, reqs, lost, rebound, rebindCrl, moves, reissued>>
 
 \* The old disk (a backup, or a machine's earlier disk: enrol.pv 2, the
-\* rotated-out key) holds a superseded expired serial of m and its key;
+\* rotated-out key) holds a superseded expired serial of m and its key
+\* (a key m no longer holds: a disk with m's current key is m itself);
 \* the attacker asks to renew it for a key of its own (0). One such
 \* request at a time (state bound).
 Stale(m) ==
     /\ \E i \in SerialsOf(m) :
-        /\ i < cur[m] /\ ~NotExpired(i, now)
+        /\ i < cur[m] /\ ~NotExpired(i, now) /\ certs[i].key # certs[cur[m]].key
         /\ ~\E r \in reqs : r.key = 0
         /\ ~\E c \in DOMAIN certs : ~certs[c].forged /\ certs[c].key = 0
         /\ reqs' = reqs \cup {[m |-> m, from |-> i, key |-> 0, ok |-> TRUE]}
@@ -451,7 +469,7 @@ Next ==
     \/ \E m \in Machines : Request(m) \/ Revoke(m) \/ Stale(m)
     \/ \E m \in Machines, same \in BOOLEAN : Rebind(m, same)
     \/ \E m \in Machines, a \in {"own", "other"}, k \in BOOLEAN : Move(m, a, k)
-    \/ \E r \in reqs : Issue(r)
+    \/ \E r \in reqs, twice \in BOOLEAN : Issue(r, twice)
        \* (one disjunct for coverage: IssueForged is mutant-only)
        \/ \E i \in DOMAIN certs : IssueForged(i)
     \/ \E m \in Machines, i \in ans : Install(m, i)
@@ -470,7 +488,7 @@ Spec == Init /\ [][Next]_vars
 LiveSpec == Spec
     /\ \A v \in Verifiers : (Mutant = "push-only" \/ WF_vars(Fetch(v))) /\ WF_vars(TakeRoot(v))
     /\ \A m \in Machines : WF_vars(Request(m))
-                          /\ WF_vars(\E r \in reqs : r.m = m /\ Issue(r))
+                          /\ WF_vars(\E r \in reqs, twice \in BOOLEAN : r.m = m /\ Issue(r, twice))
                           /\ WF_vars(\E i \in ans : Install(m, i))
 
 ----------------------------------------------------------------------------
@@ -504,15 +522,16 @@ NoRenewOfRetired ==
 
 \* A renewal after the NotAfter is of the name's newest serial, within
 \* RenewGrace of its NotAfter (the issuer's log entry: from, iss), or
-\* superseded only by answers to the same request (the same certificate,
-\* the same key: Repeat).
+\* superseded only by serials for its own key (the backlog's answers:
+\* NewestKey) or answers to the same request (the same certificate, the
+\* same key: Repeat).
 NoRenewPastGrace ==
     \A i \in DOMAIN certs : certs[i].forged \/ certs[i].from = 0 \/ certs[i].iss < certs[certs[i].from].exp + RenewGrace
 GraceOnlyNewest ==
     \A i \in DOMAIN certs : LET f == certs[i].from IN
         certs[i].forged \/ f = 0 \/ certs[i].iss < certs[f].exp
         \/ \A j \in DOMAIN certs : (f < j /\ j < i /\ certs[j].m = certs[i].m /\ ~certs[j].forged)
-                => (certs[j].key = certs[i].key /\ certs[j].from = f)
+                => (certs[j].key = certs[f].key \/ (certs[j].key = certs[i].key /\ certs[j].from = f))
 
 \* The old disk (a copied, rotated-out key: Stale) is never certified: a
 \* machine that took a newer certificate keeps its name, whatever the
@@ -588,5 +607,8 @@ WitnessRenewedAfterExpiry == \A i \in DOMAIN certs : certs[i].from = 0 \/ certs[
 \* A request answered again after its certificate expired (Repeat).
 WitnessAnsweredAgain == \A i \in DOMAIN certs : LET f == certs[i].from IN
     f = 0 \/ certs[i].iss < certs[f].exp \/ \A j \in DOMAIN certs : ~(f < j /\ j < i /\ certs[j].m = certs[i].m)
+\* A machine holds a serial that is not its name's newest (it installed
+\* the first of the backlog's answers).
+WitnessHeldNotNewest == \A m \in Machines : Newest(cur[m])
 WitnessRetried == \A m \in Machines : keys[m] <= 2 \/ lost = 0
 =============================================================================
