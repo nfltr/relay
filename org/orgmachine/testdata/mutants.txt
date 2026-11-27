@@ -7,7 +7,7 @@
 client-no-name-check | orgmachine.go | 	id, err := m.ver.Check(certs[0], certs[1], orgid.Peer{Name: name}, now) | 	id, err := m.ver.Check(certs[0], certs[1], orgid.Peer{}, now) | TestNamedMachineAndGroup
 client-skips-check | orgmachine.go | 			return until, fmt.Errorf("the server is not machine %s of the organisation: %w", name, err) | 			_ = err | TestNamedMachineAndGroup
 group-dial-skips-check | orgmachine.go | 			return until, fmt.Errorf("the server is not a machine of group %s: %w", group, err) | 			_ = err | TestGroupDialChecksTheGroup
-no-rule-check | ../../client/orgid/grant.go | 	until, err := rules.Admit(id, self, services, now) | 	until, err := id.Until, error(nil) | TestMachineAdmitsByTheRules
+no-rule-check | ../../client/orgid/grant.go | 	until, rule, err := rules.admit(id, self, services, now) | 	until, rule, err := id.Until, Rule{}, error(nil) | TestMachineAdmitsByTheRules
 status-not-kept | orgmachine.go | 	if err := orgfiles.Write(filepath.Join(m.dir, StatusFile), msg, 0o600); err != nil { | 	if err := error(nil); err != nil { | TestMachineAdmitsByTheRules
 status-not-reloaded | orgmachine.go | 		newStatus, _ = m.rules.Take(st, m.ver.Root(), m.orgID, now) | 		_ = st | TestMachineAdmitsByTheRules
 no-expiry-timer | orgmachine.go | 	t := time.NewTimer(time.Until(until)) | 	t := time.NewTimer(time.Hour) | TestHoldEndsAtUntil
