@@ -53,7 +53,7 @@ act-after-fence-verifies | audit.go | 		if (fence != "" || e.Act == ActArrived) 
 import-unfenced | move.go | 	if i.movedTo == "" { | 	if false { | TestMoveImportRefusesAnUnfencedCopy
 # The remote issuer renewal (renew.go; spec/proverif/orgmove.pv, its BIND:renew.* rows).
 renew-answer-unbound | renew.go | 	if pub, ok := issuerKey(c); !ok || !pub.Equal(i.key.Public()) { | 	if pub, ok := issuerKey(c); !ok || pub == nil { | TestIssuerRenewalModelBindings
-renew-answer-unbound | renew.go | 	if !i.heads[a.Head] { | 	if false { | TestIssuerRenewalModelBindings
+renew-answer-unbound | renew.go | 	if _, ok := i.heads[a.Head]; !ok { | 	if false { | TestIssuerRenewalModelBindings
 renew-unsigned-request | renew.go | 	case !ed25519.Verify(pub, renewalMessage(req), req.Sig): | 	case false: | TestIssuerRenewalModelBindings
 # Members refuse a CRL whose issuer certificate expired (orgid TakeCRL):
 # the issuer signs none then, and signs one at once after the renewal.
@@ -179,3 +179,9 @@ move-replayed | order.go | 	case slices.Index(n.serials, o.Serial) < n.moved: //
 move-outside-bound | order.go | 	case len(o.Groups) == 0 || !subset(o.Groups, i.cert.Subject.OrganizationalUnit): // mutant move-outside-bound | 	case len(o.Groups) == 0: | TestMoveOrderRefusals
 status-before-crl | status.go | 	if i.moveDue { | 	if false { | TestStatusWaitsForTheMovesCRL
 rebind-token-groups | issuer.go | 	der, err := i.issue(ActRebound, t.name, n.groups, t.machineID, t.dev, pub, tokenID, "", now) // mutant rebind-token-groups | 	der, err := i.issue(ActRebound, t.name, t.groups, t.machineID, t.dev, pub, tokenID, "", now) | TestRebindAfterAMoveTakesTheNewGroups
+# A people act names the log's head after the roster's last change (lane
+# SECFIX, review S7; people.pv query 14, act-no-head there).
+act-no-head | people.go | 	case i.heads[a.Head] < i.rosterLine || i.heads[a.Head] == 0: | 	case false: | TestPeopleModelBindings
+act-head-any-line | people.go | 	case i.heads[a.Head] < i.rosterLine || i.heads[a.Head] == 0: | 	case i.heads[a.Head] == 0: | TestPeopleModelBindings
+roster-line-not-moved | issuer.go | 		i.rosterLine = i.heads[i.head] | 		_ = 0 | TestPeopleModelBindings
+roster-line-not-replayed | issuer.go | 			i.rosterLine = n + 1 | 			_ = n | TestPeopleModelBindings

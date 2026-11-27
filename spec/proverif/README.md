@@ -1071,6 +1071,7 @@ race of a removal with a redemption, the reach bound) is
 | 6 | an offboard is the owner's, or of a person certified as a member | holds |
 | 7-8 | after the offboard, no certificate for the leaver alice (her key in the attacker's hands) and no act of the leaver carol, an admin | holds |
 | 9-13 | witnesses: alice certified; bob certified through carol's invite; carol acted; bob renewed after the offboards (phase 1 is live); a leaked invite enrols the attacker's key for its person (the residual: one person, the invite's role, once) | attack (reachable), as they must |
+| 14 | no replay: each of carol's acts is applied at most once per signature (injective). The act names the issuer log's head after the roster's last change, read from the status; the issuer takes an act only at that head, and the act it applies changes the roster (modelled as a fresh value each issuer instance offers and takes once; lane SECFIX, review S7) | holds |
 
 Mutants: `no-invite` (a sign-in rule for the IdP's domain certifies from
 the ID token alone: 1, 2; a compromised IdP enrols anyone, so domain rules
@@ -1080,7 +1081,12 @@ were removed: owner decision 2026-11-25, invites only), `invite-in-clear`
 `admin-invites-admin` (3, 5), `admin-offboards-any` (an admin offboards
 an admin: 6), `no-deny` (the leaver renews: 1, 7, not proved: ProVerif
 finds the derivation in phase 1, not the trace), `admin-after-offboard`
-(8, not proved, likewise). Since the invite became a signature key
+(8, now an attack trace, and 14: the leaver's key acts again),
+`act-no-head` (the issuer takes an act without its head: a replay of
+carol's act applies twice, 14; witness 12 then not proved). The
+mutants that make the attacker an admin, or carol (`invite-in-clear`,
+`role-from-request`, `no-role-check`, `admin-invites-admin`), also break
+14. Since the invite became a signature key
 (lane PEOPLE2), `role-from-request`, `no-role-check` and
 `admin-after-offboard` also break 2 and `admin-invites-admin` also 4: an
 insider with admin power invites bob, or a new admin, to the attacker's
@@ -1096,8 +1102,10 @@ relay: refused; the join's role the invite's: `role-from-request`),
 admin's signature, another key's signature, a certificate the issuer did
 not sign, no signature: refused; `no-role-check`, `admin-sig-unchecked`,
 `admin-cert-unchecked`), `people.removed` (a removed admin's request,
-renewal, join and a new invite: refused; `admin-after-offboard`) (lane
-PEOPLE2; `org/orgpki/testdata/mutants.txt`).
+renewal, join and a new invite: refused; `admin-after-offboard`),
+`people.head` (an applied act sent again after a later act, an act with
+a head the log never had: refused; `act-no-head`) (lane PEOPLE2, lane
+SECFIX; `org/orgpki/testdata/mutants.txt`).
 
 ### svc_access.pv: service-level access, grants, the identity an app gets and the audit (identity to the app: code since lane SA2; rules in code: lane SA3; grants: lane SA4; audit: lane SA5)
 
