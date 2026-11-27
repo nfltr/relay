@@ -33,7 +33,8 @@
 #   restore   a restore from a backup (OrgMove.tla Revive):
 #             OrgMoveRestore.cfg, each line of
 #             spec/orgmove/restore-mutants.txt caught, its witnesses
-#             reached, -coverage 1 (in ci).
+#             reached, -coverage 1; OrgMoveRestoreOlder.cfg (the relay
+#             offers an older CRL) with its witness and coverage (in ci).
 #   hfixtures each spec/orgmove/traces/hosted/<Invariant>-*.ndjson is
 #             rejected by spec/orgmove/TraceOrgHosted.tla's <Invariant>.
 #   htraces   the tests of client/orgid, org/orgmachine and orgenrol built
@@ -70,6 +71,13 @@ restore_spec() {
 	mfile=restore-mutants.txt
 	witnesses="WitnessRevivedTaken WitnessBehindRestored WitnessRevocationMerged WitnessTokenVoided"
 	covskip="Crash" # no crash here: OrgMove.cfg covers it
+}
+# older: OrgMoveRestoreOlder.cfg (the relay offers a restore an older CRL
+# than the fleet's: lane SECFIX2, S8), its witness, -coverage 1.
+older() {
+	run OrgMoveRestoreOlder.cfg
+	cfg=OrgMoveRestoreOlder.cfg witnesses="WitnessOlderOffered"
+	witnesses && coverage
 }
 # OrgHolds.tla: its actions taken only under a mutant (coverage skips them).
 holds_spec() {
@@ -374,7 +382,7 @@ ci) mutants && witnesses && coverage && fixtures && ofixtures &&
 	dash_spec && run OrgDashLive.cfg && mutants && witnesses && coverage &&
 	spec=OrgMove && restore_spec && mutants && witnesses && coverage ;;
 dash) dash_spec && run OrgDash.cfg && run OrgDashLive.cfg && mutants && witnesses && coverage ;;
-restore) restore_spec && run OrgMoveRestore.cfg && mutants && witnesses && coverage ;;
+restore) restore_spec && run OrgMoveRestore.cfg && mutants && witnesses && coverage && older ;;
 hosted) hosted_spec && run OrgHosted.cfg && run OrgHostedLive.cfg && mutants && witnesses && coverage && fixtures hosted ;;
 hfixtures) fixtures hosted ;;
 htraces) htraces ;;

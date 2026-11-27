@@ -55,6 +55,23 @@ fleet taking a CRL above it), `WitnessRevocationMerged`,
 `WitnessTokenVoided` (a token the lost host redeemed, void in the
 restored log).
 
+The relay may hand the restore an older CRL than a member holds
+(`OrgMoveRestoreOlder.cfg`, `OfferAny`: any published CRL not below the
+copy's own; lane SECFIX2, review S8): the restore takes the newest of the
+relay's and the members' it is given (`orgissuer.Restore`: this machine's
+member `crl.der`, and `nfltr org move send --restored --crl` a member's),
+so the restore resumes at or above the Number the fleet holds when it
+runs, with that CRL's revocations (`RestoreNotBehindFleet`, mutant
+`restore-older-crl`: the relay's only, the code before). With the honest
+relay (`OrgMoveRestore.cfg`) the serving issuer is never behind the fleet
+at all (`IssuerNotBehindFleet`). Residual, not claimed under `OfferAny`
+(CRLMonotone, RevokedStaysRevoked, IssuerNotBehindFleet): a CRL the lost
+issuer signed that the relay withheld from the fleet and the restore
+alike, and hands the fleet only after the restore, is outnumbered by the
+restored issuer's next CRLs, its revocations undone; the operator's
+guard is to give the restore a member's CRL read after the old machine
+stopped (nfltr's runbook). Witness `WitnessOlderOffered`.
+
 Witnesses (each must be violated, the state reachable): `WitnessMoved`,
 `WitnessTokenAcrossMove` (a token made before the move is redeemed after
 it), `WitnessRevokedAcrossMove` (a CRL the new host signs lists a revoke
@@ -261,7 +278,8 @@ minutes, out of `ci` since lane SPECFAST): `OrgMoveLive.cfg`
 two configs, its mutants, witnesses and coverage.
 `scripts/spec-orgmove.sh restore` (also in `ci`, about 40 s): `OrgMoveRestore.cfg`
 (316367 states), `restore-mutants.txt`, its witnesses, `-coverage 1` (Crash
-aside: none there; `OrgMove.cfg`'s coverage skips Revive, MaxRevive 0).
+aside: none there; `OrgMove.cfg`'s coverage skips Revive, MaxRevive 0);
+then `OrgMoveRestoreOlder.cfg`, its witness and `-coverage 1`.
 
 ## Environment assumptions
 
@@ -275,7 +293,7 @@ aside: none there; `OrgMove.cfg`'s coverage skips Revive, MaxRevive 0).
 | a shared mailbox's hold is decided by the mailbox service in one statement per touch; a release vacates only the caller's own hold; its kind (broadcast or drop box) is set by its first declared touch and never changes | OrgHolds SvcRead, SvcWrite, Release, XTake | relay-server `spec/Reach.tla` (GiveUp, ReleaseOnlyOwn), `internal/application/mailbox/scope.go` |
 | a running issuer service holds the serve lock (`flock`) for as long as it may publish; the lock is released when its process ends | OrgHolds Lock | `orgenrol/issuer.go` (`Run`), `org/internal/orgfiles` |
 | a restore runs only with the organisation lost: the old host deleted, no move under way, and no CRL published for `orgpki.RestoreQuiet` (2 h: two missed hourly re-signs; `orgpki.Issuer.Restore` refuses a CRL signed less long ago. Until lane ISSUEROUT the signal was the CRL's lapse, an hour then, a day since) | Revive (Lost) | nfltr `deploy/standalone/org-issuer-remote.sh` (`restored check`), its runbook "The organisation issuer from a backup" |
-| the CRL a restore takes is the newest the fleet holds: the relay's `crl` broadcast keeps the newest publish, and the restore verifies it under the issuer's own key (`orgpki.Issuer.Restore`: no relay's forged CRL); a relay that withholds the newest one is a relay attack outside this model (members would refuse the restored issuer's lower Numbers and fail closed when theirs lapses) | Revive (NewestRev, MaxPub) | `orgenrol.PublishedRevocationList`, relay client `orgid` (`CRLMailbox`) |
+| the honest relay's `crl` broadcast keeps the newest publish, and every CRL a restore takes is verified under the issuer's own key (`orgpki.Issuer.Restore`: no relay's forged CRL); a relay that withholds the newest one (`OfferAny`) is outvoted only by a member CRL the restore is given: the operator gives the CRL of a member that holds the fleet's newest (any running member's `crl.der`; members take only newer CRLs, so any one that was online holds it) | Revive (Offers, Fleet, Taken) | `orgenrol.PublishedRevocationList`, relay client `orgid` (`CRLMailbox`), `orgissuer.Restore` |
 | the owner revokes a machine that takes a vacant hold (denial of service is outside the threat model) | OrgHolds Revoke (fair) | the mailbox service: a vacant hold is taken by the first holder declaration |
 
 ## Traces
@@ -318,7 +336,7 @@ abstracts a host to its issuer directory); orgenrol
 `serve-after-fence`; orgpki's restore (`restore.go`, OrgMove.tla Revive):
 `number-not-above-published`, `merge-skipped`, `revive-keeps-tokens`,
 `restore-not-lapsed`, `restore-any-issuer`, `restore-older-than-copy`,
-`adopt-any-signer`, `adopt-unknown-name`, `adopt-without-restore`. The transfer's bindings (`BIND:move.*` of
+`adopt-any-signer`, `adopt-unknown-name`, `adopt-without-restore`, `restore-older-crl` (OfferAny: the relay's CRL only); orgissuer's `restore-skips-member` (this machine's member CRL not counted). The transfer's bindings (`BIND:move.*` of
 `spec/proverif/orgmove.pv`) are orgissuer's `TestOrgMoveModelBindings`
 (`make spec-bindings`).
 

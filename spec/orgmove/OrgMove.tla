@@ -50,6 +50,7 @@ CONSTANTS
     MaxLostH,    \* hosts lost (disk gone)
     MaxCrash,    \* recipient crashes before import
     MaxRevive,   \* restores of a backup copy (0: none)
+    OfferAny,    \* the relay offers a restore any published CRL not below the copy's (lane SECFIX2, S8)
     Mutant
 
 Hosts == 1..NH
@@ -270,18 +271,28 @@ Lost == /\ \A x \in Hosts : ~Has(x)
         /\ \A c \in bundles : Fenced(c.log) => ~rkey[FenceTo(c.log)]
 \* The lines of a set of names, in some order.
 SeqOf(S) == CHOOSE s \in [1..Cardinality(S) -> S] : {s[i] : i \in DOMAIN s} = S
-MergeLines(l) ==
+\* The CRLs the relay may offer a restore of copy l: the newest (the
+\* honest relay), or under OfferAny any published one not below the
+\* copy's own (orgpki.Issuer.Restore refuses those). The restore takes the
+\* newest of the offer and the fleet's (the CRL a member holds, which the
+\* operator gives it: orgissuer.Restore reads this machine's member
+\* crl.der, nfltr org move send --restored --crl a member's); mutant
+\* restore-older-crl takes the offer only (the code before: S8).
+Offers(l) == IF OfferAny THEN {c \in pub : c.num >= CrlNum(l)} ELSE {c \in pub : c.num = MaxPub}
+Fleet == [num |-> vnum, rev |-> vrev]
+Taken(c) == IF Mutant # "restore-older-crl" /\ vnum > c.num THEN Fleet ELSE c
+MergeLines(l, c) ==
     IF Mutant = "revive-behind" THEN <<>>
-    ELSE <<[k |-> "restore", x |-> IF Mutant = "number-not-above-published" THEN CrlNum(l) ELSE MaxPub]>> \o
-         LET S == IF Mutant = "merge-skipped" THEN {} ELSE NewestRev \ Revoked(l)
+    ELSE <<[k |-> "restore", x |-> IF Mutant = "number-not-above-published" THEN CrlNum(l) ELSE c.num, f |-> vnum]>> \o
+         LET S == IF Mutant = "merge-skipped" THEN {} ELSE c.rev \ Revoked(l)
              q == SeqOf(S)
          IN [i \in DOMAIN q |-> [k |-> "mrev", x |-> q[i]]]
-Revive(r) == \E b \in bundles :
+Revive(r) == \E b \in bundles : \E o \in Offers(b.log) :
     /\ revives < MaxRevive
     /\ ~Fenced(b.log) /\ rkey[r]
     /\ Lost \/ Mutant = "revive-while-held"
     /\ ~Has(r)
-    /\ LET add == MergeLines(b.log) \o <<[k |-> "fence", x |-> r], [k |-> "arrive", x |-> r]>>
+    /\ LET add == MergeLines(b.log, Taken(o)) \o <<[k |-> "fence", x |-> r], [k |-> "arrive", x |-> r]>>
        IN /\ dir' = [dir EXCEPT ![r] = [log |-> b.log \o add, key |-> b.key]]
           /\ hist' = hist \o add
     /\ rkey' = [rkey EXCEPT ![r] = FALSE]
@@ -346,6 +357,23 @@ CRLMonotone ==
 \* A name the fleet has seen revoked stays revoked for it.
 RevokedStaysRevoked == vseen \subseteq vrev
 
+\* The serving issuer's CRL Number is never below the fleet's: its next
+\* CRL is one the fleet takes. With the relay offering the newest CRL
+\* (OrgMoveRestore.cfg) this holds across a restore; under OfferAny only
+\* at the restore (RestoreNotBehindFleet).
+IssuerNotBehindFleet == \A h \in Hosts : Serving(h) => CrlNum(LogOf(h)) >= vnum
+
+\* OfferAny (lane SECFIX2, review S8): a restore resumes at or above the
+\* Number the fleet holds when it runs (f, recorded in the restore line),
+\* whatever older CRL the relay offers (mutant restore-older-crl).
+\* Residual (not claimed): a CRL the lost issuer signed that the relay
+\* withheld from the fleet and the restore alike, and hands the fleet
+\* only after the restore, is replaced by the restored issuer's next
+\* Number above it, its revocations undone (IssuerNotBehindFleet and
+\* RevokedStaysRevoked fail then: OrgMoveRestoreOlder.cfg checks
+\* neither).
+RestoreNotBehindFleet == \A h \in Hosts : Has(h) => \A i \in Acts(LogOf(h), "restore") : LogOf(h)[i].x >= LogOf(h)[i].f
+
 \* The serving issuer is the one the fleet's certificates chain through:
 \* machines keep their sessions and renew into it on their own.
 FleetUnderServingIssuer == \A h \in Hosts : Serving(h) => dir[h].key = FleetKey
@@ -371,5 +399,8 @@ WitnessRevivedTaken == ~(revives > 0 /\ \E h \in Hosts : Serving(h) /\ vnum = Cr
 WitnessBehindRestored == ~\E h \in Hosts : Serving(h) /\ vnum > 0 /\ \E i \in Acts(LogOf(h), "restore") :
     LogOf(h)[i].x > CrlNum(SubSeq(LogOf(h), 1, i - 1)) /\ vnum > LogOf(h)[i].x
 WitnessRevocationMerged == ~\E h \in Hosts : Serving(h) /\ Acts(LogOf(h), "mrev") # {}
+\* OrgMoveRestoreOlder.cfg: offered an older CRL than the fleet's, the
+\* restore took the fleet's.
+WitnessOlderOffered == ~\E h \in Hosts : Serving(h) /\ \E i \in Acts(LogOf(h), "restore") : \E c \in pub : c.num < LogOf(h)[i].x /\ c.num >= CrlNum(SubSeq(LogOf(h), 1, i - 1))
 WitnessTokenVoided == ~\E h \in Hosts, t \in Tokens : Serving(h) /\ redeem[t] = 1 /\ t \in Made(LogOf(h)) /\ t \notin LiveMade(LogOf(h)) /\ t \notin Redeemed(LogOf(h))
 =============================================================================
