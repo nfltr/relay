@@ -4,6 +4,7 @@
 package orgmachine_test
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/tls"
@@ -449,6 +450,11 @@ func TestMachineAdmitsByTheRules(t *testing.T) {
 	}
 	if took, _ := web.TakeStatus(msg, time.Now()); took {
 		t.Error("the same status taken twice")
+	}
+	// Kept whole: a new process takes it (marks.json alone would only
+	// refuse the older file, admitting no one; lane SECFIX).
+	if got, _ := os.ReadFile(filepath.Join(d, "web", orgmachine.StatusFile)); !bytes.Equal(got, msg) {
+		t.Error("status.json is not the status taken")
 	}
 	if err := admit(web, cli, "pg"); err == nil {
 		t.Error("admitted by a rule the newer status dropped")
