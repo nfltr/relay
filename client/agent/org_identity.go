@@ -6,6 +6,7 @@ package agent
 import (
 	"bufio"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
@@ -57,9 +58,10 @@ const (
 	// AssertionHeader is a JWT (RFC 7519, compact JWS RFC 7515, alg EdDSA
 	// RFC 8037) under this machine's organisation key: iss this machine's
 	// name, aud the service (BIND:svc.aud), sub the person or else the
-	// caller's machine, machine, groups, iat, exp (iat + AssertionLife).
-	// An app beyond loopback verifies it against its agent's key (JWKS)
-	// and checks aud is its own service.
+	// caller's machine, machine, groups, iat, exp (iat + AssertionLife),
+	// jti (128 random bits, one per request). An app beyond loopback
+	// verifies it against its agent's key (JWKS), checks aud is its own
+	// service, and refuses a jti it took before exp (a replay).
 	AssertionHeader = "Nfltr-Assertion"
 )
 
@@ -263,6 +265,7 @@ type assertionClaims struct {
 	Groups  []string `json:"groups"`
 	Iat     int64    `json:"iat"`
 	Exp     int64    `json:"exp"`
+	Jti     string   `json:"jti"`
 }
 
 func (a assertion) sign(c caller, now time.Time) (string, error) {
@@ -279,12 +282,21 @@ func (a assertion) sign(c caller, now time.Time) (string, error) {
 		return "", err
 	}
 	body, err := json.Marshal(assertionClaims{Iss: a.iss, Sub: sub, Aud: c.service, Machine: c.machine, Person: c.person,
-		Groups: c.groups, Iat: now.Unix(), Exp: now.Add(AssertionLife).Unix()})
+		Groups: c.groups, Iat: now.Unix(), Exp: now.Add(AssertionLife).Unix(), Jti: newJTI()})
 	if err != nil {
 		return "", err
 	}
 	in := b64(head) + "." + b64(body)
 	return in + "." + b64(ed25519.Sign(key, []byte(in))), nil
+}
+
+// newJTI is an assertion's jti (RFC 7519 4.1.7): 128 random bits, so an
+// app that keeps the jti of each assertion it took until its exp refuses
+// one replayed within its life (lane SECFIX2, review S17).
+func newJTI() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never fails (Go 1.24+)
+	return b64(b[:])
 }
 
 // machineKey is o's current machine key.
