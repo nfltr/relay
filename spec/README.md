@@ -1510,3 +1510,91 @@ from taking the end of a conn that acknowledges none (a direct path's
 failed nfltr-pipe's direct dials. Guards `TestCloseOnADirectPathTakesNoEnd`
 (Go mutant `direct-takes-end`, `client/tlsend/testdata/mutants.txt`) and
 `TestSessionWrappersPassTheEndOn` (`psConn` has no `CloseWriteSync`).
+
+## AuditLog.tla: a machine's session audit log, its lost closes and its rotation
+
+The serving agent appends each organisation session's `open` and `close`
+lines to the machine's audit log (`org/orgmachine` `sessions.jsonl`, nfltr
+`docs/decisions/service-access-2026-11-25.md` "SA5"). Lane SA5GAPS closes
+two of its gaps. (c) A killed process left an `open` with no `close`: each
+process now holds an owner file (`sessions.owners/<id>`, its lock
+`<id>.lock` held for the process's life) listing the sessions it opened,
+written before the open line and pruned after the close line; a later
+process of the machine (its keeper's round) whose try-lock of an owner
+lock succeeds writes, under the log's lock, a `lost` close for each listed
+session whose open is in the file and whose close is not, then deletes the
+owner file. The log is the truth, the owner file only says whose sessions
+they were. (a) The file is rotated: a prefix of lines the issuer
+acknowledged is dropped, never the last line (the next line chains to it,
+the log goes on) and never an open whose close is not written.
+
+`AuditLog.cfg` (`make spec`: 3 processes, 2 sessions, 2 rotations, every
+action taken with `COVERAGE=1`), `AuditLogLive.cfg` (one process never
+killed).
+
+| invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
+|---|---|---|
+| `AtMostOneClose` | a session has at most one close | `recover-no-log-check` (every listed session closed) |
+| `CloseHasOpen` | every close follows its open | `recover-no-log-check` |
+| `LiveOpenNotClosed` | a session its live process serves is not recorded closed | `recover-live` (an owner closed without its lock taken) |
+| `NothingLost` | rotation drops only lines the issuer holds | `rotate-unacked` |
+| `OneLog` | rotation never starts a new log | `rotate-all` (the last line dropped too) |
+| `EveryOpenCloses` (AuditLogLive) | every open is closed, a killed process's too | `no-recovery` (the code before), `open-before-intent`, `rotate-drops-open` |
+
+Witnesses (violated): `W_LostClose`, `W_CloseThenKilled` (killed between
+its close line and its owner file's prune: recovery writes none),
+`W_IntentOnly` (killed between the owner file and the open line: nothing
+to close), `W_Rotated`.
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| `flock(2)` (`LockFileEx` on Windows) is released when its process ends, also when killed; a lock held by a live process cannot be taken by another | flock(2), LockFileEx docs; `org/internal/orgfiles` |
+| A line appended and fsynced under the log's lock is in the file after a crash; a torn last line is cut by the next append | `org/orgmachine` `AppendAudit` (`lastLine`, `Truncate`) |
+| A rename over a file is atomic | rename(2); `orgfiles.Write` |
+| The issuer's answer acknowledges a prefix of the log (`sessions.sent`) | `org/orgenrol/auditship.go` |
+
+### Code map (AuditLog.tla)
+
+| actions | code |
+|---|---|
+| `Intent`, `OpenLine`, `CloseLine`, `Forget`, `Start` | org/orgmachine/audit.go (`Audit`, `AppendAudit`, the owner file) |
+| `Recover`, `RecoverDone` | org/orgmachine/audit.go (`CloseLost`), org/orgenrol/auditship.go (the keeper's round) |
+| `Ship`, `Rotate` | org/orgenrol/auditship.go (`shipOnce`), org/orgmachine/audit.go (`RotateAudit`) |
+
+## MoveAudit.tla: the session audit across an organisation move
+
+A machine moves its cursor (`sessions.sent`) past the lines an issuer's
+answer acknowledges, so those lines exist only at the issuer. They are
+issuer state: `nfltr org move send` carries `sessions.jsonl`,
+`sessions-heads.json`, `sessions.sink` and `config.json` in the bundle
+(`org/orgissuer/bundle.go`), and the issuer takes no audit post after its
+fence (the post stays unanswered; the new machine answers it). Before
+lane SA5GAPS neither held: the new issuer reported every machine's earlier
+lines as a gap, and a post answered between the fence and the bundle was
+lost. `spec/orgmove/OrgMove.tla` owns the move; here only what the audit
+needs of it.
+
+`MoveAudit.cfg` (`make spec`: 3 hosts, 3 lines, every action taken).
+
+| invariant | statement | mutant |
+|---|---|---|
+| `AckedHeld` | every line the machine was answered for is held by the serving issuer | `bundle-no-sessions` (the code before), `take-after-fence` |
+| `NoGap` | a move makes no serving issuer report a gap | `bundle-no-sessions` |
+
+Witnesses: `W_TakenAfterMove`, `W_AckedBeforeMove`.
+
+### Environment assumptions
+
+| assumption | source |
+|---|---|
+| The fence and the bundle are written under the issuer directory's lock, which the intake (`decide`) takes too | `orgissuer.Send`, `orgenrol` `service.with` |
+| A request the issuer does not answer is read again (by the new issuer after the move) | `orgenrol` `Run` (ErrMoved: unanswered and unacknowledged), `spec/orgmove/OrgMove.tla` |
+
+### Code map (MoveAudit.tla)
+
+| actions | code |
+|---|---|
+| `Take` | org/orgenrol/audit.go (`takeAudit`), org/orgenrol/issuer.go (`decide`) |
+| `Fence`, `Send`, `Import` | org/orgissuer/bundle.go (`bundleMember`, `tombstoneFiles`) |

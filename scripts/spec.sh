@@ -8,7 +8,7 @@
 #            spec/UDPFlow.cfg, spec/UDPFlowLive.cfg, spec/DatagramAssoc*.cfg,
 #            spec/BrowserPeer.cfg, spec/DirectPunch.cfg, spec/PunchRound*.cfg,
 #            spec/AgentStop*.cfg and
-#            spec/TLSEnd.cfg:
+#            spec/TLSEnd.cfg, spec/AuditLog*.cfg, spec/MoveAudit.cfg:
 #            their invariants and liveness
 #            (LARGE=1 adds CallCreditLarge.cfg, CallCreditBothLarge.cfg,
 #            UDPFlowLarge.cfg).
@@ -941,7 +941,7 @@ CCTESTS='^(TestCallCreditBothWaysGrant|TestCallCreditCallerLeavesStuckHandler|Te
 DGDIRECT='^(TestDatagramDirectMovesAndFallsBack|TestDatagramDirectOnlyOnceTheAgentAttached)$'
 case ${1:-} in
 check)
-	cfgs="CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch PunchRound PunchRoundSym PortMap Birthday AgentStop AgentStopNoDrain AgentStopLate AgentStopClose TLSEnd"
+	cfgs="CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch PunchRound PunchRoundSym PortMap Birthday AgentStop AgentStopNoDrain AgentStopLate AgentStopClose TLSEnd AuditLog AuditLogLive MoveAudit"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	# check1 CFG MODULE: one configuration, side by side (scripts/pool.sh).
 	check1() {
@@ -1229,6 +1229,28 @@ mutants)
 	done
 	expect witness:Clean -e 's/^    NoFalseReset$/    W_Clean/'
 	expect witness:Bound -e 's/^    NoFalseReset$/    W_Bound/'
+	model=AuditLog
+	# A machine's session audit log (lane SA5GAPS): recovery of a killed
+	# process's sessions and the file's rotation.
+	for m in recover-live recover-no-log-check rotate-unacked rotate-all; do
+		expect AUDIT:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
+	done
+	cfg=AuditLogLive
+	for m in no-recovery open-before-intent rotate-drops-open; do
+		expect AUDIT:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
+	done
+	cfg=
+	for w in W_LostClose W_CloseThenKilled W_IntentOnly W_Rotated; do
+		expect witness:$w -e "s/^    OneLog\$/    $w/"
+	done
+	model=MoveAudit
+	# The session audit across an organisation move (lane SA5GAPS).
+	for m in bundle-no-sessions take-after-fence; do
+		expect MOVEAUDIT:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
+	done
+	for w in W_TakenAfterMove W_AckedBeforeMove; do
+		expect witness:$w -e "s/^    NoGap\$/    $w/"
+	done
 	pool_end || fail=1
 	exit $fail
 	;;
