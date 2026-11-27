@@ -51,6 +51,7 @@ CONSTANTS
     MaxKeys,      \* keys the machine makes (state bound)
     MaxCerts,     \* certificates the issuer issues for the name (state bound)
     MaxLost,      \* requests or answers the relay loses
+    SignIn,       \* a sign-in join (orgenrol.JoinSignIn): no token; TokGen is the pinned root's
     Mutant
 
 Evil == MaxRoot + 1   \* a root another key signed (the attacker's)
@@ -103,11 +104,18 @@ Init ==
 \* The join's check of the root message (orgenrol.trust): the pinned root,
 \* or a root the pinned recovery key certifies. Under pin-root-only (the
 \* code before) the pinned root only; under any-root any root.
+\* A sign-in join (SignIn) names no token: it is held to the pinned root
+\* (TokGen) exactly, a rotation since the pins were made refused (a new
+\* sign-in link names the new root); mutant signin-any-recovery takes any
+\* root the pinned recovery key certifies, an older one too (the code
+\* before; lane SECFIX2, review S9).
 Trusts(g) ==
+    IF SignIn /\ Mutant # "signin-any-recovery" THEN g = TokGen ELSE
     \/ /\ \/ g = 1
           \/ Mutant # "pin-root-only" /\ g <= MaxRoot
        /\ \/ g >= TokGen
           \/ Mutant = "older-root"
+          \/ SignIn
     \/ Mutant = "any-root"
 
 \* `nfltr org join` runs: the relay hands it root g (the owner's current,
@@ -208,7 +216,7 @@ Other ==
 \* The machine renews (Enrol.tla Request, Issue, Install): a new key,
 \* certified in the name's log, not under the token.
 Renew ==
-    /\ result = "joined" /\ ~revoked /\ Newest.tok
+    /\ result = "joined" /\ jcert # 0 /\ ~revoked /\ Newest.tok
     /\ keys < MaxKeys /\ Len(certs) < MaxCerts
     /\ keys' = keys + 1
     /\ certs' = Append(certs, [key |-> keys + 1, root |-> root, tok |-> FALSE, afterRevoke |-> FALSE, id |-> Newest.id, mac |-> Newest.mac])
@@ -245,14 +253,19 @@ Relabel ==
     /\ relabeled' = TRUE
     /\ UNCHANGED <<root, certs, revoked, other, replayed, ans, keys, jkey, active, jroot, result, tries, lost, jcert>>
 
-\* Under any-root the join takes the attacker's root, and the attacker
-\* answers with a certificate of its own under it; under older-root a
-\* root superseded before the token was made, whose keys the attacker may
-\* hold (why the owner rotated). A root superseded after the token was
-\* made is the residual: the token names no later root (the owner makes
-\* new tokens after a rotation).
+\* The attacker answers a join that took its root (Evil: any-root) or a
+\* superseded one, whose keys it may hold (why the owner rotated), with a
+\* certificate of its own under it. A token join takes only an answer
+\* under the token's MAC (orgpki.Answer TokenMAC, which the relay cannot
+\* make without the token: lane SECFIX2, review S9), so the forgery needs
+\* the token (Other) or mutant answer-unmacd (the code before); a root
+\* superseded after the token was made is then refused too, the
+\* issuer's real answer failing its chain check. A sign-in names no
+\* secret its answer could carry: held to the pinned root, a root
+\* superseded after the sign-in link was made is its residual.
+ForgedTaken == SignIn \/ other \/ Mutant \in {"answer-unmacd", "any-root", "older-root"}
 InstallForged ==
-    /\ active /\ (jroot = Evil \/ jroot < TokGen)
+    /\ active /\ (jroot = Evil \/ jroot < root) /\ ForgedTaken
     /\ result' = "joined" /\ active' = FALSE
     /\ UNCHANGED <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, jroot, tries, lost, relabeled, jcert>>
 
@@ -289,6 +302,11 @@ JoinRootsAreOwners == result = "joined" => jroot # Evil
 \* ... and never under a root older than the token's (mutant older-root).
 JoinRootNotOlder == result = "joined" => jroot >= TokGen
 
+\* A token join completes only with a certificate the issuer issued
+\* (unless the token leaked): never with a forged answer under a root
+\* superseded after the token was made (mutant answer-unmacd).
+JoinedByIssuer == ~SignIn /\ result = "joined" /\ ~other => jcert # 0
+
 \* A certificate binds a relay machine id only as the token's holder
 \* stated it under the token's MAC (the relay cannot choose it), and only
 \* the issuer's account machine of the name (the move policy).
@@ -297,7 +315,7 @@ BindOnlyOwnAccount == \A i \in DOMAIN certs : certs[i].id \in {"none", "own"}
 
 \* A join the relay did not tamper with installs a certificate naming its
 \* relay machine id: no move at the first serve.
-JoinedBound == result = "joined" /\ jroot # Evil /\ ~relabeled => certs[jcert].id = "own"
+JoinedBound == result = "joined" /\ jroot # Evil /\ jcert # 0 /\ ~relabeled => certs[jcert].id = "own"
 
 \* Witnesses (each must be violated: the states are reachable).
 WitnessRetriedJoin == ~(result = "joined" /\ tries >= 2)
@@ -307,6 +325,8 @@ WitnessJoinedAfterRotation == ~(result = "joined" /\ jroot > 1)
 WitnessRefusedOther == ~(result = "refused-token" /\ other)
 WitnessRefusedEvil == result # "refused-root"
 WitnessRefusedOlder == ~(result = "refused-root" /\ jroot < TokGen)
+\* JoinSignIn.cfg: a sign-in handed a superseded root refuses it.
+WitnessSignInHeld == ~(SignIn /\ result = "refused-root" /\ jroot < TokGen)
 WitnessJoinedBound == ~(result = "joined" /\ jcert # 0 /\ certs[jcert].id = "own")
 WitnessRefusedRelabeled == ~(result = "refused-token" /\ relabeled /\ ~other /\ ~revoked)
 =============================================================================
