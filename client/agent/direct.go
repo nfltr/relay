@@ -540,7 +540,11 @@ func newPSConn(c *pathswitch.Conn, first net.Conn) *psConn { return &psConn{Conn
 // sends close_notify above but never ends the stream under it, so each
 // end's Close ends its direction; the peer's bytes are taken and dropped
 // meanwhile) and ends the session cleanly, or resets it once the peer is
-// silent for its Linger.
+// silent for its Linger. If it dropped bytes of the peer's unread (its
+// close_notify after this end's, crossing), the session can end only
+// reset: Close sends that reset before it returns, so a caller that ends
+// the transport next leaves the peer no Detach to wait out
+// (TestDatagramDirectMovesAndFallsBack's leak; lane ENDACK).
 func (c *psConn) Close() error {
 	c.closed.Store(true)
 	_ = c.CloseRead()
@@ -548,6 +552,10 @@ func (c *psConn) Close() error {
 	if !c.WaitAcked(c.Written()+1, psCloseBound) { // +1: the END
 		c.Abort()
 		return fmt.Errorf("close: the peer did not acknowledge the stream's end: %w", pathswitch.ErrReset)
+	}
+	if c.Dropped() { // the peer's bytes dropped unread: its end is a reset, sent now while the stream is up (lane ENDACK)
+		c.Abort()
+		return nil
 	}
 	go func() { _ = c.Conn.Close() }()
 	return nil
