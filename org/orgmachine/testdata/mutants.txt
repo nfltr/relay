@@ -3,7 +3,9 @@
 # orgpki's testdata/mutants.txt. Models: relay spec/proverif/e2ee_tcp_org.pv
 # (the client's name and check, the service's group) and spec/enrol/Enrol.tla
 # (no-expiry-timer: NoExpiredSession; no-cut-on-update and reload-skips-crl:
-# RevocationBound).
+# RevocationBound); spec/AuditLog.tla (the audit-* lines: recover-live,
+# no-recovery, recover-no-log-check, rotate-unacked, rotate-all,
+# rotate-drops-open).
 client-no-name-check | orgmachine.go | 	id, err := m.ver.Check(certs[0], certs[1], orgid.Peer{Name: name}, now) | 	id, err := m.ver.Check(certs[0], certs[1], orgid.Peer{}, now) | TestNamedMachineAndGroup
 client-skips-check | orgmachine.go | 			return until, fmt.Errorf("the server is not machine %s of the organisation: %w", name, err) | 			_ = err | TestNamedMachineAndGroup
 group-dial-skips-check | orgmachine.go | 			return until, fmt.Errorf("the server is not a machine of group %s: %w", group, err) | 			_ = err | TestGroupDialChecksTheGroup
@@ -18,3 +20,9 @@ install-any-host-cert | orgmachine.go | 	if _, err := orgpki.CheckHostCert(hostC
 read-pair-once | ../../client/orgid/identity.go | 		if strings.Contains(err.Error(), "private key does not match public key") { | 		if strings.Contains(err.Error(), "a mismatch never") { | TestReadPairWaitsForTheWritersCertificate
 renew-at-expiry | orgmachine.go | 		return from.Add(life/2 + life/10*time.Duration(spread)/1000) | 		return from.Add(life + life/10*time.Duration(spread)/1000) | TestRenewDueAtHalfLife
 client-tickets-on | orgmachine.go | 		SessionTicketsDisabled: true, | 		SessionTicketsDisabled: false, | TestOrgClientTLSHasNoTickets
+audit-recover-live | audit.go | 	unlock, err := orgfiles.TryLock(path + ".lock") | 	unlock, err := func() {}, error(nil) | TestKilledProcessSessionClosedLost
+audit-no-recovery | audit.go | 		k, err := m.closeOwner(id, now) | 		k, err := 0, error(nil) | TestKilledProcessSessionClosedLost
+audit-recover-no-log-check | audit.go | 			if !ok { | 			if !ok && false { | TestKilledBetweenStepsClosedOnce
+audit-rotate-unacked | audit.go | 		cut = min(acked, end-int64(len(last))-1) | 		cut = end - int64(len(last)) - 1 | TestAuditRotationKeepsTheLog
+audit-rotate-all | audit.go | 		cut = min(acked, end-int64(len(last))-1) | 		cut = min(acked, end) | TestAuditRotationKeepsTheLog
+audit-rotate-drops-open | audit.go | 			cut = min(cut, o) | 			_ = o | TestAuditRotationKeepsTheLog

@@ -77,6 +77,7 @@ type Machine struct {
 	rules   orgid.Rules // the access rules of the newest status taken (TakeStatus, status.json)
 	changed chan struct{}
 	audited chan struct{} // a line written to the audit log (Audited)
+	own     owner         // this process's open sessions (audit.go)
 }
 
 // Open reads dir. A machine that is not enrolled (no files) is an error:

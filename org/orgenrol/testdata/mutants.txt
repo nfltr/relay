@@ -79,3 +79,5 @@ sink-cursor-not-moved | audit.go | 	cur.Offset += int64(len(buf)) | 	_ = cur | T
 no-ship | auditship.go | 	at.Log, at.Offset = lr.Log, end | 	at.Log, at.Offset = lr.Log, 0 | TestAuditReachesTheIssuer
 seq-skips | ../orgmachine/audit.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, orgaudit.Hash(last) | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+2, orgaudit.Hash(last) | TestAuditReachesTheIssuer
 no-chain-written | ../orgmachine/audit.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, orgaudit.Hash(last) | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, "" | TestAuditReachesTheIssuer
+audit-keeper-no-recovery | auditship.go | 		if _, err := m.CloseLost(now()); err != nil { | 		if _, err := 0, error(nil); err != nil { | TestKeeperClosesAKilledProcesssSession
+audit-move-no-sessions | ../orgissuer/bundle.go | 	if dir, base := path.Split(name); dir == "org/" && slices.Contains(auditFiles, base) { | 	if dir, base := path.Split(name); dir == "org/" && slices.Contains(auditFiles, base) && false { | TestAuditFollowsTheMove

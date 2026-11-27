@@ -9,7 +9,10 @@ package orgenrol
 // (orgpki.SealAudit) on the enrol drop box with the machine's signed
 // head, every orgaudit.ShipEvery while there are some, the head alone
 // every orgaudit.BeatEvery. One process of the machine ships at a time
-// (shipLock); where it stands is shipFile.
+// (shipLock); where it stands is shipFile. Each round first closes the
+// sessions of the machine's processes that ended without closing them
+// (orgmachine CloseLost), and an answered post rotates the log
+// (orgmachine RotateAudit, auditRotateAt): spec/AuditLog.tla.
 
 import (
 	"bytes"
@@ -32,6 +35,9 @@ const (
 	shipLock = "sessions.ship.lock"
 	shipFile = "sessions.sent" // shipped: the log and the bytes of it the issuer acknowledged
 	shipMax  = 256 << 10       // bytes of lines in one post
+	// auditRotateAt: the machine's log is rotated past what the issuer
+	// acknowledged once it is over this (about 2000 sessions).
+	auditRotateAt = 1 << 20
 )
 
 type shipped struct {
@@ -43,6 +49,9 @@ type shipped struct {
 func shipAudit(ctx context.Context, mb Mailbox, m *orgmachine.Machine, wait time.Duration, now func() time.Time, logger *slog.Logger) {
 	var beat time.Time // the last post the issuer answered
 	for ctx.Err() == nil {
+		if _, err := m.CloseLost(now()); err != nil {
+			logger.Warn("org: a gone process's open sessions were not closed (again next round)", "error", err)
+		}
 		switch posted, err := shipOnce(ctx, mb, m, now().Sub(beat) >= orgaudit.BeatEvery, wait, now); {
 		case errors.Is(err, orgfiles.ErrLocked): // another process of the machine ships
 		case err != nil:
@@ -115,7 +124,14 @@ func shipOnce(ctx context.Context, mb Mailbox, m *orgmachine.Machine, beat bool,
 	// The issuer took what verified and logged the rest: either way
 	// these lines are done (the machine's own copy keeps them).
 	at.Log, at.Offset = lr.Log, end
-	return true, writeJSON(filepath.Join(dir, shipFile), at)
+	if err := writeJSON(filepath.Join(dir, shipFile), at); err != nil {
+		return true, err
+	}
+	_, err = orgmachine.RotateAudit(dir, at.Offset, auditRotateAt, func(cut int64) error {
+		at.Offset -= cut
+		return writeJSON(filepath.Join(dir, shipFile), at)
+	})
+	return true, err
 }
 
 // unshipped are the complete lines of dir's audit log after at (at most

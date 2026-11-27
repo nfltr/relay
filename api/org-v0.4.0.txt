@@ -17,6 +17,8 @@ Compatible changes:
 - ./orgmachine.AppendAudit: added
 - ./orgmachine.AuditFile: added
 - ./orgmachine.LastAudit: added
+- ./orgmachine.(*Machine).CloseLost: added
+- ./orgmachine.RotateAudit: added
 - ./orgenrol.AuditSession: added
 - ./orgenrol.AuditSink: added
 - ./orgenrol.AuditView: added

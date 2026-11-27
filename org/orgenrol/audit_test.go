@@ -250,3 +250,26 @@ func TestAuditNotTakenAfterTheFence(t *testing.T) {
 		t.Fatalf("the fenced issuer took lines: %v", err)
 	}
 }
+
+// A process of the machine killed mid-session (its owner file left, its
+// lock free) has its session closed lost by the keeper's next round, and
+// the close reaches the issuer (spec/AuditLog.tla EveryOpenCloses; the
+// code before left it open until silent).
+func TestKeeperClosesAKilledProcesssSession(t *testing.T) {
+	f := newFleet(t)
+	leaf, key := f.m.Current()
+	s := orgaudit.Session{ID: "killed1", Service: "pg", Who: orgaudit.Who{Name: "web-1"}, By: "rule", Opened: f.clk.Now().UTC()}
+	owners := filepath.Join(f.dir, "sessions.owners")
+	check(t, os.MkdirAll(owners, 0o700))
+	check(t, os.WriteFile(filepath.Join(owners, "gone"), []byte(`["killed1"]`), 0o600))
+	check(t, os.WriteFile(filepath.Join(owners, "gone.lock"), nil, 0o600))
+	check(t, orgmachine.AppendAudit(f.dir, s.Open(), leaf, key, f.clk.Now()))
+	keep(t, f.ctx, f.keeper())
+	eventually(t, "the killed process's session closed at the issuer", func() bool {
+		v := f.audit(t, f.clk.Now())
+		return len(v.Sessions) == 1 && v.Sessions[0].Close != nil && v.Sessions[0].Close.Reason == orgaudit.ReasonLost
+	})
+	if v := f.audit(t, f.clk.Now()); v.Findings != nil {
+		t.Fatalf("findings %q", findings(v))
+	}
+}

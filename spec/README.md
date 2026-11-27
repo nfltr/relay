@@ -1570,10 +1570,11 @@ answer acknowledges, so those lines exist only at the issuer. They are
 issuer state: `nfltr org move send` carries `sessions.jsonl`,
 `sessions-heads.json`, `sessions.sink` and `config.json` in the bundle
 (`org/orgissuer/bundle.go`), and the issuer takes no audit post after its
-fence (the post stays unanswered; the new machine answers it). Before
-lane SA5GAPS neither held: the new issuer reported every machine's earlier
-lines as a gap, and a post answered between the fence and the bundle was
-lost. `spec/orgmove/OrgMove.tla` owns the move; here only what the audit
+fence (the post stays unanswered; the new machine answers it: `decide`'s
+`orgissuer.Store.Open` refuses a fenced log with ErrMoved, which held
+before; `TestAuditNotTakenAfterTheFence` guards it). Before lane SA5GAPS
+the bundle carried none of the files: the new issuer refused every
+machine's next lines as a gap (`TestAuditFollowsTheMove`). `spec/orgmove/OrgMove.tla` owns the move; here only what the audit
 needs of it.
 
 `MoveAudit.cfg` (`make spec`: 3 hosts, 3 lines, every action taken).

@@ -42,6 +42,11 @@ const (
 	ReasonExpiry  = "expiry"  // its admission's end (a grant's, a certificate's, the rules' life)
 	ReasonRevoked = "revoked" // a newer CRL or policy refused it
 	ReasonError   = "error"   // the agent could not serve it
+	// ReasonLost: the serving process ended without closing it (killed,
+	// crashed); the machine's next process wrote the close when it found
+	// the session open (relay org orgmachine CloseLost), so Closed is when
+	// it was found and In, Out and Path are unknown (zero, none).
+	ReasonLost = "lost"
 )
 
 // Who is the client as its organisation certificate names it.
