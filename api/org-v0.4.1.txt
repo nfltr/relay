@@ -1,0 +1,3 @@
+Compatible changes:
+- ./orgpki.Status.People: added
+- ./orgpki.StatusMember.Person: added

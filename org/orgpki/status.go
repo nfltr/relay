@@ -46,6 +46,7 @@ type Status struct {
 	Policy    *orgid.SignedPolicy   `json:"policy,omitempty"`  // the root's access policy (policy.go): the serving agents' rules
 	Requests  []StatusGrantRequest  `json:"requests"`          // open grant requests (grant.go)
 	Grants    []StatusGrant         `json:"grants"`            // grants in force: their holders present them
+	People    []Person              `json:"people"`            // the roster (people.go), removed people included: the relay revokes their machines (relay-server spec/PersonEnrol.tla ApplyStatus)
 	Truncated bool                  `json:"truncated,omitempty"`
 }
 
@@ -61,6 +62,7 @@ type StatusMember struct {
 	Serial    string    `json:"serial"`
 	Groups    []string  `json:"groups"`
 	MachineID string    `json:"machine_id,omitempty"`
+	Person    string    `json:"person,omitempty"` // the name's person (PersonOf), "" for none
 	NotAfter  time.Time `json:"not_after"`
 	Revoked   bool      `json:"revoked,omitempty"`
 }
@@ -94,7 +96,7 @@ func (i *Issuer) SignedStatus(now time.Time) (SignedStatus, error) {
 			st.Truncated = true
 			break
 		}
-		m := StatusMember{Name: name, Groups: slices.Clone(n.groups), MachineID: n.machineID, Revoked: n.revoked}
+		m := StatusMember{Name: name, Groups: slices.Clone(n.groups), MachineID: n.machineID, Person: n.dev.Person, Revoked: n.revoked}
 		if len(n.serials) > 0 {
 			m.Serial = n.serials[len(n.serials)-1]
 			if c := i.certs[m.Serial]; c != nil {
@@ -115,8 +117,22 @@ func (i *Issuer) SignedStatus(now time.Time) (SignedStatus, error) {
 	var gt bool
 	st.Requests, st.Grants, gt = i.statusGrants(now)
 	st.Truncated = st.Truncated || gt
+	st.People = []Person{}
+	for email, p := range i.roster.people {
+		if len(st.People) == MaxStatusMembers {
+			st.Truncated = true
+			break
+		}
+		st.People = append(st.People, Person{Email: email, Role: p.role, Removed: p.removed})
+	}
+	for k := range i.denied { // a removed person an owner's code enrolled: not in the roster
+		if email, ok := strings.CutPrefix(k, "person:"); ok && i.roster.people[email] == nil && len(st.People) < MaxStatusMembers {
+			st.People = append(st.People, Person{Email: email, Removed: true})
+		}
+	}
 	key := i.key
 	i.mu.Unlock()
+	slices.SortFunc(st.People, func(a, b Person) int { return strings.Compare(a.Email, b.Email) })
 	slices.SortFunc(st.Members, func(a, b StatusMember) int { return strings.Compare(a.Name, b.Name) })
 	slices.SortFunc(st.Tokens, func(a, b StatusToken) int { return strings.Compare(a.ID, b.ID) })
 	body, err := json.Marshal(st)

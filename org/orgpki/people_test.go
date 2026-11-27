@@ -464,3 +464,44 @@ func mustSign(t *testing.T, k ed25519.PrivateKey, body []byte) []byte {
 	t.Helper()
 	return ed25519.Sign(k, append([]byte(peoplePrefix), body...))
 }
+
+// The people in the signed status (nfltr docs/decisions/people-layer-2026-11-25.md,
+// lane PEOPLE3; relay-server spec/PersonEnrol.tla ApplyStatus): the roster with each role and removal, a person
+// removed whom an owner's code enrolled (not in the roster) included, and
+// each member's person; the relay revokes a removed person's machines from
+// it and the dashboard shows it.
+func TestSignedStatusCarriesPeople(t *testing.T) {
+	s := newSignInOrg(t, "alice@example.com")
+	ana := s.join(t, "ana@example.com")
+	s.codeDeviceAt(t, "raj-mac", "raj@example.com", "m-rajmac")
+	if _, err := s.iss.RevokePerson("raj@example.com", s.now); err != nil {
+		t.Fatal(err)
+	}
+	st := func() Status {
+		t.Helper()
+		ss, err := s.iss.SignedStatus(s.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, _, err := VerifyStatus(ss, s.org.rootCrt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	want := []Person{{Email: "ana@example.com", Role: RoleMember}, {Email: "raj@example.com", Removed: true}}
+	if got := st().People; !slices.Equal(got, want) {
+		t.Fatalf("people %+v, want %+v", got, want)
+	}
+	name := parse(t, ana.cert).Subject.CommonName
+	i := slices.IndexFunc(st().Members, func(m StatusMember) bool { return m.Name == name })
+	if i < 0 || st().Members[i].Person != "ana@example.com" {
+		t.Fatalf("members %+v: %s's person", st().Members, name)
+	}
+	if _, err := s.actRemoval(t, s.root, nil, PeopleAct{Act: PeopleRemove, Person: "ana@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st().People; !got[0].Removed {
+		t.Fatalf("people after ana's removal %+v", got)
+	}
+}
