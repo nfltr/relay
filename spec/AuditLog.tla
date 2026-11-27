@@ -136,12 +136,14 @@ RecoverDone(p, q) ==
     /\ of' = [of EXCEPT ![q] = FALSE] /\ owner' = [owner EXCEPT ![q] = {}]
     /\ UNCHANGED <<log, base, acked, logs, st, ses, who, lock, rots>>
 
-\* The keeper's post answered: the issuer holds every line written so far
-\* (it reads complete lines, no lock).
-Ship ==
-    /\ acked < Len(log)
-    /\ acked' = Len(log)
+\* The keeper's post answered: the issuer holds the lines up to n, the
+\* complete ones the keeper read (no lock: lines written since are the
+\* next post's).
+Ship(n) ==
+    /\ n \in acked + 1..Len(log)
+    /\ acked' = n
     /\ UNCHANGED <<log, base, logs, st, of, owner, ses, who, lock, rots>>
+ShipSome == \E n \in 1..Len(log) : Ship(n)
 
 \* The keeper rotates the file under the lock: drops log[base..b-1].
 \* rotate-unacked: lines the issuer lacks; rotate-all: the last line too;
@@ -163,7 +165,7 @@ Next ==
     \/ \E p \in Procs, s \in Sess : Intent(p, s) \/ OpenLine(p, s) \/ CloseLine(p, s) \/ Forget(p, s)
     \/ \E p, q \in Procs, s \in Sess : Recover(p, q, s)
     \/ \E p, q \in Procs : RecoverDone(p, q)
-    \/ Ship
+    \/ ShipSome
 
 Spec == Init /\ [][Next]_vars
 
@@ -174,7 +176,7 @@ LiveSpec == Spec
     /\ (\A p \in Procs, s \in Sess : WF_vars(OpenLine(p, s)) /\ WF_vars(CloseLine(p, s)) /\ WF_vars(Forget(p, s)))
     /\ (\A p, q \in Procs, s \in Sess : WF_vars(Recover(p, q, s)))
     /\ (\A p, q \in Procs : WF_vars(RecoverDone(p, q)))
-    /\ WF_vars(Ship)
+    /\ WF_vars(ShipSome)
 
 ----------------------------------------------------------------------------
 \* Safety.

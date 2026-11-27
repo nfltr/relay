@@ -50,14 +50,15 @@ Write ==
     /\ lines' = lines + 1
     /\ UNCHANGED <<acked, dir, bundles, gap>>
 
-\* The keeper posts lines acked+1..lines; issuer h appends them (a hole
-\* before them is a gap) and answers, or the answer is lost (answered
-\* FALSE): the next post repeats the lines, which h holds already.
-Take(h, answered) ==
-    /\ Takes(h) /\ acked < lines
+\* The keeper posts lines acked+1..n (the complete lines it read, n <=
+\* lines); issuer h appends them (a hole before them is a gap) and
+\* answers, or the answer is lost (answered FALSE): the next post repeats
+\* the lines, which h holds already.
+Take(h, n, answered) ==
+    /\ Takes(h) /\ n \in acked + 1..lines
     /\ gap' = (gap \/ dir[h].held < acked)
-    /\ dir' = [dir EXCEPT ![h].held = IF @ >= lines THEN @ ELSE lines]
-    /\ acked' = IF answered THEN lines ELSE acked
+    /\ dir' = [dir EXCEPT ![h].held = IF @ >= n THEN @ ELSE n]
+    /\ acked' = IF answered THEN n ELSE acked
     /\ UNCHANGED <<lines, bundles>>
 
 \* nfltr org move send: the fence, then (under the same lock, and again
@@ -81,7 +82,7 @@ Import(r, b) ==
 
 Next ==
     \/ Write
-    \/ \E h \in Hosts, a \in BOOLEAN : Take(h, a)
+    \/ \E h \in Hosts, n \in 1..MaxLines, a \in BOOLEAN : Take(h, n, a)
     \/ \E h, r \in Hosts : Fence(h, r)
     \/ \E h \in Hosts : Send(h)
     \/ \E r \in Hosts, b \in bundles : Import(r, b)
