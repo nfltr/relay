@@ -51,10 +51,12 @@ func findings(v AuditView) string {
 // TestAuditReachesTheIssuer is the path end to end in one process: a
 // session's two lines go from the machine's log through the relay,
 // sealed, to the issuer's sessions, which ReadAudit shows with no
-// finding; the relay's mailbox never holds a record's bytes.
+// finding; the relay never carries a record's bytes.
 func TestAuditReachesTheIssuer(t *testing.T) {
 	f := newFleet(t)
 	f.session(t, "pg", true)
+	var posted [][]byte // every payload the relay carried (an acked one leaves its box)
+	f.relay.rewrite = func(_ string, p []byte) []byte { posted = append(posted, p); return p }
 	keep(t, f.ctx, f.keeper())
 	eventually(t, "the session at the issuer", func() bool {
 		v := f.audit(t, f.clk.Now())
@@ -67,19 +69,17 @@ func TestAuditReachesTheIssuer(t *testing.T) {
 	}
 	f.relay.mu.Lock()
 	posts := 0
-	for box, envs := range f.relay.boxes {
-		for _, e := range envs {
-			var req orgpki.Request
-			if json.Unmarshal(e.Payload, &req) == nil && req.Audit != nil {
-				posts++
-				var clear orgpki.AuditBatch // sealed: no batch reads out of it
-				if json.Unmarshal(req.Audit.Sealed, &clear) == nil && (clear.Lines != nil || clear.Head != nil) {
-					t.Errorf("mailbox %s holds a record in the clear: %s", box, req.Audit.Sealed)
-				}
+	for _, payload := range posted {
+		var req orgpki.Request
+		if json.Unmarshal(payload, &req) == nil && req.Audit != nil {
+			posts++
+			var clear orgpki.AuditBatch // sealed: no batch reads out of it
+			if json.Unmarshal(req.Audit.Sealed, &clear) == nil && (clear.Lines != nil || clear.Head != nil) {
+				t.Errorf("the relay carried a record in the clear: %s", req.Audit.Sealed)
 			}
-			if bytes.Contains(e.Payload, []byte(`"service"`)) {
-				t.Errorf("mailbox %s holds a record in the clear: %s", box, e.Payload)
-			}
+		}
+		if bytes.Contains(payload, []byte(`"service"`)) {
+			t.Errorf("the relay carried a record in the clear: %s", payload)
 		}
 	}
 	f.relay.mu.Unlock()
