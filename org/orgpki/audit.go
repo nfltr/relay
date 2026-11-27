@@ -120,7 +120,9 @@ func encode(e Entry, head string) ([]byte, error) {
 // VerifyLog checks a whole log: every line chains to the one before, the
 // first is an init, each issuer certificate chains to the root of its
 // time, each rotation is the recovery key's, and every checkpoint's
-// signatures are the issuer's and (when present) the root's of its time.
+// signatures are the issuer's and the root's of its time. Lines lost at
+// the tail are not seen here: Issuer.CheckPublishedHead holds the log to
+// the head the issuer last published.
 // It returns the entries and the head.
 func VerifyLog(lines [][]byte) ([]Entry, string, error) {
 	var (
@@ -199,7 +201,10 @@ func VerifyLog(lines [][]byte) ([]Entry, string, error) {
 			if pub, ok := issuerKey(issuer); !ok || !ed25519.Verify(pub, msg, e.IssuerSig) {
 				return nil, "", fmt.Errorf("audit line %d: checkpoint: not the issuer's signature", i+1)
 			}
-			if e.RootSig != nil && !verifyRootSig(root, msg, e.RootSig) {
+			// Every checkpoint is the root's too (RenewIssuer, InstallRenewal
+			// sign none without it): one without is refused, not skipped
+			// (lane SECFIX2, review S19; mutant checkpoint-root-optional).
+			if !verifyRootSig(root, msg, e.RootSig) {
 				return nil, "", fmt.Errorf("audit line %d: checkpoint: not the root's signature", i+1)
 			}
 		}

@@ -4,11 +4,14 @@
 package orgenrol
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -221,4 +224,40 @@ func TestServicePutsItsStatusAgainWhenTheRelayIsBack(t *testing.T) {
 	f.relay.statuses, f.relay.down = nil, true
 	f.relay.mu.Unlock()
 	eventually(t, "the status put again", func() bool { return f.status(t) != nil })
+}
+
+// An issuer whose log lost its last lines does not serve: the relay's
+// copy of its status names a head the log lacks (orgpki.ErrTruncated;
+// lane SECFIX2, review S19, mutant truncation-served). The whole log
+// serves.
+func TestIssuerWithALostTailDoesNotServe(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	o := newOrg(t, now)
+	var st orgpki.SignedStatus
+	o.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) {
+		_, err := iss.MakeToken("web-1", []string{"web"}, "", time.Hour, now)
+		check(t, err)
+		st, err = iss.SignedStatus(now)
+		check(t, err)
+	})
+	msg, err := json.Marshal(st)
+	check(t, err)
+	r := newRelay()
+	r.statuses = map[string][]byte{o.id: msg}
+	run := func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+		return Service{Mailbox: copyRelay{r}, Dir: o.dir, Logger: quiet(), Now: func() time.Time { return now }, Wait: 50 * time.Millisecond}.Run(ctx)
+	}
+	if err := run(); err != nil {
+		t.Fatalf("the whole log: %v", err)
+	}
+	log := filepath.Join(o.dir, orgissuer.LogFile)
+	data, err := os.ReadFile(log)
+	check(t, err)
+	lines := bytes.SplitAfter(bytes.TrimSuffix(data, []byte("\n")), []byte("\n"))
+	check(t, os.WriteFile(log, bytes.Join(lines[:len(lines)-1], nil), 0o600))
+	if err := run(); !errors.Is(err, orgpki.ErrTruncated) {
+		t.Fatalf("a log without its last line: %v, want ErrTruncated", err)
+	}
 }

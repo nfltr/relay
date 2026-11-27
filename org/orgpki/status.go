@@ -196,3 +196,34 @@ func CheckStatusSignature(s SignedStatus) (Status, *x509.Certificate, error) {
 	}
 	return st, iss, nil
 }
+
+// ErrTruncated: the log lacks the head of a status this issuer published,
+// so lines at its tail are lost (a disk or a copy rolled back); acts they
+// held (revocations, CRL Numbers) would be undone. A copy of a lost issuer
+// comes back with nfltr org move send --restored (Restore), never by
+// serving the shorter log.
+var ErrTruncated = errors.New("the issuer's log ends before the head it published: lines at its tail are lost")
+
+// CheckPublishedHead holds the log to msg, the relay's copy of the
+// organisation's signed status (orgid.StatusCopy): when it is this
+// organisation's, signed under its root, and names a head this log does
+// not hold, the log lost lines at its tail (ErrTruncated; lane SECFIX2,
+// review S19, mutant truncation-unseen). A status from before a restore
+// (the lost issuer's) is not held against the restored log, nor one that
+// does not verify (the relay's word is no evidence).
+func (i *Issuer) CheckPublishedHead(msg []byte) error {
+	var s SignedStatus
+	if json.Unmarshal(msg, &s) != nil {
+		return nil
+	}
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	st, _, err := VerifyStatus(s, i.root)
+	if err != nil || st.OrgID != i.orgID {
+		return nil
+	}
+	if _, ok := i.heads[st.Head]; ok || (!i.restoredAt.IsZero() && st.At.Before(i.restoredAt)) {
+		return nil
+	}
+	return fmt.Errorf("%w: the relay holds this issuer's status of %s at head %s, not in this log of %d lines (restore it with nfltr org move send --restored)", ErrTruncated, st.At.UTC().Format(time.RFC3339), st.Head, len(i.heads))
+}
