@@ -77,6 +77,8 @@ func TestNamedMachineAndGroup(t *testing.T) {
 	}
 	if err := session(t, eve, cli, "web", "db"); err == nil {
 		t.Error("the client took eve's certificate for web")
+	} else if msg := err.Error(); !strings.Contains(msg, "the server is not machine web of the organisation: ") || strings.Contains(msg, "<machine>.<agent>") {
+		t.Errorf("the refusal must name the machine and no retired dial form: %v", err)
 	}
 	if err := session(t, web, eve, "web", "db"); err == nil {
 		t.Error("the service admitted eve, outside its group")

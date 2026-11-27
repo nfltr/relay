@@ -24,7 +24,7 @@ accept-older-crl | verify.go | 	if held := v.crls[fp]; held != nil && crl.Number
 rotate-by-primary | verify.go | 	if err := c.CheckSignatureFrom(recovery); err != nil { | 	if err := c.CheckSignatureFrom(current); err != nil { | TestRotationOnlyByRecoveryKey
 replayed-rotation | verify.go | 	if !c.NotBefore.After(current.NotBefore) { | 	if false { | TestRotationOnlyByRecoveryKey
 client-no-name-check | identity.go | 	id, err := m.ver.Check(certs[0], certs[1], Peer{Name: name}, now) | 	id, err := m.ver.Check(certs[0], certs[1], Peer{}, now) | TestNamedMachineAndGroup
-client-skips-check | identity.go | 			return until, fmt.Errorf("the server is not machine %s of the organisation (a machine enrols under its name in the account and is dialled as <machine>.<agent>): %w", name, err) | 			_ = err | TestNamedMachineAndGroup
+client-skips-check | identity.go | 			return until, fmt.Errorf("the server is not machine %s of the organisation: %w", name, err) | 			_ = err | TestNamedMachineAndGroup
 group-dial-skips-check | identity.go | 			return until, fmt.Errorf("the server is not a machine of group %s: %w", group, err) | 			_ = err | TestGroupDialChecksTheGroup
 no-expiry-timer | identity.go | 	t := time.NewTimer(time.Until(until)) | 	t := time.NewTimer(time.Hour) | TestHoldEndsAtUntil
 no-cut-on-update | identity.go | 			u, cerr := check(time.Now()) | 			u, cerr := until, error(nil) | TestRevocationCutsHeldSession

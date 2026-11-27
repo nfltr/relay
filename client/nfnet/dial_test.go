@@ -255,7 +255,9 @@ func TestRelayTunnelsE2EE(t *testing.T) {
 	_, _ = c.Write([]byte("x"))
 	_ = c.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, err = c.Read(make([]byte, 1))
-	wantCode(t, "a client outside the service's groups", err, CodeE2EEClientRefused, "")
+	if e := wantCode(t, "a client outside the service's groups", err, CodeE2EEClientRefused, ""); !strings.Contains(e.Message, "access rules do not let it use the service") {
+		t.Fatalf("the refusal must name the access rules: %s", e.Message)
+	}
 }
 
 // Nothing the relay says changes a session's mode: an organisation open

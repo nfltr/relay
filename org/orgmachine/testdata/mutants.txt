@@ -5,7 +5,7 @@
 # (no-expiry-timer: NoExpiredSession; no-cut-on-update and reload-skips-crl:
 # RevocationBound).
 client-no-name-check | orgmachine.go | 	id, err := m.ver.Check(certs[0], certs[1], orgid.Peer{Name: name}, now) | 	id, err := m.ver.Check(certs[0], certs[1], orgid.Peer{}, now) | TestNamedMachineAndGroup
-client-skips-check | orgmachine.go | 			return until, fmt.Errorf("the server is not machine %s of the organisation (a machine enrols under its name in the account and is dialled as <machine>.<agent>): %w", name, err) | 			_ = err | TestNamedMachineAndGroup
+client-skips-check | orgmachine.go | 			return until, fmt.Errorf("the server is not machine %s of the organisation: %w", name, err) | 			_ = err | TestNamedMachineAndGroup
 group-dial-skips-check | orgmachine.go | 			return until, fmt.Errorf("the server is not a machine of group %s: %w", group, err) | 			_ = err | TestGroupDialChecksTheGroup
 no-rule-check | ../../client/orgid/grant.go | 	until, err := rules.Admit(id, self, services, now) | 	until, err := id.Until, error(nil) | TestMachineAdmitsByTheRules
 status-not-kept | orgmachine.go | 	if err := orgfiles.Write(filepath.Join(m.dir, StatusFile), msg, 0o600); err != nil { | 	if err := error(nil); err != nil { | TestMachineAdmitsByTheRules

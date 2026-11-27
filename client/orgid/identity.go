@@ -420,7 +420,7 @@ func (m *Identity) ClientTLS(name string, admitted func(certs []*x509.Certificat
 	return m.clientTLS(MachineDNS(name, m.orgID), func(certs []*x509.Certificate, now time.Time) (time.Time, error) {
 		until, err := m.CheckServer(certs, name, now)
 		if err != nil {
-			return until, fmt.Errorf("the server is not machine %s of the organisation (a machine enrols under its name in the account and is dialled as <machine>.<agent>): %w", name, err)
+			return until, fmt.Errorf("the server is not machine %s of the organisation: %w", name, err)
 		}
 		return until, nil
 	}, admitted)

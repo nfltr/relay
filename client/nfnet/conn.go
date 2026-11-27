@@ -350,7 +350,7 @@ func clientRefused(err error) error {
 	if msg := op.Err.Error(); msg != "tls: bad certificate" && msg != "tls: certificate required" {
 		return err
 	}
-	return &Error{Code: CodeE2EEClientRefused, Message: "the service refused this machine's organisation certificate (not in its allowed groups, revoked or expired): " + err.Error(), Err: err}
+	return &Error{Code: CodeE2EEClientRefused, Message: "the service refused this machine's organisation certificate (the organisation's access rules do not let it use the service, or it is revoked or expired): " + err.Error(), Err: err}
 }
 
 // handshake runs the end-to-end TLS handshake: a failure is
