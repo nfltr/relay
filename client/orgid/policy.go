@@ -283,6 +283,12 @@ func statusPolicy(msg []byte, v *Verifier, now time.Time) (heldPolicy, error) {
 type Rules struct {
 	mu   sync.Mutex
 	held *heldPolicy
+	// The newest rules number and status time this machine took under the
+	// root of fingerprint floorRoot (MarksFile): a status below them is
+	// refused after a restart too.
+	floorRoot string
+	floorNum  int64
+	floorAt   time.Time
 }
 
 // Take takes the organisation's signed status msg (relay org
@@ -300,6 +306,9 @@ func (r *Rules) Take(msg []byte, v *Verifier, now time.Time) (took bool, err err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.floorRoot == Fingerprint(h.root) && (h.policy.Number < r.floorNum || h.at.Before(r.floorAt)) {
+		return false, fmt.Errorf("the status (rules %d, of %s) is older than the newest this machine took (rules %d, of %s): a replay", h.policy.Number, h.at.UTC().Format(time.RFC3339), r.floorNum, r.floorAt.UTC().Format(time.RFC3339))
+	}
 	// Newer: higher rules (the issuer numbers them up only), or the same
 	// rules under a later status (a later life). A status the relay
 	// replays is not newer.
