@@ -19,6 +19,10 @@ import (
 	"github.com/nfltr/relay/client/orgid"
 )
 
+// An organisation-mode service of the SDK's own identity is audited
+// (client/agent auditOpen; SA5 gap (b)).
+var _ agent.OrgAuditor = (*orgid.Identity)(nil)
+
 // orgServer serves an echo over the agent's TLS of organisation mode (allow
 // group db, negotiating protos) on a pipe; the client end is returned with
 // a done channel closed at the test's end.

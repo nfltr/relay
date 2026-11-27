@@ -77,7 +77,7 @@ audit-in-clear | ../orgpki/sessionaudit.go | 	return hpke.Seal(pk, kdf, aead, au
 audit-in-clear | ../orgpki/sessionaudit.go | 	plain, err := hpke.Open(sk, kdf, aead, auditInfo(i.key.Public().(ed25519.PublicKey)), sealed) | 	plain, err := sealed, error(nil); _, _, _ = sk, kdf, aead | TestAuditReachesTheIssuer
 sink-cursor-not-moved | audit.go | 	cur.Offset += int64(len(buf)) | 	_ = cur | TestAuditSinkTakesEveryLineOnce
 no-ship | auditship.go | 	at.Log, at.Offset = lr.Log, end | 	at.Log, at.Offset = lr.Log, 0 | TestAuditReachesTheIssuer
-seq-skips | ../orgmachine/audit.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, orgaudit.Hash(last) | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+2, orgaudit.Hash(last) | TestAuditReachesTheIssuer
-no-chain-written | ../orgmachine/audit.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, orgaudit.Hash(last) | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, "" | TestAuditReachesTheIssuer
+seq-skips | ../../client/orgaudit/log.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, Hash(last) | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+2, Hash(last) | TestAuditReachesTheIssuer
+no-chain-written | ../../client/orgaudit/log.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, Hash(last) | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, "" | TestAuditReachesTheIssuer
 audit-keeper-no-recovery | auditship.go | 		if _, err := m.CloseLost(now()); err != nil { | 		if _, err := 0, error(nil); err != nil { | TestKeeperClosesAKilledProcesssSession
 audit-move-no-sessions | ../orgissuer/bundle.go | 	if dir, base := path.Split(name); dir == "org/" && slices.Contains(auditFiles, base) { | 	if dir, base := path.Split(name); dir == "org/" && slices.Contains(auditFiles, base) && false { | TestAuditFollowsTheMove

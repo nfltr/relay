@@ -21,7 +21,6 @@ import (
 
 	"github.com/nfltr/relay/client/orgaudit"
 	"github.com/nfltr/relay/org/orgissuer"
-	"github.com/nfltr/relay/org/orgmachine"
 	"github.com/nfltr/relay/org/orgpki"
 )
 
@@ -107,7 +106,7 @@ func TestAuditReachesTheIssuer(t *testing.T) {
 func TestAuditAlterationsFound(t *testing.T) {
 	f := newFleet(t)
 	f.session(t, "pg", true)
-	local := filepath.Join(f.dir, orgmachine.AuditFile)
+	local := filepath.Join(f.dir, orgaudit.LogFile)
 	b, err := os.ReadFile(local)
 	check(t, err)
 	check(t, os.WriteFile(local, bytes.Replace(b, []byte(`"out":7`), []byte(`"out":1`), 1), 0o600))
@@ -228,7 +227,7 @@ func TestAuditFollowsTheMove(t *testing.T) {
 func TestAuditNotTakenAfterTheFence(t *testing.T) {
 	f := newFleet(t)
 	f.session(t, "pg", true)
-	line, err := orgmachine.LastAudit(f.dir)
+	line, err := orgaudit.Last(f.dir)
 	check(t, err)
 	lr, err := orgaudit.Parse(line)
 	check(t, err)
@@ -263,7 +262,7 @@ func TestKeeperClosesAKilledProcesssSession(t *testing.T) {
 	check(t, os.MkdirAll(owners, 0o700))
 	check(t, os.WriteFile(filepath.Join(owners, "gone"), []byte(`["killed1"]`), 0o600))
 	check(t, os.WriteFile(filepath.Join(owners, "gone.lock"), nil, 0o600))
-	check(t, orgmachine.AppendAudit(f.dir, s.Open(), leaf, key, f.clk.Now()))
+	check(t, orgaudit.Append(f.dir, s.Open(), leaf, key, f.clk.Now()))
 	keep(t, f.ctx, f.keeper())
 	eventually(t, "the killed process's session closed at the issuer", func() bool {
 		v := f.audit(t, f.clk.Now())

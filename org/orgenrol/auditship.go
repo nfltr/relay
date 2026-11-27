@@ -12,7 +12,7 @@ package orgenrol
 // (shipLock); where it stands is shipFile. Each round first closes the
 // sessions of the machine's processes that ended without closing them
 // (orgmachine CloseLost), and an answered post rotates the log
-// (orgmachine RotateAudit, auditRotateAt): spec/AuditLog.tla.
+// (orgaudit.Rotate, auditRotateAt): spec/AuditLog.tla.
 
 import (
 	"bytes"
@@ -88,7 +88,7 @@ func shipOnce(ctx context.Context, mb Mailbox, m *orgmachine.Machine, beat bool,
 	if err != nil || len(lines) == 0 && !beat {
 		return false, err
 	}
-	last, err := orgmachine.LastAudit(dir)
+	last, err := orgaudit.Last(dir)
 	if err != nil || last == nil {
 		return false, err
 	}
@@ -127,7 +127,7 @@ func shipOnce(ctx context.Context, mb Mailbox, m *orgmachine.Machine, beat bool,
 	if err := writeJSON(filepath.Join(dir, shipFile), at); err != nil {
 		return true, err
 	}
-	_, err = orgmachine.RotateAudit(dir, at.Offset, auditRotateAt, func(cut int64) error {
+	_, err = orgaudit.Rotate(dir, at.Offset, auditRotateAt, func(cut int64) error {
 		at.Offset -= cut
 		return writeJSON(filepath.Join(dir, shipFile), at)
 	})
@@ -138,7 +138,7 @@ func shipOnce(ctx context.Context, mb Mailbox, m *orgmachine.Machine, beat bool,
 // shipMax bytes) and where they end. A log whose first line is not of
 // at's log (the file replaced) is shipped from its start.
 func unshipped(dir string, at *shipped) ([][]byte, int64, error) {
-	f, err := os.Open(filepath.Join(dir, orgmachine.AuditFile)) // #nosec G304 -- the machine's own directory
+	f, err := os.Open(filepath.Join(dir, orgaudit.LogFile)) // #nosec G304 -- the machine's own directory
 	if os.IsNotExist(err) {
 		return nil, at.Offset, nil
 	}

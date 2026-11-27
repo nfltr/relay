@@ -31,6 +31,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/nfltr/relay/client/orgaudit"
 	"github.com/nfltr/relay/client/orgid"
 	"github.com/nfltr/relay/org/internal/orgfiles"
 	"github.com/nfltr/relay/org/orgpki"
@@ -77,7 +78,7 @@ type Machine struct {
 	rules   orgid.Rules // the access rules of the newest status taken (TakeStatus, status.json)
 	changed chan struct{}
 	audited chan struct{} // a line written to the audit log (Audited)
-	own     owner         // this process's open sessions (audit.go)
+	log     *orgaudit.Log // this process's writer of the audit log (audit.go)
 }
 
 // Open reads dir. A machine that is not enrolled (no files) is an error:
@@ -100,6 +101,7 @@ func Open(dir string) (*Machine, error) {
 		return nil, err
 	}
 	m := &Machine{dir: dir, ver: ver, orgID: orgID, root: root.Raw, changed: make(chan struct{}), audited: make(chan struct{}, 1)}
+	m.log = &orgaudit.Log{Dir: dir, Signer: m.Current, Written: m.wroteAudit}
 	if _, err := m.Reload(time.Now()); err != nil {
 		return nil, err
 	}

@@ -1514,7 +1514,8 @@ failed nfltr-pipe's direct dials. Guards `TestCloseOnADirectPathTakesNoEnd`
 ## AuditLog.tla: a machine's session audit log, its lost closes and its rotation
 
 The serving agent appends each organisation session's `open` and `close`
-lines to the machine's audit log (`org/orgmachine` `sessions.jsonl`, nfltr
+lines to the machine's audit log (`client/orgaudit` `Log`, `sessions.jsonl`,
+written by `org/orgmachine` and `client/orgid`'s Identity; nfltr
 `docs/decisions/service-access-2026-11-25.md` "SA5"). Lane SA5GAPS closes
 two of its gaps. (c) A killed process left an `open` with no `close`: each
 process now holds an owner file (`sessions.owners/<id>`, its lock
@@ -1550,18 +1551,18 @@ to close), `W_Rotated`.
 
 | assumption | source |
 |---|---|
-| `flock(2)` (`LockFileEx` on Windows) is released when its process ends, also when killed; a lock held by a live process cannot be taken by another | flock(2), LockFileEx docs; `org/internal/orgfiles` |
-| A line appended and fsynced under the log's lock is in the file after a crash; a torn last line is cut by the next append | `org/orgmachine` `AppendAudit` (`lastLine`, `Truncate`) |
-| A rename over a file is atomic | rename(2); `orgfiles.Write` |
+| `flock(2)` (`LockFileEx` on Windows) is released when its process ends, also when killed; a lock held by a live process cannot be taken by another (a Log kept reachable: its lock file is closed by the GC with it) | flock(2), LockFileEx docs; `client/orgaudit/files*.go` |
+| A line appended and fsynced under the log's lock is in the file after a crash; a torn last line is cut by the next append | `client/orgaudit` `Append` (`lastLine`, `Truncate`) |
+| A rename over a file is atomic | rename(2); `client/orgaudit` `writeFile` |
 | The issuer's answer acknowledges a prefix of the log (`sessions.sent`) | `org/orgenrol/auditship.go` |
 
 ### Code map (AuditLog.tla)
 
 | actions | code |
 |---|---|
-| `Intent`, `OpenLine`, `CloseLine`, `Forget`, `Start` | org/orgmachine/audit.go (`Audit`, `AppendAudit`, the owner file) |
-| `Recover`, `RecoverDone` | org/orgmachine/audit.go (`CloseLost`), org/orgenrol/auditship.go (the keeper's round) |
-| `Ship`, `Rotate` | org/orgenrol/auditship.go (`shipOnce`), org/orgmachine/audit.go (`RotateAudit`) |
+| `Intent`, `OpenLine`, `CloseLine`, `Forget`, `Start` | client/orgaudit/log.go (`Log.Audit`, `Append`, the owner file), its writers org/orgmachine/audit.go and client/orgid/identity.go (`Audit`) |
+| `Recover`, `RecoverDone` | client/orgaudit/log.go (`Log.CloseLost`), org/orgenrol/auditship.go (the keeper's round) |
+| `Ship`, `Rotate` | org/orgenrol/auditship.go (`shipOnce`), client/orgaudit/log.go (`Rotate`) |
 
 ## MoveAudit.tla: the session audit across an organisation move
 

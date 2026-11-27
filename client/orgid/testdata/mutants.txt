@@ -64,3 +64,4 @@ rule-any-service | policy.go | 		return (r.Service == service || r.Service == An
 rule-any-place | policy.go | 		return (r.Service == service || r.Service == AnyService) && matches(r.Who, client) && matches(r.Where, self) | 		return (r.Service == service || r.Service == AnyService) && matches(r.Who, client) | TestSvcAccessModelBindingsPolicy
 approver-any-service | policy.go | 		return a.Where == where && a.Service == service && slices.Contains(a.People, person) | 		return a.Where == where && slices.Contains(a.People, person) | TestSvcAccessModelBindingsPolicy
 client-no-grant | grant.go | 		g := m.grantFor(cert.Leaf, service, where, time.Now()) | 		g := (*x509.Certificate)(nil); _ = where | TestGrantSessionAdmittedAndCut
+identity-audit-nowhere | identity.go | 	m.log = &orgaudit.Log{Dir: dir, Signer: m.current} | 	m.log = &orgaudit.Log{Dir: filepath.Join(dir, "elsewhere"), Signer: m.current} | TestIdentitySessionAudited

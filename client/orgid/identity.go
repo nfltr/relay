@@ -5,6 +5,7 @@ package orgid
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
@@ -16,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nfltr/relay/client/orgaudit"
 	"github.com/nfltr/relay/client/pairfile"
 )
 
@@ -68,6 +70,7 @@ type Identity struct {
 	issuers []byte // issuers.crl, as the verifier took it
 	rules   Rules  // the access rules of the newest status taken (TakeStatus)
 	changed chan struct{}
+	log     *orgaudit.Log // this process's writer of the machine's audit log (Audit)
 }
 
 // Load reads dir. A machine that is not enrolled (no files) is an error:
@@ -90,6 +93,7 @@ func Load(dir string) (*Identity, error) {
 		return nil, err
 	}
 	m := &Identity{dir: dir, ver: ver, orgID: orgID, root: root.Raw, changed: make(chan struct{})}
+	m.log = &orgaudit.Log{Dir: dir, Signer: m.current}
 	if _, err := m.Reload(time.Now()); err != nil {
 		return nil, err
 	}
@@ -345,6 +349,27 @@ func (m *Identity) Certificate() (*tls.Certificate, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.cert, nil
+}
+
+// current is the certificate and key that sign the machine's audit lines.
+func (m *Identity) current() (*x509.Certificate, ed25519.PrivateKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	key, _ := m.cert.PrivateKey.(ed25519.PrivateKey)
+	return m.cert.Leaf, key
+}
+
+// Audit records a session certs opened to service, one of services
+// (agent.OrgAuditor), in the machine's audit log, the one relay org
+// orgmachine.Machine writes (orgaudit.Log): its open line now, its close
+// line at the end it returns. The machine's keeper (relay org orgenrol,
+// in nfltr up and nfltr cat serve) ships it to the issuer and closes the
+// sessions of a process that ended without closing them.
+func (m *Identity) Audit(certs []*x509.Certificate, service string, services []string, opened time.Time) func(orgaudit.End) {
+	leaf, _ := m.current()
+	self := Checked{Name: leaf.Subject.CommonName, Groups: leaf.Subject.OrganizationalUnit}
+	return m.log.Audit(orgaudit.Session{Service: service, Who: orgaudit.WhoOf(certs[0]), Opened: opened,
+		By: AdmittedBy(m.ver, &m.rules, certs, self, services, opened)})
 }
 
 // Changed is closed at the next change (agent.Org).

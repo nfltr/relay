@@ -1,59 +1,54 @@
 // Copyright 2026 nfltr
 // SPDX-License-Identifier: Apache-2.0
 
-package orgmachine_test
+package orgaudit
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
-
-	"github.com/nfltr/relay/client/orgaudit"
-	"github.com/nfltr/relay/org/orgmachine"
-	"github.com/nfltr/relay/org/orgmachine/orgmachinetest"
 )
 
-// auditMachine is a machine's directory enrolled, opened by procs
-// processes (each its own Machine on the directory).
-func auditMachine(t *testing.T, procs int) []*orgmachine.Machine {
+// logs is procs processes' Logs of one machine directory.
+func logs(t *testing.T, procs int) []*Log {
 	t.Helper()
-	now := time.Now()
-	o := orgmachinetest.New(t, now)
-	dir := filepath.Join(t.TempDir(), "web")
-	o.Enrol(t, dir, "web", now, "web")
-	var ms []*orgmachine.Machine
+	m := newMachine(t, "web", 1)
+	m.cert.Subject = pkix.Name{CommonName: "web"}
+	dir := t.TempDir()
+	var ls []*Log
 	for range procs {
-		ms = append(ms, open(t, dir))
+		ls = append(ls, &Log{Dir: dir, Signer: func() (*x509.Certificate, ed25519.PrivateKey) { return m.cert, m.key }})
 	}
-	return ms
+	return ls
 }
 
-func opened(t *testing.T, m *orgmachine.Machine, service string) func(orgaudit.End) {
+func opened(t *testing.T, l *Log, service string) func(End) {
 	t.Helper()
-	leaf, _ := m.Current()
-	return m.Audit([]*x509.Certificate{leaf, m.Issuer()}, service, []string{service}, time.Now())
+	return l.Audit(Session{Service: service, Who: Who{Name: "ci-1"}, By: "rule group:ops machine:web " + service, Opened: time.Now()})
 }
 
 // records is dir's audit log, each line checked against the one before.
-func records(t *testing.T, dir string) []orgaudit.Record {
+func records(t *testing.T, dir string) []Record {
 	t.Helper()
-	data, err := os.ReadFile(filepath.Join(dir, orgmachine.AuditFile))
+	data, err := os.ReadFile(filepath.Join(dir, LogFile))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var rs []orgaudit.Record
+	var rs []Record
 	var prev []byte
 	for l := range bytes.Lines(data) {
 		l = bytes.TrimSuffix(l, []byte("\n"))
-		r, err := orgaudit.Parse(l)
+		r, err := Parse(l)
 		if err != nil {
 			t.Fatalf("line %d: %v", len(rs)+1, err)
 		}
-		if prev != nil && r.Prev != orgaudit.Hash(prev) {
+		if prev != nil && r.Prev != Hash(prev) {
 			t.Fatalf("line %d does not chain to the one before", len(rs)+1)
 		}
 		rs, prev = append(rs, r), l
@@ -61,9 +56,9 @@ func records(t *testing.T, dir string) []orgaudit.Record {
 	return rs
 }
 
-func closes(rs []orgaudit.Record, session string) (n int, reason string) {
+func closes(rs []Record, session string) (n int, reason string) {
 	for _, r := range rs {
-		if r.Kind == orgaudit.KindClose && r.Session == session {
+		if r.Kind == KindClose && r.Session == session {
 			n, reason = n+1, r.Reason
 		}
 	}
@@ -75,22 +70,22 @@ func closes(rs []orgaudit.Record, session string) (n int, reason string) {
 // mutant no-recovery, the code before). A live process's session stays
 // open (LiveOpenNotClosed; mutant recover-live).
 func TestKilledProcessSessionClosedLost(t *testing.T) {
-	ms := auditMachine(t, 3)
+	ms := logs(t, 3)
 	killed, live, next := ms[0], ms[1], ms[2]
 	opened(t, killed, "pg")
-	opened(t, killed, "ssh")(orgaudit.End{Closed: time.Now(), Reason: orgaudit.ReasonClosed})
+	opened(t, killed, "ssh")(End{Closed: time.Now(), Reason: ReasonClosed})
 	// A serving process's sessions keep its Machine (their ends hold it);
 	// held here, or the GC closes its owner lock's file as a kill would.
 	defer runtime.KeepAlive(opened(t, live, "web"))
-	orgmachine.KillOwner(killed) // its process is gone: its owner lock is free
+	killed.release() // its process is gone: its owner lock is free
 	if n, err := next.CloseLost(time.Now()); err != nil || n != 1 {
 		t.Fatalf("CloseLost: %d closes, %v; want 1", n, err)
 	}
-	rs := records(t, next.Dir())
+	rs := records(t, next.Dir)
 	if len(rs) != 5 {
 		t.Fatalf("%d lines, want 5 (3 opens, 2 closes)", len(rs))
 	}
-	if n, reason := closes(rs, rs[0].Session); n != 1 || reason != orgaudit.ReasonLost {
+	if n, reason := closes(rs, rs[0].Session); n != 1 || reason != ReasonLost {
 		t.Fatalf("the killed process's open session: %d closes (%s), want one lost", n, reason)
 	}
 	if n, _ := closes(rs, rs[3].Session); n != 0 {
@@ -106,21 +101,21 @@ func TestKilledProcessSessionClosedLost(t *testing.T) {
 // (W_IntentOnly), gets no close from recovery: the log says what happened
 // (mutant recover-no-log-check).
 func TestKilledBetweenStepsClosedOnce(t *testing.T) {
-	ms := auditMachine(t, 2)
+	ms := logs(t, 2)
 	killed, next := ms[0], ms[1]
 	opened(t, killed, "pg")
-	rs := records(t, killed.Dir())
-	s := orgaudit.Session{ID: rs[0].Session, Service: rs[0].Service, Who: rs[0].Who, By: rs[0].By, Opened: rs[0].Opened}
-	orgmachine.WriteAudit(killed, s.Close(orgaudit.End{Closed: time.Now(), Reason: orgaudit.ReasonClosed})) // the close line, not the prune
-	orgmachine.AddOwned(killed, "intent-only")                                                              // the owner file, not the open line
-	orgmachine.KillOwner(killed)
+	rs := records(t, killed.Dir)
+	s := Session{ID: rs[0].Session, Service: rs[0].Service, Who: rs[0].Who, By: rs[0].By, Opened: rs[0].Opened}
+	killed.line(s.Close(End{Closed: time.Now(), Reason: ReasonClosed})) // the close line, not the prune
+	killed.add("intent-only")                                           // the owner file, not the open line
+	killed.release()
 	if n, err := next.CloseLost(time.Now()); err != nil || n != 0 {
 		t.Fatalf("CloseLost: %d closes, %v; want none", n, err)
 	}
-	if n, _ := closes(records(t, next.Dir()), s.ID); n != 1 {
+	if n, _ := closes(records(t, next.Dir), s.ID); n != 1 {
 		t.Fatalf("%d closes, want 1", n)
 	}
-	if left, _ := os.ReadDir(filepath.Join(next.Dir(), orgmachine.OwnersDir)); len(left) != 0 {
+	if left, _ := os.ReadDir(filepath.Join(next.Dir, OwnersDir)); len(left) != 0 {
 		t.Fatalf("owner files left: %v", left)
 	}
 }
@@ -130,14 +125,14 @@ func TestKilledBetweenStepsClosedOnce(t *testing.T) {
 // (EveryOpenCloses, mutant rotate-drops-open), never past acked
 // (NothingLost, mutant rotate-unacked).
 func TestAuditRotationKeepsTheLog(t *testing.T) {
-	m := auditMachine(t, 1)[0]
-	dir := m.Dir()
+	m := logs(t, 1)[0]
+	dir := m.Dir
 	for range 3 {
-		opened(t, m, "pg")(orgaudit.End{Closed: time.Now(), Reason: orgaudit.ReasonClosed})
+		opened(t, m, "pg")(End{Closed: time.Now(), Reason: ReasonClosed})
 	}
 	end := opened(t, m, "ssh") // open: line 7
-	opened(t, m, "pg")(orgaudit.End{Closed: time.Now(), Reason: orgaudit.ReasonClosed})
-	data, _ := os.ReadFile(filepath.Join(dir, orgmachine.AuditFile))
+	opened(t, m, "pg")(End{Closed: time.Now(), Reason: ReasonClosed})
+	data, _ := os.ReadFile(filepath.Join(dir, LogFile))
 	offsets := []int64{0}
 	for l := range bytes.Lines(data) {
 		offsets = append(offsets, offsets[len(offsets)-1]+int64(len(l)))
@@ -145,19 +140,19 @@ func TestAuditRotationKeepsTheLog(t *testing.T) {
 	before := records(t, dir)
 	moved := int64(-1)
 	cursor := func(cut int64) error { moved = cut; return nil }
-	if cut, err := orgmachine.RotateAudit(dir, offsets[2], int64(len(data))+1, cursor); err != nil || cut != 0 {
+	if cut, err := Rotate(dir, offsets[2], int64(len(data))+1, cursor); err != nil || cut != 0 {
 		t.Fatalf("under the size: cut %d, %v", cut, err)
 	}
-	if cut, err := orgmachine.RotateAudit(dir, offsets[2], 1, cursor); err != nil || cut != offsets[2] || moved != cut {
+	if cut, err := Rotate(dir, offsets[2], 1, cursor); err != nil || cut != offsets[2] || moved != cut {
 		t.Fatalf("acked 2 lines: cut %d (cursor told %d), %v; want %d", cut, moved, err, offsets[2])
 	}
-	if cut, err := orgmachine.RotateAudit(dir, int64(len(data)), 1, cursor); err != nil || cut != offsets[6]-offsets[2] {
+	if cut, err := Rotate(dir, int64(len(data)), 1, cursor); err != nil || cut != offsets[6]-offsets[2] {
 		t.Fatalf("all acked: cut %d, %v; want up to the open session (%d)", cut, err, offsets[6]-offsets[2])
 	}
-	end(orgaudit.End{Closed: time.Now(), Reason: orgaudit.ReasonClosed})
-	data, _ = os.ReadFile(filepath.Join(dir, orgmachine.AuditFile))
+	end(End{Closed: time.Now(), Reason: ReasonClosed})
+	data, _ = os.ReadFile(filepath.Join(dir, LogFile))
 	last := int64(len(data)) - int64(len(bytes.TrimSuffix(data, []byte("\n")))-bytes.LastIndexByte(bytes.TrimSuffix(data, []byte("\n")), '\n'))
-	if cut, err := orgmachine.RotateAudit(dir, int64(len(data)), 1, cursor); err != nil || cut != last {
+	if cut, err := Rotate(dir, int64(len(data)), 1, cursor); err != nil || cut != last {
 		t.Fatalf("all acked and closed: cut %d, %v; want all but the last line (%d)", cut, err, last)
 	}
 	opened(t, m, "pg")

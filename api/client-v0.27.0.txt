@@ -1,5 +1,6 @@
 Compatible changes:
 - ./orgid.AdmittedBy: added
+- ./orgid.(*Identity).Audit: added
 - ./agent.OrgAuditor: added
 - ./tlsend.(*Conn).Bytes: added
 - package github.com/nfltr/relay/client/orgaudit: added

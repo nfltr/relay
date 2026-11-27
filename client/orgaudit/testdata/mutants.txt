@@ -14,3 +14,10 @@ no-new-log | orgaudit.go | 			find("new log %s (log %s ended at seq %d)", r.Log,
 head-no-sig | orgaudit.go | 	if !verify(h.Key, headContext, s.Head, s.Sig) { | 	if false { | TestAuditHeadFindsWithheldLines
 no-withheld | orgaudit.go | 	if seq, _ := c.Held(h.Machine, h.Log); seq < h.Seq { | 	if seq, _ := c.Held(h.Machine, h.Log); false && seq < h.Seq { | TestAuditHeadFindsWithheldLines
 never-silent | orgaudit.go | 	if open == 0 || now.Sub(heard) < SilentAfter { | 	if true { | TestAuditHeadFindsWithheldLines
+# spec/AuditLog.tla (lane SA5GAPS): a gone process's sessions closed lost, the log's rotation.
+audit-recover-live | log.go | 	unlock, err := tryLockFile(path + ".lock") | 	unlock, err := func() {}, error(nil) | TestKilledProcessSessionClosedLost
+audit-no-recovery | log.go | 		k, err := l.closeOwner(id, now) | 		k, err := 0, error(nil) | TestKilledProcessSessionClosedLost
+audit-recover-no-log-check | log.go | 			if !ok { | 			if !ok && false { | TestKilledBetweenStepsClosedOnce
+audit-rotate-unacked | log.go | 		cut = min(acked, end-int64(len(last))-1) | 		cut = end - int64(len(last)) - 1 | TestAuditRotationKeepsTheLog
+audit-rotate-all | log.go | 		cut = min(acked, end-int64(len(last))-1) | 		cut = min(acked, end) | TestAuditRotationKeepsTheLog
+audit-rotate-drops-open | log.go | 			cut = min(cut, o) | 			_ = o | TestAuditRotationKeepsTheLog
