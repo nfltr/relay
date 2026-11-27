@@ -204,11 +204,11 @@ func (d *directServer) holdConn(q *quic.Conn, name string) {
 		return // a capability address's: no admission to end (its sessions end with the serving process)
 	}
 	certs := q.ConnectionState().TLS.PeerCertificates
-	cut := func() { go d.closeAfterSessions(q, name) }
+	cut := func(string) { go d.closeAfterSessions(q, name) }
 	changed := d.org.Changed() // before the check: a change after it is seen
 	until, err := d.org.CheckClient(certs, d.services, time.Now())
 	if err != nil {
-		cut()
+		cut("")
 		return
 	}
 	go holdAdmission(until, changed, d.org.Changed,

@@ -171,6 +171,7 @@ const EndBound = 5 * time.Second
 // Read is the TLS connection's, with a transport end as ErrTruncated.
 func (c *Conn) Read(p []byte) (int, error) {
 	n, err := c.Conn.Read(p)
+	c.raw.read.Add(int64(n))
 	if err == io.EOF {
 		if c.raw.ended.Load() {
 			err = ErrTruncated
@@ -183,6 +184,17 @@ func (c *Conn) Read(p []byte) (int, error) {
 	return n, err
 }
 
+// Write is the TLS connection's, counted (Bytes).
+func (c *Conn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	c.raw.written.Add(int64(n))
+	return n, err
+}
+
+// Bytes is the plaintext read and written so far: an organisation
+// session's audit record (relay client/orgaudit End.In, End.Out).
+func (c *Conn) Bytes() (read, written int64) { return c.raw.read.Load(), c.raw.written.Load() }
+
 // rawEnd is the transport under the TLS connection. It hands crypto/tls
 // an EOF only on a read of its own, never with the last bytes: after a
 // close_notify, crypto/tls reads no further, so ended is set only when
@@ -191,8 +203,10 @@ type rawEnd struct {
 	net.Conn
 	eof      bool // the transport's EOF, held for the next read
 	ended    atomic.Bool
-	reset    atomic.Bool // Conn.Reset: Close sends no close_notify
-	notified atomic.Bool // the peer's close_notify was read (a clean io.EOF)
+	reset    atomic.Bool  // Conn.Reset: Close sends no close_notify
+	notified atomic.Bool  // the peer's close_notify was read (a clean io.EOF)
+	read     atomic.Int64 // plaintext bytes Conn.Read returned (Bytes)
+	written  atomic.Int64 // and Conn.Write took
 }
 
 // NetConn is the transport (crypto/tls's NetConn is this rawEnd): a

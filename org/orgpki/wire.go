@@ -52,6 +52,10 @@ type Request struct {
 	// Grant is an act on a grant (grant.go): a member machine's request,
 	// an approver's answer, a revoke (ID: random).
 	Grant *GrantRequest `json:"grant,omitempty"`
+	// Audit is a machine's session audit lines, sealed to the issuer
+	// (sessionaudit.go; ID: the batch's log and last seq, so a retry is
+	// answered as the first post was).
+	Audit *AuditRequest `json:"audit,omitempty"`
 }
 
 // Answer is the issuer's answer to request ID: the certificate and the
@@ -77,6 +81,8 @@ type Answer struct {
 	Policy int64 `json:"policy,omitempty"`
 	// Grant is what a grant act did (ApplyGrant).
 	Grant *GrantAnswer `json:"grant,omitempty"`
+	// Audit is where the issuer stands in the machine's audit log.
+	Audit *AuditAnswer `json:"audit,omitempty"`
 }
 
 // RootMessage is the organisation's current root and its recovery, and

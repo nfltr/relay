@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/nfltr/link/peerlink"
+	"github.com/nfltr/relay/client/orgaudit"
 	"github.com/nfltr/relay/client/tlsend"
 	"github.com/nfltr/relay/proto/wire/agentservices"
 )
@@ -41,6 +43,24 @@ type Org interface {
 	// against (a CRL, a root, a certificate); open sessions are checked
 	// again then, and a refused one ends.
 	Changed() <-chan struct{}
+}
+
+// OrgAuditor is an Org that keeps an audit record of each session it
+// admits (relay org orgmachine.Machine: a signed, numbered line of the
+// machine's log at the session's open and at its end; nfltr
+// docs/decisions/service-access-2026-11-25.md "4. Audit per service").
+// Audit is called once the handshake admitted certs to service (one of
+// services), and the end it returns once the session ended.
+type OrgAuditor interface {
+	Audit(certs []*x509.Certificate, service string, services []string, opened time.Time) (end func(orgaudit.End))
+}
+
+// auditOpen is o's audit of a session (OrgAuditor), or none.
+func auditOpen(o Org, certs []*x509.Certificate, service string, services []string) func(orgaudit.End) {
+	if a, ok := o.(OrgAuditor); ok {
+		return a.Audit(certs, service, services, time.Now())
+	}
+	return func(orgaudit.End) {}
 }
 
 // ErrOrgClientRefused: a session's client presented no certificate the
@@ -101,7 +121,10 @@ func orgServerConfig(o Org, services []string, bind serviceBind, adm *orgAdmissi
 // returns the channel of the change after the one just taken; take
 // changed before the check that admitted the session, so a change between
 // the two is not missed. It returns when done is closed or after cut.
-func holdAdmission(until time.Time, changed <-chan struct{}, next func() <-chan struct{}, check func(now time.Time) (time.Time, error), cut func(), done <-chan struct{}) {
+//
+// cut is told why: orgaudit.ReasonExpiry at until, ReasonRevoked at a
+// change the check refuses.
+func holdAdmission(until time.Time, changed <-chan struct{}, next func() <-chan struct{}, check func(now time.Time) (time.Time, error), cut func(reason string), done <-chan struct{}) {
 	t := time.NewTimer(time.Until(until))
 	defer t.Stop()
 	for {
@@ -109,13 +132,13 @@ func holdAdmission(until time.Time, changed <-chan struct{}, next func() <-chan 
 		case <-done:
 			return
 		case <-t.C:
-			cut()
+			cut(orgaudit.ReasonExpiry)
 			return
 		case <-changed:
 			changed = next()
 			u, cerr := check(time.Now())
 			if cerr != nil {
-				cut()
+				cut(orgaudit.ReasonRevoked)
 				return
 			}
 			t.Reset(time.Until(u))
@@ -229,11 +252,25 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 		}
 	}
 	handshook()
+	end := auditOpen(p.org, adm.certs, p.bind.service, p.services)
+	var reason atomic.Pointer[string] // why it ended, when not by either side
+	defer func() {
+		e := orgaudit.End{Closed: time.Now(), Reason: orgaudit.ReasonClosed, Path: PathRelayed}
+		e.In, e.Out = tc.Bytes()
+		if r := reason.Load(); r != nil {
+			e.Reason = *r
+		}
+		if ps != nil {
+			e.Path = ps.Path()
+		}
+		end(e)
+	}()
 	done := make(chan struct{})
-	defer close(done)
+	defer close(done) // before the audit's end: the hold returns, and its reason is set
 	go holdAdmission(adm.until, changed, p.org.Changed,
 		func(now time.Time) (time.Time, error) { return p.org.CheckClient(adm.certs, p.services, now) },
-		func() {
+		func(why string) {
+			reason.Store(&why)
 			logger.Info("e2ee tcp: organisation admission ended, session cut")
 			if revokeDatagrams(target) {
 				// its flows told why on the session, which then ends
@@ -250,6 +287,8 @@ func serveE2EETCP(s, target net.Conn, p sessionPlan, logger *slog.Logger) {
 	}
 	if err != nil {
 		logger.Warn("e2ee tcp: the caller's identity to the target", "error", err)
+		why := orgaudit.ReasonError
+		reason.Store(&why)
 		_ = tc.Reset()
 		dropTarget(target)
 		return

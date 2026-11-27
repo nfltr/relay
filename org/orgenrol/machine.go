@@ -387,6 +387,7 @@ func (k Keeper) Run(ctx context.Context) {
 	var follows sync.WaitGroup
 	defer follows.Wait() // nothing of Run writes the machine's directory once it returned (TestKeeperRunJoinsItsFollows)
 	follows.Go(func() { followCRL(ctx, k.Mailbox, m, k.FollowEvery, k.Now, k.Logger) })
+	follows.Go(func() { shipAudit(ctx, k.Mailbox, m, k.AnswerWait, k.Now, k.Logger) }) // auditship.go
 	follows.Go(func() {
 		follow(ctx, k.Mailbox, orgpki.RootMailbox(org), k.FollowEvery, func(p []byte) error {
 			var rm orgpki.RootMessage

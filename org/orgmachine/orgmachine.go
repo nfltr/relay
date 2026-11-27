@@ -76,6 +76,7 @@ type Machine struct {
 	krl     []byte      // orgpki.HostKRL of crl
 	rules   orgid.Rules // the access rules of the newest status taken (TakeStatus, status.json)
 	changed chan struct{}
+	audited chan struct{} // a line written to the audit log (Audited)
 }
 
 // Open reads dir. A machine that is not enrolled (no files) is an error:
@@ -97,7 +98,7 @@ func Open(dir string) (*Machine, error) {
 	if err != nil {
 		return nil, err
 	}
-	m := &Machine{dir: dir, ver: ver, orgID: orgID, root: root.Raw, changed: make(chan struct{})}
+	m := &Machine{dir: dir, ver: ver, orgID: orgID, root: root.Raw, changed: make(chan struct{}), audited: make(chan struct{}, 1)}
 	if _, err := m.Reload(time.Now()); err != nil {
 		return nil, err
 	}
@@ -414,6 +415,14 @@ func (m *Machine) Current() (*x509.Certificate, ed25519.PrivateKey) {
 	defer m.mu.Unlock()
 	key, _ := m.cert.PrivateKey.(ed25519.PrivateKey)
 	return m.cert.Leaf, key
+}
+
+// Issuer is the issuer certificate of this machine's chain: whom its
+// audit lines are sealed to (orgpki.SealAudit).
+func (m *Machine) Issuer() *x509.Certificate {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.issuer
 }
 
 // HostSigner is this machine's SSH host key: its current key, presenting

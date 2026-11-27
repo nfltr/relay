@@ -152,22 +152,40 @@ func (v *Verifier) checkGrant(g, issuer, leaf *x509.Certificate, client, self Ch
 // certificate is checked (chain, NotAfter, CRL), then a rule of rules
 // admits it, else the grant does (CheckGrant).
 func AdmitClient(ver *Verifier, rules *Rules, certs []*x509.Certificate, self Checked, services []string, now time.Time) (time.Time, error) {
+	until, _, err := admitClient(ver, rules, certs, self, services, now)
+	return until, err
+}
+
+// AdmittedBy is what admits certs at now, as AdmitClient decides it, in
+// an audit record's words (relay client/orgaudit Record.By): "rule <who>
+// <where> <service>" or "grant <request> by <approver>"; "" when nothing
+// does.
+func AdmittedBy(ver *Verifier, rules *Rules, certs []*x509.Certificate, self Checked, services []string, now time.Time) string {
+	_, by, err := admitClient(ver, rules, certs, self, services, now)
+	if err != nil {
+		return ""
+	}
+	return by
+}
+
+// admitClient is AdmitClient with what admitted (AdmittedBy's words).
+func admitClient(ver *Verifier, rules *Rules, certs []*x509.Certificate, self Checked, services []string, now time.Time) (time.Time, string, error) {
 	if len(certs) != 2 && len(certs) != 3 {
-		return time.Time{}, errNoChain
+		return time.Time{}, "", errNoChain
 	}
 	id, err := ver.Check(certs[0], certs[1], Peer{}, now)
 	if err != nil {
-		return time.Time{}, err
+		return time.Time{}, "", err
 	}
-	until, err := rules.Admit(id, self, services, now)
+	until, rule, err := rules.admit(id, self, services, now)
 	if err == nil || len(certs) == 2 {
-		return until, err
+		return until, "rule " + rule.Who + " " + rule.Where + " " + rule.Service, err
 	}
-	_, until, gerr := ver.CheckGrant(certs[2], certs[1], certs[0], id, self, services, now)
+	g, until, gerr := ver.CheckGrant(certs[2], certs[1], certs[0], id, self, services, now)
 	if gerr != nil {
-		return time.Time{}, fmt.Errorf("%w; its grant: %v", err, gerr)
+		return time.Time{}, "", fmt.Errorf("%w; its grant: %v", err, gerr)
 	}
-	return until, nil
+	return until, "grant " + g.Request + " by " + g.By, nil
 }
 
 // grantsIn are the grant certificates a signed status (relay org

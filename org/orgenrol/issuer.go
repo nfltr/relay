@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -63,6 +64,9 @@ type CRLCopyWriter interface {
 type StatusCopyWriter interface {
 	PutOrgStatus(ctx context.Context, orgID string, msg []byte) error
 }
+
+// sinkClient posts to an URL audit sink (ExportAudit).
+var sinkClient = &http.Client{Timeout: 30 * time.Second}
 
 // serveLock: the file a Service holds while it serves its directory.
 const serveLock = "serve.lock"
@@ -221,6 +225,9 @@ func (c Service) Run(ctx context.Context) (err error) {
 		}
 		if ctx.Err() == nil {
 			s.maintained(err, c.Now())
+			if _, err := ExportAudit(ctx, c.Dir, sinkClient); err != nil && ctx.Err() == nil {
+				logger.Warn("org issuer: the audit sink did not take the sessions (again next round; nothing is lost)", "error", err)
+			}
 		}
 		// The round: a notice ends it at once, and the loop maintains
 		// (RevokePush.tla Read: a notice taken before the read; one that
@@ -482,6 +489,14 @@ func (s *service) decide(ctx context.Context, req orgpki.Request, refuse string,
 				a.Refused = err.Error()
 			} else {
 				a.Grant = &r
+			}
+			return nil
+		case req.Audit != nil: // a machine's session audit lines (audit.go): no certificate
+			r, err := takeAudit(s.Dir, iss, *req.Audit, now)
+			if err != nil {
+				a.Refused = err.Error()
+			} else {
+				a.Audit = &r
 			}
 			return nil
 		case req.People != nil: // the root's or an admin's act on the roster (People.tla): no certificate

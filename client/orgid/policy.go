@@ -150,9 +150,19 @@ func VerifyPolicy(sp SignedPolicy, root *x509.Certificate, orgID string) (Policy
 // name, groups and person) use service on the serving machine self (its
 // own name and groups).
 func (p Policy) Admits(client, self Checked, service string) bool {
-	return slices.ContainsFunc(p.Rules, func(r Rule) bool {
+	_, ok := p.admitting(client, self, service)
+	return ok
+}
+
+// admitting is the first rule of p that admits client to service on self.
+func (p Policy) admitting(client, self Checked, service string) (Rule, bool) {
+	i := slices.IndexFunc(p.Rules, func(r Rule) bool {
 		return (r.Service == service || r.Service == AnyService) && matches(r.Who, client) && matches(r.Where, self)
 	})
+	if i < 0 {
+		return Rule{}, false
+	}
+	return p.Rules[i], true
 }
 
 // matches reports whether a "<kind>:<name>" principal names c: one of its
@@ -296,22 +306,28 @@ func (r *Rules) Take(msg []byte, root *x509.Certificate, orgID string, now time.
 // PeerRuleAdmits): fail closed with no rules or lapsed ones. until is the
 // earlier of the client certificate's and the rules' ends.
 func (r *Rules) Admit(client, self Checked, services []string, now time.Time) (until time.Time, err error) {
+	until, _, err = r.admit(client, self, services, now)
+	return until, err
+}
+
+// admit is Admit with the rule that admitted.
+func (r *Rules) admit(client, self Checked, services []string, now time.Time) (until time.Time, rule Rule, err error) {
 	r.mu.Lock()
 	pol := r.held
 	r.mu.Unlock()
 	switch {
 	case pol == nil:
-		return time.Time{}, errors.New("no access rules from the organisation's status yet: fail closed (the agent reads it from the relay)")
+		return time.Time{}, Rule{}, errors.New("no access rules from the organisation's status yet: fail closed (the agent reads it from the relay)")
 	case !now.Before(pol.until):
-		return time.Time{}, fmt.Errorf("the organisation's access rules lapsed at %s (status of %s): fail closed until the issuer is heard from", pol.until.Format(time.RFC3339), pol.at.Format(time.RFC3339))
+		return time.Time{}, Rule{}, fmt.Errorf("the organisation's access rules lapsed at %s (status of %s): fail closed until the issuer is heard from", pol.until.Format(time.RFC3339), pol.at.Format(time.RFC3339))
 	}
 	for _, s := range services {
-		if pol.policy.Admits(client, self, s) {
+		if rule, ok := pol.policy.admitting(client, self, s); ok {
 			if client.Until.Before(pol.until) {
-				return client.Until, nil
+				return client.Until, rule, nil
 			}
-			return pol.until, nil
+			return pol.until, rule, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("no access rule lets %s use %s/%s (nfltr access allow on the root's machine)", client.Name, self.Name, strings.Join(services, ","))
+	return time.Time{}, Rule{}, fmt.Errorf("no access rule lets %s use %s/%s (nfltr access allow on the root's machine)", client.Name, self.Name, strings.Join(services, ","))
 }
