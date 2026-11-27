@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nfltr/relay/client/grpcclient"
+	"github.com/nfltr/relay/client/internal/tcprig"
 	"github.com/nfltr/relay/proto/wire/agentwire"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
@@ -227,12 +228,7 @@ func TestRedialNowOutlivesADialInFlight(t *testing.T) {
 // dial RedialNow makes, and RedialNow returns then, so its caller's attempt
 // fails with that refusal and the caller paces the next one itself.
 func TestRedialNowReturnsWhileTheRelayIsDown(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close() // the relay is down
+	port := tcprig.RefusedAddr(t).Port // the relay is down: a held port no other process can take
 
 	conn, err := grpcclient.NewClientConn(false, "127.0.0.1", port)
 	if err != nil {
