@@ -116,7 +116,9 @@ func (f *fleet) invite(t *testing.T, person, role string) string {
 	t.Helper()
 	invite, key, err := orgpki.NewInvite(f.org.id)
 	check(t, err)
-	pr, err := orgpki.SignPeople(orgpki.PeopleAct{OrgID: f.org.id, Act: orgpki.PeopleInvite, Person: person, Role: role, InviteKey: key}, f.org.rootKey, nil, f.clk.Now())
+	var head string // the signer reads it from the status
+	f.org.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) { head = iss.Head() })
+	pr, err := orgpki.SignPeople(orgpki.PeopleAct{OrgID: f.org.id, Head: head, Act: orgpki.PeopleInvite, Person: person, Role: role, InviteKey: key}, f.org.rootKey, nil, f.clk.Now())
 	check(t, err)
 	if _, err := exchange(f.ctx, f.relay, f.org.id, orgpki.Request{ID: randomID(), People: &pr}, hang); err != nil {
 		t.Fatalf("the invite: %v", err)

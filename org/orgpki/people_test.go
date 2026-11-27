@@ -48,6 +48,9 @@ func (s *signInOrg) actRemoval(t *testing.T, key crypto.Signer, cert []byte, a P
 	if a.OrgID == "" {
 		a.OrgID = s.iss.OrgID()
 	}
+	if a.Head == "" {
+		a.Head = s.iss.Head()
+	}
 	r, err := SignPeople(a, key, cert, s.now)
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +346,7 @@ var peopleBindings = map[string]func(t *testing.T){
 		if err != nil {
 			t.Fatal(err)
 		}
-		r, err := SignPeople(PeopleAct{OrgID: s.iss.OrgID(), Act: PeopleInvite, Person: "ana@example.com", Role: RoleMember, InviteKey: key}, s.root, nil, s.now)
+		r, err := SignPeople(PeopleAct{OrgID: s.iss.OrgID(), Head: s.iss.Head(), Act: PeopleInvite, Person: "ana@example.com", Role: RoleMember, InviteKey: key}, s.root, nil, s.now)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -367,11 +370,11 @@ var peopleBindings = map[string]func(t *testing.T){
 		dan := s.join(t, "dan@example.com")
 		forged := forgeCert(t, carol.cert)
 		_, key, _ := NewInvite(s.iss.OrgID())
-		honest, err := SignPeople(PeopleAct{OrgID: s.iss.OrgID(), Act: PeopleInvite, Person: "eve@example.com", Role: RoleMember, InviteKey: key}, carol.key, carol.cert, s.now)
+		honest, err := SignPeople(PeopleAct{OrgID: s.iss.OrgID(), Head: s.iss.Head(), Act: PeopleInvite, Person: "eve@example.com", Role: RoleMember, InviteKey: key}, carol.key, carol.cert, s.now)
 		if err != nil {
 			t.Fatal(err)
 		}
-		member, err := SignPeople(PeopleAct{OrgID: s.iss.OrgID(), Act: PeopleInvite, Person: "eve@example.com", Role: RoleMember, InviteKey: key}, dan.key, dan.cert, s.now)
+		member, err := SignPeople(PeopleAct{OrgID: s.iss.OrgID(), Head: s.iss.Head(), Act: PeopleInvite, Person: "eve@example.com", Role: RoleMember, InviteKey: key}, dan.key, dan.cert, s.now)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -388,6 +391,48 @@ var peopleBindings = map[string]func(t *testing.T){
 		}
 		if _, err := s.iss.ApplyPeople(honest, s.now); err != nil {
 			t.Errorf("the honest request: %v", err)
+		}
+	},
+	// An act names the log's head after the roster's last change: the
+	// relay's replay of an applied act, after another act, and an act
+	// naming a head the log never had are refused (mutant act-no-head;
+	// lane SECFIX, review S7).
+	"people.head": func(t *testing.T) {
+		s := newSignInOrg(t, "ana@example.com")
+		s.join(t, "dan@example.com")
+		sign := func(role string) PeopleRequest {
+			r, err := SignPeople(PeopleAct{OrgID: s.iss.OrgID(), Head: s.iss.Head(), Act: PeopleRole, Person: "dan@example.com", Role: role}, s.root, nil, s.now)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return r
+		}
+		promote := sign(RoleAdmin)
+		if _, err := s.iss.ApplyPeople(promote, s.now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.iss.ApplyPeople(sign(RoleMember), s.now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.iss.ApplyPeople(promote, s.now); !errors.Is(err, ErrRefused) {
+			t.Errorf("the promotion replayed after the demotion: %v, want refused", err)
+		}
+		reopened, err := Open(s.lines, s.iss.key, s.sink) // the roster's last change from the log
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reopened.ApplyPeople(promote, s.now); !errors.Is(err, ErrRefused) {
+			t.Errorf("the promotion replayed to the reopened issuer: %v, want refused", err)
+		}
+		if got := s.roleOf("dan@example.com"); got != RoleMember {
+			t.Errorf("dan is %q, want member", got)
+		}
+		other, err := SignPeople(PeopleAct{OrgID: s.iss.OrgID(), Head: strings.Repeat("0", 64), Act: PeopleRole, Person: "dan@example.com", Role: RoleAdmin}, s.root, nil, s.now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.iss.ApplyPeople(other, s.now); !errors.Is(err, ErrRefused) {
+			t.Errorf("a head the log never had: %v, want refused", err)
 		}
 	},
 	// The issuer refuses a removed person's join, renewal, sign-in again

@@ -127,7 +127,8 @@ type Issuer struct {
 	restoredAt time.Time            // the last restore from a backup (restore.go); zero: none
 	carried    map[string]time.Time // serials a restore took from the published CRL, listed until then
 	head       string
-	heads      map[string]bool       // every head the log had: a remote renewal checkpoints one (renew.go)
+	heads      map[string]int        // every head the log had, by its line number: a remote renewal checkpoints one (renew.go)
+	rosterLine int                   // the line of the roster's last change: a people act names a head at or after it (people.go)
 	rules      map[string]SignInRule // by id (signin.go)
 	roster     roster                // people, roles and invites (people.go)
 	policy     *orgid.SignedPolicy   // the root's newest access policy (policy.go); nil: none
@@ -181,13 +182,16 @@ func Open(lines [][]byte, key ed25519.PrivateKey, sink Sink) (*Issuer, error) {
 	if err != nil {
 		return nil, err
 	}
-	i := &Issuer{tokens: map[string]*tokenRec{}, names: map[string]*nameRec{}, certs: map[string]*certRec{}, heads: map[string]bool{}, rules: map[string]SignInRule{}, sink: sink}
-	for _, l := range lines {
-		i.heads[lineHash(l)] = true
+	i := &Issuer{tokens: map[string]*tokenRec{}, names: map[string]*nameRec{}, certs: map[string]*certRec{}, heads: map[string]int{}, rules: map[string]SignInRule{}, sink: sink}
+	for n, l := range lines {
+		i.heads[lineHash(l)] = n + 1
 	}
-	for _, e := range entries {
+	for n, e := range entries {
 		if err := i.apply(e); err != nil {
 			return nil, err
+		}
+		if rosterChange(e) {
+			i.rosterLine = n + 1
 		}
 	}
 	i.head = head
@@ -318,7 +322,10 @@ func (i *Issuer) commit(e Entry) error {
 	}
 	prev := i.head
 	i.head = lineHash(line)
-	i.heads[i.head] = true
+	i.heads[i.head] = len(i.heads) + 1
+	if rosterChange(e) {
+		i.rosterLine = i.heads[i.head]
+	}
 	traceCommit(i.orgID, e, prev, i.head)
 	return i.apply(e)
 }

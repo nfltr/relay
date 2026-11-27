@@ -334,16 +334,17 @@ direct_once pos-unbound TTFFTTTTTTFFFFFF
 # invite act) a mutant that gives an insider admin power also lets it
 # invite bob (2) or an admin (4) to the attacker's key: the old model's
 # invite sealed to pk(skIss), which it never published, hid that.
-people - TTTTTTTTFFFFF
-people idp-honest TTTTTTTTFFFFF
-people no-invite FFTTTTTTFFF?F
-people invite-in-clear FFTTTTTTFFFFF
-people role-from-request FFFFTTTTFFFFF
-people no-role-check FFTFTTTTFFFFF
-people admin-invites-admin TTFFFTTTFFFFF
-people admin-offboards-any TTTTTFTTFFFFF
-people no-deny ?TTTTT?TFFFFF
-people admin-after-offboard TFTTTTT?FFFFF
+people - TTTTTTTTFFFFFT
+people idp-honest TTTTTTTTFFFFFT
+people no-invite FFTTTTTTFFF?FT
+people invite-in-clear FFTTTTTTFFFFFF
+people role-from-request FFFFTTTTFFFFFF
+people no-role-check FFTFTTTTFFFFFF
+people admin-invites-admin TTFFFTTTFFFFFF
+people admin-offboards-any TTTTTFTTFFFFFT
+people no-deny ?TTTTT?TFFFFFT
+people admin-after-offboard TFTTTTTFFFFFFF
+people act-no-head TTTTTTTTFFF?FF
 #
 # svc_access (nfltr docs/decisions/service-access-2026-11-25.md; a design,
 # no code yet; queries in README "svc_access.pv"): 1 admission only by a

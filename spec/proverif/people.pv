@@ -40,7 +40,16 @@
      BIND:people.invite  the issuer certifies a sign-in only with an open invite for the token's person, proved over the request's keys (the invite key's signature)
      BIND:people.role    the certificate's role is the invite's, never the request's
      BIND:people.admin   an admin request is signed by a key whose certificate the issuer signed with role admin
-     BIND:people.removed the issuer refuses a removed person's join, renewal and admin requests *)
+     BIND:people.removed the issuer refuses a removed person's join, renewal and admin requests
+     BIND:people.head    an act names the issuer log's head; the issuer refuses one whose head is before the roster's last change (a replay)
+
+   The head (lane SECFIX, review S7): the issuer's log head after the
+   roster's last change, which the signer read from the status, is a
+   value the issuer takes once: the act that is applied changes the
+   roster, so its head is then stale. Modelled as a fresh value each
+   issuer instance offers and takes once (the attacker delivers it to the
+   signer); query 14 is injective: each act of carol's is applied at most
+   once per signature (mutant act-no-head). *)
 
 free c: channel.                    (* the relay *)
 
@@ -66,6 +75,7 @@ fun leaf(person, role, pkey): bitstring [data].      (* email SAN, role, key *)
 fun renewal(pkey): bitstring [data].
 fun inviteReq(person, role, pkey): bitstring [data].   (* person, role, the invite's public key *)
 fun offReq(person): bitstring [data].
+fun act(bitstring, bitstring): bitstring [data].       (* the head, the request *)
 
 free skIdP: skey [private].
 free skIss: skey [private].
@@ -82,6 +92,8 @@ event Holds(person, pkey).
 event Issued(bool, person, role, pkey).   (* phase 1?, person, role, key *)
 event AdminActed(bool, person).
 event Offboarded(person).
+event AdminSigned(person, bitstring).     (* honest admin a signed request r, once *)
+event AdminApplied(person, bitstring).    (* the issuer applied admin a's request r *)
 
 (* The IdP over the device's TLS session (honest; its key may leak). *)
 let IdP =
@@ -104,11 +116,15 @@ let Carol(ko: skey) =
   in(c, lcert: bitstring);
   let leaf(=carol, =rAdmin, =pk(ko)) = checksign(lcert, pk(skIss)) in
   new t: skey;
+  in(c, h1: bitstring);
   event AdminAsked(carol, bob);
-  out(c, (inviteReq(bob, rMember, pk(t)), sign(inviteReq(bob, rMember, pk(t)), ko), lcert));
+  event AdminSigned(carol, inviteReq(bob, rMember, pk(t)));
+  out(c, (act(h1, inviteReq(bob, rMember, pk(t))), sign(act(h1, inviteReq(bob, rMember, pk(t))), ko), lcert));
   out(cinv(bob), t);
+  in(c, h2: bitstring);
   event AdminAskedOff(carol, bob);
-  out(c, (offReq(bob), sign(offReq(bob), ko), lcert)).
+  event AdminSigned(carol, offReq(bob));
+  out(c, (act(h2, offReq(bob)), sign(act(h2, offReq(bob)), ko), lcert)).
 
 (* The issuer: a join. *)
 let IssuerJoin(late: bool) =
@@ -147,25 +163,35 @@ let Renew(late: bool) =
 
 (* The issuer: an admin's request, checked the same way for each act. *)
 let IssuerInvite(late: bool) =
-  in(c, (req: bitstring, s: bitstring, lcert: bitstring));
+  new h: bitstring;
+  out(c, h);
+  in(c, (m: bitstring, s: bitstring, lcert: bitstring));
   let leaf(a, ra, ka) = checksign(lcert, pk(skIss)) in
   if ra = rAdmin then                                    (* NOT:no-role-check *)
-  if checksign(s, ka) = req then
+  if checksign(s, ka) = m then
+  let act(hm, req) = m in
+  if hm = h then                                         (* NOT:act-no-head *)
   if late && (a = alice || a = carol) then 0 else       (* NOT:admin-after-offboard *)
   let inviteReq(p, r, vk) = req in
   if r = rMember then                                    (* NOT:admin-invites-admin *)
+  event AdminApplied(a, req);
   event AdminActed(late, a);
   insert invites(p, r, vk);
   event Invited(p, r).
 
 let IssuerOff(late: bool) =
-  in(c, (req: bitstring, s: bitstring, lcert: bitstring));
+  new h: bitstring;
+  out(c, h);
+  in(c, (m: bitstring, s: bitstring, lcert: bitstring));
   let leaf(a, ra, ka) = checksign(lcert, pk(skIss)) in
   if ra = rAdmin then                                    (* NOT:no-role-check *)
-  if checksign(s, ka) = req then
+  if checksign(s, ka) = m then
+  let act(hm, req) = m in
+  if hm = h then                                         (* NOT:act-no-head *)
   if late && (a = alice || a = carol) then 0 else       (* NOT:admin-after-offboard *)
   let offReq(p) = req in
   get roster(=p, =rMember) in                            (* NOT:admin-offboards-any *)
+  event AdminApplied(a, req);
   event AdminActed(late, a);
   event Offboarded(p).
 
@@ -221,6 +247,9 @@ query k: pkey; event(Issued(false, bob, rMember, k)).
 query b: bool; event(AdminActed(b, carol)).
 query k: pkey; event(Issued(true, bob, rMember, k)).
 query b: bool, k: pkey; event(Issued(b, lc, rMember, k)).
+(* 14. no replay: each of carol's acts is applied at most once per
+   signature (mutant act-no-head; lane SECFIX, review S7) *)
+query r: bitstring; inj-event(AdminApplied(carol, r)) ==> inj-event(AdminSigned(carol, r)).
 
 process
   Setup | !IdP |

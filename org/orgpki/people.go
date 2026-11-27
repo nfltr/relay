@@ -233,13 +233,18 @@ type PeopleAct struct {
 	Role      string    `json:"role,omitempty"`
 	InviteKey []byte    `json:"invite_key,omitempty"`
 	NotAfter  time.Time `json:"not_after"`
+	// Head is the issuer log's head the signer read (Status.Head): the
+	// issuer takes the act only when no roster change came after it, so
+	// an applied act sent again is refused (BIND:people.head; lane
+	// SECFIX, review S7).
+	Head string `json:"head"`
 }
 
 // PeopleRequest is a PeopleAct's JSON bytes signed over the prefix
 // "nfltr-org-people-v1" NUL and them: by the root (the owner; no Cert) or by the key of Cert, a
 // certificate of one of an admin's machines (BIND:people.admin). The
-// relay carries it and can withhold or replay it; a replay changes
-// nothing.
+// relay carries it and can withhold or replay it; a replay is refused
+// (PeopleAct.Head).
 type PeopleRequest struct {
 	Body []byte `json:"body"`
 	Sig  []byte `json:"sig"`
@@ -302,6 +307,8 @@ func (i *Issuer) ApplyPeople(r PeopleRequest, now time.Time) (Removal, error) {
 		why = fmt.Sprintf("the act is of organisation %q, not %s", a.OrgID, i.orgID)
 	case !now.Before(a.NotAfter) || a.NotAfter.Sub(now) > OrderLife:
 		why = "the act is void (until " + a.NotAfter.UTC().Format(time.RFC3339) + ")"
+	case i.heads[a.Head] < i.rosterLine || i.heads[a.Head] == 0:
+		why = "the act names a head before the roster's last change (sent again, or signed before another act): sign it again against the current status"
 	}
 	if why != "" {
 		return Removal{}, i.refuse(Entry{Time: now, Actor: by, ActorRole: role}, why)
@@ -319,6 +326,13 @@ func (i *Issuer) ApplyPeople(r PeopleRequest, now time.Time) (Removal, error) {
 		return i.removePerson(by, role, d.Person, now)
 	}
 	return Removal{}, i.refuse(Entry{Time: now, Actor: by, ActorRole: role}, "no act "+a.Act)
+}
+
+// rosterChange is a log line that changes the roster: an invite, a role,
+// a person's removal. A people act signed at a head before it is refused
+// (PeopleAct.Head).
+func rosterChange(e Entry) bool {
+	return e.Act == ActInvite || e.Act == ActRole || e.Act == ActRevoked && e.Person != ""
 }
 
 // signer is who signed r and their role in the log now ("" and owner for

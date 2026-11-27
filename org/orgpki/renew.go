@@ -151,7 +151,7 @@ func (i *Issuer) InstallRenewal(a IssuerRenewal, now time.Time) error {
 	if !c.NotAfter.After(i.cert.NotAfter) {
 		return fmt.Errorf("%w: the answer's certificate ends %s, not after the current one: an old answer", ErrRefused, c.NotAfter.UTC().Format(time.RFC3339))
 	}
-	if !i.heads[a.Head] {
+	if _, ok := i.heads[a.Head]; !ok {
 		return fmt.Errorf("%w: the answer checkpoints %q, not a head of this log", ErrRefused, a.Head)
 	}
 	msg := checkpointMessage(i.orgID, a.Head)
