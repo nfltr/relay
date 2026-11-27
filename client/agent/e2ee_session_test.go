@@ -190,6 +190,28 @@ func TestE2EEStreamUpgrade(t *testing.T) {
 	}
 }
 
+// TestE2EEStreamRefusedUpgrade: an upgrade the backend answers 200 (it
+// ignores Upgrade) leaves the session HTTP: the next request is read as
+// one, its Host the backend's, not passed on as bytes.
+func TestE2EEStreamRefusedUpgrade(t *testing.T) {
+	c := streamSession(t, echoBackend(t, nil))
+	br := bufio.NewReader(c)
+	for i, raw := range []string{
+		"GET /ws HTTP/1.1\r\nHost: public.example\r\nUpgrade: echo\r\nConnection: Upgrade\r\n\r\n",
+		"GET /next HTTP/1.1\r\nHost: public.example\r\n\r\n",
+	} {
+		_, _ = io.WriteString(c, raw)
+		resp, err := http.ReadResponse(br, nil)
+		if err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		if got := resp.Header.Get("X-Host"); resp.StatusCode != http.StatusOK || got != "backend.local" {
+			t.Errorf("request %d: %d, the backend saw Host %q, want backend.local", i, resp.StatusCode, got)
+		}
+	}
+}
+
 // TestE2EEStreamBackendDown: a backend that cannot be reached gets the
 // client a 502, on a dedicated connection and through the pool alike.
 func TestE2EEStreamBackendDown(t *testing.T) {

@@ -39,7 +39,8 @@
      BIND:svc.apprall    the issuer takes an approval only over the whole request (lAppr, req)
      BIND:svc.apprpol    ... by a key the root's policy names for that service
      BIND:svc.rulesig    the agent admits by a rule only under the root key, for the certified group
-     BIND:svc.hdrwho     the identity the app gets is the certificate's name and group
+     BIND:svc.hdrwho     the identity the app gets is the certificate's name and group,
+                         on every request of the session until the app switched protocol
      BIND:svc.aud        an app takes an assertion only for its own service
      BIND:svc.auditsig   the issuer takes an audit record of machine m only under m's certified key
 
