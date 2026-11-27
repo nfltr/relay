@@ -686,6 +686,34 @@ func TestNewMachineJoinsAfterRotation(t *testing.T) {
 	}
 }
 
+// A token names the root it was made under (its NotBefore): a join
+// refuses an older root, the pinned one too, which the relay may serve
+// after a rotation (Join.tla JoinRootNotOlder, mutant older-root; lane
+// SECFIX, review S9).
+func TestJoinRefusesARootOlderThanTheToken(t *testing.T) {
+	f := newFleet(t)
+	var rm orgpki.RootMessage
+	f.relay.mu.Lock()
+	roots := f.relay.boxes[orgpki.RootMailbox(f.org.id)]
+	check(t, json.Unmarshal(roots[len(roots)-1].Payload, &rm))
+	f.relay.mu.Unlock()
+	f.rotate(t)
+	tok := f.org.token(t, "web-new", f.clk.Now())
+	nb, err := orgpki.TokenRootNotBefore(tok)
+	check(t, err)
+	if old, _ := x509.ParseCertificate(rm.Root); !old.NotBefore.Before(nb) {
+		t.Fatalf("the token's root NotBefore %s is not after the first root's %s", nb, old.NotBefore)
+	}
+	msg, err := json.Marshal(rm) // the first root, the one pinned
+	check(t, err)
+	_, err = f.relay.Append(f.ctx, orgpki.RootMailbox(f.org.id), msg, mailboxclient.AppendOptions{ReplaceKey: "current"})
+	check(t, err)
+	_, err = Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "old"), f.org.pins, tok, hang, f.clk.Now)
+	if err == nil || !strings.Contains(err.Error(), "older than the root the token was made under") {
+		t.Fatalf("the first root after a rotation: %v, want refused as older", err)
+	}
+}
+
 // A join pinned on the first root refuses a root another recovery key
 // certifies, also one the relay pairs with the pinned recovery
 // certificate (Join.tla JoinRootsAreOwners, mutant any-root).

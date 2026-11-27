@@ -79,3 +79,6 @@ sink-cursor-not-moved | audit.go | 	cur.Offset += int64(len(buf)) | 	_ = cur | T
 no-ship | auditship.go | 	at.Log, at.Offset = lr.Log, end | 	at.Log, at.Offset = lr.Log, 0 | TestAuditReachesTheIssuer
 seq-skips | ../orgmachine/audit.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, orgaudit.Hash(last) | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+2, orgaudit.Hash(last) | TestAuditReachesTheIssuer
 no-chain-written | ../orgmachine/audit.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, orgaudit.Hash(last) | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, "" | TestAuditReachesTheIssuer
+# A join takes no root older than the token's (lane SECFIX, review S9;
+# spec/enrol/Join.tla JoinRootNotOlder, older-root there).
+older-root | machine.go | 	if root.NotBefore.Before(notBefore) { | 	if false { | TestJoinRefusesARootOlderThanTheToken

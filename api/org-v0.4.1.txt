@@ -1,3 +1,4 @@
 Compatible changes:
-- ./orgmachine/orgmachinetest.(*Org).Rotate: added
 - ./orgpki.PeopleAct.Head: added
+- ./orgpki.TokenRootNotBefore: added
+- ./orgmachine/orgmachinetest.(*Org).Rotate: added
