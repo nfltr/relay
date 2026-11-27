@@ -5,7 +5,8 @@
 (* behaviour of TLSEnd, in order. Logged: X's close_notify (Notify,        *)
 (* XNotify), its transport's end (Fin, XFin), the end of its               *)
 (* CloseWriteSync's wait (End: n 1 nil, XRecv to clean; 0 an error, XRecv  *)
-(* to reset), Y's read of the close_notify (EOF, YRecv of it), Y's Close   *)
+(* to reset), Y's take of the transport's end behind the close_notify    *)
+(* (EOF, YTake: Read starts it, lane ENDACK), Y's Close                    *)
 (* (Close, YClose: n 1 it takes the transport's end first, the only Close *)
 (* of a Y on a transport that acknowledges ends; n 0 is close-at-notify's) *)
 (* and its whole close (Closed, YClosed). Not logged, so TLC adds them:  *)
@@ -25,8 +26,9 @@ traceVars == <<vars, l>>
 E == Log[l]
 
 \* Y's Mux takes the close_notify's bytes and the FIN behind it (YRecv)
-\* before Y's app reads the close_notify (EOF): the ENDACK X's wait ends
-\* at (End) can come before that read.
+\* before Y's app reads them (EOF); the ENDACK X's wait ends at (End)
+\* comes only after that read (lane ENDACK). Y's own half close is not
+\* logged here (yw "none" or TLC's).
 Env ==
     \/ x2y # <<>> /\ YRecv
     \/ xs # "wait" /\ XRecv
@@ -35,7 +37,7 @@ Step ==
     CASE E.ev = "Notify" -> XNotify
       [] E.ev = "Fin" -> XFin
       [] E.ev = "End" -> XRecv /\ xs = "wait" /\ xs' = IF E.n = 1 THEN "clean" ELSE "reset"
-      [] E.ev = "EOF" -> yeof /\ UNCHANGED vars  \* Y's app reads the close_notify its Mux took (Env)
+      [] E.ev = "EOF" -> YTake  \* Y took the FIN behind the close_notify (Read starts it; lane ENDACK)
       [] E.ev = "Close" -> YClose /\ E.n = 1   \* n 0: Close at the close_notify (close-at-notify's YClose)
       [] E.ev = "Closed" -> YClosed
       [] OTHER -> Print(<<"unknown event", E>>, FALSE)

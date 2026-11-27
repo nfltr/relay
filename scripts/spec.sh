@@ -1223,12 +1223,15 @@ mutants)
 	model=TLSEnd
 	# A session's end under end-to-end TLS (lane PIPERESET): a Close at the
 	# peer's close_notify, before the FIN behind it (the code before); a
-	# Close that waits for that FIN with no bound.
-	for m in close-at-notify unbounded; do
+	# Close that waits for that FIN with no bound. Lane ENDACK: the FIN
+	# acknowledged at its receipt (link before), a Read that stops at the
+	# close_notify (both ends' half closes wait for each other).
+	for m in close-at-notify unbounded ack-on-receipt stop-at-notify; do
 		expect TLSEND:$m -e "s/Mutant = \"none\"/Mutant = \"$m\"/"
 	done
-	expect witness:Clean -e 's/^    NoFalseReset$/    W_Clean/'
-	expect witness:Bound -e 's/^    NoFalseReset$/    W_Bound/'
+	for w in W_Clean W_Bound W_BothClean W_FailAfterArrival; do
+		expect witness:TLSEND-$w -e "s/^    NoFalseReset$/    $w/"
+	done
 	pool_end || fail=1
 	exit $fail
 	;;
