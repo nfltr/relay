@@ -1,0 +1,10 @@
+Compatible changes:
+- ./orgid.(*Identity).Audit: added
+- ./orgaudit.Append: added
+- ./orgaudit.Last: added
+- ./orgaudit.Log: added
+- ./orgaudit.LogFile: added
+- ./orgaudit.OwnersDir: added
+- ./orgaudit.ReasonLost: added
+- ./orgaudit.Rotate: added
+- ./orgaudit.WhoOf: added

@@ -1,3 +1,17 @@
+Incompatible changes:
+- ./orgmachine.AppendAudit: removed
+- ./orgmachine.AuditFile: removed
+- ./orgmachine.LastAudit: removed
+- ./orgpki.(*Issuer).ApplyOrder: changed from func(SignedOrder, time.Time) (string, error) to func(SignedOrder, time.Time) (Order, error)
+- ./orgpki.Order: old is comparable, new is not
 Compatible changes:
+- ./orgmachine.(*Machine).CloseLost: added
+- ./orgenrol.SendPeople: added
+- ./orgpki.ActMoveOrder: added
+- ./orgpki.ActRegrouped: added
+- ./orgpki.Answer.Moved: added
+- ./orgpki.ErrCRLDue: added
+- ./orgpki.MoveOrder: added
+- ./orgpki.Order.Groups: added
 - ./orgpki.Status.People: added
 - ./orgpki.StatusMember.Person: added
