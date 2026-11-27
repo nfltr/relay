@@ -249,7 +249,7 @@ type sinkCursor struct {
 const exportMax = 1 << 20
 
 // ExportAudit hands the sink the lines of SessionsFile it has not taken
-// (none set: nothing), at most exportMax at a time, and moves the cursor
+// (none set: nothing), at most 1 MiB at a time, and moves the cursor
 // once it took them. client is for an URL sink. It returns the bytes
 // exported.
 func ExportAudit(ctx context.Context, dir string, client *http.Client) (int, error) {

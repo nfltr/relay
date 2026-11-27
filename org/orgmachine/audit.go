@@ -28,10 +28,10 @@ import (
 	"github.com/nfltr/relay/org/internal/orgfiles"
 )
 
-// AuditFile is the machine's audit log, 0600; auditLock its writers' lock.
+// AuditFile is the machine's audit log, 0600, under its writers' lock.
 const (
-	AuditFile = "audit.jsonl"
-	auditLock = "audit.lock"
+	AuditFile = "sessions.jsonl"
+	auditLock = "sessions.lock"
 )
 
 // Audit records a session certs opened to service (agent.OrgAuditor):

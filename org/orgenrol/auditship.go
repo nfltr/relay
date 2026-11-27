@@ -29,9 +29,9 @@ import (
 )
 
 const (
-	shipLock = "audit.ship.lock"
-	shipFile = "audit.sent" // shipped: the log and the bytes of it the issuer acknowledged
-	shipMax  = 256 << 10    // bytes of lines in one post
+	shipLock = "sessions.ship.lock"
+	shipFile = "sessions.sent" // shipped: the log and the bytes of it the issuer acknowledged
+	shipMax  = 256 << 10       // bytes of lines in one post
 )
 
 type shipped struct {
