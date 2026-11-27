@@ -277,16 +277,11 @@ func TestKeeperClosesAKilledProcesssSession(t *testing.T) {
 	}
 }
 
-// TestKeeperShipsABacklogAndRotates is the rotation end to end: a log over
-// auditRotateAt (an issuer out of reach while the sessions went on) ships
-// in shipMax posts one after another, not one per ShipEvery (the code
-// before took 30 s a post), every answered post rotating the file past
-// what the issuer holds (spec/AuditLog.tla Ship, Rotate): the issuer
-// holds every session with no finding (no gap, no new log: OneLog,
-// NothingLost), the file is cut to under auditRotateAt with the log going
-// on, and a session after the rotation chains on at the issuer.
-func TestKeeperShipsABacklogAndRotates(t *testing.T) {
-	f := newFleet(t)
+// backlog writes, before the keeper runs, a signed log just over size
+// bytes of closed sessions (an issuer out of reach while the sessions went
+// on); it returns the sessions, the file and its signing state.
+func backlog(t *testing.T, f *fleet, size int) (int, string, orgaudit.Signing) {
+	t.Helper()
 	cert, key := f.m.Current()
 	var buf bytes.Buffer
 	s := orgaudit.Signing{Log: "backlog0123456789abcdef", Machine: cert.Subject.CommonName, Cert: cert, Key: key, At: f.clk.Now()}
@@ -294,7 +289,7 @@ func TestKeeperShipsABacklogAndRotates(t *testing.T) {
 	// Long lines (a rule named at length; a line stays under 2 KiB): fewer
 	// to sign and check, so the test is quick under -race too.
 	by := "rule group:ops " + strings.Repeat("x", 800)
-	for buf.Len() <= auditRotateAt+shipMax/2 {
+	for buf.Len() <= size {
 		n++
 		ses := orgaudit.Session{ID: fmt.Sprintf("s%05d", n), Service: "pg", Who: orgaudit.Who{Name: "ci-1"}, By: by, Opened: f.clk.Now().UTC()}
 		for _, r := range []orgaudit.Record{ses.Open(), ses.Close(orgaudit.End{Closed: f.clk.Now().UTC(), Reason: orgaudit.ReasonClosed})} {
@@ -310,14 +305,55 @@ func TestKeeperShipsABacklogAndRotates(t *testing.T) {
 	}
 	local := filepath.Join(f.dir, orgaudit.LogFile)
 	check(t, os.WriteFile(local, buf.Bytes(), 0o600))
-	keep(t, f.ctx, f.keeper())
-	// The machine's cursor, not ReadAudit: a read checks every line the
-	// issuer holds, too slow to poll under -race.
-	eventually(t, "the machine's cursor at the file's end (the backlog acknowledged)", func() bool {
+	return n, local, s
+}
+
+// shippedWithin waits until the machine's cursor is at local's end (the
+// backlog acknowledged), for at most d. The cursor, not ReadAudit: a read
+// checks every line the issuer holds, too slow to poll under -race.
+func shippedWithin(t *testing.T, f *fleet, local string, d time.Duration) {
+	t.Helper()
+	for deadline := time.Now().Add(d); ; time.Sleep(10 * time.Millisecond) {
 		var at shipped
 		fi, err := os.Stat(local)
-		return err == nil && readJSON(filepath.Join(f.dir, shipFile), &at) == nil && at.Offset == fi.Size()
-	})
+		if err == nil && readJSON(filepath.Join(f.dir, shipFile), &at) == nil && at.Offset == fi.Size() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not within %s: the machine's cursor at the file's end (the backlog acknowledged)", d)
+		}
+	}
+}
+
+// TestKeeperShipsABacklogPostAfterPost: a backlog over shipMax ships in
+// posts one after another, not one per ShipEvery (the code before took
+// 30 s a post; mutant audit-backlog-waits). Two posts, so the bound below
+// ShipEvery holds on a loaded machine under -race: the backlog of
+// TestKeeperShipsABacklogAndRotates took 18 s there at background
+// priority, over hang (lane R85PREP).
+func TestKeeperShipsABacklogPostAfterPost(t *testing.T) {
+	f := newFleet(t)
+	n, local, _ := backlog(t, f, shipMax+shipMax/2)
+	keep(t, f.ctx, f.keeper())
+	shippedWithin(t, f, local, orgaudit.ShipEvery-5*time.Second)
+	if v := f.audit(t, f.clk.Now()); len(v.Sessions) != n || v.Findings != nil {
+		t.Fatalf("the issuer holds %d of %d sessions, findings %q", len(v.Sessions), n, findings(v))
+	}
+}
+
+// TestKeeperShipsABacklogAndRotates is the rotation end to end: a log over
+// auditRotateAt ships (TestKeeperShipsABacklogPostAfterPost), every
+// answered post rotating the file past what the issuer holds
+// (spec/AuditLog.tla Ship, Rotate): the issuer holds every session with no
+// finding (no gap, no new log: OneLog, NothingLost), the file is cut to
+// under auditRotateAt with the log going on, and a session after the
+// rotation chains on at the issuer. Its wait is bounded only against a
+// hang, scaled to its four or five posts.
+func TestKeeperShipsABacklogAndRotates(t *testing.T) {
+	f := newFleet(t)
+	n, local, s := backlog(t, f, auditRotateAt+shipMax/2)
+	keep(t, f.ctx, f.keeper())
+	shippedWithin(t, f, local, 5*hang)
 	if v := f.audit(t, f.clk.Now()); len(v.Sessions) != n || v.Findings != nil {
 		t.Fatalf("the issuer holds %d of %d sessions, findings %q", len(v.Sessions), n, findings(v))
 	}

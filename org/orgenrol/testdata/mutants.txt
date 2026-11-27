@@ -83,7 +83,7 @@ audit-keeper-no-recovery | auditship.go | 		if _, err := m.CloseLost(now()); err
 audit-move-no-sessions | ../orgissuer/bundle.go | 	if dir, base := path.Split(name); dir == "org/" && slices.Contains(auditFiles, base) { | 	if dir, base := path.Split(name); dir == "org/" && slices.Contains(auditFiles, base) && false { | TestAuditFollowsTheMove
 # A backlog over shipMax (an issuer back after an outage) ships post after
 # post, not one per ShipEvery (lane SA5TRACE).
-audit-backlog-waits | auditship.go | 			if more { // a backlog over shipMax: the next post now (TestKeeperShipsABacklogAndRotates) | 			if false && more { | TestKeeperShipsABacklogAndRotates
+audit-backlog-waits | auditship.go | 			if more { // a backlog over shipMax: the next post now (TestKeeperShipsABacklogAndRotates) | 			if false && more { | TestKeeperShipsABacklogPostAfterPost
 # The issuer's refusal logged as an outage (lane ORGRENEW: canary-linux's "does not answer yet ... nothing to do" over a refusal).
 refusal-as-outage | machine.go | 		case errors.Is(err, ErrIssuerRefused): | 		case false: | TestKeeperLogsARefusalAsARefusal
 # One set of groups (relay-server spec/GroupMirror.tla Reput, Pickup;
