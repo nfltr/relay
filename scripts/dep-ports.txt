@@ -1,0 +1,20 @@
+# Dependencies behind ports (scripts/check-dep-ports.sh; nfltr
+# docs/decisions/dependencies-behind-ports-2026-11-27.md). One rule per line:
+# NAME KIND PATTERN ALLOWED... (ALLOWED: the adapter and the escape hatches).
+# Today's violations are in scripts/dep-ports-allow.txt, which may only shrink.
+#
+# gRPC and its wire: proto (generated code and wire codecs), the dial helpers
+# and the per-service clients (AGENTS.md "Transport encapsulation rule").
+grpc import google\.golang\.org/(grpc|genproto)|github\.com/grpc-ecosystem proto/** client/grpcclient/** client/rpcclient/** client/mailboxclient/** client/presenceclient/** client/machinecred/**
+protobuf import google\.golang\.org/protobuf proto/** client/rpcclient/** client/mailboxclient/** client/presenceclient/**
+# QUIC: link's peerlink/quiclink is the adapter; the agent's direct path reaches it directly.
+quic import github\.com/nfltr/quic-go
+webrtc import github\.com/pion/ client/p2p/**
+noise import github\.com/flynn/noise client/rpcclient/a2a_e2ee.go client/rpcclient/a2a_e2ee_session.go
+portmap import github\.com/jackpal/gateway client/agent/direct_portmap.go
+oidc import github\.com/coreos/go-oidc|golang\.org/x/oauth2 org/orgpki/signin.go client/appenrol/signin.go
+ssh import golang\.org/x/crypto/ssh|github\.com/stripe/krl org/orgpki/**
+acme import golang\.org/x/crypto/acme client/agent/acme.go
+config import github\.com/spf13/(viper|pflag) browser/e2e/harness/**
+fsnotify import github\.com/fsnotify/fsnotify
+docker name (^|[^[:alnum:]_./-])docker[[:space:]]+(compose|run|exec|build|buildx|rm|pull|push|ps|inspect|network|volume|logs|cp|kill|stop|start|image|info|wait|save|load|tag|context)([[:space:]]|$) **/Dockerfile*

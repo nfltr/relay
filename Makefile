@@ -360,6 +360,15 @@ spec-appenrol-traces:
 spec-grant-ci:
 	./scripts/spec-grant.sh ci
 
+# Dependencies behind ports (scripts/check-dep-ports.sh, a copy of nfltr's, kept identical;
+# nfltr docs/decisions/dependencies-behind-ports-2026-11-27.md): only a
+# dependency's adapter or an escape hatch imports or names it
+# (scripts/dep-ports.txt); today's violations are scripts/dep-ports-allow.txt,
+# which may only shrink.
+.PHONY: check-dep-ports
+check-dep-ports:
+	./scripts/check-dep-ports.sh self-test
+	./scripts/check-dep-ports.sh
 # Early-exit pipes under pipefail (scripts/check-grepq.sh, a copy of
 # nfltr's, kept identical): `producer | grep -q` reads SIGPIPE (141) as "not
 # found"; the self-test reproduces the race.

@@ -185,6 +185,7 @@ jobs:
       - run: make spec-bindings
       - run: make check-spec-drift
       - run: make check-grepq
+      - run: make check-dep-ports
       # each module's API changes since its latest tag are the ones api/ lists
       - run: make check-api
       - run: make check-spec-actions
