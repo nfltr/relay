@@ -127,7 +127,10 @@ func (v *Verifier) checkGrant(g, issuer, leaf *x509.Certificate, client, self Ch
 	case !slices.Contains(services, gr.Service) || !matches(gr.Where, self): // BIND:svc.grantsvc
 		return gr, time.Time{}, "service", fmt.Errorf("the grant is for %s/%s, not %s/%s", gr.Where, gr.Service, self.Name, strings.Join(services, ","))
 	}
-	iss := chains[0][len(chains[0])-2]
+	iss, err := issuerOf(chains[0])
+	if err != nil {
+		return gr, time.Time{}, "chain", err
+	}
 	crl := v.crls[KeyFingerprint(iss.PublicKey)]
 	switch {
 	case crl == nil:

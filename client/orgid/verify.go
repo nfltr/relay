@@ -92,10 +92,12 @@ func (v *Verifier) verify(c, issuer *x509.Certificate, dnsName string, now time.
 	if err != nil {
 		return nil, err
 	}
-	// A leaf under an issuer the root's CRL of issuers lists: every check
-	// of one (Check, Issued: a join's or a renewal's answer) refuses it
-	// (OrgHosted.tla Admit, RevokedIssuerRefused).
-	if ch := chains[0]; len(ch) >= 3 && v.issuers != nil && v.issuers.revoked[ch[len(ch)-2].SerialNumber.String()] {
+	// A chain through an issuer the root's CRL of issuers lists: every
+	// check of one (Check, Issued: a join's or a renewal's answer; TakeCRL's
+	// of the issuer itself, the certificate the root signed at any chain
+	// position, review S4) refuses it (OrgHosted.tla Admit,
+	// RevokedIssuerRefused).
+	if ch := chains[0]; len(ch) >= 2 && v.issuers != nil && v.issuers.revoked[ch[len(ch)-2].SerialNumber.String()] {
 		return nil, errors.New("the root revoked this issuer (its CRL of issuers)")
 	}
 	return chains, nil
@@ -290,7 +292,10 @@ func (v *Verifier) check(leaf, issuer *x509.Certificate, want Peer, now time.Tim
 	if want.Name != "" && leaf.Subject.CommonName != want.Name {
 		return Checked{}, "name", fmt.Errorf("the certificate names %q, not %q", leaf.Subject.CommonName, want.Name)
 	}
-	iss := chains[0][len(chains[0])-2]
+	iss, err := issuerOf(chains[0])
+	if err != nil {
+		return Checked{}, "chain", err
+	}
 	groups := leaf.Subject.OrganizationalUnit
 	if !subset(groups, iss.Subject.OrganizationalUnit) {
 		return Checked{}, "group", fmt.Errorf("groups %v are outside the issuer's policy %v", groups, iss.Subject.OrganizationalUnit)
@@ -327,6 +332,17 @@ func (v *Verifier) check(leaf, issuer *x509.Certificate, want Peer, now time.Tim
 		}
 	}
 	return Checked{Name: leaf.Subject.CommonName, Groups: slices.Clone(groups), MachineID: MachineID(leaf), Person: person, App: app, Serial: leaf.SerialNumber, Until: until}, "", nil
+}
+
+// issuerOf is the issuer of chain's leaf: a leaf, not a CA, under an
+// issuer under the root. An issuer's certificate presented as the leaf
+// would be its own issuer, inside its own groups, under its own CRL
+// (review S4).
+func issuerOf(chain []*x509.Certificate) (*x509.Certificate, error) {
+	if len(chain) != 3 || chain[0].IsCA {
+		return nil, errors.New("not a leaf under an issuer of the organisation")
+	}
+	return chain[1], nil
 }
 
 // Issued checks a certificate an issuer answered: it chains (through
