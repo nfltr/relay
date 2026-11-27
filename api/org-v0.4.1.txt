@@ -1,4 +1,6 @@
 Compatible changes:
 - ./orgpki.PeopleAct.Head: added
 - ./orgpki.TokenRootNotBefore: added
+- ./orgmachine.(*Machine).Fresh: added
+- ./orgmachine.Fresh: added
 - ./orgmachine/orgmachinetest.(*Org).Rotate: added

@@ -633,6 +633,34 @@ func (m *Machine) CheckClient(certs []*x509.Certificate, services []string, now 
 	return orgid.AdmitClient(m.ver, &m.rules, certs, orgid.Checked{Name: leaf.Subject.CommonName, Groups: leaf.Subject.OrganizationalUnit}, services, now)
 }
 
+// Fresh is m serving one service whose sessions end once the CRL m holds
+// is fresh old (nfltr up fresh:; spec/enrol/CrlCarriers.tla FreshBound):
+// m's CheckClient, then orgid.Verifier.FreshBound. Every other method is
+// m's.
+type Fresh struct {
+	*Machine
+	fresh time.Duration
+}
+
+// Fresh is m bounded by fresh, from orgid.FreshMin to the CRL's life
+// (orgpki.CRLLife): a bound past the life bounds nothing NextUpdate does
+// not.
+func (m *Machine) Fresh(fresh time.Duration) (*Fresh, error) {
+	if fresh < orgid.FreshMin || fresh > orgpki.CRLLife {
+		return nil, fmt.Errorf("fresh %s: want %s to %s (the issuer re-signs its CRL every %s, and it lives %s)", fresh, orgid.FreshMin, orgpki.CRLLife, orgpki.CRLEvery, orgpki.CRLLife)
+	}
+	return &Fresh{Machine: m, fresh: fresh}, nil
+}
+
+// CheckClient is Machine.CheckClient bounded by the CRL's age (agent.Org).
+func (f *Fresh) CheckClient(certs []*x509.Certificate, services []string, now time.Time) (time.Time, error) {
+	until, err := f.Machine.CheckClient(certs, services, now)
+	if err != nil {
+		return until, err
+	}
+	return f.ver.FreshBound(certs, f.fresh, until, now)
+}
+
 // CheckServer checks a server's certificates as the machine name.
 func (m *Machine) CheckServer(certs []*x509.Certificate, name string, now time.Time) (time.Time, error) {
 	if len(certs) != 2 {
