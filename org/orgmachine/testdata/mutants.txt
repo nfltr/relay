@@ -24,3 +24,10 @@ status-survives-rotation | orgmachine.go | 	_ = os.Remove(filepath.Join(m.dir, S
 # A fresh process takes no list older than the newest taken (lane SECFIX,
 # review S10; client/orgid MarksFile).
 machine-marks-not-loaded | orgmachine.go | 	if err := orgid.LoadMarks(dir, ver, &m.rules); err != nil { | 	if err := error(nil); err != nil { | TestMachineMarksHoldAcrossARestart
+# A fresh-bounded service (lane SECFIX item 8, nfltr up fresh:;
+# spec/enrol/CrlCarriers.tla FreshBound, FreshQuiet): the bound not
+# applied, until not lowered to it (a session held past it on a withheld
+# CRL), a bound under orgid.FreshMin taken (cut at every re-sign).
+fresh-ignored | orgmachine.go | 	return f.ver.FreshBound(certs, f.fresh, until, now) | 	return until, nil | TestFreshCutsAtTheBound
+fresh-not-cut | ../../client/orgid/fresh.go | 	if end.Before(until) { | 	if false { | TestFreshCutsAtTheBound
+fresh-short | orgmachine.go | 	if fresh < orgid.FreshMin || fresh > orgpki.CRLLife { | 	if fresh < time.Minute || fresh > orgpki.CRLLife { | TestFreshCutsAtTheBound
