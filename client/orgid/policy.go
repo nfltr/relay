@@ -277,7 +277,7 @@ func statusPolicy(msg []byte, v *Verifier, now time.Time) (heldPolicy, error) {
 }
 
 // Rules are the access rules of the newest organisation status a serving
-// machine took (Take), for its check of a client (Admit); the zero value
+// machine took (Take), for its check of a client (AdmitClient); the zero value
 // holds none, and admits nobody. Identity and relay org orgmachine.Machine
 // each hold one.
 type Rules struct {
