@@ -35,7 +35,7 @@ JK == <<E.o, E.m, E.tok>>
 \* Lines TraceEnrol.tla and TraceOrgHosted.tla read: no step of the join.
 Others == {"issue", "refuse", "revoke", "rebind", "crl", "take", "rotate", "check", "itake"}
 
-\* Start's Trusts: the owner's roots, and only those, are taken.
+\* Start's Trusts: the owner's roots not older than the token's, and only those, are taken.
 RootBad ==
     CASE E.ok /\ ~E.own -> {"any-root"}
       [] E.own /\ ~E.ok -> {"pin-root-only"}

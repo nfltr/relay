@@ -18,9 +18,12 @@
 \* name, and a token certifies one key only.
 \*
 \* The join takes the organisation's root from the relay: the pinned root
-\* (generation 1, the one the token was made under) or a root the pinned
-\* recovery key certifies (a rotation since: Rotate), as a running machine
-\* takes a rotation; never an attacker's root (Evil, signed by another key).
+\* (generation 1) or a root the pinned recovery key certifies (a rotation
+\* since: Rotate), as a running machine takes a rotation; never an
+\* attacker's root (Evil, signed by another key), and never one older than
+\* the root the token was made under (generation TokGen: the token names
+\* its NotBefore; lane SECFIX, review S9). The relay hands any root the
+\* owner ever made (a superseded one too) or Evil.
 \* The attacker may also hold the token (it leaked: Other) and the
 \* machine's join key once a renewal retired it (Renew, then ReplayOld).
 \*
@@ -43,6 +46,7 @@ EXTENDS Integers, Sequences, FiniteSets
 
 CONSTANTS
     MaxRoot,      \* the owner's root generations 1..MaxRoot (1: the pinned one)
+    TokGen,       \* the generation the token was made under (the owner's root at Init)
     MaxTries,     \* join runs (state bound)
     MaxKeys,      \* keys the machine makes (state bound)
     MaxCerts,     \* certificates the issuer issues for the name (state bound)
@@ -88,7 +92,7 @@ TypeOK ==
     /\ relabeled \in BOOLEAN /\ jcert \in 0..MaxCerts
 
 Init ==
-    /\ root = 1
+    /\ root = TokGen
     /\ certs = <<>>
     /\ revoked = FALSE /\ other = FALSE /\ replayed = FALSE
     /\ reqs = {} /\ ans = {}
@@ -100,8 +104,10 @@ Init ==
 \* or a root the pinned recovery key certifies. Under pin-root-only (the
 \* code before) the pinned root only; under any-root any root.
 Trusts(g) ==
-    \/ g = 1
-    \/ Mutant # "pin-root-only" /\ g <= MaxRoot
+    \/ /\ \/ g = 1
+          \/ Mutant # "pin-root-only" /\ g <= MaxRoot
+       /\ \/ g >= TokGen
+          \/ Mutant = "older-root"
     \/ Mutant = "any-root"
 
 \* `nfltr org join` runs: the relay hands it root g (the owner's current,
@@ -111,7 +117,7 @@ Trusts(g) ==
 \* own relay machine id under the token's MAC.
 Start(g) ==
     /\ ~active /\ result = "none" /\ tries < MaxTries
-    /\ g \in {root, Evil}
+    /\ g \in (1..root) \cup {Evil}
     /\ tries' = tries + 1
     /\ jroot' = g
     /\ IF ~Trusts(g)
@@ -240,9 +246,13 @@ Relabel ==
     /\ UNCHANGED <<root, certs, revoked, other, replayed, ans, keys, jkey, active, jroot, result, tries, lost, jcert>>
 
 \* Under any-root the join takes the attacker's root, and the attacker
-\* answers with a certificate of its own under it.
+\* answers with a certificate of its own under it; under older-root a
+\* root superseded before the token was made, whose keys the attacker may
+\* hold (why the owner rotated). A root superseded after the token was
+\* made is the residual: the token names no later root (the owner makes
+\* new tokens after a rotation).
 InstallForged ==
-    /\ active /\ jroot = Evil
+    /\ active /\ (jroot = Evil \/ jroot < TokGen)
     /\ result' = "joined" /\ active' = FALSE
     /\ UNCHANGED <<root, certs, revoked, other, replayed, reqs, ans, keys, jkey, jroot, tries, lost, relabeled, jcert>>
 
@@ -271,10 +281,13 @@ NoRetiredKeyRevived == \A i, j \in DOMAIN certs : j < i /\ certs[i].tok => certs
 \* lost or late answer never burns the name.
 RefusedOnlyForCause ==
     /\ result = "refused-token" => revoked \/ other \/ relabeled
-    /\ result = "refused-root" => jroot = Evil
+    /\ result = "refused-root" => jroot = Evil \/ jroot < TokGen
 
 \* A machine joins only under a root the owner made.
 JoinRootsAreOwners == result = "joined" => jroot # Evil
+
+\* ... and never under a root older than the token's (mutant older-root).
+JoinRootNotOlder == result = "joined" => jroot >= TokGen
 
 \* A certificate binds a relay machine id only as the token's holder
 \* stated it under the token's MAC (the relay cannot choose it), and only
@@ -293,6 +306,7 @@ WitnessJoinedAfterLoss == ~(result = "joined" /\ lost > 0)
 WitnessJoinedAfterRotation == ~(result = "joined" /\ jroot > 1)
 WitnessRefusedOther == ~(result = "refused-token" /\ other)
 WitnessRefusedEvil == result # "refused-root"
+WitnessRefusedOlder == ~(result = "refused-root" /\ jroot < TokGen)
 WitnessJoinedBound == ~(result = "joined" /\ jcert # 0 /\ certs[jcert].id = "own")
 WitnessRefusedRelabeled == ~(result = "refused-token" /\ relabeled /\ ~other /\ ~revoked)
 =============================================================================

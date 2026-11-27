@@ -100,6 +100,7 @@ the relay loses one request or answer; one rotation.
 | NoIssueAfterRevoke | nothing is issued under a token after the name's revoke | `reissue-revoked` |
 | NoRetiredKeyRevived | a key a renewal retired is never certified by the token again | `reissue-after-renewal` |
 | JoinRootsAreOwners | a machine joins only under a root the owner made | `any-root` |
+| JoinRootNotOlder | ... and never under one older than the root the token was made under (the token names that root's NotBefore; the relay hands any root the owner ever made: lane SECFIX, review S9; `JoinOlder.cfg`, TokGen 2) | `older-root` (any recovery-signed root, the code before) |
 | RefusedOnlyForCause (relabel) | ... or the relay changed the request's relay machine id or named another sender (it can refuse a join, as it can by not carrying it) | |
 | BindOnlyStated | a certificate binds a relay machine id only as the token's holder stated it under the token's MAC (`orgpki.EnrolRequest` MachineID, MachineMAC; BIND:enrol.id): the relay cannot choose it | `bind-unmacd` (the id the MAC does not cover, such as the sender the relay names, bound) |
 | BindOnlyOwnAccount | ... and only the issuer's account machine of the name (the move policy, as Enrol.tla Move) | `bind-any-account` |
@@ -107,12 +108,13 @@ the relay loses one request or answer; one rotation.
 
 Witnesses: `WitnessRetriedJoin`, `WitnessReissued`,
 `WitnessJoinedAfterLoss`, `WitnessJoinedAfterRotation`,
-`WitnessRefusedOther`, `WitnessRefusedEvil`, `WitnessJoinedBound`,
+`WitnessRefusedOther`, `WitnessRefusedEvil`, `WitnessRefusedOlder`
+(`JoinOlder.cfg`: the superseded root refused), `WitnessJoinedBound`,
 `WitnessRefusedRelabeled`.
 
 | Action | code |
 |---|---|
-| Start | `orgenrol.Join`: the root message checked (`trust`: the pinned root, or one the pinned recovery key certifies), the token's kept key, the request posted under the run's id, stating the machine's relay machine id under the token's MAC (`Pins.MachineID`, `orgpki.NewEnrolRequestFor`) |
+| Start | `orgenrol.Join`: the root message checked (`trust`: the pinned root, or one the pinned recovery key certifies, not older than the token's root: `orgpki.TokenRootNotBefore`), the token's kept key, the request posted under the run's id, stating the machine's relay machine id under the token's MAC (`Pins.MachineID`, `orgpki.NewEnrolRequestFor`) |
 | Issue | `orgpki.Issuer.Enrol` (through `orgenrol.Service`): a redeemed token answers again only its key, while the name is not revoked and its newest certificate is the token's; a token naming no relay machine id binds the request's when its MAC holds and the move policy admits it; `orgenrol.Service` refuses a request whose id is not its sender's |
 | Relabel | the relay changes a request's relay machine id (the MAC no longer holds: `orgpki.Issuer.Enrol` refuses) or names another sender (`orgenrol.Service.wrongMachine` refuses) |
 | Install | `orgenrol.Join`: the answer to this run's or the first run's request, checked by `orgmachine.Checked` (key, chain) |
@@ -121,7 +123,7 @@ Witnesses: `WitnessRetriedJoin`, `WitnessReissued`,
 | Other | the token leaked: another key's request |
 | Renew, ReplayOld | a renewal retires the join key; the attacker posts it with the token |
 | Revoke, Rotate | `nfltr org revoke`, `nfltr org rotate` |
-| InstallForged | mutant `any-root` only: the attacker's answer under its own root |
+| InstallForged | mutants `any-root` and `older-root` only: the attacker's answer under its own root, or under a root superseded before the token was made (its keys may be the attacker's). A root superseded after the token was made is the residual: the token names no later root, so the owner makes new tokens after a rotation |
 
 The join takes the first answer it reads: after a rotation between a
 run's answer and the next run, the first run's answer (under the old

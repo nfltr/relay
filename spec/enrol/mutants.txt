@@ -68,6 +68,7 @@ reissue-revoked NoIssueAfterRevoke Join.cfg
 reissue-after-renewal NoRetiredKeyRevived Join.cfg
 pin-root-only RefusedOnlyForCause Join.cfg
 any-root JoinRootsAreOwners Join.cfg
+older-root JoinRootNotOlder JoinOlder.cfg
 # the join's relay machine id (lane LOGINREDS): bind-none is the code
 # before (a login's certificate named no id, so the first serve moved the
 # name while a second serve read the pair); bind-unmacd binds an id the
