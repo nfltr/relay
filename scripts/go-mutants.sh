@@ -9,7 +9,8 @@
 # of its file that occurs exactly once; a file outside the package is a
 # path from it, e.g. ../internal/x/x.go) and checks that its test then
 # fails. Fails on a mutant its test does not catch, or whose line is gone.
-# A port of nfltr's scripts/orgpki-mutants.sh. make test-go-mutants.
+# A port of nfltr's scripts/orgpki-mutants.sh. make test-go-mutants. The
+# same file in relay and relay-server (whose root is its one module).
 # The tree is never edited: each mutant's files are written to a temp dir
 # and given to go test as an -overlay, so mutants run in parallel
 # (MUTANT_JOBS, default the job's share of the CPUs under make ci,
@@ -71,6 +72,7 @@ if [[ "${1:-}" == "--one" ]]; then
   pkg="$(dirname "$(dirname "$list")")"
   rel="${pkg#"$root"/}"
   module="${rel%%/*}"
+  [[ -f "$root/$module/go.mod" ]] || module=. # a repository of one module
   tmp="$(mktemp -d)"
   trap 'rm -rf "$tmp"' EXIT
   test="" replace="" n=0
@@ -110,6 +112,7 @@ shift
 pkg="$(dirname "$(dirname "$list")")"
 rel="${pkg#"$root"/}"
 module="${rel%%/*}"
+[[ -f "$root/$module/go.mod" ]] || module=. # a repository of one module
 # A list whose package, its dependencies, the list and this script are
 # unchanged since it passed: its verdict from scripts/cicache.sh.
 cicache="$root/scripts/cicache.sh"
