@@ -59,13 +59,15 @@ func TestRevokeReachesTheMachineWhileTheMailboxIsDown(t *testing.T) {
 	deadline := time.After(hang)
 	for {
 		select {
-		case <-changed:
+		case <-changed: // a change, not necessarily this one (the status copy)
 		case <-deadline:
 			t.Fatal("the revoke did not reach the machine while the mailbox was down")
 		}
+		// Before the check: a CRL taken between the check and the capture
+		// closes a channel this loop never waits on.
+		changed = f.m.Changed()
 		if _, err := f.m.CheckServer([]*x509.Certificate{cur, issuerOf(t, f.dir)}, "web-1", f.clk.Now()); err != nil {
 			return // refused: the CRL taken from the copy lists it
 		}
-		changed = f.m.Changed()
 	}
 }
