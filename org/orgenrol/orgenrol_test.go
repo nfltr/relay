@@ -778,6 +778,38 @@ func TestJoinRefusesARootOlderThanTheToken(t *testing.T) {
 	}
 }
 
+// A join takes only an answer under its token's MAC (Join.tla
+// JoinedByIssuer, mutant answer-unmacd; lane SECFIX2, review S9): an
+// answer the relay made (here the issuer's, its MAC dropped or another
+// token's put in) is refused, so a root superseded after the token was
+// made, whose keys the relay may hold, never installs its forgery.
+func TestJoinRefusesAnAnswerNotUnderTheToken(t *testing.T) {
+	f := newFleet(t)
+	for name, mac := range map[string]func(orgpki.Answer) []byte{
+		"no MAC":              func(orgpki.Answer) []byte { return nil },
+		"the MAC bit-flipped": func(a orgpki.Answer) []byte { m := append([]byte(nil), a.TokenMAC...); m[0] ^= 1; return m },
+	} {
+		f.relay.mu.Lock()
+		f.relay.rewrite = func(box string, p []byte) []byte {
+			if box != orgpki.AnswersMailbox(f.org.id) {
+				return p
+			}
+			var a orgpki.Answer
+			if json.Unmarshal(p, &a) != nil || a.Cert == nil {
+				return p
+			}
+			a.TokenMAC = mac(a)
+			out, _ := json.Marshal(a)
+			return out
+		}
+		f.relay.mu.Unlock()
+		_, err := Join(f.ctx, f.relay, filepath.Join(t.TempDir(), "m"), f.org.pins, f.org.token(t, "web-mac-"+strconv.Itoa(len(name)), f.clk.Now()), hang, f.clk.Now)
+		if err == nil || !strings.Contains(err.Error(), "not under the token's MAC") {
+			t.Fatalf("an answer with %s: %v, want refused", name, err)
+		}
+	}
+}
+
 // A join pinned on the first root refuses a root another recovery key
 // certifies, also one the relay pairs with the pinned recovery
 // certificate (Join.tla JoinRootsAreOwners, mutant any-root).

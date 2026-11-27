@@ -4,6 +4,7 @@
 package orgenrol
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -14,6 +15,7 @@ import (
 	"errors"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -94,6 +96,29 @@ func TestJoinSignInInstallsTheDevice(t *testing.T) {
 	}
 	if _, err := JoinSignIn(f.ctx, f.relay, filepath.Join(t.TempDir(), "x"), f.org.pins, f.org.id, "people", idp.Token(idp.Claims("rogue", nonce)), "", ko, kr.Public(), hang, f.clk.Now); err == nil {
 		t.Fatal("a rogue client's token joined")
+	}
+}
+
+// A sign-in join is held to the root its pins name (Join.tla SignIn,
+// mutant signin-any-recovery; lane SECFIX2, review S9): after a rotation
+// the relay's root, recovery-signed, is refused for pins of the root
+// before, before anything is posted.
+func TestJoinSignInIsHeldToThePinnedRoot(t *testing.T) {
+	f := newFleet(t)
+	newRoot := f.rotate(t)
+	eventually(t, "the relay holds the new root", func() bool {
+		f.relay.mu.Lock()
+		defer f.relay.mu.Unlock()
+		var rm orgpki.RootMessage
+		roots := f.relay.boxes[orgpki.RootMailbox(f.org.id)]
+		return len(roots) > 0 && json.Unmarshal(roots[len(roots)-1].Payload, &rm) == nil && bytes.Equal(rm.Root, newRoot.Raw)
+	})
+	_, ko, err := ed25519.GenerateKey(rand.Reader)
+	check(t, err)
+	kr, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	check(t, err)
+	if _, err := JoinSignIn(f.ctx, f.relay, filepath.Join(t.TempDir(), "d"), f.org.pins, f.org.id, "people", "x.y.z", "", ko, kr.Public(), hang, f.clk.Now); err == nil || !strings.Contains(err.Error(), "not the pinned one") {
+		t.Fatalf("a sign-in pinned to the root before a rotation: %v, want refused", err)
 	}
 }
 

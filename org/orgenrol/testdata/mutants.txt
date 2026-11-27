@@ -93,3 +93,7 @@ no-renew-when-moved | ../orgmachine/orgmachine.go | 	if m.ver.Issued(leaf, issue
 # A join takes no root older than the token's (lane SECFIX, review S9;
 # spec/enrol/Join.tla JoinRootNotOlder, older-root there).
 older-root | machine.go | 	if root.NotBefore.Before(notBefore) { | 	if false { | TestJoinRefusesARootOlderThanTheToken
+# Join.tla JoinedByIssuer, SignIn (lane SECFIX2, review S9): a join takes
+# only an answer under its token's MAC; a sign-in only its pinned root.
+answer-unmacd | machine.go | 	if err := orgpki.CheckAnswerMAC(token, a.Cert, a.Issuer, a.TokenMAC); err != nil { // Join.tla JoinedByIssuer | 	if err := error(nil); err != nil { | TestJoinRefusesAnAnswerNotUnderTheToken
+signin-any-recovery | machine.go | 	if orgid.Fingerprint(root) != pins.Root { | 	if false { | TestJoinSignInIsHeldToThePinnedRoot

@@ -543,6 +543,9 @@ func (s *service) decide(ctx context.Context, req orgpki.Request, refuse string,
 			return nil
 		}
 		a.Cert, a.Issuer = der, iss.Cert().Raw
+		if req.Enrol != nil {
+			a.TokenMAC = iss.AnswerMAC(req.Enrol.TokenID, der, a.Issuer) // Join.tla JoinedByIssuer
+		}
 		// The host certificate (nfltr cat serve --ssh) restates the certificate
 		// just logged, so it is never refused; only a failed random read
 		// errs, as the certificate's own signature would.
