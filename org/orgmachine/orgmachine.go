@@ -318,6 +318,14 @@ func (m *Machine) takeCRL(crl []byte, issuer *x509.Certificate, now time.Time) (
 	return true, nil
 }
 
+// listed: crl (one the verifier took, or nil) lists leaf's serial.
+func listed(crl []byte, leaf *x509.Certificate) bool {
+	c, err := x509.ParseRevocationList(crl)
+	return err == nil && slices.ContainsFunc(c.RevokedCertificateEntries, func(e x509.RevocationListEntry) bool {
+		return e.SerialNumber.Cmp(leaf.SerialNumber) == 0
+	})
+}
+
 // hostKRL is orgpki.HostKRL of a CRL the verifier took (so it parses),
 // nil if not.
 func hostKRL(crl []byte, issuer *x509.Certificate) []byte {
@@ -382,12 +390,14 @@ func (m *Machine) Dir() string { return m.dir }
 // up to 10 % of it later (spread by the serial, so a fleet does not renew
 // at once; lane SEAMLESS), or now when the certificate is not under the
 // root it trusts (after a rotation; Enrol.tla Request, Due;
-// spec/enrol/CertRide.tla Ask).
+// spec/enrol/CertRide.tla Ask), or listed in the CRL it holds (a move
+// order revoked it: the renewal brings its new groups, relay-server
+// spec/GroupMirror.tla Pickup; mutant no-renew-when-moved).
 func (m *Machine) RenewDue(now time.Time) time.Time {
 	m.mu.Lock()
-	leaf, issuer, host := m.cert.Leaf, m.issuer, m.host
+	leaf, issuer, host, crl := m.cert.Leaf, m.issuer, m.host, m.crl
 	m.mu.Unlock()
-	if m.ver.Issued(leaf, issuer, now) != nil {
+	if m.ver.Issued(leaf, issuer, now) != nil || listed(crl, leaf) {
 		return now
 	}
 	spread := new(big.Int).Mod(leaf.SerialNumber, big.NewInt(1000)).Int64() // 0..999

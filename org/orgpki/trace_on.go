@@ -176,3 +176,39 @@ func grantLine(l map[string]any) {
 		panic(err)
 	}
 }
+
+// Group traces (GROUPTRACE=<dir>, scripts/spec-onegroup.sh traces): the
+// issuer's move orders and signed statuses, under its lock, in its order;
+// spec/onegroup/TraceGroupIssuer.tla checks them.
+var groupMu sync.Mutex
+
+func groupLine(l map[string]any) {
+	dir := os.Getenv("GROUPTRACE")
+	if dir == "" {
+		return
+	}
+	b, err := json.Marshal(l)
+	if err != nil {
+		panic(err)
+	}
+	groupMu.Lock()
+	defer groupMu.Unlock()
+	f, err := os.OpenFile(filepath.Join(dir, strconv.Itoa(os.Getpid())+".ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		panic(err)
+	}
+	defer f.Close()
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		panic(err)
+	}
+}
+
+// groupStatusLine records a signed status: each member's groups and
+// serial, and the CRL it carries.
+func groupStatusLine(st Status) {
+	m := map[string]any{}
+	for _, x := range st.Members {
+		m[x.Name] = map[string]any{"gs": append([]string{}, x.Groups...), "s": x.Serial}
+	}
+	groupLine(map[string]any{"ev": "sign", "o": st.OrgID, "num": st.CRL.Number, "map": m, "t": st.At.Unix()})
+}

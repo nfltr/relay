@@ -81,7 +81,7 @@ reauth-any-user | signin.go | 		case n.dev != dev: // AppEnrol.tla Reauth (mutan
 signin-takes-code-key | signin.go | 		case n.authUntil.IsZero(): | 		case false: | TestSignInOnlyForItsPersonNotRevoked
 renew-ignores-auth | issuer.go | 	if !n.authUntil.IsZero() && now.After(n.authUntil) { // AppEnrol.tla Renew (mutant renew-ignores-auth) | 	if false { | TestSignInRenewalEndsWithAuthLife
 # A rebind (spec/enrol/Enrol.tla Rebind; nfltr docs/decisions/org-rebind-2026-11-17.md):
-rebind-keeps-serials | issuer.go | 		sns := n.serials[:n.retired] // Enrol.tla Rebind (mutant rebind-keeps-serials) | 		sns := n.serials[:0] | TestRebindRetiresTheOldID
+rebind-keeps-serials | issuer.go | 		sns := n.serials[:max(n.retired, n.moved)] // Enrol.tla Rebind (mutant rebind-keeps-serials); GroupMirror.tla Move (move-keeps-old-cert) | 		sns := n.serials[:n.moved] | TestRebindRetiresTheOldID
 renew-rebound | issuer.go | 	if n.isRetired(sn) { // Enrol.tla NoRenewOfRetired (mutant renew-rebound): the old machine id's disk | 	if false { | TestRebindRetiresTheOldID
 rebind-keeps-id | issuer.go | 			n.retired, n.machineID, i.crlDue = len(n.serials), e.MachineID, true | 			n.retired, i.crlDue = len(n.serials), true | TestRebindRetiresTheOldID
 rebind-reusable | issuer.go | 	if redeemed { | 	if _ = redeemed; false { | TestRebindTokenRules
@@ -170,3 +170,12 @@ revoke-by-anyone | grant.go | 	case !owner && !pol.Approves(person, g.Where, g.S
 host-check-any-life | hostcert.go | 	case c.ValidBefore-c.ValidAfter > uint64((issueBackdate+HostLife)/time.Second): | 	case false: | TestHostCertLifeIsItsOwn
 host-no-backdate | hostcert.go | 	until := leaf.NotBefore.Add(issueBackdate + HostLife) // mutant host-life-equal | 	until := leaf.NotBefore.Add(HostLife) | TestStepAHostCertPassesTheOldCheck
 readpins-no-rules | renew.go | 	i := emptyIssuer(nil) | 	i := &Issuer{tokens: map[string]*tokenRec{}, names: map[string]*nameRec{}, certs: map[string]*certRec{}} | TestReadPinsReplaysSignInRules
+# The root's move order (relay-server spec/GroupMirror.tla Move, Sign;
+# spec/proverif/orggroup.pv 5; group_move_test.go, orggroup_bindings_test.go).
+move-without-order | order.go | 	if !verifyRootSig(i.root, append([]byte(orderPrefix), s.Body...), s.Sig) { // BIND:group.movesig, BIND:dash.ordersig | 	if false { | TestOrgGroupModelBindings
+move-keeps-old-cert | issuer.go | 		sns := n.serials[:max(n.retired, n.moved)] // Enrol.tla Rebind (mutant rebind-keeps-serials); GroupMirror.tla Move (move-keeps-old-cert) | 		sns := n.serials[:n.retired] | TestMoveOrderRegroupsAndRevokesTheOldCertificates
+move-keeps-groups | issuer.go | 		n.groups, n.moved, i.crlDue, i.moveDue = e.Groups, len(n.serials), true, true | 		n.moved, i.crlDue, i.moveDue = len(n.serials), true, true | TestMoveOrderRegroupsAndRevokesTheOldCertificates
+move-replayed | order.go | 	case slices.Index(n.serials, o.Serial) < n.moved: // mutant move-replayed | 	case false: | TestMoveOrderRegroupsAndRevokesTheOldCertificates
+move-outside-bound | order.go | 	case len(o.Groups) == 0 || !subset(o.Groups, i.cert.Subject.OrganizationalUnit): // mutant move-outside-bound | 	case len(o.Groups) == 0: | TestMoveOrderRefusals
+status-before-crl | status.go | 	if i.moveDue { | 	if false { | TestStatusWaitsForTheMovesCRL
+rebind-token-groups | issuer.go | 	der, err := i.issue(ActRebound, t.name, n.groups, t.machineID, t.dev, pub, tokenID, "", now) // mutant rebind-token-groups | 	der, err := i.issue(ActRebound, t.name, t.groups, t.machineID, t.dev, pub, tokenID, "", now) | TestRebindAfterAMoveTakesTheNewGroups

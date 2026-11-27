@@ -86,3 +86,7 @@ audit-move-no-sessions | ../orgissuer/bundle.go | 	if dir, base := path.Split(na
 audit-backlog-waits | auditship.go | 			if more { // a backlog over shipMax: the next post now (TestKeeperShipsABacklogAndRotates) | 			if false && more { | TestKeeperShipsABacklogAndRotates
 # The issuer's refusal logged as an outage (lane ORGRENEW: canary-linux's "does not answer yet ... nothing to do" over a refusal).
 refusal-as-outage | machine.go | 		case errors.Is(err, ErrIssuerRefused): | 		case false: | TestKeeperLogsARefusalAsARefusal
+# One set of groups (relay-server spec/GroupMirror.tla Reput, Pickup;
+# status_test.go).
+no-reput-on-reconnect | issuer.go | 				s.relayLost = true | 				s.relayLost = false | TestServicePutsItsStatusAgainWhenTheRelayIsBack
+no-renew-when-moved | ../orgmachine/orgmachine.go | 	if m.ver.Issued(leaf, issuer, now) != nil || listed(crl, leaf) { | 	if m.ver.Issued(leaf, issuer, now) != nil || listed(crl[:0], leaf) { | TestServiceAppliesTheRootsMoveOrder

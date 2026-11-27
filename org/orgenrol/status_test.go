@@ -184,3 +184,41 @@ func TestKeptMachineTakesTheRootsAccessRules(t *testing.T) {
 		t.Error("a service no rule names admitted")
 	}
 }
+
+// The root's move order (relay-server spec/GroupMirror.tla Move, Pickup;
+// nfltr docs/decisions/one-group-2026-11-25.md): applied and answered, the
+// relay's status copy shows web-1 in db, and its keeper, seeing its
+// serial in the CRL, renews at once into db (mutant no-renew-when-moved).
+func TestServiceAppliesTheRootsMoveOrder(t *testing.T) {
+	f := newFleetWith(t, func(f *fleet) { f.copy = true })
+	keep(t, f.ctx, f.keeper())
+	var pins orgpki.Pins
+	f.org.do(t, func(iss *orgpki.Issuer, _ *orgissuer.Store) {
+		pins = orgpki.Pins{OrgID: iss.OrgID(), Root: iss.Root(), Issuer: iss.Cert()}
+	})
+	o, err := orgpki.MoveOrder(pins, f.org.rootKey, "web-1", hex.EncodeToString(f.joined.Cert.SerialNumber.Bytes()), []string{"db"}, f.clk.Now())
+	check(t, err)
+	if name, err := SendOrder(f.ctx, f.relay, f.org.id, o, hang); err != nil || name != "web-1" {
+		t.Fatalf("the move: %q, %v", name, err)
+	}
+	eventually(t, "the status copy shows web-1 in db", func() bool {
+		st := f.status(t)
+		return st != nil && len(st.Members) == 1 && slices.Equal(st.Members[0].Groups, []string{"db"})
+	})
+	eventually(t, "the machine renews into db", func() bool {
+		c, _ := f.m.Current()
+		return slices.Equal(c.Subject.OrganizationalUnit, []string{"db"})
+	})
+}
+
+// GroupMirror.tla Reput: the relay restarts (its copy gone) while the
+// issuer cannot read its requests; the issuer puts the status again at
+// once, not copyEvery later (mutant no-reput-on-reconnect).
+func TestServicePutsItsStatusAgainWhenTheRelayIsBack(t *testing.T) {
+	f := newFleetWith(t, func(f *fleet) { f.copy = true })
+	eventually(t, "the first status", func() bool { return f.status(t) != nil })
+	f.relay.mu.Lock()
+	f.relay.statuses, f.relay.down = nil, true
+	f.relay.mu.Unlock()
+	eventually(t, "the status put again", func() bool { return f.status(t) != nil })
+}

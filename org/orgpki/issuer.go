@@ -101,6 +101,7 @@ type nameRec struct {
 	revoked   bool
 	serials   []string  // in issue order
 	retired   int       // serials[:retired]: retired by a rebind (the name's earlier machine id), listed in every CRL until they expire
+	moved     int       // serials[:moved]: revoked by a move order (order.go), listed likewise; they still renew (into the new groups)
 	authUntil time.Time // enrolled by sign-in: renews by itself until then (AuthLife); zero: by a code, until revoked
 }
 
@@ -123,6 +124,7 @@ type Issuer struct {
 	crlNumber  int64
 	crlNext    time.Time
 	crlDue     bool                 // a revocation or a new issuer certificate since the last CRL
+	moveDue    bool                 // a move order since the last CRL (SignedStatus waits for one)
 	movedTo    string               // the receive key the log's last fence names (move.go)
 	restoredAt time.Time            // the last restore from a backup (restore.go); zero: none
 	carried    map[string]time.Time // serials a restore took from the published CRL, listed until then
@@ -257,6 +259,12 @@ func (i *Issuer) apply(e Entry) error {
 			n.authUntil = e.AuthUntil
 		}
 		i.certs[e.Serial] = &certRec{name: e.Name, key: e.Key, digest: e.Digest, token: e.Token, notAfter: e.NotAfter, from: e.From}
+	case ActRegrouped:
+		n := i.names[e.Name]
+		if n == nil {
+			return errors.New("a regrouped line names no enrolled name")
+		}
+		n.groups, n.moved, i.crlDue, i.moveDue = e.Groups, len(n.serials), true, true
 	case ActRevoked:
 		if n := i.names[e.Name]; n != nil {
 			n.revoked = true
@@ -299,7 +307,7 @@ func (i *Issuer) apply(e Entry) error {
 		}
 		return i.grants.apply(e)
 	case ActCRL:
-		i.crlNumber, i.crlNext, i.crlDue = e.Number, e.NotAfter, false
+		i.crlNumber, i.crlNext, i.crlDue, i.moveDue = e.Number, e.NotAfter, false, false
 	case ActRestored:
 		i.applyRestored(e)
 	case ActMoved:
@@ -666,13 +674,13 @@ func (i *Issuer) rebind(t *tokenRec, tokenID string, pub ed25519.PublicKey, refu
 			traceLine(map[string]any{"ev": "refuse", "o": i.orgID, "n": t.name, "from": "", "tok": tokenID, "k": orgid.KeyFingerprint(pub), "why": "enrolled", "t": now.Unix()})
 			return nil, i.refuse(refusal, "the rebind token was redeemed")
 		}
-		return i.issue(ActIssued, t.name, t.groups, t.machineID, t.dev, pub, tokenID, "", now)
+		return i.issue(ActIssued, t.name, n.groups, t.machineID, t.dev, pub, tokenID, "", now) // the name's groups now: a move since the token (GroupMirror.tla Move)
 	}
 	same := t.machineID == n.machineID
 	if until := i.validUntil(n, now); same && !until.IsZero() { // Enrol.tla ReissueRetiresOnlyExpired (mutant reissue-while-valid)
 		return nil, i.refuse(refusal, t.name+" holds a certificate valid until "+until.UTC().Format(time.RFC3339)+": a reissue to its own machine id is for a name whose certificates all expired")
 	}
-	der, err := i.issue(ActRebound, t.name, t.groups, t.machineID, t.dev, pub, tokenID, "", now)
+	der, err := i.issue(ActRebound, t.name, n.groups, t.machineID, t.dev, pub, tokenID, "", now) // mutant rebind-token-groups
 	if err == nil {
 		traceLine(map[string]any{"ev": "rebind", "o": i.orgID, "n": t.name, "s": n.serials[len(n.serials)-1], "same": same, "t": now.Unix()})
 	}
@@ -870,6 +878,7 @@ func (i *Issuer) issueEntry(act, name string, groups []string, machineID string,
 		return nil, err
 	}
 	traceLine(map[string]any{"ev": "issue", "o": i.orgID, "n": name, "s": e.Serial, "from": from, "tok": token, "k": e.Key, "exp": t.NotAfter.Unix(), "t": now.Unix()})
+	groupLine(map[string]any{"ev": "issue", "o": i.orgID, "n": name, "s": e.Serial, "gs": append([]string{}, groups...), "exp": t.NotAfter.Unix(), "t": now.Unix()})
 	return der, nil
 }
 
@@ -919,7 +928,7 @@ func (i *Issuer) CRL(now time.Time) ([]byte, error) {
 	var listed []x509.RevocationListEntry
 	seen := map[string]bool{}
 	for _, n := range i.names {
-		sns := n.serials[:n.retired] // Enrol.tla Rebind (mutant rebind-keeps-serials)
+		sns := n.serials[:max(n.retired, n.moved)] // Enrol.tla Rebind (mutant rebind-keeps-serials); GroupMirror.tla Move (move-keeps-old-cert)
 		if n.revoked {
 			sns = n.serials
 		}
@@ -955,6 +964,7 @@ func (i *Issuer) CRL(now time.Time) ([]byte, error) {
 	}
 	traceLine(map[string]any{"ev": "crl", "o": i.orgID, "num": number, "next": next.Unix(), "t": now.Unix(), "rev": rev})
 	grantLine(map[string]any{"ev": "crl", "o": i.orgID, "num": number, "next": next.Unix(), "t": now.Unix(), "rev": append([]string{}, grantSNs...)})
+	groupLine(map[string]any{"ev": "crl", "o": i.orgID, "num": number, "t": now.Unix(), "rev": rev})
 	return der, nil
 }
 

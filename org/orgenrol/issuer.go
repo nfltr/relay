@@ -173,6 +173,9 @@ type service struct {
 	// pubs: the round's publishes since its read, -1 before it read
 	// (the OrgHolds trace's write line).
 	pubs int
+	// relayLost: a read of the requests failed since the last status put
+	// (the relay unreachable or restarted): the next round puts it at once.
+	relayLost bool
 	// failingSince: the first of the current run of failed maintain
 	// rounds (zero while they succeed; maintained).
 	failingSince time.Time
@@ -245,6 +248,7 @@ func (c Service) Run(ctx context.Context) (err error) {
 		cancel()
 		if err != nil {
 			if ctx.Err() == nil && !woken {
+				s.relayLost = true
 				logger.Warn("org issuer: requests not read (again shortly)", "error", err)
 				select {
 				case <-ctx.Done():
@@ -473,9 +477,14 @@ func (s *service) decide(ctx context.Context, req orgpki.Request, refuse string,
 		var der []byte
 		var err error
 		switch {
-		case req.Order != nil: // the root's order (OrgDash.tla Apply): no certificate
-			if a.Revoked, err = iss.ApplyOrder(*req.Order, now); err != nil {
+		case req.Order != nil: // the root's order (OrgDash.tla Apply, GroupMirror.tla Move): no certificate
+			switch o, err := iss.ApplyOrder(*req.Order, now); {
+			case err != nil:
 				a.Refused = err.Error()
+			case o.Act == orgpki.ActMoveOrder:
+				a.Moved = o.Name
+			default:
+				a.Revoked = o.Name
 			}
 			return nil
 		case req.Policy != nil: // the root's access policy (GroupMirror.tla RuleApply): no certificate
@@ -646,7 +655,7 @@ func (s *service) maintain(ctx context.Context, now time.Time) error {
 		s.pubs++
 		s.pubRoot, s.pubRootAt = slices.Concat(root, issuers), now
 	}
-	s.putStatus(ctx, now)
+	s.putStatus(ctx, now, s.relayLost) // at once when the relay is back (GroupMirror.tla Reput); a new CRL changes the status (its CRL), so it is put with it (Sign)
 	if crlErr != nil {
 		return crlErr
 	}
@@ -715,10 +724,12 @@ func (s *service) putCopy(ctx context.Context, crl, issuer []byte, now time.Time
 }
 
 // putStatus puts the issuer's signed status on the relay's copy when the
-// Mailbox keeps one, when it changed (its At aside) or copyEvery passed. A
-// failure is logged (a relay that holds another organisation for this
-// account refuses it: one organisation per account).
-func (s *service) putStatus(ctx context.Context, now time.Time) {
+// Mailbox keeps one, when it changed (its At aside: a new CRL is a change),
+// copyEvery passed or force (the relay was unreachable: its copy, held in
+// process memory, may be gone; mutant no-reput-on-reconnect). A failure is logged (a relay that holds another
+// organisation for this account refuses it: one organisation per
+// account).
+func (s *service) putStatus(ctx context.Context, now time.Time, force bool) {
 	w, ok := s.Mailbox.(StatusCopyWriter)
 	if !ok {
 		return
@@ -729,13 +740,16 @@ func (s *service) putStatus(ctx context.Context, now time.Time) {
 		return err
 	})
 	key := statusContent(st.Body)
-	if err != nil || (bytes.Equal(key, s.copyStatus) && now.Sub(s.copyStatusAt) < copyEvery) {
+	if err != nil || (!force && bytes.Equal(key, s.copyStatus) && now.Sub(s.copyStatusAt) < copyEvery) {
 		return
 	}
 	s.copyStatus, s.copyStatusAt = key, now
 	data, err := json.Marshal(st)
 	if err == nil {
 		err = w.PutOrgStatus(ctx, s.org, data)
+	}
+	if err == nil {
+		s.relayLost = false
 	}
 	if err != nil && ctx.Err() == nil {
 		s.Logger.Warn("org issuer: the relay's copy of the organisation status not kept (tried again within "+copyEvery.String()+")", "error", err)

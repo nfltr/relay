@@ -13,13 +13,14 @@ import (
 	"github.com/nfltr/relay/org/orgpki"
 )
 
-// SendOrder posts the root's order (orgpki.RevokeOrder, signed on the
-// root's machine: nfltr org approve) on orgID's enrol drop box and waits
-// up to wait for the issuer's answer: the name it revoked, or
-// ErrIssuerRefused with its reason (spec/orgmove/OrgDash.tla Apply).
+// SendOrder posts the root's order (orgpki.RevokeOrder or MoveOrder,
+// signed on the root's machine: nfltr org approve) on orgID's enrol drop
+// box and waits up to wait for the issuer's answer: the name it revoked or
+// moved, or ErrIssuerRefused with its reason (spec/orgmove/OrgDash.tla
+// Apply, relay-server spec/GroupMirror.tla Move).
 func SendOrder(ctx context.Context, mb Mailbox, orgID string, o orgpki.SignedOrder, wait time.Duration) (string, error) {
 	a, err := exchange(ctx, mb, orgID, orgpki.Request{ID: randomID(), Order: &o}, wait)
-	return a.Revoked, err
+	return a.Revoked + a.Moved, err
 }
 
 // SendPolicy posts the root's access policy (orgpki.SignPolicy, signed on

@@ -72,8 +72,10 @@ type Answer struct {
 	Refused    string     `json:"refused,omitempty"`
 	// SignInEnded: the refusal is ErrSignInEnded (the device signs in again).
 	SignInEnded bool `json:"sign_in_ended,omitempty"`
-	// Revoked is the name an order revoked.
+	// Revoked is the name an order revoked; Moved the name a move order
+	// moved (its new groups: the order's).
 	Revoked string `json:"revoked,omitempty"`
+	Moved   string `json:"moved,omitempty"`
 	// Removal is what a people act's removal filed.
 	Removal *Removal `json:"removal,omitempty"`
 	// Policy is the number of the access policy the issuer holds after a

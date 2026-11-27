@@ -45,6 +45,7 @@ const (
 	ActGrant       = "grant"         // Grant (ID, Who, Where, Service, ForS, Serial, Until), Actor: the approver; Cert: the grant certificate
 	ActGrantDeny   = "grant-deny"    // Grant.ID, Actor (ActorRole owner: the root): the request's final answer
 	ActGrantRevoke = "grant-revoke"  // Grant.Serial, Grant.ID, Actor (ActorRole owner: the root)
+	ActRegrouped   = "regrouped"     // Name, Groups: its groups from now; Serial: the root's move order's (order.go); every serial of Name so far revoked
 )
 
 // Entry is one line of the issuer's hash-chained JSON-lines log. Prev is

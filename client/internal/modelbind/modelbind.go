@@ -18,11 +18,10 @@ import (
 // client's TestEveryModelBindingHasARow exempt these ids, and each fails
 // once a pending id has a row, so the list cannot go stale.
 var Pending = map[string]string{
-	// spec/proverif/orggroup.pv (a design, lane ONEGROUP): the rows come
-	// with its code, lane ONEGROUP-C1 (org/orgpki TestOrgGroupModelBindings).
-	"group.movesig": "ONEGROUP-C1: org/orgpki move order",
-	"group.ou":      "ONEGROUP-C1: client/orgid groups from the certificate",
-	"group.pin":     "ONEGROUP-C2: relay-server org_status root pin",
+	// spec/proverif/orggroup.pv (lane ONEGROUP): group.movesig and
+	// group.ou since lane ONEGROUP-C1 (org/orgpki TestOrgGroupModelBindings);
+	// the pin's row comes with relay-server's mirror.
+	"group.pin": "ONEGROUP-C2: relay-server org_status root pin",
 	// spec/proverif/svc_access.pv (a design, lane SERVICEACCESS): the rows
 	// come with its code lanes (nfltr docs/decisions/service-access-2026-11-25.md):
 	// svc.hdrwho and svc.aud since lane SA2, svc.rulesig and svc.apprpol

@@ -28,3 +28,9 @@ func appTraceLine(map[string]any) {}
 // with -tags enroltrace (trace_on.go, GRANTTRACE=<dir>); here it compiles
 // away.
 func grantLine(map[string]any) {}
+
+// groupLine records one issuer step of spec/onegroup/TraceGroupIssuer.tla
+// (a move order applied, a status signed). Built only with -tags
+// enroltrace (trace_on.go, GROUPTRACE=<dir>); here it compiles away.
+func groupLine(map[string]any) {}
+func groupStatusLine(Status)   {}

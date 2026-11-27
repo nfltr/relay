@@ -1,3 +1,6 @@
+Incompatible changes:
+- ./orgpki.(*Issuer).ApplyOrder: changed from func(SignedOrder, time.Time) (string, error) to func(SignedOrder, time.Time) (Order, error)
+- ./orgpki.Order: old is comparable, new is not
 Compatible changes:
 - ./orgmachine.(*Machine).Audit: added
 - ./orgmachine.(*Machine).Audited: added
@@ -25,4 +28,10 @@ Compatible changes:
 - ./orgpki.AuditSigners: added
 - ./orgpki.LogChecker: added
 - ./orgpki.Request.Audit: added
+- ./orgpki.ActMoveOrder: added
+- ./orgpki.ActRegrouped: added
+- ./orgpki.Answer.Moved: added
+- ./orgpki.ErrCRLDue: added
+- ./orgpki.MoveOrder: added
+- ./orgpki.Order.Groups: added
 - ./orgpki.SealAudit: added

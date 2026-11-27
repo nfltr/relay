@@ -82,13 +82,25 @@ type SignedStatus struct {
 	Sig  []byte `json:"sig"`
 }
 
-// SignedStatus is this issuer's status at now, signed with its key.
+// ErrCRLDue: a move since the last CRL; the status is signed only after
+// the CRL revoking the moved certificates (Issuer.CRL), so a status never
+// shows a move whose old certificates its CRL does not list (relay-server
+// spec/GroupMirror.tla Sign: the status and the CRL signed together;
+// mutant status-before-crl).
+var ErrCRLDue = errors.New("a move is not in a CRL yet: the status is signed after the CRL")
+
+// SignedStatus is this issuer's status at now, signed with its key, with
+// the CRL last signed (ErrCRLDue while a move waits for one).
 func (i *Issuer) SignedStatus(now time.Time) (SignedStatus, error) {
 	req, err := i.RenewalRequest(i.Groups())
 	if err != nil {
 		return SignedStatus{}, err
 	}
 	i.mu.Lock()
+	if i.moveDue {
+		i.mu.Unlock()
+		return SignedStatus{}, ErrCRLDue
+	}
 	st := Status{OrgID: i.orgID, At: now.UTC(), Head: i.head, Issuer: i.cert.Raw, RootFP: orgid.Fingerprint(i.root),
 		CRL: StatusCRL{Number: i.crlNumber, NextUpdate: i.crlNext}, Members: []StatusMember{}, Tokens: []StatusToken{}, Renewal: &req, Policy: i.policy}
 	for name, n := range i.names {
@@ -131,6 +143,7 @@ func (i *Issuer) SignedStatus(now time.Time) (SignedStatus, error) {
 		}
 	}
 	key := i.key
+	groupStatusLine(st)
 	i.mu.Unlock()
 	slices.SortFunc(st.People, func(a, b Person) int { return strings.Compare(a.Email, b.Email) })
 	slices.SortFunc(st.Members, func(a, b StatusMember) int { return strings.Compare(a.Name, b.Name) })

@@ -172,8 +172,8 @@ func orderBindings(t *testing.T) {
 		}
 	}
 	ok := sign(o, o.root, honest(o, "web-1", hex.EncodeToString(web.SerialNumber.Bytes())))
-	if name, err := o.iss.ApplyOrder(ok, t0); err != nil || name != "web-1" {
-		t.Fatalf("the honest order: %q, %v", name, err)
+	if got, err := o.iss.ApplyOrder(ok, t0); err != nil || got.Name != "web-1" {
+		t.Fatalf("the honest order: %q, %v", got.Name, err)
 	}
 	if _, err := o.iss.ApplyOrder(ok, t0); err == nil {
 		t.Error("the same order again: applied, want refused (revoked already)")
