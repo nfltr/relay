@@ -52,6 +52,7 @@ CONSTANTS
     Vanish,       \* a replica's copy gone this long counts for the alert (OrgCRLCopyVanished's for)
     WarnAge,      \* a member warns once its CRL is this old (orgid.CRLWarnAge, 2 h)
     Ride,         \* the issuer outage no session may notice (CrlLife - Every - CopyEvery - FollowEvery)
+    FreshAge,     \* the verifier's service is fresh-bounded: its sessions end once the CRL held is this old (nfltr up fresh:; 0: no key)
     Mutant
 
 VARIABLES
@@ -90,6 +91,19 @@ Life == IF Mutant = "hour-life" THEN Every + 1 ELSE CrlLife
 ReSign == Life - Every
 ASSUME Every + CopyEvery + FollowEvery < WarnAge /\ WarnAge < CrlLife
 ASSUME Ride <= CrlLife - Every - CopyEvery - FollowEvery
+\* A service's freshness bound (nfltr up fresh:, lane SECFIX item 8): at
+\* least WarnAge (orgid.FreshMin = CRLWarnAge, 2 h), at most the CRL's
+\* life. Below the re-sign interval and the copy's lag (fresh-short: the
+\* bound at Every) it cuts the service's sessions every re-sign while the
+\* issuer is up (FreshQuiet).
+ASSUME FreshAge = 0 \/ FreshAge \in WarnAge..CrlLife
+
+\* The fresh-bounded service admits and holds a session only while the
+\* CRL held at t was signed less than its bound ago (orgid.FreshBound:
+\* until is ThisUpdate + fresh; a newer CRL taken moves it, Hold's check
+\* on the change). fresh-ignored: the key read, the bound not applied.
+Bound == IF Mutant = "fresh-short" THEN Every ELSE FreshAge
+Within(t) == FreshAge = 0 \/ Mutant = "fresh-ignored" \/ t - held.this < Bound
 
 Last == crls[Len(crls)]
 Rec(n) == [num |-> n, this |-> crls[n].this, next |-> crls[n].next, rev |-> crls[n].rev]
@@ -173,7 +187,7 @@ Tick ==
     /\ now < MaxTime
     /\ ~ReSignDue /\ ~PutDue /\ ~BoxDue /\ ~PushDue /\ ~ReadDue /\ ~DeliverDue
     /\ now' = now + 1
-    /\ sess' = (sess /\ (held.next > now + 1 \/ Mutant = "lapsed-accepted"))     \* fail closed at NextUpdate
+    /\ sess' = (sess /\ (held.next > now + 1 \/ Mutant = "lapsed-accepted") /\ Within(now + 1))     \* fail closed at NextUpdate, and at the service's bound
     /\ UNCHANGED <<crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, renewal, relay, clocks>>
 
 \* The issuer (nfltr org serve, orgenrol.Service.maintain).
@@ -270,7 +284,7 @@ ServeForged ==
 \* The machine presents its certificate; the verifier admits it on a
 \* current CRL that does not list it.
 Admit ==
-    /\ ~sess /\ (Fresh \/ Mutant = "lapsed-accepted") /\ ~held.rev
+    /\ ~sess /\ (Fresh \/ Mutant = "lapsed-accepted") /\ ~held.rev /\ Within(now)
     /\ sess' = TRUE
     /\ UNCHANGED <<now, crls, revokedAt, issuerUp, upSince, downs, mailboxUp, mdowns, box, copy, sent, putAt, restarts, held, learned, readAt, renewal, relay, clocks>>
 
@@ -340,6 +354,13 @@ RideOutage ==
 QuietWhileIssuerUp == (issuerUp /\ now > upSince + CopyEvery + FollowEvery) => ~Warn
 WarnWhileIssuerDown == (~issuerUp /\ now >= downAt + WarnAge) => Warn
 
+\* A fresh-bounded service (lane SECFIX item 8): no session of it admitted
+\* or held while the CRL held is FreshAge old or older, whatever the relay
+\* withholds (fresh-ignored breaks it); and none cut for it while the
+\* issuer is up past CopyEvery + FollowEvery (fresh-short breaks it).
+FreshBound == (sess /\ FreshAge # 0) => now - held.this < FreshAge
+FreshQuiet == (FreshAge # 0 /\ issuerUp /\ now > upSince + CopyEvery + FollowEvery) => now - held.this < Bound
+
 \* Witnesses (each must be violated: reachable).
 WitnessLapsed == Fresh
 WitnessCopyWhileMailboxDown == ~(~mailboxUp /\ held.num > box)
@@ -351,4 +372,9 @@ WitnessPeerCopy == ~peerTook
 WitnessRodeOutage == ~(~issuerUp /\ downAt > upSince + CopyEvery + FollowEvery /\ now = downAt + Ride - 1 /\ Fresh)
 WitnessWarned == ~(Warn /\ Fresh)
 WitnessRevokedPastPush == ~(revokedAt # -1 /\ now > revokedAt /\ sess)
+\* CrlCarriersFresh.cfg: a current CRL too old for the service (its
+\* sessions refused where an unbounded one admits), and a session held
+\* to the last step before the bound.
+WitnessFreshRefused == ~(FreshAge # 0 /\ Fresh /\ now - held.this >= FreshAge)
+WitnessFreshHeld == ~(FreshAge # 0 /\ sess /\ now - held.this = FreshAge - 1)
 =============================================================================

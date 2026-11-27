@@ -189,6 +189,7 @@ spec-traces:
 	./scripts/spec.sh traces
 	./scripts/spec-appenrol.sh traces
 	./scripts/spec-enrol.sh replicas
+	./scripts/spec-enrol.sh fresh
 	./scripts/spec-enrol.sh live
 	./scripts/spec-enrol.sh traces
 	./scripts/spec-orgmove.sh live

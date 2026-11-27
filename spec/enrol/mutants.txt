@@ -143,3 +143,9 @@ two-thirds HostRideOutage CertRide.cfg
 ask-once HostRideOutage CertRide.cfg
 host-life-equal HostRevokeBound CertRideHost.cfg
 ask-once HostRideOutage CertRideDay.cfg
+# A fresh-bounded service (lane SECFIX item 8, nfltr up fresh:): the key
+# read and the bound not applied (a session held on a withheld CRL until
+# its NextUpdate), and a bound below the re-sign interval (the brief's
+# 10 minutes: every session cut each hour while the issuer is up).
+fresh-ignored FreshBound CrlCarriersFresh.cfg
+fresh-short FreshQuiet CrlCarriersFresh.cfg

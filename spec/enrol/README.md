@@ -224,6 +224,8 @@ after it (the bound's margin covers the other order).
 | RideOutage | an issuer outage shorter than Ride after the issuer was up CopyEvery + FollowEvery leaves the verifier a current CRL: no session refused | `hour-life` (the CRL valid a little longer than its re-sign interval: the design before ISSUEROUT, an hour) |
 | QuietWhileIssuerUp | no warning while the issuer has been up CopyEvery + FollowEvery (needs Every + CopyEvery + FollowEvery < WarnAge) | `warn-early` (warning at the re-sign age) |
 | WarnWhileIssuerDown | the member warns once the issuer has been down WarnAge, long before the CRL lapses | `warn-on-lapse` (nothing said until the CRL lapses: the design before ISSUEROUT) |
+| FreshBound (`CrlCarriersFresh.cfg`) | a fresh-bounded service (nfltr up `fresh:`, lane SECFIX item 8) admits and holds no session while the CRL held was signed FreshAge ago or more, whatever the relay withholds | `fresh-ignored` (the key read, the bound not applied: a session held on a withheld CRL to its NextUpdate) |
+| FreshQuiet (`CrlCarriersFresh.cfg`) | no session of it is cut for freshness while the issuer has been up CopyEvery + FollowEvery (needs FreshAge >= WarnAge: `orgid.FreshMin`) | `fresh-short` (a bound at the re-sign interval: every session cut at each hourly re-sign while the issuer is up; why the minimum is 2 h, not 10 minutes) |
 
 Witnesses: `WitnessLapsed` (an issuer outage lapses the CRL: the bound
 is fail closed), `WitnessCopyWhileMailboxDown` (a CRL taken from the
@@ -235,7 +237,16 @@ anywhere: the monitoring's memory), `WitnessPeerCopy`
 did not land on), `WitnessRodeOutage` (an issuer outage Ride - 1 long
 with a current CRL), `WitnessWarned` (a warning on a current CRL),
 `WitnessRevokedPastPush` (a revoked machine's session past the push
-bound: the push path cut).
+bound: the push path cut), `WitnessFreshRefused` (`CrlCarriersFresh.cfg`:
+a current CRL too old for the fresh-bounded service), `WitnessFreshHeld`
+(a session held to the step before the bound).
+
+Fresh (lane SECFIX item 8): FreshAge is one service's bound (nfltr up
+`fresh:`; 0, the other configurations: no key). The service's machine
+admits a session only while the CRL it holds is younger (Admit) and cuts
+it when time passes the bound (Tick): `orgid.Verifier.FreshBound` sets
+the admission's until to the CRL's ThisUpdate + fresh, which
+`holdAdmission` cuts at, and a newer CRL taken (a change) moves it.
 
 Replicas (lane MAILBOXSPOF2): a put lands on one replica, which keeps it
 and publishes it on the replicas' bus (relay-server's Redis pub/sub, as
@@ -260,8 +271,8 @@ up puts again within CopyEvery < Vanish).
 | Push | `orgid.Follow`'s long-poll of the mailbox |
 | ReadCopy | `orgid.Follow`'s read of the copy every `FollowEvery` (`mailboxclient.Client.OrgCRL`) |
 | Replay, ServeForged | the relay serving an older CRL, or one it made (refused: `copy-unsigned` takes it) |
-| Admit | the verifier's TLS check (`orgid.Identity.CheckServer` and siblings) |
-| Tick | time passes once nothing due is left; sessions end at the CRL's NextUpdate |
+| Admit | the verifier's TLS check (`orgid.Identity.CheckServer` and siblings; a fresh-bounded service's `orgmachine.Fresh.CheckClient`, `orgid.Verifier.FreshBound`) |
+| Tick | time passes once nothing due is left; sessions end at the CRL's NextUpdate, a fresh-bounded service's at its bound (client/agent `holdAdmission` at until) |
 
 `CrlCarriers.cfg`: MaxTime 7, CrlLife 6, Every 2, CopyEvery 1,
 FollowEvery 1, WarnAge 5, Ride 2 (the code's 24 h, 1 h, 5 and 10
@@ -272,7 +283,9 @@ before ISSUEROUT; in `ci`); `CrlCarriersReplicas.cfg`: the
 same on two replicas (15M states before ISSUEROUT, under its replica symmetry about
 half; `check` and nightly, `make spec-traces` running `spec-enrol.sh
 replicas`: its mutants and witness in `ci`); both in `coverage` (`make
-spec-enrol-coverage`). The CrlCarriers
+spec-enrol-coverage`); `CrlCarriersFresh.cfg`: `CrlCarriers.cfg` with
+FreshAge 5 (WarnAge: `orgid.FreshMin`, 2 h; nightly, `spec-enrol.sh
+fresh`; its mutants and witnesses in `ci`). The CrlCarriers
 trace check (`TraceCrlCarriers.tla`, "Traces") runs in `traces`.
 
 ## `CertRide.tla`
@@ -463,6 +476,7 @@ fixtures each rejected by its invariant.
 | a timer may run slower than the wall clock (host sleep): the machine reads the clock again at least every minute | Request | `orgenrol` wakeEvery |
 | the relay's copy is in each replica's process: a restart loses it (the issuer puts it again every CopyEvery); the replicas' bus (Redis pub/sub) delivers a put to every subscribed replica within moments and keeps nothing for one that was away | CrlCarriers RelayRestart, Deliver, ReadCopy | nfltr `docs/decisions/crl-off-mailbox-2026-11-20.md`; Redis pub/sub's at-most-once delivery (redis.io "Pub/Sub") |
 | the monitoring keeps the copies' count for a day (Prometheus retention well past it) | CrlCarriers Alert (OrgCRLCopyVanished) | nfltr `deploy/metrics/` |
+| a fresh-bounded service's machine cuts at its admission's until by a timer on the monotonic clock (Go `time.Timer`); ThisUpdate is whole seconds (RFC 5280 UTCTime), so the bound ends up to a second early, never late | CrlCarriers Tick, Admit (FreshBound) | Go `time` package ("Monotonic Clocks"); `orgmachine` `TestFreshCutsAtTheBound` |
 | a machine's Install is one step: its key and certificate are two files replaced write-ahead as one pair (`client/pairfile`: the new key beside the old, the certificate, then the swap; the next writer finishes a stopped swap), and every reader takes the key the certificate certifies (`orgid.ReadPair`; read again, at most 5 s, only while another process replaces the pair) | Install | `spec/pair/MachinePair.tla` (lane CERTATOMIC; before it lane CERTPAIR: nfltr `TestLoginJoinsTheOrganisation`, `nfltr cat serve --ssh` read a renewal's new key with the old certificate); guards `TestEveryStoppedRenewalOpens`, `TestReadPairWaitsForTheWritersCertificate`, mutants `read-pair-once` and `client/pairfile/testdata/mutants.txt` |
 | the recovery key is never online with the primary | RootsAreOwners | the design |
 | one issuer acts on the log at a time, also across a move to another machine (`nfltr org move`): the old machine acts no more after its fence, the new one continues the same log and CRL Number | Issue, Revoke, Republish | `spec/orgmove/OrgMove.tla` (AtMostOneIssuer, OldCannotIssue, CRLMonotone) |
@@ -486,6 +500,8 @@ fixtures each rejected by its invariant.
 | CrlCarriers.tla | client/mailboxclient/orgcrl.go |
 | CrlCarriers.tla | org/orgenrol/machine.go |
 | CrlCarriers.tla | org/orgenrol/issuer.go |
+| CrlCarriers.tla | client/orgid/fresh.go |
+| CrlCarriers.tla | org/orgmachine/orgmachine.go |
 | CertRide.tla | org/orgpki/profile.go |
 | CertRide.tla | org/orgpki/hostcert.go |
 | CertRide.tla | org/orgmachine/orgmachine.go |
