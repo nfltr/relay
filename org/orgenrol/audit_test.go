@@ -72,7 +72,8 @@ func TestAuditReachesTheIssuer(t *testing.T) {
 			var req orgpki.Request
 			if json.Unmarshal(e.Payload, &req) == nil && req.Audit != nil {
 				posts++
-				if bytes.Contains(req.Audit.Sealed, []byte(`"rec"`)) || bytes.Contains(req.Audit.Sealed, []byte(`"head"`)) {
+				var clear orgpki.AuditBatch // sealed: no batch reads out of it
+				if json.Unmarshal(req.Audit.Sealed, &clear) == nil && (clear.Lines != nil || clear.Head != nil) {
 					t.Errorf("mailbox %s holds a record in the clear: %s", box, req.Audit.Sealed)
 				}
 			}
