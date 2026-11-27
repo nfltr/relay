@@ -985,7 +985,7 @@ mutants)
 		if META=$4.states tlc "$2" "$3" >"$4.out" 2>&1; then
 			echo "$1: not caught"
 			return 1
-		elif grep -qE '^Error: (Invariant .* is violated|Temporal propert.* was violated|Action propert.* is violated)' "$4.out"; then
+		elif grep -qE '^Error: (Invariant .* is violated|Temporal propert.* (was|were) violated|Action propert.* is violated)' "$4.out"; then
 			echo "$1: caught: $(grep -m1 -E '^Error: (Invariant|Temporal|Action)' "$4.out" | sed 's/^Error: //')"
 		else
 			echo "$1: TLC failed:"
