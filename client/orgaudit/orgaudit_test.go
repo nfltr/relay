@@ -120,6 +120,7 @@ func TestAuditGapAndAlterationFound(t *testing.T) {
 		{"forged-signature", [][]byte{lines[0], lines[1], forged}, 2, "not this machine's key at seq 3"},
 		{"uncertified-key", [][]byte{lines[0], lines[1], foreign}, 2, "not this machine's key at seq 3"},
 		{"from-another-machine", [][]byte{lines[0], relabel(t, webLines[1], "db")}, 1, "bad signature at seq 2"},
+		{"signed-by-another-machine", [][]byte{lines[0], writeLog(t, machine{name: "db", cert: web.cert, key: web.key}, "L1", 2)[1]}, 1, "not this machine's key at seq 2"},
 		{"another-machines-record", [][]byte{lines[0], webLines[0], lines[1]}, 3, ""}, // web's own line is web's, and db's log has no gap
 		{"chain-broken", [][]byte{lines[0], rechain(t, db, lines[1], 2, "")}, 2, "chain broken at seq 2"},
 		{"new-log", append(lines[:2:2], writeLog(t, db, "L2", 1)...), 3, "new log L2 (log L1 ended at seq 2)"},

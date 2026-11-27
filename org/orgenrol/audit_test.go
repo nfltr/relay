@@ -19,6 +19,7 @@ import (
 
 	"github.com/nfltr/relay/client/orgaudit"
 	"github.com/nfltr/relay/org/orgmachine"
+	"github.com/nfltr/relay/org/orgpki"
 )
 
 // session audits one session of f's machine (its own certificate as the
@@ -65,17 +66,31 @@ func TestAuditReachesTheIssuer(t *testing.T) {
 		t.Fatalf("the issuer's view: %+v, findings %q", v, findings(v))
 	}
 	f.relay.mu.Lock()
+	posts := 0
 	for box, envs := range f.relay.boxes {
 		for _, e := range envs {
-			if bytes.Contains(e.Payload, []byte(`"service"`)) || bytes.Contains(e.Payload, []byte("pg")) && strings.Contains(string(e.Payload), `"rec"`) {
+			var req orgpki.Request
+			if json.Unmarshal(e.Payload, &req) == nil && req.Audit != nil {
+				posts++
+				if bytes.Contains(req.Audit.Sealed, []byte(`"rec"`)) || bytes.Contains(req.Audit.Sealed, []byte(`"head"`)) {
+					t.Errorf("mailbox %s holds a record in the clear: %s", box, req.Audit.Sealed)
+				}
+			}
+			if bytes.Contains(e.Payload, []byte(`"service"`)) {
 				t.Errorf("mailbox %s holds a record in the clear: %s", box, e.Payload)
 			}
 		}
 	}
 	f.relay.mu.Unlock()
+	if posts == 0 {
+		t.Fatal("no audit post on the relay")
+	}
 	// An open session, then silence: reported once SilentAfter passed.
 	f.session(t, "ssh", false)
 	eventually(t, "the open session at the issuer", func() bool { return len(f.audit(t, f.clk.Now()).Sessions) == 2 })
+	if v := f.audit(t, f.clk.Now()); v.Findings != nil || v.Sessions[1].Close != nil {
+		t.Fatalf("an open session: %+v, findings %q", v.Sessions[1], findings(v))
+	}
 	if got := findings(f.audit(t, f.clk.Now().Add(orgaudit.SilentAfter+time.Minute))); !strings.Contains(got, "silent since") {
 		t.Fatalf("silent: findings %q", got)
 	}

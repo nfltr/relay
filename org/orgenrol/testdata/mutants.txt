@@ -66,3 +66,16 @@ new-key-per-retry | machine.go | 	key, first, err := renewKey(m.Dir(), hex.Encod
 # The access rules' carrier (machine.go followCRL; lane SA3, relay-server
 # spec/GroupMirror.tla PeerTake): the keeper reads the relay's status copy.
 status-copy-unread | machine.go | 	if sc, ok := mb.(orgid.StatusCopy); ok { | 	if sc, ok := mb.(orgid.StatusCopy); false && ok { | TestKeptMachineTakesTheRootsAccessRules
+# The session audit's intake, refusals, read and seal (audit.go,
+# ../orgpki/sessionaudit.go; nfltr docs/decisions/service-access-2026-11-25.md
+# "SA5"; spec/proverif/svc_access.pv query 7).
+intake-takes-refused | audit.go | 		if ok { | 		if ok || true { | TestAuditAlterationsFound
+refusal-not-logged | audit.go | 		if err := iss.RefuseAudit(m, f.seq, fmt.Sprintf("%s (%d lines refused)", f.what, f.n), now); err != nil { | 		if err := error(nil); err != nil && f != nil { | TestAuditAlterationsFound
+read-skips-check | audit.go | 		v.Findings = append(v.Findings, fs...) | 		_ = fs | TestAuditAlterationsFound
+no-silent | audit.go | 		v.Findings = append(v.Findings, orgaudit.Silent(m, heads[m].Heard, open, now)...) | 		_ = open | TestAuditReachesTheIssuer
+audit-in-clear | ../orgpki/sessionaudit.go | 	return hpke.Seal(pk, kdf, aead, auditInfo(edpub), plain) | 	_, _, _ = pk, kdf, aead; return plain, nil | TestAuditReachesTheIssuer
+audit-in-clear | ../orgpki/sessionaudit.go | 	plain, err := hpke.Open(sk, kdf, aead, auditInfo(i.key.Public().(ed25519.PublicKey)), sealed) | 	plain, err := sealed, error(nil); _, _, _ = sk, kdf, aead | TestAuditReachesTheIssuer
+sink-cursor-not-moved | audit.go | 	cur.Offset += int64(len(buf)) | 	_ = cur | TestAuditSinkTakesEveryLineOnce
+no-ship | auditship.go | 	at.Log, at.Offset = lr.Log, end | 	at.Log, at.Offset = lr.Log, 0 | TestAuditReachesTheIssuer
+seq-skips | ../orgmachine/audit.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, orgaudit.Hash(last) | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+2, orgaudit.Hash(last) | TestAuditReachesTheIssuer
+no-chain-written | ../orgmachine/audit.go | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, orgaudit.Hash(last) | 		s.Log, s.Seq, s.Prev = lr.Log, lr.Seq+1, "" | TestAuditReachesTheIssuer

@@ -84,3 +84,7 @@ header-underscore | org_identity.go | 		n := strings.ReplaceAll(strings.ToLower(
 jwt-no-aud | org_identity.go | 	body, err := json.Marshal(assertionClaims{Iss: a.iss, Sub: sub, Aud: c.service, Machine: c.machine, Person: c.person, | 	body, err := json.Marshal(assertionClaims{Iss: a.iss, Sub: sub, Aud: "pg", Machine: c.machine, Person: c.person, | TestSvcAccessModelBindings
 proxy-no-header | org_identity.go | 		_, err := target.Write(proxyV2Header(c)) | 		_, err := 0, error(nil) | TestSvcAccessModelBindings
 identity-off | org.go | 	if p.ident != IdentityOff { // IdentityOff reads nothing of the caller | 	if false { | TestSvcAccessModelBindings
+# The session audit (OrgAuditor; nfltr docs/decisions/service-access-2026-11-25.md "SA5").
+audit-no-bytes | org.go | 		e.In, e.Out = tc.Bytes() | 		_ = tc | TestOrgSessionAudited
+audit-no-revoke-reason | org.go | 				cut(orgaudit.ReasonRevoked) | 				cut(orgaudit.ReasonExpiry) | TestOrgSessionAudited
+audit-not-ended | org.go | 		end(e) | 		_ = end | TestOrgSessionAudited

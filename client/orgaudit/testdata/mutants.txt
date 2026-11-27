@@ -1,0 +1,16 @@
+# Planted bugs of orgaudit (scripts/go-mutants.sh client/orgaudit/testdata/mutants.txt,
+# make test-go-mutants): the check of nfltr
+# docs/decisions/service-access-2026-11-25.md "SA5: the record, its check,
+# the names", one per finding it must make; spec/proverif/svc_access.pv
+# query 7 (BIND:svc.auditsig) for the signature and the machine's key.
+no-sig-check | orgaudit.go | 	if !verify(r.Key, recordContext, s.Rec, s.Sig) { | 	if false { | TestAuditGapAndAlterationFound
+no-key-check | orgaudit.go | 	if !c.machineKey(r.Signer, r.Key, r.Machine) { | 	if false { | TestAuditGapAndAlterationFound
+key-any-machine | orgaudit.go | 	return ok && err == nil && len(pub) == ed25519.PublicKeySize && s.Machine == machine && s.Key == c.KeyOf(pub) | 	return ok && err == nil && len(pub) == ed25519.PublicKeySize && s.Key == c.KeyOf(pub) | TestAuditGapAndAlterationFound
+key-any-key | orgaudit.go | 	return ok && err == nil && len(pub) == ed25519.PublicKeySize && s.Machine == machine && s.Key == c.KeyOf(pub) | 	return ok && err == nil && len(pub) == ed25519.PublicKeySize && s.Machine == machine | TestAuditGapAndAlterationFound
+replay-taken | orgaudit.go | 	case r.Seq <= a.seq: | 	case false: | TestAuditGapAndAlterationFound
+no-gap | orgaudit.go | 	case r.Seq > a.seq+1: | 	case false: | TestAuditGapAndAlterationFound
+no-chain | orgaudit.go | 	case r.Prev != a.hash: | 	case false: | TestAuditGapAndAlterationFound
+no-new-log | orgaudit.go | 			find("new log %s (log %s ended at seq %d)", r.Log, l, o.seq) | 			_, _ = l, o | TestAuditGapAndAlterationFound
+head-no-sig | orgaudit.go | 	if !verify(h.Key, headContext, s.Head, s.Sig) { | 	if false { | TestAuditHeadFindsWithheldLines
+no-withheld | orgaudit.go | 	if seq, _ := c.Held(h.Machine, h.Log); seq < h.Seq { | 	if seq, _ := c.Held(h.Machine, h.Log); false && seq < h.Seq { | TestAuditHeadFindsWithheldLines
+never-silent | orgaudit.go | 	if open == 0 || now.Sub(heard) < SilentAfter { | 	if true { | TestAuditHeadFindsWithheldLines

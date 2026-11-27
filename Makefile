@@ -272,6 +272,7 @@ GO_MUTANT_LISTS = \
 	client/agent/testdata/org_mutants.txt \
 	client/agent/testdata/queue_mutants.txt \
 	client/orgid/testdata/mutants.txt \
+	client/orgaudit/testdata/mutants.txt \
 	client/machinecred/testdata/mutants.txt \
 	client/pairfile/testdata/mutants.txt \
 	client/appenrol/testdata/mutants.txt \
