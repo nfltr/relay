@@ -1,5 +1,7 @@
+Incompatible changes:
+- ./orgid.(*Rules).Admit: removed
+- ./orgid.(*Rules).Take: changed from func([]byte, *crypto/x509.Certificate, string, time.Time) (bool, error) to func([]byte, *Verifier, time.Time) (bool, error)
 Compatible changes:
-- ./orgid.(*Identity).Audit: added
 - ./orgaudit.Append: added
 - ./orgaudit.Last: added
 - ./orgaudit.Log: added
@@ -8,3 +10,9 @@ Compatible changes:
 - ./orgaudit.ReasonLost: added
 - ./orgaudit.Rotate: added
 - ./orgaudit.WhoOf: added
+- ./orgid.(*Identity).Audit: added
+- ./orgid.(*Verifier).FreshBound: added
+- ./orgid.FreshMin: added
+- ./orgid.KeepMarks: added
+- ./orgid.LoadMarks: added
+- ./orgid.MarksFile: added
