@@ -89,7 +89,7 @@ var errUnacked = errors.New("the peer did not acknowledge the session's end")
 // joinTarget is peerlink.Join(tc, target), where a acknowledges what
 // passed through tc (nil: none does, a plain Join): once the target's
 // end reached tc (Join's CloseWrite on it: TLS close_notify) it waits
-// until the peer acknowledged every byte, then reports to the target's
+// until the peer acknowledged every byte and the END, then reports to the target's
 // Accept conn (closeSync); unacknowledged, it resets the session.
 //
 // Relayed (no acker), where tc is the agent-link session or TLS on one
@@ -121,7 +121,8 @@ func queueOf(c net.Conn) *QueueConn {
 }
 
 // ackedEnd is tc whose CloseWrite returns once the peer acknowledged
-// every byte before it, and reports that to the target's Accept conn.
+// every byte before it and the END (pathswitch: once the peer's program
+// read it), and reports that to the target's Accept conn.
 type ackedEnd struct {
 	peerlink.Session
 	a  acker
@@ -130,7 +131,7 @@ type ackedEnd struct {
 
 func (c ackedEnd) CloseWrite() error {
 	err := c.Session.CloseWrite()
-	if err == nil && !c.a.WaitAcked(c.a.Written(), psCloseBound) {
+	if err == nil && !c.a.WaitAcked(c.a.Written()+1, psCloseBound) { // +1: the END, acknowledged once the peer's program read it (lane ENDACK)
 		err = errUnacked
 	}
 	if err != nil {
