@@ -5,7 +5,7 @@ go 1.27.2
 require (
 	github.com/coreos/go-oidc/v3 v3.21.0
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/nfltr/relay/client v0.27.0
+	github.com/nfltr/relay/client v0.27.1
 	github.com/stripe/krl v0.0.0-20250403164848-fcf8101b2f53
 	golang.org/x/crypto v0.58.0
 	golang.org/x/sys v0.49.0
