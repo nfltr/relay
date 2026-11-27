@@ -1,22 +1,4 @@
-Incompatible changes:
-- ./orgpki.(*Issuer).ApplyOrder: changed from func(SignedOrder, time.Time) (string, error) to func(SignedOrder, time.Time) (Order, error)
-- ./orgpki.Order: old is comparable, new is not
 Compatible changes:
-- ./orgmachine.(*Machine).Audit: added
-- ./orgmachine.(*Machine).Audited: added
-- ./orgmachine.(*Machine).Issuer: added
-- ./orgmachine.(*Machine).CloseLost: added
-- ./orgenrol.AuditSession: added
-- ./orgenrol.AuditSink: added
-- ./orgenrol.AuditView: added
-- ./orgenrol.ConfigFile: added
-- ./orgenrol.ExportAudit: added
-- ./orgenrol.HeadsFile: added
-- ./orgenrol.ReadAudit: added
-- ./orgenrol.SendPeople: added
-- ./orgenrol.SessionsFile: added
-- ./orgenrol.SetAuditSink: added
-- ./orgenrol.SinkCursorFile: added
 - ./orgpki.(*Issuer).AuditChecker: added
 - ./orgpki.(*Issuer).OpenAudit: added
 - ./orgpki.(*Issuer).RefuseAudit: added
@@ -28,10 +10,20 @@ Compatible changes:
 - ./orgpki.AuditSigners: added
 - ./orgpki.LogChecker: added
 - ./orgpki.Request.Audit: added
-- ./orgpki.ActMoveOrder: added
-- ./orgpki.ActRegrouped: added
-- ./orgpki.Answer.Moved: added
-- ./orgpki.ErrCRLDue: added
-- ./orgpki.MoveOrder: added
-- ./orgpki.Order.Groups: added
 - ./orgpki.SealAudit: added
+- ./orgmachine.(*Machine).Audit: added
+- ./orgmachine.(*Machine).Audited: added
+- ./orgmachine.(*Machine).Issuer: added
+- ./orgmachine.AppendAudit: added
+- ./orgmachine.AuditFile: added
+- ./orgmachine.LastAudit: added
+- ./orgenrol.AuditSession: added
+- ./orgenrol.AuditSink: added
+- ./orgenrol.AuditView: added
+- ./orgenrol.ConfigFile: added
+- ./orgenrol.ExportAudit: added
+- ./orgenrol.HeadsFile: added
+- ./orgenrol.ReadAudit: added
+- ./orgenrol.SessionsFile: added
+- ./orgenrol.SetAuditSink: added
+- ./orgenrol.SinkCursorFile: added

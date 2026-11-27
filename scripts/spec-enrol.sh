@@ -92,14 +92,17 @@ invariants() {
 # consts [cfg]: a config's constants (Enrol.cfg's by default), Mutant aside.
 consts() { sed -n '/^CONSTANTS/,/^SPECIFICATION/p' $dir/${1:-Enrol.cfg} | grep -v -e Mutant -e '^SPECIFICATION'; }
 
-# mutant1 M P WANT MOD: one mutant, caught when its TLC output matches WANT (a pool check).
+# mutant1 M P WANT MOD ID: one mutant, caught when its TLC output matches WANT
+# (a pool check). ID (M, P and the configuration) names its files: a mutant
+# and property recur with several configurations (ask-once HostRideOutage),
+# which the pool checks at once; one name made them share a file (lane R85PREP).
 mutant1() {
-	MOD=$4 tlc "$work/X-$1-$2.cfg" >"$work/x-$1-$2.out" 2>&1 || true
-	if grep -Eq "$3" "$work/x-$1-$2.out"; then
-		echo "$1: caught by $2 ($(grep -c '^State [0-9]*:' "$work/x-$1-$2.out") states deep)"
+	MOD=$4 tlc "$work/X-$5.cfg" >"$work/x-$5.out" 2>&1 || true
+	if grep -Eq "$3" "$work/x-$5.out"; then
+		echo "$1: caught by $2 ($(grep -c '^State [0-9]*:' "$work/x-$5.out") states deep)"
 	else
 		echo "$1: NOT caught by $2"
-		grep -m3 -E '^Error' "$work/x-$1-$2.out" || true
+		grep -m3 -E '^Error' "$work/x-$5.out" || true
 		return 1
 	fi
 }
@@ -109,13 +112,14 @@ mutants() {
 	pool_start "$work/pool"
 	while read -r m p c; do
 		[ -n "$m" ] || continue
+		id=$m-$p-${c:-Enrol.cfg}
 		case " $temporal " in
-		*" $p "*) { consts $c; printf '    Mutant = "%s"\nSPECIFICATION LiveSpec\nPROPERTIES\n    %s\n' "$m" "$p"; } >"$work/X-$m-$p.cfg"
+		*" $p "*) { consts $c; printf '    Mutant = "%s"\nSPECIFICATION LiveSpec\nPROPERTIES\n    %s\n' "$m" "$p"; } >"$work/X-$id.cfg"
 			want="^Error: Temporal propert(y|ies) .*violated" ;;
-		*) { consts $c; printf '    Mutant = "%s"\nSPECIFICATION Spec\nINVARIANTS\n    TypeOK\n    %s\n' "$m" "$p"; } >"$work/X-$m-$p.cfg"
+		*) { consts $c; printf '    Mutant = "%s"\nSPECIFICATION Spec\nINVARIANTS\n    TypeOK\n    %s\n' "$m" "$p"; } >"$work/X-$id.cfg"
 			want="^Error: Invariant $p is violated" ;;
 		esac
-		pool mutant1 "$m" "$p" "$want" "$(modof "$c")"
+		pool mutant1 "$m" "$p" "$want" "$(modof "$c")" "$id"
 	done <"$work/mlist"
 	pool_end
 }
