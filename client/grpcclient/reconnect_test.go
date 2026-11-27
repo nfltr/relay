@@ -7,7 +7,6 @@ import (
 	"context"
 	"io"
 	"net"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -84,18 +83,30 @@ func TestClientConnReachesARelayBackFromAnOutageWithinASecond(t *testing.T) {
 }
 
 // outageListener is a relay that is down while down is set: it closes every
-// connection at once and reports the dial on dials.
+// connection at once and reports the dial on dials. With hold set, the next
+// connection is handed to the test on it instead (a dial in flight), once.
+// The test holds the listener throughout, so no other process can take its
+// port while the relay is "down" (a port probed free and listened on again
+// could be: the test then skipped).
 type outageListener struct {
 	net.Listener
 	down  atomic.Bool
 	dials chan struct{}
+	hold  atomic.Pointer[chan net.Conn]
 }
 
 func (l *outageListener) Accept() (net.Conn, error) {
 	for {
 		c, err := l.Listener.Accept()
-		if err != nil || !l.down.Load() {
+		if err != nil {
 			return c, err
+		}
+		if h := l.hold.Swap(nil); h != nil {
+			*h <- c
+			continue
+		}
+		if !l.down.Load() {
+			return c, nil
 		}
 		_ = c.Close()
 		select {
@@ -103,6 +114,23 @@ func (l *outageListener) Accept() (net.Conn, error) {
 		default:
 		}
 	}
+}
+
+// downRelay is a relay that is down (every connection dropped) until its
+// down is cleared, then serves health, on a port the test holds throughout.
+func downRelay(t *testing.T) *outageListener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := &outageListener{Listener: ln, dials: make(chan struct{}, 1)}
+	l.down.Store(true)
+	srv := grpc.NewServer(v1Relay())
+	healthpb.RegisterHealthServer(srv, servingHealth{})
+	go func() { _ = srv.Serve(l) }()
+	t.Cleanup(srv.Stop)
+	return l
 }
 
 // TestRedialNowReachesARelayThatIsBack: a caller that paces its own redials
@@ -114,14 +142,8 @@ func (l *outageListener) Accept() (net.Conn, error) {
 // starved machine) a handshake slower than a fixed wait failed the attempt
 // with the last dial's error ("connection refused").
 func TestRedialNowReachesARelayThatIsBack(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	_ = ln.Close() // the relay is down
-
-	conn, err := grpcclient.NewClientConn(false, "127.0.0.1", port)
+	l := downRelay(t)
+	conn, err := grpcclient.NewClientConn(false, "127.0.0.1", l.Addr().(*net.TCPAddr).Port)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,15 +155,7 @@ func TestRedialNowReachesARelayThatIsBack(t *testing.T) {
 		_, _ = health.Check(context.Background(), &healthpb.HealthCheckRequest{})
 	}
 
-	ln, err = net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-	if err != nil {
-		t.Skipf("port %d taken while the relay was down: %v", port, err)
-	}
-	srv := grpc.NewServer(v1Relay())
-	healthpb.RegisterHealthServer(srv, servingHealth{})
-	go func() { _ = srv.Serve(ln) }()
-	defer srv.Stop()
-
+	l.down.Store(false) // the relay is back
 	grpcclient.RedialNow(context.Background(), conn)
 	if st := conn.GetState(); st != connectivity.Ready {
 		t.Fatalf("RedialNow returned with the channel %s; want READY: the relay is back", st)
@@ -160,42 +174,22 @@ func TestRedialNowReachesARelayThatIsBack(t *testing.T) {
 // failed at once with that dial's error. RedialNow waits for a dial made
 // after it, however late the held dial fails.
 func TestRedialNowOutlivesADialInFlight(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
-	_ = ln.Close() // the relay is down
-
-	conn, err := grpcclient.NewClientConn(false, "127.0.0.1", port)
+	l := downRelay(t)
+	conn, err := grpcclient.NewClientConn(false, "127.0.0.1", l.Addr().(*net.TCPAddr).Port)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer conn.Close() //nolint:errcheck
 	health := healthpb.NewHealthClient(conn)
-	_, _ = health.Check(context.Background(), &healthpb.HealthCheckRequest{}) // refused: the channel backs off
+	_, _ = health.Check(context.Background(), &healthpb.HealthCheckRequest{}) // dropped: the channel backs off
 
-	// The channel's next dial is accepted and held: a dial in flight.
-	ln, err = net.Listen("tcp", addr)
-	if err != nil {
-		t.Skipf("port %d taken while the relay was down: %v", port, err)
-	}
-	held, err := ln.Accept()
-	_ = ln.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
+	// The channel's next dial is accepted and held: a dial in flight. The
+	// relay is back for every dial after it.
+	hold := make(chan net.Conn, 1)
+	l.hold.Store(&hold)
+	l.down.Store(false)
+	held := <-hold
 	defer held.Close() //nolint:errcheck
-
-	ln, err = net.Listen("tcp", addr)
-	if err != nil {
-		t.Skipf("port %d taken: %v", port, err)
-	}
-	srv := grpc.NewServer(v1Relay())
-	healthpb.RegisterHealthServer(srv, servingHealth{})
-	go func() { _ = srv.Serve(ln) }()
-	defer srv.Stop()
 
 	// The held dial fails once RedialNow has begun: the "relay" half-closes
 	// it and sees the client close it.

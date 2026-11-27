@@ -4,7 +4,8 @@
 // Command harness is the browser extension's e2e world (make browser-e2e;
 // nfltr docs/decisions/browser-peer-2026-11-16.md, lane BP4): a relay core
 // (github.com/nfltr/relay-core compose.Serve, nf1 and nf1.websocket on) in
-// a child process on fixed loopback ports, so a restart is the process's
+// a child process on loopback ports (kernel-chosen at its first start, the
+// same ones again after a restart), so a restart is the process's
 // exit and a new one (its sessions cut as a relay's exit cuts them), two agents of this checkout's
 // client/agent (an echo under an address, one whose service also takes
 // the browser direct path, client/p2p BrowserDirect, and a web page with a
@@ -156,7 +157,9 @@ func run() error {
 	return nil
 }
 
-// relay is a relay core process on fixed loopback ports.
+// relay is a relay core process on loopback ports: its first start binds
+// kernel-chosen ones and reports them (never a port probed free and closed,
+// which another process may take first); a restart binds the same again.
 type relay struct {
 	key                   string
 	proxy, grpc, internal string
@@ -168,16 +171,8 @@ func newRelay() (*relay, error) {
 	if _, err := rand.Read(secret); err != nil {
 		return nil, err
 	}
-	r := &relay{key: "rpc_" + hex.EncodeToString(secret)}
-	for _, a := range []*string{&r.proxy, &r.grpc, &r.internal} {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			return nil, err
-		}
-		*a = l.Addr().String()
-		_ = l.Close()
-	}
-	return r, nil
+	const kernelChosen = "127.0.0.1:0"
+	return &relay{key: "rpc_" + hex.EncodeToString(secret), proxy: kernelChosen, grpc: kernelChosen, internal: kernelChosen}, nil
 }
 
 func (r *relay) start() error {
@@ -191,9 +186,18 @@ func (r *relay) start() error {
 	if _, err := r.cmd.StdinPipe(); err != nil { // the child ends with this process
 		return err
 	}
+	out, err := r.cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
 	if err := r.cmd.Start(); err != nil {
 		return err
 	}
+	var bound struct{ Proxy, GRPC, Internal string }
+	if err := json.NewDecoder(out).Decode(&bound); err != nil { // the child's ports, once it listens
+		return fmt.Errorf("the relay reported no ports: %w", err)
+	}
+	r.proxy, r.grpc, r.internal = bound.Proxy, bound.GRPC, bound.Internal
 	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(50 * time.Millisecond) {
 		res, err := http.Get("http://" + r.internal + "/ready")
 		if err == nil {
@@ -245,6 +249,9 @@ func serveRelay() error {
 		if err != nil {
 			return err
 		}
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(map[string]string{"Proxy": ls.Proxy.Addr().String(), "GRPC": ls.GRPC.Addr().String(), "Internal": ls.Internal.Addr().String()}); err != nil {
+		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM)
 	defer stop()

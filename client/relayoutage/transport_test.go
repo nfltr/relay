@@ -12,50 +12,47 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nfltr/relay/client/internal/tcprig"
 )
 
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	_ = l.Close()
-	return addr
-}
-
 // A relay restart (deploy window) refuses connections for seconds. A request
 // that never reached the relay is safe to resend whatever its method, so the
 // relay client rides the outage out instead of failing the dispatch, record or
-// status call.
+// status call. The restarting relay is a port the test holds (every dial to
+// it refused), then, after two refusals, the relay that is back: never a
+// port probed free, closed and listened on again, which another process may
+// take in between.
 func TestTransportRidesOutRefusedConnections(t *testing.T) {
-	addr := freeAddr(t)
 	got := make(chan string, 1)
-	go func() {
-		time.Sleep(400 * time.Millisecond)
-		l, err := net.Listen("tcp", addr)
-		if err != nil {
-			got <- "listen: " + err.Error()
-			return
+	back := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		got <- string(b)
+	}))
+	t.Cleanup(back.Close)
+	down := tcprig.RefusedAddr(t).String()
+	var refusals atomic.Int32
+	base := http.DefaultTransport.(*http.Transport).Clone()
+	base.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		if refusals.Load() >= 2 {
+			return (&net.Dialer{}).DialContext(ctx, network, back.Listener.Addr().String())
 		}
-		srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			b, _ := io.ReadAll(r.Body)
-			got <- string(b)
-		}))
-		srv.Listener = l
-		srv.Start()
-		t.Cleanup(srv.Close)
-	}()
+		c, err := (&net.Dialer{}).DialContext(ctx, network, down)
+		if err == nil {
+			_ = c.Close()
+			return nil, errors.New("the held port accepted a dial")
+		}
+		refusals.Add(1)
+		return nil, err
+	}
 
-	client := &http.Client{Transport: Transport(http.DefaultTransport)}
+	client := &http.Client{Transport: Transport(base)}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+addr+"/api/v1/orchestration/dispatch", bytes.NewReader([]byte(`{"task_id":"t1"}`)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://relay.test/api/v1/orchestration/dispatch", bytes.NewReader([]byte(`{"task_id":"t1"}`)))
 	if err != nil {
 		t.Fatal(err)
 	}
