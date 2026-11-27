@@ -291,13 +291,19 @@ func TestKeeperShipsABacklogAndRotates(t *testing.T) {
 	var buf bytes.Buffer
 	s := orgaudit.Signing{Log: "backlog0123456789abcdef", Machine: cert.Subject.CommonName, Cert: cert, Key: key, At: f.clk.Now()}
 	n := 0
+	// Long lines (a rule named at length; a line stays under 2 KiB): fewer
+	// to sign and check, so the test is quick under -race too.
+	by := "rule group:ops " + strings.Repeat("x", 800)
 	for buf.Len() <= auditRotateAt+shipMax/2 {
 		n++
-		ses := orgaudit.Session{ID: fmt.Sprintf("s%05d", n), Service: "pg", Who: orgaudit.Who{Name: "ci-1"}, By: "rule group:ops", Opened: f.clk.Now().UTC()}
+		ses := orgaudit.Session{ID: fmt.Sprintf("s%05d", n), Service: "pg", Who: orgaudit.Who{Name: "ci-1"}, By: by, Opened: f.clk.Now().UTC()}
 		for _, r := range []orgaudit.Record{ses.Open(), ses.Close(orgaudit.End{Closed: f.clk.Now().UTC(), Reason: orgaudit.ReasonClosed})} {
 			s.Seq++
 			line, err := orgaudit.Line(r, s)
 			check(t, err)
+			if len(line) >= 2048 { // unshipped reads a log's first line in 2 KiB
+				t.Fatalf("a line of %d bytes", len(line))
+			}
 			buf.Write(append(line, '\n'))
 			s.Prev = orgaudit.Hash(line)
 		}
@@ -305,15 +311,16 @@ func TestKeeperShipsABacklogAndRotates(t *testing.T) {
 	local := filepath.Join(f.dir, orgaudit.LogFile)
 	check(t, os.WriteFile(local, buf.Bytes(), 0o600))
 	keep(t, f.ctx, f.keeper())
-	eventually(t, "every session of the backlog at the issuer", func() bool { return len(f.audit(t, f.clk.Now()).Sessions) == n })
-	if v := f.audit(t, f.clk.Now()); v.Findings != nil {
-		t.Fatalf("findings %q", findings(v))
-	}
-	eventually(t, "the machine's cursor at the file's end", func() bool {
+	// The machine's cursor, not ReadAudit: a read checks every line the
+	// issuer holds, too slow to poll under -race.
+	eventually(t, "the machine's cursor at the file's end (the backlog acknowledged)", func() bool {
 		var at shipped
 		fi, err := os.Stat(local)
 		return err == nil && readJSON(filepath.Join(f.dir, shipFile), &at) == nil && at.Offset == fi.Size()
 	})
+	if v := f.audit(t, f.clk.Now()); len(v.Sessions) != n || v.Findings != nil {
+		t.Fatalf("the issuer holds %d of %d sessions, findings %q", len(v.Sessions), n, findings(v))
+	}
 	fi, err := os.Stat(local)
 	check(t, err)
 	first, err := os.ReadFile(local)
@@ -324,12 +331,13 @@ func TestKeeperShipsABacklogAndRotates(t *testing.T) {
 		t.Fatalf("after the backlog: the file %d bytes (rotated past %d), its first line seq %d of log %s", fi.Size(), auditRotateAt, r.Seq, r.Log)
 	}
 	f.session(t, "ssh", true)
-	eventually(t, "the session after the rotation at the issuer", func() bool {
-		v := f.audit(t, f.clk.Now())
-		return len(v.Sessions) == n+1 && v.Sessions[n].Close != nil
+	eventually(t, "the session after the rotation acknowledged", func() bool {
+		var at shipped
+		fi, err := os.Stat(local)
+		return err == nil && readJSON(filepath.Join(f.dir, shipFile), &at) == nil && at.Offset == fi.Size()
 	})
-	if v := f.audit(t, f.clk.Now()); v.Findings != nil {
-		t.Fatalf("after the rotation: findings %q", findings(v))
+	if v := f.audit(t, f.clk.Now()); len(v.Sessions) != n+1 || v.Sessions[n].Close == nil || v.Findings != nil {
+		t.Fatalf("after the rotation: %d sessions, findings %q", len(v.Sessions), findings(v))
 	}
 }
 
