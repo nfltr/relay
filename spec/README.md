@@ -1357,7 +1357,7 @@ periods; TCP's `SO_LINGER`); a second close waiting for the first is
 | The link's end resets a pathswitch session still on its relayed path at the peer, which ends it (`CycleEnd`'s `LinkEnds`); a session moves to a direct path only while not aborted (an aborted Conn takes no path) | relay-core `core/session`; link `pathswitch` (Abort ends the Conn) |
 | A peer may be arbitrarily slow (no fairness on peer steps): a slow peer is a vanished one until it answers | QUIC/TCP give no delivery-time bound |
 | Closing a QUIC connection at once drops the ABORTs queued on it (the reason for the grace) | RFC 9000 10.2 |
-| A direct session's `WaitAcked` is true only once the peer holds every byte, and the peer's Read keeps what it took through a later reset (`CloseReturn`'s clean case is `dlv = wrote`); an ABORT or the session's end fails it, silence within `Linger` | link `pathswitch` (`spec/DirectPath.tla` `TakenRead`, `CloseBounded`; `Conn.WaitAcked`) |
+| A direct session's `WaitAcked` is true only once the peer holds every byte, and the peer's Read keeps what it took through a later reset (`CloseReturn`'s clean case is `dlv = wrote`); an ABORT or the session's end fails it, silence within `Linger`. The acked end waits for the END too (`Written()+1`), which pathswitch acknowledges only once the peer's program read it (lane ENDACK, `TestAckedEndWaitsForTheEnd`): stronger than `dlv = wrote`, which still holds | link `pathswitch` (`spec/DirectPath.tla` `TakenRead`, `CloseBounded`, `EndTruth`; `Conn.WaitAcked`) |
 | Timers fire at their deadline (Drain, Grace are ticks); the scheduler runs the agent's own steps before time passes | Go `time.Timer`; tests measure the bound (`TestDirectStopsWaitOneGrace`) |
 
 ### Code map (AgentStop.tla)
@@ -1441,17 +1441,38 @@ Mux acknowledges before any close), within `EndBound` (5 s, crypto/tls's
 own close_notify bound) when X ended only its TLS stream and keeps the
 transport (a plain crypto/tls peer's `CloseWrite`).
 
-`TLSEnd.cfg` (`make spec`, 20 states, every action taken with
-`COVERAGE=1`); X may keep the transport (`keep`).
+The end read (lane ENDACK, link `spec/README.md` "The end read by the
+far program"): link now acknowledges an end once the far program read it
+(EOF), not at receipt, so a clean `CloseWriteSync` says Y's program took
+the stream. Y's program reads only to the close_notify, so Y's `Read`, at
+the close_notify's EOF on a transport that acknowledges ends, starts
+reading the transport to its FIN in the background (`YTake`, within
+`EndBound`; `Close` waits for it): link's FIN is read, so acknowledged,
+once Y's program read the close_notify. Without it each end's
+`CloseWriteSync` waited for the other's Close (mutant `stop-at-notify`:
+both wait for the ack, every clean relayed nf1 session stalled the 30 s
+idle bound, PIPERACE's prototype). In the background, a peer that sends
+its FIN only after Y's Close (nfnet `TestNF1CloseTakesThePeersEnd`'s
+server) costs Y's Read nothing. Y's program failing after the close_notify
+(`YFail`, before its take) resets X's wait: never a clean end Y's program
+did not take (`AckTruth`).
+
+`TLSEnd.cfg` (`make spec`, 104 states, every action taken with
+`COVERAGE=1`); X may keep the transport (`keep`); Y may half close first
+(`yw`).
 
 | invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
 |---|---|---|
 | `NoFalseReset` | nothing fails here: X's end, every byte taken, is never read as a reset | `close-at-notify` (the code before: Close at the close_notify) |
 | `XEnds` | X's wait for the ENDACK ends clean | `close-at-notify` |
-| `YCloses` | Y's Close returns, also when X keeps the transport | `unbounded` (the FIN awaited with no bound) |
+| `YCloses` | Y's Close returns, also when X keeps the transport | `unbounded` (the FIN awaited with no bound), `stop-at-notify` |
+| `AckTruth` | X's end reads clean only once Y took the FIN behind the close_notify (its program read the close_notify) | `ack-on-receipt` (link before lane ENDACK: the FIN acknowledged on Y's Mux's receipt) |
+| `YWEnds` | Y's own half close (`CloseWriteSync`) ends | `stop-at-notify` (Y's Read stops at the close_notify: both ends wait for the other's ack) |
 
 Witnesses (violated): `W_Clean` (X's end acknowledged), `W_Bound` (Y
-closed by the bound, X keeping the transport). Go mutants:
+closed by the bound, X keeping the transport), `W_BothClean` (both half
+closes clean), `W_FailAfterArrival` (Y's program fails after the
+close_notify arrived: X reads a reset). Go mutants:
 `client/nfnet/testdata/mutants.txt` `close-before-fin`
 (`TestNF1CloseTakesThePeersEnd`), `closewrite-tls-only`
 (`TestNF1CloseWriteEndsTheSession`).
@@ -1461,7 +1482,7 @@ closed by the bound, X keeping the transport). Go mutants:
 | assumption | source |
 |---|---|
 | A link session is one ordered stream each way; the close_notify record and the FIN written after it arrive in that order | link `WIRE.md` (session frames in order) |
-| A far end's Mux acknowledges a FIN on receipt, and an end it holds before its close (a hop's reader when it takes the end) | link `endack.go` (`AckEnd`, `ackAtClose`, `readEnd`), link `spec/RelayedClose.tla`, `spec/EndAckLeg.tla` |
+| A far end acknowledges a FIN once its reader took it (Read's EOF), or at a close after every byte read; never at receipt (lane ENDACK; v0.14.0 and earlier at receipt) | link `endack.go` (`readEnd`, `ackAtClose`), link `spec/RelayedClose.tla`, `spec/EndAckLeg.tla` |
 | A whole close that reaches the peer before its end's ENDACK ends the peer's `CloseWriteSync` with `ErrReset` | link ENDACKTRUTH (`closeAckErr`), link `spec/RelayedClose.tla` `CClose` |
 | The FIN behind a close_notify arrives within `EndBound`: `CloseWrite` writes it right after the close_notify on the same stream; later, Close closes anyway. A direct path's conn (no `CloseWriteSync`) is not waited for: its own Close takes the peer's end in the background | crypto/tls bounds its close_notify write by 5 s (`Conn.closeNotify`); client/agent `psConn.Close` |
 
@@ -1470,7 +1491,7 @@ closed by the bound, X keeping the transport). Go mutants:
 | actions | code |
 |---|---|
 | `XNotify`, `XFin` (the FIN right behind the close_notify) | client/tlsend/tlsend.go (`CloseWrite`, `CloseWriteSyncReceived`), client/nf1/early.go (an early session's `CloseWrite`, `CloseWriteSyncReceived`, `Reset`: its link session's) |
-| `YRecv` (the close_notify's EOF: `notified`), `YClose`, `YClosed` | client/tlsend/tlsend.go (`Read`, `Close`, `rawEnd.takeEnd`) |
+| `YRecv` (the close_notify's EOF: `notified`), `YTake` (`Conn.takeEnd`, started by `Read`), `YClose`, `YClosed` | client/tlsend/tlsend.go (`Read`, `takeEnd`, `Close`, `rawEnd.readToEnd`) |
 | trace recorder | client/tlsend/trace_on.go (`-tags relaytrace`), checked by `TraceTLSEnd.tla` (below) |
 | a wrapper over the session passes its end on (`CloseWrite`, `CloseWriteSyncReceived`, `Reset`; no `CloseWriteSync` on a direct path's conn) | client/agent/direct_nf1.go (`detachTap`), client/agent/direct.go (`peekConn`, `pathStream`, `psConn`), client/nf1/early.go |
 
@@ -1481,7 +1502,7 @@ one file per session (named by the TLS exported keying material, the
 same at both ends) and direction (the first close_notify's: its sender
 is X): X's `Notify` (`XNotify`), `Fin` (`XFin`) and `End` (its
 `CloseWriteSync` returned: n 1 nil, `XRecv` to clean; 0, to reset), Y's
-`EOF` (its app read the close_notify its Mux took: `yeof`), `Close` (`YClose`; n 1: it takes the
+`EOF` (its take of the FIN behind the close_notify ended: `YTake`, lane ENDACK), `Close` (`YClose`; n 1: it takes the
 transport's end first, the only Close of a Y on a transport that
 acknowledges ends, so n 0 is `close-at-notify`'s) and `Closed`
 (`YClosed`). TLC adds Y's Mux reading the close_notify and the FIN
@@ -1498,8 +1519,9 @@ and Y's Close returned, `NoFalseReset` checked on every state.
 module maps is one tlsend records, the fixtures, then
 `TestEndOverALinkSession` (sync, closewrite, crossing) recorded and each
 direction checked. Fixtures (`spec/testdata/`): `accept-tlsend-sync`,
-`accept-tlsend-crossing` (recorded), `accept-tlsend-end-before-eof`
-(recorded: `End` before `EOF`), `accept-tlsend-keep` (X keeps its
+`accept-tlsend-crossing` (recorded), `reject-tlsend-ack-on-receipt`
+(was `accept-tlsend-end-before-eof`: `End` before `EOF`, an ENDACK
+before Y took the FIN, lane ENDACK), `accept-tlsend-keep` (X keeps its
 transport: Y's Close by the bound); `reject-tlsend-close-at-notify`
 (recorded with the mutant put back: `Close` n 0),
 `reject-tlsend-close-before-fin` (a whole close reached X before the
