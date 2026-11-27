@@ -19,7 +19,8 @@ orgmove OrgMove -
 orgmove OrgHolds -
 orgmove OrgHosted -
 appenrol AppEnrol -
-people People -'
+people People -
+onegroup GroupIssuer -'
 
 # steps <tla>: the model's step names.
 steps() {
@@ -71,6 +72,7 @@ orgmove/TraceOrgMove.tla org/orgpki,org/orgissuer -
 orgmove/TraceOrgHolds.tla org/orgenrol -
 appenrol/TraceAppEnrol.tla org/orgpki -
 people/TracePeople.tla org/orgpki -
+onegroup/TraceGroupIssuer.tla org/orgpki -
 TraceCallCredit.tla client/rpcclient -
 TraceCallCreditBoth.tla client/rpcclient -
 TraceCallCreditSenders.tla client/rpcclient -'

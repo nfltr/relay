@@ -11,7 +11,10 @@ The organisation issuer's models (`org/`) are in their own directories:
 `spec/enrol/` (certificates' lifecycle) and `spec/orgmove/` (moving the
 issuer), `make spec-enrol-ci spec-orgmove-ci` (both in `make ci`).
 Time-limited, approved access to a service is `spec/grant/`, `make
-spec-grant-ci` (in `make ci`), its traces in `make spec-traces`.
+spec-grant-ci` (in `make ci`), its traces in `make spec-traces`. The
+issuer's half of one set of groups (the root's move orders) is
+`spec/onegroup/`, `make spec-onegroup-ci` (in `make ci`), its traces in
+`make spec-traces`.
 
 ## CallCredit.tla: per-call credit for agent-to-agent calls
 

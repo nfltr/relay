@@ -936,8 +936,10 @@ membership the issuer placed (1, witness 2); a peer admits only one (3,
 witness 4); the issuer places a machine in groups only by the owner's token
 or order (5, witness 6); neither key leaves its machine (7, 8). Mutants:
 `mirror-no-pin` (1), `relay-chosen-group` (3), `relay-only-move`,
-`no-owner-gate` (5). Bindings, rows with the code (lane ONEGROUP-C1):
-`BIND:group.movesig`, `BIND:group.ou`, `BIND:group.pin`.
+`no-owner-gate` (5). Bindings: `BIND:group.movesig` and `BIND:group.ou`,
+rows in `org/orgpki` `TestOrgGroupModelBindings` (lane ONEGROUP-C1; the
+issuer's state, `spec/onegroup/`); `BIND:group.pin`, the relay-server
+mirror's (ONEGROUP-C2, pending in `modelbind.Pending`).
 
 ### orgmove.pv: moving an organisation's issuer (`org/`)
 

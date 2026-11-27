@@ -196,6 +196,7 @@ spec-traces:
 	./scripts/spec-people.sh traces
 	PROVERIF_FULL=1 ./spec/proverif/run.sh
 	./scripts/spec-grant.sh traces
+	./scripts/spec-onegroup.sh traces
 spec-cltraces:
 	./scripts/spec.sh cltraces
 spec-astraces:
@@ -351,6 +352,14 @@ spec-appenrol-ci:
 	./scripts/spec-appenrol.sh ci
 spec-appenrol-traces:
 	./scripts/spec-appenrol.sh traces
+
+# spec-onegroup-ci (in make ci, under a minute): the issuer's half of one
+# set of groups, the root's move orders (spec/onegroup/README.md): the
+# invariants, every mutant, the witnesses, -coverage 1, the trace fixtures
+# and the move tests' traces; every test's traces nightly (spec-traces).
+.PHONY: spec-onegroup-ci
+spec-onegroup-ci:
+	./scripts/spec-onegroup.sh ci
 
 # spec-grant-ci (in make ci): time-limited, approved access to a service
 # (spec/grant/README.md): the invariants, the liveness config, every

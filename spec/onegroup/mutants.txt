@@ -1,0 +1,9 @@
+# <mutant> <property>: TLC on GroupIssuer.cfg with that Mutant must report
+# <property> violated (scripts/spec-onegroup.sh mutants). Each is a Go
+# mutant too (org/orgpki/testdata/mutants.txt, the same name).
+move-without-order MovedOnlyAsked
+move-replayed AppliedOnce
+move-outside-bound InBound
+move-keeps-old-cert StatusWithItsCRL
+status-before-crl StatusWithItsCRL
+renew-old-groups StatusWithItsCRL
