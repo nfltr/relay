@@ -209,6 +209,9 @@ func (c Service) Run(ctx context.Context) (err error) {
 	if err := s.with(func(iss *orgpki.Issuer, _ *orgissuer.Store) error { s.org = iss.OrgID(); return nil }); err != nil {
 		return err
 	}
+	if err := s.checkPublishedHead(ctx); err != nil {
+		return err
+	}
 	traceHold("start", s.org, c.Dir)
 	defer func() { traceHoldEnd(s.org, c.Dir, err) }() // before unlock: the lock is free after it
 	wake, stopWatch := watchDir(c.Dir, logger)
@@ -743,6 +746,30 @@ func (s *service) putStatus(ctx context.Context, now time.Time) {
 	if err != nil && ctx.Err() == nil {
 		s.Logger.Warn("org issuer: the relay's copy of the organisation status not kept (tried again within "+copyEvery.String()+")", "error", err)
 	}
+}
+
+// checkPublishedHead holds the log, before the first round, to the head
+// of the status the relay holds (orgpki.Issuer.CheckPublishedHead): a log
+// that lost lines at its tail (a disk rolled back) does not serve, so its
+// lower CRL Numbers and undone revocations never go out (lane SECFIX2,
+// review S19). A relay without the copy, or one that cannot be read now,
+// is no evidence: the service starts.
+func (s *service) checkPublishedHead(ctx context.Context) error {
+	sc, ok := s.Mailbox.(orgid.StatusCopy)
+	if !ok {
+		return nil
+	}
+	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	msg, err := sc.OrgStatus(rctx, s.org)
+	if err != nil || msg == nil {
+		return nil
+	}
+	err = s.with(func(iss *orgpki.Issuer, _ *orgissuer.Store) error { return iss.CheckPublishedHead(msg) })
+	if errors.Is(err, orgpki.ErrTruncated) {
+		s.Logger.Error("org issuer: LOG TRUNCATED: not serving", "error", err)
+	}
+	return err
 }
 
 // statusContent is a status body without its At: what changed means.

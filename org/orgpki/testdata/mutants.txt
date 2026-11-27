@@ -177,3 +177,7 @@ roster-line-not-replayed | issuer.go | 			i.rosterLine = n + 1 | 			_ = n | Test
 # OrgMove.tla OfferAny (spec/orgmove/restore-mutants.txt): a restore takes
 # the newest of the relay's CRL and the members' (lane SECFIX2, review S8).
 restore-older-crl | restore.go | 	for n, der := range append([][]byte{crlDER}, fleet...) { | 	for n, der := range [][]byte{crlDER} { | TestRestoreTakesTheFleetsNewerCRL
+# The issuer's log (lane SECFIX2, review S19): a checkpoint is the root's
+# too; a lost tail is seen against the published status's head.
+checkpoint-root-optional | audit.go | 			if !verifyRootSig(root, msg, e.RootSig) { | 			if e.RootSig != nil && !verifyRootSig(root, msg, e.RootSig) { | TestVerifyLogRefusesACheckpointWithoutTheRoot
+truncation-unseen | status.go | 	if _, ok := i.heads[st.Head]; ok || (!i.restoredAt.IsZero() && st.At.Before(i.restoredAt)) { | 	if true { | TestCheckPublishedHeadSeesALostTail

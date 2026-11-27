@@ -86,3 +86,5 @@ older-root | machine.go | 	if root.NotBefore.Before(notBefore) { | 	if false { |
 # only an answer under its token's MAC; a sign-in only its pinned root.
 answer-unmacd | machine.go | 	if err := orgpki.CheckAnswerMAC(token, a.Cert, a.Issuer, a.TokenMAC); err != nil { // Join.tla JoinedByIssuer | 	if err := error(nil); err != nil { | TestJoinRefusesAnAnswerNotUnderTheToken
 signin-any-recovery | machine.go | 	if orgid.Fingerprint(root) != pins.Root { | 	if false { | TestJoinSignInIsHeldToThePinnedRoot
+# The issuer's log (lane SECFIX2, review S19): a lost tail does not serve.
+truncation-served | issuer.go | 	if err := s.checkPublishedHead(ctx); err != nil { | 	if err := error(nil); err != nil { | TestIssuerWithALostTailDoesNotServe
