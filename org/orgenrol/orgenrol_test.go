@@ -535,15 +535,30 @@ func TestRevokePushAndBackstop(t *testing.T) {
 			if !slices.Equal(names, []string{"web-1"}) {
 				t.Fatalf("revoked %v", names)
 			}
-			select {
-			case <-changed:
-			case <-time.After(hang):
-				t.Fatal("the CRL did not reach the machine")
-			}
-			if _, err := f.m.CheckServer([]*x509.Certificate{cur, issuerOf(t, f.dir)}, "web-1", f.clk.Now()); err == nil {
-				t.Fatal("a revoked machine still checks")
-			}
+			f.untilRefused(t, cur, changed, hang, "the CRL did not reach the machine")
 		})
+	}
+}
+
+// untilRefused waits until f's machine no longer checks cur (a CRL that
+// lists it taken), at each change of the machine from changed (taken
+// before the revoke) on, failing with what after bound. A change is not
+// necessarily the revoke's (the status copy, another carrier's CRL), so
+// the next Changed is taken before each check: a change between the check
+// and the take would close a channel never waited on.
+func (f *fleet) untilRefused(t *testing.T, cur *x509.Certificate, changed <-chan struct{}, bound time.Duration, what string) {
+	t.Helper()
+	deadline := time.After(bound)
+	for {
+		select {
+		case <-changed:
+		case <-deadline:
+			t.Fatal(what)
+		}
+		changed = f.m.Changed()
+		if _, err := f.m.CheckServer([]*x509.Certificate{cur, issuerOf(t, f.dir)}, "web-1", f.clk.Now()); err != nil {
+			return
+		}
 	}
 }
 
@@ -851,14 +866,7 @@ func TestFollowCRLTakesTheRevokePush(t *testing.T) {
 	if _, err := orgissuer.RevokeMachines(f.org.dir, []string{"m-web-1"}, f.clk.Now()); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-changed:
-	case <-time.After(hang):
-		t.Fatal("the CRL did not reach the follower")
-	}
-	if _, err := f.m.CheckServer([]*x509.Certificate{cur, issuerOf(t, f.dir)}, "web-1", f.clk.Now()); err == nil {
-		t.Fatal("a revoked machine still checks")
-	}
+	f.untilRefused(t, cur, changed, hang, "the CRL did not reach the follower")
 }
 
 // The Keeper's CRL follow warns while the machine's CRL is older than
@@ -914,15 +922,8 @@ func TestRevokePublishedAtItsNotice(t *testing.T) {
 	if _, err := orgissuer.RevokeMachines(f.org.dir, []string{"m-web-1"}, f.clk.Now()); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-changed:
-		t.Logf("the CRL reached the machine %v after the revoke", time.Since(start))
-	case <-time.After(3 * time.Second):
-		t.Fatal("the CRL did not reach the machine within 3s of the revoke (the issuer's round is an hour)")
-	}
-	if _, err := f.m.CheckServer([]*x509.Certificate{cur, issuerOf(t, f.dir)}, "web-1", f.clk.Now()); err == nil {
-		t.Fatal("a revoked machine still checks")
-	}
+	f.untilRefused(t, cur, changed, 3*time.Second, "the CRL did not reach the machine within 3s of the revoke (the issuer's round is an hour)")
+	t.Logf("the CRL reached the machine %v after the revoke", time.Since(start))
 }
 
 // The owner revokes the issuer with the root (OrgHosted.tla RevokeIssuer,
