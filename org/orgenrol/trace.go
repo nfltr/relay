@@ -35,9 +35,9 @@ func traceCarry(string, any, []byte, time.Time, bool, error) {}
 // a run's request with the key it keeps for the token, and how the run
 // ended (Install, or GiveUp); checked by TraceJoin.tla, built only with
 // -tags enroltrace.
-func traceJoinRoot(string, Pins, *x509.Certificate, *x509.Certificate, bool)  {}
-func traceJoinStart(string, string, string, crypto.PublicKey, string, string) {}
-func traceJoinEnd(string, string, string, string, orgpki.Answer)              {}
+func traceJoinRoot(string, Pins, *x509.Certificate, *x509.Certificate, time.Time, bool) {}
+func traceJoinStart(string, string, string, crypto.PublicKey, string, string)           {}
+func traceJoinEnd(string, string, string, string, orgpki.Answer)                        {}
 
 // traceHold, traceHoldWrite and traceHoldEnd record the issuer's steps of
 // spec/orgmove/OrgHolds.tla (README "Traces"): a service's start, its

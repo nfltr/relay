@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math/big"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -35,13 +36,17 @@ var ErrRefused = errors.New("refused")
 // nfltr org issuer renew installs a new one.
 var ErrIssuerExpired = errors.New("the issuer certificate expired")
 
-// A token is tokenPrefix<org id>.<token id>.<secret>: the org id (public)
-// names the organisation's mailboxes, which keep the first root's id
-// across a rotation, so a machine pinned on the current root finds them.
-// v1 tokens (nfltr until v2.1.57) carried no org id.
+// A token is tokenPrefix<org id>.<token id>.<secret>.<root NotBefore>:
+// the org id (public) names the organisation's mailboxes, which keep the
+// first root's id across a rotation, so a machine pinned on the current
+// root finds them; the root's NotBefore (Unix seconds) is the root the
+// token was made under: a join takes no older one (TokenRootNotBefore;
+// Join.tla JoinRootNotOlder, lane SECFIX). v1 tokens (nfltr until
+// v2.1.57) carried no org id, v2 ones no root.
 const (
-	tokenPrefix   = "nfltr-org-token-v2." // #nosec G101 -- the token format prefix, not a credential
-	tokenPrefixV1 = "nfltr-org-token-v1." // #nosec G101 -- the old format's prefix, refused by name
+	tokenPrefix   = "nfltr-org-token-v3." // #nosec G101 -- the token format prefix, not a credential
+	tokenPrefixV1 = "nfltr-org-token-v1." // #nosec G101 -- an old format's prefix, refused by name
+	tokenPrefixV2 = "nfltr-org-token-v2." // #nosec G101 -- an old format's prefix, refused by name
 )
 
 // Sink stores one log line durably before the issuer acts on it (the
@@ -493,26 +498,30 @@ func (i *Issuer) newToken(e Entry) (string, error) {
 	if err := i.commit(e); err != nil {
 		return "", err
 	}
-	return tokenPrefix + i.orgID + "." + e.Token + "." + base64.RawURLEncoding.EncodeToString(i.tokenSecret(e.Token)), nil
+	return tokenPrefix + i.orgID + "." + e.Token + "." + base64.RawURLEncoding.EncodeToString(i.tokenSecret(e.Token)) + "." + strconv.FormatInt(i.root.NotBefore.Unix(), 10), nil
 }
 
-// parseToken splits a token into its organisation's id, its id and its
-// secret.
-func parseToken(token string) (orgID, id string, secret []byte, err error) {
+// parseToken splits a token into its organisation's id, its id, its
+// secret and its root's NotBefore.
+func parseToken(token string) (orgID, id string, secret []byte, rootNB time.Time, err error) {
 	token = strings.TrimSpace(token)
-	if strings.HasPrefix(token, tokenPrefixV1) {
-		return "", "", nil, errors.New("an nfltr organisation token of the v1 format (before v2.1.58), which names no organisation: ask the organisation's owner for a new token (nfltr org token)")
+	if strings.HasPrefix(token, tokenPrefixV1) || strings.HasPrefix(token, tokenPrefixV2) {
+		return "", "", nil, time.Time{}, errors.New("an nfltr organisation token of an earlier format, which names no organisation or no root: ask the organisation's owner for a new token (nfltr org token)")
 	}
 	rest, ok := strings.CutPrefix(token, tokenPrefix)
 	parts := strings.Split(rest, ".")
-	if ok && len(parts) == 3 {
+	var nb int64
+	if ok && len(parts) == 4 {
 		orgID, id = parts[0], parts[1]
 		secret, err = base64.RawURLEncoding.Strict().DecodeString(parts[2])
+		if err == nil {
+			nb, err = strconv.ParseInt(parts[3], 10, 64)
+		}
 	}
-	if !ok || len(parts) != 3 || err != nil || !validOrgID(orgID) || id == "" || len(secret) != sha256.Size {
-		return "", "", nil, errors.New("not an nfltr organisation token")
+	if !ok || len(parts) != 4 || err != nil || !validOrgID(orgID) || id == "" || len(secret) != sha256.Size || nb <= 0 {
+		return "", "", nil, time.Time{}, errors.New("not an nfltr organisation token")
 	}
-	return orgID, id, secret, nil
+	return orgID, id, secret, time.Unix(nb, 0), nil
 }
 
 // validOrgID: OrgID's form, "o-" and 26 lower-case base32 characters.
@@ -526,13 +535,21 @@ func validOrgID(id string) bool {
 // organisation's mailboxes (EnrolMailbox and the rest), nothing more. The
 // root a machine takes is the one it was given the fingerprint of.
 func TokenOrgID(token string) (string, error) {
-	orgID, _, _, err := parseToken(token)
+	orgID, _, _, _, err := parseToken(token)
 	return orgID, err
+}
+
+// TokenRootNotBefore is the NotBefore of the root a token was made under:
+// a join takes no root older than it (the relay may serve a superseded
+// one; Join.tla JoinRootNotOlder).
+func TokenRootNotBefore(token string) (time.Time, error) {
+	_, _, _, nb, err := parseToken(token)
+	return nb, err
 }
 
 // NewEnrolRequest is the machine's side: the request for csr under token.
 func NewEnrolRequest(token string, csr []byte) (EnrolRequest, error) {
-	_, id, secret, err := parseToken(token)
+	_, id, secret, _, err := parseToken(token)
 	if err != nil {
 		return EnrolRequest{}, err
 	}
@@ -546,7 +563,7 @@ func NewEnrolRequestFor(token string, csr []byte, machineID string) (EnrolReques
 	if err != nil || machineID == "" {
 		return r, err
 	}
-	_, _, secret, err := parseToken(token)
+	_, _, secret, _, err := parseToken(token)
 	if err != nil {
 		return EnrolRequest{}, err
 	}

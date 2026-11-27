@@ -478,8 +478,22 @@ func TestTokenNamesItsOrganisation(t *testing.T) {
 	if id, err := TokenOrgID(tok); err != nil || id != o.iss.OrgID() {
 		t.Fatalf("TokenOrgID %q %v, want %q", id, err, o.iss.OrgID())
 	}
-	id, sec, _ := strings.Cut(strings.TrimPrefix(tok, "nfltr-org-token-v2."+o.iss.OrgID()+"."), ".")
-	for _, bad := range []string{"nfltr-org-token-v1." + id + "." + sec, "nfltr-org-token-v2.o-x." + id + "." + sec, "nfltr-org-token-v2." + id + "." + sec} {
+	if nb, err := TokenRootNotBefore(tok); err != nil || nb.Unix() != o.iss.Root().NotBefore.Unix() {
+		t.Fatalf("TokenRootNotBefore %s %v, want the root's %s", nb, err, o.iss.Root().NotBefore)
+	}
+	rest, ok := strings.CutPrefix(tok, tokenPrefix+o.iss.OrgID()+".")
+	parts := strings.Split(rest, ".")
+	if !ok || len(parts) != 3 {
+		t.Fatalf("token %q: not <prefix><org>.<id>.<secret>.<root NotBefore>", tok)
+	}
+	id, sec, nb := parts[0], parts[1], parts[2]
+	for _, bad := range []string{
+		"nfltr-org-token-v1." + id + "." + sec,
+		"nfltr-org-token-v2." + o.iss.OrgID() + "." + id + "." + sec, // no root
+		tokenPrefix + "o-x." + id + "." + sec + "." + nb,
+		tokenPrefix + o.iss.OrgID() + "." + id + "." + sec, // no root
+		tokenPrefix + o.iss.OrgID() + "." + id + "." + sec + ".0",
+	} {
 		if _, err := TokenOrgID(bad); err == nil {
 			t.Fatalf("TokenOrgID(%q) accepted", bad)
 		}

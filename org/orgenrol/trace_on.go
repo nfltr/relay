@@ -134,8 +134,8 @@ func pushTrace(ev, dir string, der []byte) {
 // (Join.tla Start's Trusts): own when it is the owner's, the pinned root or
 // one the pinned recovery key certifies (decided here, apart from trust),
 // ok when trust took it.
-func traceJoinRoot(orgID string, pins Pins, root, rec *x509.Certificate, ok bool) {
-	own := orgid.Fingerprint(rec) == pins.Recovery &&
+func traceJoinRoot(orgID string, pins Pins, root, rec *x509.Certificate, notBefore time.Time, ok bool) {
+	own := orgid.Fingerprint(rec) == pins.Recovery && !root.NotBefore.Before(notBefore) &&
 		(orgid.Fingerprint(root) == pins.Root || rotatedRoot(root, rec, orgID) == nil)
 	joinLine(map[string]any{"ev": "jroot", "o": orgID, "own": own, "ok": ok})
 }

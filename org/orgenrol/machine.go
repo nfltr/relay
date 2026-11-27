@@ -124,7 +124,11 @@ func Join(ctx context.Context, mb Mailbox, dir string, pins Pins, token string, 
 	}
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	ver, root, rm, cm, err := trust(ctx, mb, orgID, pins, wait, now)
+	nb, err := orgpki.TokenRootNotBefore(token)
+	if err != nil {
+		return Joined{}, err
+	}
+	ver, root, rm, cm, err := trust(ctx, mb, orgID, pins, nb, wait, now)
 	if err != nil {
 		return Joined{}, err
 	}
@@ -197,12 +201,14 @@ func Join(ctx context.Context, mb Mailbox, dir string, pins Pins, token string, 
 // taken; wait bounds each read. The root holder checks a machine it keys
 // under it (a machine-key holder checking a machine).
 func Trust(ctx context.Context, mb Mailbox, orgID string, pins Pins, wait time.Duration, now func() time.Time) (*orgid.Verifier, error) {
-	ver, _, _, _, err := trust(ctx, mb, orgID, pins, wait, now)
+	ver, _, _, _, err := trust(ctx, mb, orgID, pins, time.Time{}, wait, now)
 	return ver, err
 }
 
 // trust is Trust with what Join keeps of it: the root and the messages.
-func trust(ctx context.Context, mb Mailbox, orgID string, pins Pins, wait time.Duration, now func() time.Time) (*orgid.Verifier, *x509.Certificate, orgpki.RootMessage, orgid.CRLMessage, error) {
+// A root older than notBefore (the token's root's: zero for none) is
+// refused, the pinned one too (Join.tla JoinRootNotOlder).
+func trust(ctx context.Context, mb Mailbox, orgID string, pins Pins, notBefore time.Time, wait time.Duration, now func() time.Time) (*orgid.Verifier, *x509.Certificate, orgpki.RootMessage, orgid.CRLMessage, error) {
 	var rm orgpki.RootMessage
 	var cm orgid.CRLMessage
 	data, err := latest(ctx, mb, orgpki.RootMailbox(orgID), min(pollWait, wait))
@@ -223,6 +229,10 @@ func trust(ctx context.Context, mb Mailbox, orgID string, pins Pins, wait time.D
 	if err != nil {
 		return nil, nil, rm, cm, err
 	}
+	if root.NotBefore.Before(notBefore) {
+		traceJoinRoot(orgID, pins, root, rec, notBefore, false)
+		return nil, nil, rm, cm, fmt.Errorf("the organisation's root (of %s) is older than the root the token was made under (of %s): a superseded root", root.NotBefore.UTC().Format(time.RFC3339), notBefore.UTC().Format(time.RFC3339))
+	}
 	rootPin := pins.Root
 	if orgid.Fingerprint(root) != pins.Root && orgid.Fingerprint(rec) == pins.Recovery {
 		// A rotation since the pins were made: the pinned recovery key
@@ -230,13 +240,13 @@ func trust(ctx context.Context, mb Mailbox, orgID string, pins Pins, wait time.D
 		// (orgid TakeRotation; spec/enrol/Join.tla Trusts, mutant
 		// pin-root-only; enrol.pv RotClient).
 		if err := rotatedRoot(root, rec, orgID); err != nil {
-			traceJoinRoot(orgID, pins, root, rec, false)
+			traceJoinRoot(orgID, pins, root, rec, notBefore, false)
 			return nil, nil, rm, cm, fmt.Errorf("the organisation's root is not the pinned one, nor certified by the pinned recovery key: %w", err)
 		}
 		rootPin = orgid.Fingerprint(root)
 	}
 	ver, err := orgid.NewVerifier(root, rec, rootPin, pins.Recovery)
-	traceJoinRoot(orgID, pins, root, rec, err == nil)
+	traceJoinRoot(orgID, pins, root, rec, notBefore, err == nil)
 	if err != nil {
 		return nil, nil, rm, cm, err
 	}
@@ -551,7 +561,7 @@ func (k Keeper) takeMachineKey(sk orgpki.SealedKey, rr orgpki.RenewRequest, a or
 func JoinSignIn(ctx context.Context, mb Mailbox, dir string, pins Pins, orgID, rule, idToken, invite string, key ed25519.PrivateKey, relayKey crypto.PublicKey, wait time.Duration, now func() time.Time) (*x509.Certificate, error) {
 	ctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	ver, _, rm, cm, err := trust(ctx, mb, orgID, pins, wait, now)
+	ver, _, rm, cm, err := trust(ctx, mb, orgID, pins, time.Time{}, wait, now) // a sign-in names no root: the pins only (lane SECFIX, review S9 residual)
 	if err != nil {
 		return nil, err
 	}
