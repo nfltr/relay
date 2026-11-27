@@ -10,6 +10,7 @@
 #             and backstops (RevokePush.tla); CrlCarriers.cfg: the CRL on
 #             the mailbox and the relay's copy (CrlCarriers.tla);
 #             CrlCarriersReplicas.cfg: the same on two replicas;
+#             CrlCarriersFresh.cfg: the same with a fresh-bounded service;
 #             CertRide.cfg: a machine certificate through issuer
 #             outages (CertRide.tla); CertRideHost.cfg: the SSH host
 #             certificate of a revoked machine; CertRideDay.cfg: the same
@@ -19,13 +20,14 @@
 #   mutants   each line of spec/enrol/mutants.txt must be caught (a line
 #             naming a Join*.cfg runs Join.tla).
 #   witnesses each Witness* must be violated (reachable).
-#   ci        check (CrlCarriersReplicas.cfg aside: its mutants and
-#             witness only), EnrolLoss.cfg's invariants, mutants (the
+#   ci        check (CrlCarriersReplicas.cfg and CrlCarriersFresh.cfg
+#             aside: their mutants and witnesses only), EnrolLoss.cfg's invariants, mutants (the
 #             temporal ones on LiveSpec), witnesses, fixtures (make
 #             spec-enrol-ci); live's full liveness runs nightly
 #             (spec-traces).
 #   replicas  CrlCarriersReplicas.cfg (15M states, about half under its
 #             symmetry; nightly in make spec-traces).
+#   fresh     CrlCarriersFresh.cfg (nightly in make spec-traces).
 #   coverage  check with -coverage 1; fails on an action never taken.
 #   fixtures  each spec/enrol/traces/<Invariant>-*.ndjson is rejected by
 #             <Invariant> of TraceEnrol.tla, each Accepted-*.ndjson accepted
@@ -59,6 +61,7 @@ WitnessCutByPush@RevokePush.cfg WitnessServeBackstop@RevokePush.cfg WitnessFollo
 WitnessLapsed@CrlCarriers.cfg WitnessCopyWhileMailboxDown@CrlCarriers.cfg WitnessAlert@CrlCarriers.cfg WitnessLearned@CrlCarriers.cfg WitnessRestartWhileIssuerDown@CrlCarriers.cfg
 WitnessAlertWithoutCopy@CrlCarriers.cfg WitnessPeerCopy@CrlCarriersReplicas.cfg
 WitnessRodeOutage@CrlCarriers.cfg WitnessWarned@CrlCarriers.cfg WitnessRevokedPastPush@CrlCarriers.cfg
+WitnessFreshRefused@CrlCarriersFresh.cfg WitnessFreshHeld@CrlCarriersFresh.cfg
 WitnessRodeOutage@CertRide.cfg WitnessLapsed@CertRide.cfg WitnessRenewedLate@CertRide.cfg WitnessHostLapsed@CertRide.cfg WitnessHostTrustedAfterRevoke@CertRideHost.cfg WitnessHostTrustedAfterRevoke@CertRideDay.cfg"
 
 # modof CFG: the module a config checks (Join*.cfg: Join.tla,
@@ -378,7 +381,7 @@ traces() {
 }
 
 case ${1:-} in
-check) run Enrol.cfg && run Rebind.cfg && run Join.cfg && run JoinOlder.cfg && run RevokePush.cfg && run CrlCarriers.cfg && run CrlCarriersReplicas.cfg && run CertRide.cfg && run CertRideHost.cfg && run CertRideDay.cfg ;;
+check) run Enrol.cfg && run Rebind.cfg && run Join.cfg && run JoinOlder.cfg && run RevokePush.cfg && run CrlCarriers.cfg && run CrlCarriersReplicas.cfg && run CrlCarriersFresh.cfg && run CertRide.cfg && run CertRideHost.cfg && run CertRideDay.cfg ;;
 live) run EnrolLive.cfg && run EnrolLoss.cfg ;;
 mutants) mutants ;;
 witnesses) witnesses ;;
@@ -401,6 +404,7 @@ ci)
 fixtures) fixtures ;;
 traces) traces ;;
 replicas) run CrlCarriersReplicas.cfg ;;
+fresh) run CrlCarriersFresh.cfg ;;
 trace) trace "$2" ;;
 ptrace) ptrace "$2" ;;
 ctrace) ctrace "$2" ;;
