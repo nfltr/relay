@@ -40,7 +40,16 @@
      BIND:svc.apprpol    ... by a key the root's policy names for that service
      BIND:svc.rulesig    the agent admits by a rule only under the root key, for the certified group
      BIND:svc.hdrwho     the identity the app gets is the certificate's name and group
-     BIND:svc.aud        an app takes an assertion only for its own service *)
+     BIND:svc.aud        an app takes an assertion only for its own service
+     BIND:svc.auditsig   the issuer takes an audit record of machine m only under m's certified key
+
+   Audit (lane SA5, client/orgaudit): the serving agent signs a record of
+   each session it admitted with its machine key; the issuer takes a
+   record as machine m's only under the key m's certificate (the issuer's
+   own) certifies, the machine the record names being that certificate's.
+   The order and completeness of the records (seq, prev) are the checker's
+   (orgaudit.Checker), a sequence check, not a secrecy or authenticity
+   property. *)
 
 free c: channel.
 free local: channel [private].        (* agent -> app on loopback *)
@@ -51,7 +60,7 @@ fun sign(bitstring, skey): bitstring.
 reduc forall m: bitstring, s: skey; checksign(sign(m, s), pk(s)) = m.
 reduc forall m: bitstring, s: skey; getmsg(sign(m, s)) = m.
 
-const lCert, lReq, lAppr, lApprover, lRule, lGrant, lSess, lId, lJwt: bitstring.
+const lCert, lReq, lAppr, lApprover, lRule, lGrant, lSess, lId, lJwt, lAudit: bitstring.
 const bob, alice, mallory, h: bitstring.
 const sv1, sv2: bitstring.            (* two services on h *)
 const gOps, gDev: bitstring.
@@ -69,6 +78,8 @@ event Admitted(bitstring, bitstring, bitstring, bitstring).     (* p, s, d, r *)
 event AdmittedByRule(bitstring, bitstring, bitstring).          (* p, g, s *)
 event AppAccepted(bitstring, bitstring, bitstring).             (* p, g, s *)
 event AppAcceptedJwt(bitstring, bitstring, bitstring).          (* p, g, s *)
+event Audited(bitstring, bitstring, bitstring).                 (* machine m wrote a record: p used s *)
+event AuditTaken(bitstring, bitstring, bitstring).              (* the issuer took it as m's *)
 
 (* bob asks for a service and a duration (his choice: the attacker's
    input stands for it). *)
@@ -115,7 +126,10 @@ let AgentGrant =
     if gp = p then                                                     (* NOT:agent-any-principal *)
     if gs = s then                                                     (* NOT:agent-any-service *)
     event Admitted(p, s, d, r);
+    event Audited(h, p, s);
     (
+      out(c, sign((lAudit, h, p, s), kH))
+    |
       out(local, (lId, p, grp, s))                                     (* NOT:header-from-client *)
       (* ONLY:header-from-client *) out(local, (lId, claimed, grp, s))
     |
@@ -134,7 +148,19 @@ let AgentRule =
     if rg = grp then                                                   (* NOT:group-from-client *)
     (* ONLY:group-from-client *) if rg = cgrp then
     event AdmittedByRule(p, rg, s);
+    event Audited(h, p, s);
+    out(c, sign((lAudit, h, p, s), kH));
     out(local, (lId, p, rg, s))).
+
+(* The issuer takes an audit record with the certificate of its signer
+   (orgpki AuditChecker: the serial's key and name from its own log). *)
+let IssuerAudit =
+  !(in(c, (rec: bitstring, cert: bitstring));
+    let (=lCert, m: bitstring, pkm: bitstring, grp: bitstring) = checksign(cert, pk(kiss)) in
+    let (=lAudit, rm: bitstring, p: bitstring, s: bitstring) = checksign(rec, pkm) in  (* NOT:audit-any-key *)
+    (* ONLY:audit-any-key *) let (=lAudit, rm: bitstring, p: bitstring, s: bitstring) = getmsg(rec) in
+    if rm = m then                                                     (* NOT:audit-machine-unbound *)
+    event AuditTaken(rm, p, s)).
 
 (* The apps on h: on loopback they take what the agent wrote; beyond
    loopback they take an assertion under their agent's key for their own
@@ -162,18 +188,22 @@ query p: bitstring, g: bitstring, s: bitstring; event(AdmittedByRule(p, g, s)) =
 query p: bitstring, g: bitstring, s: bitstring, d: bitstring, r: bitstring; event(AppAccepted(p, g, s)) ==> (event(Admitted(p, s, d, r)) || event(AdmittedByRule(p, g, s))) && event(Certified(p, g)).
 (* 6. the same for an assertion beyond loopback, for that app's own service *)
 query p: bitstring, g: bitstring, s: bitstring, d: bitstring, r: bitstring; event(AppAcceptedJwt(p, g, s)) ==> event(Admitted(p, s, d, r)) && event(Certified(p, g)).
-(* 7-10. witnesses: each is reachable (reads false) *)
+(* 7. the issuer takes a record as h's only if h's agent wrote it *)
+query p: bitstring, s: bitstring; event(AuditTaken(h, p, s)) ==> event(Audited(h, p, s)).
+(* 8-12. witnesses: each is reachable (reads false) *)
 query d: bitstring, r: bitstring; event(Admitted(bob, sv1, d, r)).
 query p: bitstring; event(AdmittedByRule(p, gOps, sv2)).
 query g: bitstring; event(AppAccepted(bob, g, sv1)).
 query g: bitstring; event(AppAcceptedJwt(bob, g, sv1)).
+query s: bitstring; event(AuditTaken(h, bob, s)).
 
 process
   out(c, pk(kroot)); out(c, pk(kiss)); out(c, pk(kH));
   event Certified(bob, gDev); event Certified(alice, gOps); event Certified(mallory, gDev);
   out(c, sign((lCert, alice, pk(kA), gOps), kiss));
   out(c, sign((lCert, mallory, pk(kM), gDev), kiss));
+  out(c, sign((lCert, h, pk(kH), gOps), kiss));
   out(c, sign((lApprover, sv1, pk(kA)), kroot));
   event RuleSigned(gOps, sv2);
   out(c, sign((lRule, gOps, sv2), kroot));
-  (Requester | Approver | Issuer | Client(bob, kB, gDev) | Client(alice, kA, gOps) | AgentGrant | AgentRule | App | AppJwt(sv1) | AppJwt(sv2))
+  (Requester | Approver | Issuer | Client(bob, kB, gDev) | Client(alice, kA, gOps) | AgentGrant | AgentRule | App | AppJwt(sv1) | AppJwt(sv2) | IssuerAudit)

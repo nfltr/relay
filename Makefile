@@ -246,7 +246,7 @@ test-fetch-tla:
 # field of an honest message, as a relay can, and requires a refusal; the
 # test fails when a model's ids and its rows differ (in make ci).
 spec-bindings:
-	cd client && go test -count=1 -run 'ModelBindings' ./rpcclient/ ./p2p/ ./agent/ ./capaddr/ ./nf1/ ./orgid/ ./nfnet/ ./appenrol/
+	cd client && go test -count=1 -run 'ModelBindings' ./rpcclient/ ./p2p/ ./agent/ ./capaddr/ ./nf1/ ./orgid/ ./nfnet/ ./appenrol/ ./orgaudit/
 	cd org && go test -count=1 -run 'ModelBindings' ./orgpki/ ./orgissuer/
 
 # test-go-mutants (in make ci, about a minute): every planted bug of a Go

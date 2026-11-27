@@ -351,15 +351,18 @@ people admin-after-offboard TFTTTTT?FFFFF
 # what the authorised approver approved, 3 an admitted bob is bob, 4 a rule
 # only as the root signed it for the certified group, 5-6 the identity an
 # app takes (loopback, assertion) is an admitted session's certified name
-# and group, 7-10 witnesses. Each mutant fails the queries it targets.
-svc_access - TTTTTTFFFF
-svc_access policy-unsigned TFTTTTFFFF
-svc_access approval-unbound TFTTTTFFFF
-svc_access grant-unsigned FTTTTTFFFF
-svc_access agent-any-principal FTTTTTFFFF
-svc_access agent-any-service FTTTTTFFFF
-svc_access rule-unsigned TTTFTTFFFF
-svc_access group-from-client TTTFFTFFFF
-svc_access header-from-client TTTTFTFFFF
-svc_access jwt-no-aud TTTTTFFFFF
-svc_access app-on-network TTTTFTFFFF
+# and group, 7 an audit record the issuer takes as h's is h's agent's
+# (lane SA5), 8-12 witnesses. Each mutant fails the queries it targets.
+svc_access - TTTTTTTFFFFF
+svc_access policy-unsigned TFTTTTTFFFFF
+svc_access approval-unbound TFTTTTTFFFFF
+svc_access grant-unsigned FTTTTTTFFFFF
+svc_access agent-any-principal FTTTTTTFFFFF
+svc_access agent-any-service FTTTTTTFFFFF
+svc_access rule-unsigned TTTFTTTFFFFF
+svc_access group-from-client TTTFFTTFFFFF
+svc_access header-from-client TTTTFTTFFFFF
+svc_access jwt-no-aud TTTTTFTFFFFF
+svc_access app-on-network TTTTFTTFFFFF
+svc_access audit-any-key TTTTTTFFFFFF
+svc_access audit-machine-unbound TTTTTTFFFFFF

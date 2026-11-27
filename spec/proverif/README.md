@@ -214,6 +214,7 @@ row, so the list cannot go stale.
 
 | `direct_once.pv` | `client/agent/direct_once_bindings_test.go` `TestDirectOnceModelBindings` | 4, one per `BIND:once.*` (lane DIRECTONCE), on the nf1 rig: the honest client's re-attach token for another channel, replayed on the relay's own re-attach, attaches nothing, the token over that channel would (`once.channel`; Go mutant `reattach-any-channel`); a byte the relay changes on epoch 0's relayed stream cuts that epoch (a TLS error) and the session resumes on a re-attach, every byte intact (`once.offset`; `frames-outside-channel`); a re-attach answered under another key, the honest answer replayed, refused by the client's pin, and a token over the session's own TLS (its key continued) refused by the agent (`once.reattach`; `reattach-no-pin-check`); a session framed outside its TLS (a path frame after the answer) and a re-attach without its TLS (a plain OPEN with the honest relayed token) refused by the agent, and the client's re-attach starts its ClientHello whatever the stream answers (`once.plain`; `agent-plain-relayed`); mutants `client/agent/testdata/direct_once_mutants.txt` |
 | `svc_access.pv` (identity to the app) | `client/agent/svc_access_bindings_test.go` `TestSvcAccessModelBindings` | 2 of 8 (lane SA2; the rest `modelbind.Pending`, lanes SA3, SA4): a person's device and a machine send every identity header (`Nfltr-*`, `X-Nfltr-Caller*`, lower case, `Nfltr_Person`) on two requests of one session and the app gets only the certificate's name, person, groups and the session's service; over PROXY v2 the same in the TLVs (`svc.hdrwho`; Go mutants `header-from-client`, `header-underscore`, `proxy-no-header`, `identity-off`); the assertion verifies under the agent's JWKS for its own service, pg's app refuses vault's and one past `exp` (`svc.aud`; `jwt-no-aud`) |
+| `svc_access.pv` (audit) | `client/orgaudit/svc_access_bindings_test.go` `TestSvcAccessModelBindingsAudit` | `svc.auditsig` (lane SA5): an honest record taken as db's; the same record signed by web's certified key naming db, naming another key or certificate, with its signature changed, or signed by a key the issuer never certified, refused (Go mutants `no-sig-check`, `no-key-check`, `key-any-machine`, `key-any-key` in `client/orgaudit/testdata/mutants.txt`) |
 
 `modelbind.Pending` is empty: every binding has its row (the `once.*`
 rows since lane DIRECTONCE). `cap.kind` and `org.kind` have their rows
@@ -1096,7 +1097,7 @@ not sign, no signature: refused; `no-role-check`, `admin-sig-unchecked`,
 renewal, join and a new invite: refused; `admin-after-offboard`) (lane
 PEOPLE2; `org/orgpki/testdata/mutants.txt`).
 
-### svc_access.pv: service-level access, grants and the identity an app gets (identity to the app: code since lane SA2; rules in code: lane SA3; grants: a design)
+### svc_access.pv: service-level access, grants, the identity an app gets and the audit (identity to the app: code since lane SA2; rules in code: lane SA3; grants: lane SA4; audit: lane SA5)
 
 The organisation's root signs who may approve access to a service and
 which group may use a service; a requester asks for a service and a
@@ -1122,7 +1123,8 @@ state: `spec/grant/Grant.tla`. The design is nfltr's
 | 4 | the agent admits by a rule only one the root signed, for the principal's certified group | holds |
 | 5 | the identity an app takes on loopback is an admitted session's certified name and group | holds |
 | 6 | the same for an assertion beyond loopback, for that app's own service | holds |
-| 7-10 | witnesses: bob admitted by a grant; a member admitted by a rule; an app takes bob on loopback; an app takes bob's assertion | attack (reachable), as they must |
+| 7 | the issuer takes an audit record as machine h's only if h's agent wrote it (lane SA5) | holds |
+| 8-12 | witnesses: bob admitted by a grant; a member admitted by a rule; an app takes bob on loopback; an app takes bob's assertion; the issuer takes h's record of bob | attack (reachable), as they must |
 
 Mutants: `policy-unsigned` (the issuer takes the approver from an unsigned
 document: mallory approves, 2), `approval-unbound` (the approval signs the
@@ -1132,7 +1134,11 @@ request id only: the relay changes the service or duration, 2),
 (4), `group-from-client` (the group the client claims, 4 and 5),
 `header-from-client` (the agent passes on the name the client sent, 5),
 `jwt-no-aud` (an assertion for sv1 taken by sv2's app, 6),
-`app-on-network` (the app takes identity headers from the network, 5).
+`app-on-network` (the app takes identity headers from the network, 5),
+`audit-any-key` (the issuer takes a record without checking its signer's
+certified key: mallory writes h's, 7), `audit-machine-unbound` (the
+record's machine not the signing certificate's: mallory signs a record
+naming h, 7).
 
 Identity to the app is code (lane SA2): `client/agent/org_identity.go`
 (`Service.Identity`: `http` sets `Nfltr-Machine`, `-Person`, `-Groups`,
@@ -1166,7 +1172,15 @@ serving agent admits by it in `client/orgid/grant.go`
 the session's key and principal, `BIND:svc.grantwho`; for the opened
 service and place, `BIND:svc.grantsvc`; `AdmitClient`). Rows:
 `org/orgpki/svc_access_bindings_test.go`
-(`TestSvcAccessModelBindingsGrants`). The identity ids are SA2's.
+(`TestSvcAccessModelBindingsGrants`). The identity ids are SA2's. Code
+map (lane SA5, audit): the agent signs a record per session open and
+close in `org/orgmachine/audit.go` (`client/orgaudit.Line`); every
+reader checks it with `client/orgaudit.Checker` (the signer serial's key
+and machine from the issuer's log, `org/orgpki/sessionaudit.go`
+`AuditChecker`, `AuditSigners`: `BIND:svc.auditsig`), the issuer in
+`org/orgenrol/audit.go` `takeAudit`. Row:
+`client/orgaudit/svc_access_bindings_test.go`
+(`TestSvcAccessModelBindingsAudit`).
 
 ## Code map
 
@@ -1180,6 +1194,8 @@ service and place, `BIND:svc.grantsvc`; `AdmitClient`). Rows:
 | runner, prover pin | spec/proverif/run.sh, scripts/fetch-proverif.sh |
 | svc_access.pv | client/agent/org_identity.go |
 | svc_access.pv | client/agent/svc_access_bindings_test.go |
+| svc_access.pv | client/orgaudit/orgaudit.go |
+| svc_access.pv | client/orgaudit/svc_access_bindings_test.go |
 | direct_once.pv | client/agent/direct_nf1.go |
 | direct_once.pv | client/agent/direct_client.go |
 | direct_once.pv | client/agent/direct_once_bindings_test.go |
