@@ -1,0 +1,8 @@
+{"ev":"Register","refused":false,"s":1}
+{"drain":true,"ev":"StopBegin","k":1}
+{"by":"deadline","ev":"DrainEnd","k":1}
+{"ev":"StopReset","k":1}
+{"ev":"Abort","s":1}
+{"ev":"Cut","s":1}
+{"ev":"StopEnd","k":1}
+{"drain":true,"ev":"StopBegin","k":2}

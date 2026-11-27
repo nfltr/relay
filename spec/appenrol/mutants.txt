@@ -1,0 +1,11 @@
+# <mutant> <property>: TLC on AppEnrol.cfg with that Mutant must report
+# <property> violated (scripts/spec-appenrol.sh mutants).
+no-nonce-check SignInBindsKey
+sso-skips-deny RevokedUserCut
+reusable-code CodeOnce
+renew-ignores-auth DisabledUserBound
+renew-takes-attrs AttrsFixed AppEnrolTwo.cfg
+no-token-exp DisabledUserBound
+reauth-any-user DisabledUserBound AppEnrolTwo.cfg
+revoke-user-one-name RevokedUserCut
+revoke-app-sso-only RevokedAppCut

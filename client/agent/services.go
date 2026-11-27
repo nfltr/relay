@@ -1,0 +1,500 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+package agent
+
+import (
+	"context"
+	"fmt"
+	"maps"
+	"net"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/nfltr/quic-go"
+	"github.com/nfltr/relay/client/dgram"
+	"github.com/nfltr/relay/client/nf1"
+	relayv1 "github.com/nfltr/relay/proto/nfltr/relay/v1"
+	"github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/agentservices"
+)
+
+// Services under one agent identity. The relay names a
+// session's service in the open frame's target_addr (pb.TCPData has no
+// field of its own for it); the agent looks the name up in its
+// ServiceTable, its local allow-list, and dials only that service's
+// target.
+
+// Service is one named service of an agent.
+type Service struct {
+	Name   string             // agentservices.ValidName
+	Kind   agentservices.Kind // HTTP: E2EE sessions; TCP: raw sessions; UDP: datagram associations (client/dgram)
+	Target string             // HTTP: backend URL (http or https); TCP: host:port, or unix:/abs/path (a unix socket only this table dials); UDP: host:port
+	// A udp service has its name once more beside one stream service
+	// (http or tcp) of that name (dns over tcp and udp); its sessions are
+	// associations, each flow a socket of its own to Target (or, with
+	// Queue, the association itself, for the application to serve with
+	// dgram.Serve). E2EE, Org, Group, NF1 and Direct as a tcp
+	// service's: on a direct path its datagrams ride QUIC datagrams
+	// (nfltr docs/decisions/nf1-udp-2026-11-14.md "The direct path"; a
+	// Queue's association takes the stream only).
+	// E2EE of a TCP service: On, its sessions are TLS in organisation mode
+	// (Org, required; a plain session is refused); Off, plain bytes only;
+	// Default, either as the relay's policy resolves it, and a session
+	// that is end to end encrypted is refused (no Org).
+	E2EE agentservices.E2EE
+	// Cert, when set, is the certificate an http service's E2EE share
+	// sessions end with instead of the tunnel's (Tunnel.E2EE): an http
+	// service whose share takes the tunnel's ACME certificate beside
+	// another under one agent identity. A tcp service takes none.
+	Cert *E2EESetup
+	// Org puts a TCP service with E2EE On in organisation mode, its only
+	// end-to-end encrypted mode: its sessions end TLS with the
+	// organisation's machine certificate and admit a client certificate an
+	// organisation access rule lets use the service (Org.CheckClient: the
+	// root's signed policy, nfltr access allow), nothing else
+	// (spec/proverif/e2ee_tcp.pv mutant downgrade-any-client).
+	Org Org
+	// Group publishes an organisation-mode service under one organisation
+	// group, dialled as <service>@<group> (agentservices.Decl.Group): the
+	// group must be in this machine's certificate (NewServiceTable refuses
+	// it otherwise), and a session for <service>@<group> is served only
+	// for the group the service is published under (service_alpn.go;
+	// e2ee_tcp.pv mutant agent-no-publish-check). "": a machine dial only.
+	Group string
+	// Identity tells an organisation-mode tcp service's target who called
+	// (IdentityHTTP, IdentityProxyV2): the admitted client certificate's
+	// name, person and groups. IdentityOff, the default: bytes only.
+	Identity Identity
+	// Direct lets an organisation-mode service's sessions move to a direct
+	// path when their client asks (direct.go; DirectOff, the default:
+	// relayed only, no address of this machine sent). The table then
+	// serves DirectServiceName too.
+	Direct DirectMode
+	// NF1 serves the service under a capability address (nf1...): a tcp
+	// service with E2EE On and no Org, Group or Direct. Its
+	// sessions run the listener's rendezvous answer, pinned TLS and proof
+	// before one byte reaches Target (package nf1; nfltr
+	// docs/decisions/nf1-rendezvous-2026-11-13.md); the relay finds the
+	// service by the address's rendezvous id, declared with it.
+	NF1 *nf1.Listener
+	// BrowserDirect lets an nf1 tcp service's browser visitors open their
+	// streams on WebRTC data channels to this machine (client/p2p
+	// BrowserDirect; nfltr docs/decisions/browser-peer-2026-11-16.md): its
+	// answer then says nf1.HintBrowser, and a session marked for it is a
+	// control session. nil, the default: the relay path only, no address of
+	// this machine shown to a visitor.
+	BrowserDirect BrowserDirect
+	// Queue is a tcp service's target in this process, instead of
+	// Target: its sessions wait there for Accept, which answers them
+	// (SessionQueue). One of Target and Queue.
+	Queue *SessionQueue
+	// Datagrams is a udp service's (with Target) bound on the flows of all
+	// its associations together and their counters together
+	// (dgram.Service: Stats for the serving side's drops). nil:
+	// NewServiceTable makes one with the default bound. Each relay
+	// connection builds its own table, so pass one Service for the
+	// process's lifetime for the bound to hold across them.
+	Datagrams *dgram.Service
+}
+
+// ServiceTable is the services an agent serves under its identity: the
+// only targets its ConnectTCP sessions reach. A session that names no
+// service of the table, a service of the wrong kind or a raw address is
+// refused (closed, logged, counted), never dialled: the agent is no open
+// forwarder. Build it before the tunnel runs; it is read-only after.
+type ServiceTable struct {
+	byName    map[string]*tableService
+	decls     []agentservices.Decl
+	direct    *directServer // the direct services' (DirectServiceName); nil: none
+	refused   atomic.Uint64
+	onSession func(Session)
+}
+
+// Caller is the machine that opened a session, as the relay authenticated
+// it (pb.CallerIdentity): never anything the caller sent. Machine, Group
+// and Account are ids; MachineName is for display only (a rename changes
+// it).
+type Caller struct {
+	Machine, Group, Account, MachineName string
+}
+
+// Session is a session the relay opened to one of the table's services,
+// as OnSession reports it once the table admitted it.
+type Session struct {
+	Service string
+	caller  *pb.CallerIdentity
+}
+
+// Caller is who opened s; ok is false when the relay named no caller (a
+// share visitor's session, or a relay that does not send one).
+func (s Session) Caller() (c Caller, ok bool) {
+	if s.caller.GetMachineId() == "" {
+		return Caller{}, false
+	}
+	return Caller{Machine: s.caller.GetMachineId(), Group: s.caller.GetGroupId(),
+		Account: s.caller.GetAccount(), MachineName: s.caller.GetMachineName()}, true
+}
+
+// OnSession calls f with each session the table admits, before its target
+// is dialled (f must not block). Call it before the tunnel runs.
+func (t *ServiceTable) OnSession(f func(Session)) { t.onSession = f }
+
+type tableService struct {
+	kind     agentservices.Kind
+	e2ee     agentservices.E2EE
+	network  string   // TCP: "tcp" or "unix"; UDP: "udp"
+	addr     string   // TCP: the address dialled
+	backend  string   // HTTP: the backend URL
+	shares   []string // share codes whose policy wrap enforces
+	wrap     func(http.Handler) http.Handler
+	cert     *e2eeTLSConfig // Service.Cert; nil: the tunnel's
+	org      Org            // Service.Org: organisation mode; nil: no E2EE tcp session
+	services []string       // the names an access rule must admit a client to (Org.CheckClient)
+	group    string         // Service.Group: published under it
+	ident    Identity       // Service.Identity
+	nf1      *nf1.Listener  // Service.NF1: served under a capability address
+	browser  BrowserDirect  // Service.BrowserDirect
+	queue    *SessionQueue  // Service.Queue: the target in this process
+	dgram    *dgram.Service // Service.Datagrams: a udp service's shared bound
+}
+
+// NewServiceTable validates services and returns their table.
+func NewServiceTable(services []Service) (*ServiceTable, error) {
+	if len(services) == 0 || len(services) > agentservices.MaxServices {
+		return nil, fmt.Errorf("services: want 1 to %d, got %d", agentservices.MaxServices, len(services))
+	}
+	t := &ServiceTable{byName: make(map[string]*tableService, len(services))}
+	for _, s := range services {
+		if !agentservices.ValidName(s.Name) {
+			return nil, fmt.Errorf("service %q: invalid name (a DNS label starting with a letter)", s.Name)
+		}
+		key := agentservices.Decl{Name: s.Name, Kind: s.Kind}.Target()
+		if t.byName[key] != nil {
+			return nil, fmt.Errorf("service %q: declared twice", s.Name)
+		}
+		if s.Name == DirectServiceName {
+			return nil, fmt.Errorf("service %q: the name is reserved for direct paths", s.Name)
+		}
+		if s.Direct != DirectOff && (s.Org == nil && s.NF1 == nil || s.Direct != DirectOn) {
+			return nil, fmt.Errorf("service %q: direct %q needs organisation mode or a capability address (want %q)", s.Name, s.Direct, DirectOn)
+		}
+		e := &tableService{kind: s.Kind, e2ee: s.E2EE}
+		if s.Cert != nil {
+			e.cert = s.Cert.cfg
+		}
+		if s.E2EE != agentservices.E2EEDefault && (!s.Kind.Sessions() || (s.E2EE != agentservices.E2EEOn && s.E2EE != agentservices.E2EEOff)) {
+			return nil, fmt.Errorf("service %q: e2ee %q (want %q or %q on a tcp or udp service)", s.Name, s.E2EE, agentservices.E2EEOn, agentservices.E2EEOff)
+		}
+		if s.Cert != nil && s.Kind != agentservices.HTTP {
+			return nil, fmt.Errorf("service %q: a certificate of its own needs an http service (a tcp service's E2EE is the organisation's)", s.Name)
+		}
+		if err := checkOrgService(s); err != nil {
+			return nil, err
+		}
+		if err := checkIdentity(s); err != nil {
+			return nil, err
+		}
+		if err := checkPublish(s); err != nil {
+			return nil, err
+		}
+		if s.NF1 != nil && (!s.Kind.Sessions() || s.E2EE != agentservices.E2EEOn || s.Org != nil || s.Group != "") {
+			return nil, fmt.Errorf("service %q: a capability address (nf1) needs a tcp or udp service with e2ee on and no organisation or group", s.Name)
+		}
+		if s.NF1 != nil && s.NF1.Anonymous() && s.Direct == DirectOff {
+			return nil, fmt.Errorf("service %q: an address served with no account takes direct paths only (want %q)", s.Name, DirectOn)
+		}
+		if s.NF1 != nil && s.Kind == agentservices.UDP {
+			l, err := s.NF1.WithDatagram()
+			if err != nil {
+				return nil, err
+			}
+			s.NF1 = l
+		}
+		e.org, e.group, e.nf1, e.ident = s.Org, s.Group, s.NF1, s.Identity
+		if s.Org != nil {
+			e.services = []string{s.Name}
+		}
+		if s.NF1 != nil && s.Direct != DirectOff {
+			l, err := s.NF1.WithDirect()
+			if err != nil {
+				return nil, err
+			}
+			e.nf1 = l
+		}
+		if s.BrowserDirect != nil {
+			if s.NF1 == nil || s.Kind != agentservices.TCP {
+				return nil, fmt.Errorf("service %q: a browser direct path needs a tcp service under a capability address (nf1)", s.Name)
+			}
+			l, err := e.nf1.WithBrowser()
+			if err != nil {
+				return nil, err
+			}
+			e.nf1, e.browser = l, s.BrowserDirect
+		}
+		switch s.Kind {
+		case agentservices.TCP:
+			e.network, e.addr = "tcp", s.Target
+			if (s.Target == "") == (s.Queue == nil) {
+				return nil, fmt.Errorf("service %q: a tcp service has a target or a queue, one of them", s.Name)
+			}
+			if s.Queue != nil {
+				e.network, e.addr, e.queue = networkQueue, "", s.Queue
+			} else if path, ok := strings.CutPrefix(s.Target, "unix:"); ok {
+				if !filepath.IsAbs(path) {
+					return nil, fmt.Errorf("service %q: target %q: a unix socket path must be absolute", s.Name, s.Target)
+				}
+				e.network, e.addr = "unix", path
+			} else if _, port, err := net.SplitHostPort(s.Target); err != nil || port == "" {
+				return nil, fmt.Errorf("service %q: target %q is not host:port or unix:/path", s.Name, s.Target)
+			}
+		case agentservices.UDP:
+			e.network, e.addr = "udp", s.Target
+			if (s.Target == "") == (s.Queue == nil) {
+				return nil, fmt.Errorf("service %q: a udp service has a target or a queue, one of them", s.Name)
+			}
+			if s.Queue != nil {
+				e.network, e.addr, e.queue = networkQueue, "", s.Queue
+			} else if _, port, err := net.SplitHostPort(s.Target); err != nil || port == "" {
+				return nil, fmt.Errorf("service %q: target %q is not host:port", s.Name, s.Target)
+			} else if e.dgram = s.Datagrams; e.dgram == nil {
+				e.dgram = &dgram.Service{}
+			}
+		case agentservices.HTTP:
+			if s.Queue != nil {
+				return nil, fmt.Errorf("service %q: a queue needs a tcp service", s.Name)
+			}
+			u, err := url.Parse(s.Target)
+			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+				return nil, fmt.Errorf("service %q: target %q is not an http(s) URL", s.Name, s.Target)
+			}
+			e.backend = s.Target
+		default:
+			return nil, fmt.Errorf("service %q: unknown kind %q", s.Name, s.Kind)
+		}
+		t.byName[key] = e
+		d := agentservices.Decl{Name: s.Name, Kind: s.Kind, E2EE: s.E2EE, Group: s.Group}
+		if s.NF1 != nil {
+			d.NF1 = s.NF1.Address().RID
+		}
+		t.decls = append(t.decls, d)
+	}
+	if err := t.addDirect(services); err != nil {
+		return nil, err
+	}
+	return t, nil
+}
+
+// addDirect serves DirectServiceName when a service has Direct: in
+// organisation mode (the first direct service's Org), admitting a client
+// a rule lets use any direct service. A table whose direct services are all under
+// capability addresses gets the direct paths without the reserved service
+// (its control exchanges and re-attaches come on the address's own
+// sessions: direct_nf1.go).
+func (t *ServiceTable) addDirect(services []Service) error {
+	var org Org
+	var names []string
+	modes := map[string]DirectMode{}
+	for _, s := range services {
+		if s.Direct == DirectOff {
+			continue
+		}
+		key := agentservices.Decl{Name: s.Name, Kind: s.Kind}.Target() // a name may be tcp and udp, each its mode
+		if s.NF1 != nil {
+			modes[key] = s.Direct
+			continue
+		}
+		if org == nil {
+			org = s.Org
+		}
+		modes[key] = s.Direct
+		if !slices.Contains(names, s.Name) {
+			names = append(names, s.Name)
+		}
+	}
+	if len(modes) == 0 {
+		return nil
+	}
+	if org == nil {
+		d, err := newDirectServer(nil, nil, modes)
+		t.direct = d
+		return err
+	}
+	if len(t.decls) >= agentservices.MaxServices {
+		return fmt.Errorf("services: direct paths take one of the %d services", agentservices.MaxServices)
+	}
+	d, err := newDirectServer(org, names, modes)
+	if err != nil {
+		return err
+	}
+	t.direct = d
+	t.byName[DirectServiceName] = &tableService{kind: agentservices.TCP, e2ee: agentservices.E2EEOn, network: networkDirect, org: org, services: names}
+	t.decls = append(t.decls, agentservices.Decl{Name: DirectServiceName, Kind: agentservices.TCP, E2EE: agentservices.E2EEOn})
+	return nil
+}
+
+// Continue gives t prev's direct paths when both serve the same direct
+// services, before t serves: a table built for a new relay connection
+// (nfltr builds one per connection) keeps the sessions that re-attach
+// after the old connection died, the UDP socket and its NAT mapping; t's
+// own stop. prev keeps serving its connection's sessions.
+func (t *ServiceTable) Continue(prev *ServiceTable) {
+	if t == nil || prev == nil || t.direct == nil || prev.direct == nil || t.direct == prev.direct {
+		return
+	}
+	n, o := t.direct, prev.direct
+	if !slices.Equal(n.services, o.services) || !maps.Equal(n.modes, o.modes) {
+		return // ponytail: prev's lives on with its sessions; a relay that changes a service's mode mid-process leaves one socket
+	}
+	t.direct = o
+	o.dropAddressesNotIn(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = n.node.Drain(ctx)
+	_ = n.ep.Close()
+}
+
+// Close ends the table's direct paths: their sessions within ctx (then
+// reset), the listener and its UDP socket. An agent process keeps them for
+// its life (a later table takes them over: Continue); a table one owner
+// serves alone (nfnet.Listener) closes them with it. nil, or no direct
+// service: nothing to end.
+func (t *ServiceTable) Close(ctx context.Context) {
+	if t == nil || t.direct == nil {
+		return
+	}
+	t.direct.stop(ctx)
+	_ = t.direct.node.Drain(ctx)
+	_ = t.direct.ep.Close()
+}
+
+// DirectTransport is the UDP socket of the table's direct paths, for the
+// agent link's QUIC (QUICDialer.Transport); nil: no direct service.
+func (t *ServiceTable) DirectTransport() *quic.Transport {
+	if t == nil || t.direct == nil {
+		return nil
+	}
+	return t.direct.ep.tr
+}
+
+func (t *ServiceTable) directServer() *directServer {
+	if t == nil {
+		return nil
+	}
+	return t.direct
+}
+
+// networkDirect: the reserved service's sessions are served in process.
+const networkDirect = "direct"
+
+// networkQueue: a service's sessions go to its SessionQueue.
+const networkQueue = "queue"
+
+// RequireSharePolicy makes every E2EE request to service satisfy the
+// credential policy of its share code, as E2EESetup.RequireSharePolicy does
+// for a single-service agent, for that service only: another service's
+// sessions are not checked against it, and this service's sessions never
+// pass on another service's credentials. Call it before the tunnel runs.
+func (t *ServiceTable) RequireSharePolicy(service, code string, p SharePolicy) error {
+	e := t.byName[service]
+	if e == nil || e.kind != agentservices.HTTP {
+		return fmt.Errorf("share policy: no http service %q", service)
+	}
+	check, err := newSharePolicyCheck(code, p)
+	if err != nil {
+		return err
+	}
+	e.wrap = composeWraps(e.wrap, check.wrap)
+	e.shares = append(e.shares, code)
+	return nil
+}
+
+// Declaration is the table's services as an agent declares them to its
+// relay (agentservices.Header): the direct-path service included.
+func (t *ServiceTable) Declaration() string { return agentservices.Format(t.decls) }
+
+// Registrations are the RegHeader values the table's capability addresses
+// are declared with (agentservices.FormatReg of each listener's proof),
+// one per address that has one; send them beside Declaration.
+func (t *ServiceTable) Registrations() []string {
+	var out []string
+	for _, d := range t.decls {
+		if l := t.byName[d.Target()].nf1; l != nil && l.RegistrationProof() != nil {
+			out = append(out, agentservices.FormatReg(d.NF1, l.RegistrationProof()))
+		}
+	}
+	return out
+}
+
+// Refused is how many sessions the table has refused.
+// allow:wrapper — the counter is the table's own.
+func (t *ServiceTable) Refused() uint64 { return t.refused.Load() }
+
+func (t *ServiceTable) shareCodes() []string {
+	var codes []string
+	for _, d := range t.decls {
+		codes = append(codes, t.byName[d.Target()].shares...)
+	}
+	return codes
+}
+
+// ServiceRefusedError is why a session was refused: what it named and
+// why that is no target of the table.
+type ServiceRefusedError struct {
+	Target string // the open frame's target_addr
+	E2EE   bool
+	Reason string
+	// Answer is the session answer's reason (dataplane.WriteAnswer).
+	Answer relayv1.ErrorReason
+}
+
+// allow:wrapper — the error interface.
+func (e *ServiceRefusedError) Error() string {
+	return fmt.Sprintf("session refused: target %q (e2ee=%v): %s", e.Target, e.E2EE, e.Reason)
+}
+
+// resolve returns the service a session names. An E2EE session needs the
+// agent to terminate E2EE and a service that is http, or tcp without
+// E2EE Off for the owner's session (connect: it asks for an answer; an
+// E2EE share session, the SNI router's, never does); a raw session needs a
+// tcp service without E2EE On.
+func (t *ServiceTable) resolve(target string, e2ee, terminatesE2EE, connect bool) (*tableService, error) {
+	refuse := func(answer relayv1.ErrorReason, reason string) (*tableService, error) {
+		t.refused.Add(1)
+		return nil, &ServiceRefusedError{Target: target, E2EE: e2ee, Reason: reason, Answer: answer}
+	}
+	e := t.byName[target]
+	switch {
+	case e == nil:
+		return refuse(relayv1.ErrorReason_ERROR_REASON_UNKNOWN_SERVICE, "no such service")
+	case e2ee && !terminatesE2EE && e.cert == nil && e.org == nil && e.nf1 == nil:
+		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "the agent does not terminate end-to-end TLS")
+	case e2ee && e.kind.Sessions() && !connect:
+		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "an end-to-end encrypted share session needs an http service")
+	case e2ee && e.kind.Sessions() && e.org == nil && e.nf1 == nil:
+		// Only organisation mode is end to end encrypted (E2EE Off, or a
+		// Default service the relay's policy made plain).
+		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_UNAVAILABLE, "the service is not end-to-end encrypted (not in organisation mode)")
+	case !e2ee && !e.kind.Sessions():
+		return refuse(relayv1.ErrorReason_ERROR_REASON_TARGET_REFUSED, "a raw TCP session needs a tcp service")
+	case !e2ee && e.e2ee == agentservices.E2EEOn:
+		return refuse(relayv1.ErrorReason_ERROR_REASON_E2EE_REQUIRED, "the service takes end-to-end encrypted sessions only")
+	}
+	return e, nil
+}
+
+// composeWraps applies outer around inner; either may be nil.
+func composeWraps(outer, inner func(http.Handler) http.Handler) func(http.Handler) http.Handler {
+	switch {
+	case outer == nil:
+		return inner
+	case inner == nil:
+		return outer
+	}
+	return func(next http.Handler) http.Handler { return outer(inner(next)) }
+}

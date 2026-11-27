@@ -1,0 +1,6 @@
+{"ev":"Init","lan":[],"offered":["127.0.0.1:1","127.0.0.1:2"]}
+{"a":"127.0.0.1:1","ev":"DialFail","refused":false}
+{"ev":"Learn","lan":false,"out":"dial","s":"127.0.0.1:9","tagged":true}
+{"a":"127.0.0.1:2","ev":"DialFail","refused":false}
+{"a":"127.0.0.1:9","ev":"DialFail","refused":false}
+{"ev":"Return","won":""}

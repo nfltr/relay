@@ -1,0 +1,4 @@
+# linkvet findings outside tests that are not bugs (make check-linkvet).
+# Format: <path>: <message> -- <reason>, the path from the repository root and
+# the message as linkvet prints it, without line and column. A stale entry
+# (no finding matches) fails the check.

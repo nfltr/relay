@@ -1,0 +1,4 @@
+{"ev":"invite","o":"o-aaaaaaaaaaaaaaaaaaaaaaaaaa","by":"","ar":"owner","u":"dan@x","r":"member","id":"i1","exp":1000,"t":10}
+{"ev":"join","o":"o-aaaaaaaaaaaaaaaaaaaaaaaaaa","u":"dan@x","r":"member","id":"i1","n":"send-1","a":"send","t":11}
+{"ev":"remove","o":"o-aaaaaaaaaaaaaaaaaaaaaaaaaa","u":"dan@x","by":"","ar":"owner","sr":"member","f":[["send-1",""]],"t":13}
+{"ev":"join","o":"o-aaaaaaaaaaaaaaaaaaaaaaaaaa","u":"dan@x","r":"member","id":"i1","n":"send-2","a":"send","t":14}

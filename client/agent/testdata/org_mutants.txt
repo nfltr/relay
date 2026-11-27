@@ -1,0 +1,86 @@
+# Planted bugs of the agent's organisation mode (scripts/go-mutants.sh
+# client/agent/testdata/org_mutants.txt, make test-go-mutants, in make ci):
+# each line "<mutant> | <file> | <exact line text> | <replacement> | <test>";
+# the lines of one mutant are applied together and its test must then fail.
+# Models: spec/proverif/e2ee_tcp.pv (downgrade-any-client, the checks'
+# use) and spec/enrol/Enrol.tla (no-expiry-timer: NoExpiredSession;
+# no-cut-on-update: RevocationBound). The checks themselves (chain, name,
+# groups, CRL, NotAfter) are client/orgid's, with its own mutants.
+ignore-check | org.go | 			until, err := o.CheckClient(cs.PeerCertificates, services, time.Now()) | 			until, err := time.Now().Add(time.Hour), error(nil) | TestOrgServiceAdmitsGroup
+downgrade-any-client | org.go | 		ClientAuth:             tls.RequireAnyClientCert, | 		ClientAuth:             tls.RequestClientCert, | TestOrgServiceAdmitsGroup
+downgrade-any-client | org.go | 			until, err := o.CheckClient(cs.PeerCertificates, services, time.Now()) | 			if len(cs.PeerCertificates) == 0 { adm.until = time.Now().Add(time.Hour); return nil }; until, err := o.CheckClient(cs.PeerCertificates, services, time.Now()) | TestOrgServiceAdmitsGroup
+org-falls-through | session_plan.go | 		if svc.org != nil { | 		if false { | TestOrgServiceAdmitsGroup
+e2ee-without-org | org.go | 	case s.Org == nil && s.NF1 == nil && s.Kind.Sessions() && s.E2EE == agentservices.E2EEOn: | 	case false: | TestOrgServiceOneMode
+e2ee-to-plain-service | services.go | 	case e2ee && e.kind.Sessions() && e.org == nil && e.nf1 == nil: | 	case false: | TestOrgServiceOneMode
+no-expiry-timer | org.go | 	t := time.NewTimer(time.Until(until)) | 	t := time.NewTimer(time.Hour) | TestOrgSessionEndsAtUntil
+no-expiry-timer | org.go | 			t.Reset(time.Until(u)) | 			t.Reset(time.Hour + 0*time.Until(u)) | TestOrgSessionEndsAtUntil
+no-cut-on-update | org.go | 			u, cerr := check(time.Now()) | 			u, cerr := until, error(nil) | TestOrgSessionCutOnUpdate
+tunnel-falls-through | session_plan.go | 		if targets.org != nil { | 		if false { | TestOrgServiceAdmitsGroup
+server-tickets-on | org.go | 		SessionTicketsDisabled: true, | 		SessionTicketsDisabled: false, | TestOrgServerConfigHasNoTickets
+# Direct paths (direct.go; e2ee_tcp.pv queries 21-29): the client's check
+# of the punch's answer, the agent's of the OPEN's token, the client's of
+# the agent's token.
+direct-no-name | direct_client.go | 			if _, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, p.machine, time.Now()); err != nil { | 			if _, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, cs.PeerCertificates[0].Subject.CommonName, time.Now()); err != nil { | TestDirectModelBindings
+direct-no-cert-check | direct_client.go | 			if _, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, p.machine, time.Now()); err != nil { | 			if _, err := time.Now(), error(nil); err != nil { | TestDirectModelBindings
+token-no-epoch | direct_server.go | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, 2, qk)) { | TestDirectModelBindings
+token-unbound | direct_server.go | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, nil)) || hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | TestDirectModelBindings
+token-no-role | direct_server.go | 		if hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | 		if hmac.Equal(o.Token, pathToken(s.key, roleServer, o.Epoch, qk)) || hmac.Equal(o.Token, pathToken(s.key, roleClient, o.Epoch, qk)) { | TestDirectModelBindings
+direct-no-token | direct_client.go | 		if !hmac.Equal(got, t.want) { | 		if !hmac.Equal(got, got) { | TestDirectModelBindings
+# Peer-reflexive candidates (direct_prflx.go; spec/DirectPunch.tla
+# OnlyTagged, W_PrflxWon): the probe's tag routed, sent and learned.
+prflx-any-tag | direct_prflx.go | 		ch := e.probes.by[string(b[1:n])] | 		var ch chan netip.AddrPort; for _, c := range e.probes.by { ch = c } | TestDirectProbeRoutesOnlyItsTag
+prflx-untagged | direct_server.go | 			_ = d.ep.probe(peer, tag) | 			_ = d.ep.probe(peer, tag[:0]) | TestDirectSymmetricAgentGoesDirectPeerReflexively
+prflx-no-dial | direct_prflx.go | 				start(a) | 				_ = a | TestDirectSymmetricAgentGoesDirectPeerReflexively
+# A LAN path first (owner 2026-11-16; DirectPunch.tla PreferLan, mutant
+# first-wins): a LAN connection replaces a non-LAN winner.
+lan-first-wins | direct_prflx.go | 			case won == nil || e.isLAN(r.a) && !e.isLAN(wonAt): | 			case won == nil: | TestDirectPunchPrefersLAN
+# Port mapping (direct_portmap.go; nfltr docs/decisions/portmap-2026-11-16.md):
+# the mapped address offered, the mapping deleted on Close, only a silent
+# gateway left alone (a refusal or a restarted router is asked again).
+portmap-not-offered | direct.go | 	if a := <-e.mapping(); a.IsValid() { | 	if a := <-e.mapping(); false && a.IsValid() { | TestDirectMappedAgentGoesDirect
+portmap-no-delete | direct_portmap.go | 		_, _ = e.askMap(m.gw, 0) | 		_ = m.gw | TestDirectPortMapLease
+portmap-cache-refusal | direct_portmap.go | 		if errors.Is(err, errSilent) { | 		if err != nil || true { | TestDirectPortMapLease
+# Services by name (service_alpn.go; e2ee_tcp.pv queries 30-35): the
+# client's check of the negotiated protocol, the agent's choice, its OU and
+# publish checks, the start check, the hard cut (no protocol, no session).
+client-no-alpn-check | service_alpn.go | 		return checkNegotiated(cs, proto) | 		return nil | TestServiceModelBindings
+agent-no-alpn-check | org.go | 		NextProtos:             bind.protos(cert), | 		NextProtos:             nil, | TestServiceModelBindings
+agent-no-alpn-check | org.go | 			if cs.NegotiatedProtocol == "" { | 			if false { | TestServiceModelBindings
+no-protocol-accepted | org.go | 			if cs.NegotiatedProtocol == "" { | 			if false { | TestServiceModelBindings
+agent-no-publish-check | service_alpn.go | 		if g != "" && g == b.group { | 		if g != "" { | TestServiceModelBindings
+agent-no-ou-check | service_alpn.go | 	for _, g := range certGroups(cert) { | 	for _, g := range []string{b.group} { | TestServiceModelBindings
+publish-not-in-cert | service_alpn.go | 	if !slices.Contains(certGroups(cert), s.Group) { | 	if !slices.Contains(certGroups(cert), s.Group) && false { | TestServiceModelBindings
+# The kind in the protocol's prefix (BIND:org.kind; e2ee_tcp.pv mutant
+# agent-ignores-kind): every service offers both kinds' protocols.
+agent-ignores-kind | service_alpn.go | 	if b.datagram { | 	for i, n := 0, len(p); i < n; i++ { p = append(p, DatagramALPN(p[i])) }; if false { | TestServiceModelBindings
+# Direct paths under a group dial (e2ee_tcp.pv 36; nfltr
+# docs/decisions/service-discovery-2026-11-12.md "Direct paths under a
+# group dial"): the first exchange's check of the session's machine, its
+# exclusion of the other instances.
+group-control-no-name | direct_client.go | 				_, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, p.machine, time.Now()) | 				_, err := time.Now(), error(nil) | TestDirectGroupDialGoesDirectToItsInstance
+group-control-no-exclude | direct_client.go | 		if other != "" && !slices.Contains(exclude, other) && len(exclude) < dataplane.MaxExclude { | 		if other != "" && !slices.Contains(exclude, other) && false { | TestDirectGroupDialGoesDirectToItsInstance
+# nf1 direct paths (direct_nf1.go; cap_address.pv queries 15-18): the
+# client's pin of the direct answer's key.
+nf1-direct-no-pin | direct_nf1.go | 			if err := addr.VerifyConnection(cs); err != nil { | 			if _, err := addr, error(nil); err != nil { | TestNF1DirectModelBindings
+# Trickle (direct.go gather; spec/DirectPunch.tla NoWait, mutant wait-qad):
+# the first candidates wait for the address check; the host candidates
+# leave no room for the slow ones.
+trickle-wait-qad | direct.go | 	go func() { wg.Wait(); close(ch) }() | 	wg.Wait(); close(ch) | TestDirectSilentQADDelaysNoPunch
+trickle-no-room | direct.go | 	first = first[:min(len(first), quiclink.MaxCandidates-len(slow))] | 	first = first[:min(len(first), quiclink.MaxCandidates)] | TestGatherKeepsRoomForTheSlowCandidates
+# A punch round (direct_round.go; spec/PunchRound.tla RetryBound,
+# InitialAfterProbe): retries after no answer, none once the session
+# ended, the dial rtt/2 after the sync.
+round-no-retry | direct_round.go | 		if reason != ReasonNoAnswer || n == punchAttempts || s.ended() { | 		if true { | TestDirectPunchRetriesAfterNoAnswer
+round-unbounded | direct_round.go | 		if reason != ReasonNoAnswer || n == punchAttempts || s.ended() { | 		if reason != ReasonNoAnswer { | TestDirectPunchRoundEndsRelayedAfterThreeAttempts
+round-past-end | direct_round.go | 		if reason != ReasonNoAnswer || n == punchAttempts || s.ended() { | 		if reason != ReasonNoAnswer || n == punchAttempts { | TestDirectPunchRoundStopsWhenTheSessionEnds
+round-dial-at-sync | direct_round.go | 	wait := rtt / 2 | 	wait := rtt * 0 | TestDirectPunchRetriesAfterNoAnswer
+round-done-only | direct_round.go | 	if s.nc.closed.Load() { | 	if false { | TestDirectPunchRoundStopsWhenTheSessionEnds
+# Identity to the app (org_identity.go; spec/proverif/svc_access.pv
+# queries 5-6, mutants header-from-client and jwt-no-aud there): the
+# client's identity headers deleted (every spelling), the assertion's
+# audience the session's service, the PROXY v2 header sent.
+header-from-client | org_identity.go | 		if strings.HasPrefix(n, "nfltr-") || strings.HasPrefix(n, "x-nfltr-") { | 		if false && strings.HasPrefix(n, "nfltr-") { | TestSvcAccessModelBindings
+header-underscore | org_identity.go | 		n := strings.ReplaceAll(strings.ToLower(k), "_", "-") | 		n := strings.ToLower(k) | TestSvcAccessModelBindings
+jwt-no-aud | org_identity.go | 	body, err := json.Marshal(assertionClaims{Iss: a.iss, Sub: sub, Aud: c.service, Machine: c.machine, Person: c.person, | 	body, err := json.Marshal(assertionClaims{Iss: a.iss, Sub: sub, Aud: "pg", Machine: c.machine, Person: c.person, | TestSvcAccessModelBindings
+proxy-no-header | org_identity.go | 		_, err := target.Write(proxyV2Header(c)) | 		_, err := 0, error(nil) | TestSvcAccessModelBindings
+identity-off | org.go | 	if p.ident != IdentityOff { // IdentityOff reads nothing of the caller | 	if false { | TestSvcAccessModelBindings

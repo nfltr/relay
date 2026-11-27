@@ -1,0 +1,14 @@
+Incompatible changes:
+- ./nf1.HintDirect: value changed from "d1" to "d2"
+Compatible changes:
+- ./agent.(*DirectClient).StartNF1: added
+- ./agent.Service.Datagrams: added
+- ./dgram.Config.Service: added
+- ./dgram.DefaultServiceFlows: added
+- ./dgram.Service: added
+- ./nf1.(*Listener).AdmitKind: added
+- ./nf1.ALPNFramed: added
+- ./nf1.ClientTLSFramed: added
+- ./nf1.ErrKindRefused: added
+- ./nf1.KindFramed: added
+- ./nf1.KindPlain: added

@@ -1,0 +1,45 @@
+Incompatible changes:
+- ./orgpki.(*Issuer).RevokePerson: changed from func(string, time.Time) error to func(string, time.Time) (Removal, error)
+- ./orgpki.CRLLife: value changed from 3600000000000 to 86400000000000
+- ./orgpki.CrossSign: changed from func(*crypto/x509.Certificate, crypto/ed25519.PrivateKey, crypto.PublicKey, string, time.Time) (*crypto/x509.Certificate, error) to func(*crypto/x509.Certificate, crypto/ed25519.PrivateKey, crypto.PublicKey, string, time.Time, ...RootOption) (*crypto/x509.Certificate, error)
+- ./orgpki.ErrNotLapsed: removed
+- ./orgpki.NewRoot: changed from func(crypto.Signer, string, time.Time) (*crypto/x509.Certificate, error) to func(crypto.Signer, string, time.Time, ...RootOption) (*crypto/x509.Certificate, error)
+- ./orgpki.SignInRule.EmailDomains: removed
+- ./orgpki.ValidDomain: removed
+- ./orgenrol.JoinSignIn: changed from func(context.Context, Mailbox, string, Pins, string, string, string, crypto/ed25519.PrivateKey, crypto.PublicKey, time.Duration, func() time.Time) (*crypto/x509.Certificate, error) to func(context.Context, Mailbox, string, Pins, string, string, string, string, crypto/ed25519.PrivateKey, crypto.PublicKey, time.Duration, func() time.Time) (*crypto/x509.Certificate, error)
+Compatible changes:
+- ./orgpki.(*Issuer).ApplyPeople: added
+- ./orgpki.(*Issuer).People: added
+- ./orgpki.(*SignInRequest).ProveInvite: added
+- ./orgpki.ActInvite: added
+- ./orgpki.ActRole: added
+- ./orgpki.Answer.Removal: added
+- ./orgpki.CRLEvery: added
+- ./orgpki.Entry.Actor: added
+- ./orgpki.Entry.ActorRole: added
+- ./orgpki.Entry.Filed: added
+- ./orgpki.Entry.Invite: added
+- ./orgpki.Entry.Role: added
+- ./orgpki.ErrNotQuiet: added
+- ./orgpki.Filed: added
+- ./orgpki.InviteLife: added
+- ./orgpki.InviteOrgID: added
+- ./orgpki.InviteProof: added
+- ./orgpki.NewInvite: added
+- ./orgpki.PeopleAct: added
+- ./orgpki.PeopleInvite: added
+- ./orgpki.PeopleRemove: added
+- ./orgpki.PeopleRequest: added
+- ./orgpki.PeopleRole: added
+- ./orgpki.Person: added
+- ./orgpki.Removal: added
+- ./orgpki.Request.People: added
+- ./orgpki.RestoreQuiet: added
+- ./orgpki.RoleAdmin: added
+- ./orgpki.RoleMember: added
+- ./orgpki.RoleOwner: added
+- ./orgpki.RootOption: added
+- ./orgpki.SignInRequest.Invite: added
+- ./orgpki.SignPeople: added
+- ./orgpki.WithShortName: added
+- ./orgmachine.(*Machine).CRLStale: added

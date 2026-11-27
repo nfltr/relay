@@ -1,0 +1,6 @@
+{"ev":"put","d":"/i","k":"00aa","num":1,"next":3600}
+{"ev":"publish","d":"/i","k":"00aa","num":1,"next":3600}
+{"ev":"put","d":"/i","k":"00aa","num":2,"next":3700}
+{"ev":"publish","d":"/i","k":"00aa","num":2,"next":3700}
+{"ev":"take","via":"mailbox","v":"0x1","k":"00aa","num":2,"next":3700,"t":110,"res":"taken"}
+{"ev":"take","via":"copy","v":"0x1","k":"00aa","num":1,"next":3600,"t":120,"res":"taken"}

@@ -1,0 +1,2 @@
+# go-mutants.sh --check must fail on this line: it names no line of go-mutants.sh.
+stale | go-mutants.sh | a line that is not there | x | TestNone

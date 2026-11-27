@@ -1,0 +1,40 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   cap_address_link.pv: cap_address.pv's query 10 as an equivalence (the
+   rendezvous id does not link to the pin). Two servers, keys skA and skB,
+   register rid1 and rid2 at the relay (the attacker): it reads each
+   registration, its key and signature, and opens TLS sessions of its own
+   to either rid (each acceptor shows its certificate and a fresh random).
+   It is also handed one address's pin, published elsewhere: rid1's on the
+   left, rid2's on the right. Observational equivalence: it cannot tell
+   which, so a pin it knows tells it nothing about which rendezvous id is
+   that server's. Mutant pin-unkeyed (pin = H(pk)): it hashes each
+   registration's key and compares. Same definitions as cap_address.pv. *)
+
+free c: channel.
+
+type skey.
+type pkey.
+fun pk(skey): pkey.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+reduc forall m: bitstring, k: skey; getmsg(sign(m, k)) = m.
+fun h(bitstring): bitstring.
+
+const labPin, labRdv: bitstring.
+const relayR: bitstring.
+free rid1, rid2: bitstring.
+
+letfun pinOf(s: bitstring, x: pkey) = h((labPin, s, x)). (* NOT:pin-unkeyed *)
+letfun pinOf(s: bitstring, x: pkey) = h((labPin, x)). (* ONLY:pin-unkeyed *)
+
+let Server(sk: skey, rid: bitstring) =
+  new hints: bitstring;
+  out(c, (rid, pk(sk), sign((labRdv, relayR, rid, hints), sk)));
+  !(in(c, =rid); new ns: bitstring; out(c, (pk(sk), ns))).
+
+process
+  new skA: skey; new skB: skey; new secA: bitstring; new secB: bitstring;
+  Server(skA, rid1) | Server(skB, rid2) |
+  out(c, choice[pinOf(secA, pk(skA)), pinOf(secB, pk(skB))])

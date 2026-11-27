@@ -1,0 +1,170 @@
+# Planted bugs of orgpki (scripts/go-mutants.sh org/orgpki/testdata/mutants.txt, make test-go-mutants):
+# each line "<mutant> | <file> | <exact line text> | <replacement> | <test>". Lines of one
+# mutant are applied together; the test must then fail. Models:
+# spec/proverif/enrol.pv and spec/enrol/Enrol.tla; orgpki_test.go names the
+# property each test enforces. Not here: the verifier's (no-chain-check,
+# no-name-check, no-expiry-check, no-crl-check, no-group-check,
+# leaf-group-outside-issuer, fail-open, accept-older-crl, rotate-by-primary,
+# replayed-rotation: the relay client's orgid, which the issuer's rotation
+# check uses too, plants them in its own testdata/mutants.txt), and the
+# session-level mutants no-expiry-timer and no-cut-on-update (the
+# verifier's callers, orgmachine).
+no-name-constraint | profile.go | 		PermittedDNSDomainsCritical: true, PermittedDNSDomains: []string{orgid.Domain(orgID)}, |  | TestForgedNameRefused
+renew-expired | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn && !i.askedAgain(n, sn, req.CSR, now)) { | 	if false { | TestExpiredRefused
+renew-past-grace | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn && !i.askedAgain(n, sn, req.CSR, now)) { | 	if !now.Before(rec.notAfter) && n.serials[len(n.serials)-1] != sn && !i.askedAgain(n, sn, req.CSR, now) { | TestExpiredRefused
+grace-any-serial | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn && !i.askedAgain(n, sn, req.CSR, now)) { | 	if !now.Before(rec.notAfter.Add(RenewGrace)) { | TestRenewInTheGraceOnlyTheNewest
+no-renew-after-expiry | issuer.go | 	if !now.Before(rec.notAfter) && (!now.Before(rec.notAfter.Add(RenewGrace)) || n.serials[len(n.serials)-1] != sn && !i.askedAgain(n, sn, req.CSR, now)) { | 	if !now.Before(rec.notAfter) { | TestRenewInTheGraceOnlyTheNewest
+no-repeat | issuer.go | 	return err == nil && orgid.KeyFingerprint(cr.PublicKey) == newest.key | 	return err == nil && cr == nil | TestRenewAskedAgainAfterTheNotAfter
+repeat-any-key | issuer.go | 	return err == nil && orgid.KeyFingerprint(cr.PublicKey) == newest.key | 	return err == nil && cr != nil | TestRenewAskedAgainAfterTheNotAfter
+revoke-current-only | issuer.go | 			sns = n.serials | 			sns = n.serials[len(n.serials)-1:] | TestRevokedRefused
+renew-revoked | issuer.go | 	if n.revoked { | 	if false { | TestRevokedRefused
+reusable-token | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if last == nil { | TestReusedTokenRefused
+# Join.tla Issue: a redeemed token answers again only its own key, of a
+# name not revoked or renewed since.
+burn-name | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if last != nil { | TestTokenAnsweredAgainForItsKey
+reissue-any-key | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if n.revoked || last.token != req.TokenID { | TestTokenAnsweredAgainForItsKey
+reissue-revoked | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | TestTokenAnsweredAgainForItsKey
+reissue-after-renewal | issuer.go | 		if n.revoked || last.token != req.TokenID || last.key != orgid.KeyFingerprint(pub) { | 		if n.revoked || last.key != orgid.KeyFingerprint(pub) { | TestTokenAnsweredAgainForItsKey
+token-in-request | issuer.go | 	if !hmac.Equal(req.MAC, enrolMAC(i.tokenSecret(req.TokenID), req.CSR)) { | 	if false { | TestTokenForAnotherNameRefused
+name-from-request | issuer.go | 	der, err := i.issue(ActIssued, t.name, t.groups, i.enrolMachineID(t, req.MachineID), t.dev, pub, req.TokenID, "", now) | 	der, err := i.issue(ActIssued, cr.Subject.CommonName, t.groups, i.enrolMachineID(t, req.MachineID), t.dev, pub, req.TokenID, "", now) | TestTokenForAnotherNameRefused
+token-outlives-ttl | issuer.go | 	if !now.Before(t.expires) { | 	if false { | TestTokenForAnotherNameRefused
+token-group-outside-policy | issuer.go | 	if policy := i.Groups(); !subset(groups, policy) { | 	if policy := i.Groups(); false && !subset(groups, policy) { | TestGroupOutsidePolicyRefused
+renew-forged | issuer.go | 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) { | 	if _ = sum; rec == nil { | TestRotationOnlyByRecoveryKey
+audit-unchained | audit.go | 		if e.Prev != head { | 		if false { | TestAuditLogChain
+# The enrolment answer's K_m (spec/proverif/a2a_keytransfer.pv):
+seal-to-request-key | machinekey.go | 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) || rec.token == "" || rec.token != tokenID { | 	if _, _ = rec, sum; false { | TestSealOnlyToCertifiedKey
+seal-other-key-id | machinekey.go | 	if err := machineKeyID(c, keyID); err != nil { | 	if err := error(nil); err != nil { | TestSealOnlyToCertifiedKey
+unsigned-key | machinekey.go | 	if ipub, ok := ic.PublicKey.(ed25519.PublicKey); !ok || !ed25519.Verify(ipub, machineKeyMessage(tokenID, cert, k), k.Sig) { | 	if false { | TestA2AKeyTransferModelBindings
+any-token | machinekey.go | 	return slices.Concat(machineKeyInfo(cert, k.KeyID), []byte("\x00"+tokenID+"\x00"), k.Sealed) | 	return slices.Concat(machineKeyInfo(cert, k.KeyID), []byte("\x00\x00"), k.Sealed) | TestA2AKeyTransferModelBindings
+# The move's answer's K_m (lane CERTGAPS; nfltr spec/proverif/a2a_keytransfer.pv Move):
+move-seal-any-request | machinekey.go | 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) || rec.key != orgid.KeyFingerprint(cr.PublicKey) || orgid.MachineID(c) != req.MachineID { | 	if _ = cr; rec == nil || rec.digest != hex.EncodeToString(sum[:]) { | TestSealMovedKeyOnlyForItsMove
+move-unsigned-key | machinekey.go | 	return "move." + hex.EncodeToString(sum[:]) | 	return "move." + hex.EncodeToString(sum[:0]) | TestMovedMachineOpensItsNewIDsKey
+hostcert-not-from-log | hostcert.go | 	case rec == nil || rec.digest != hex.EncodeToString(sum[:]): | 	case rec == nil && len(sum) > 0: | TestHostCertForAnotherNameRefused
+hostcert-revoked | hostcert.go | 	case i.names[rec.name].revoked: | 	case false: | TestHostCertRevokedOrExpiredRefused
+hostcert-any-signer | hostcert.go | 	if !checker.IsHostAuthority(c.SignatureKey, "") { | 	if false { | TestCheckHostCertRefusesOtherSignerOrKey
+hostcert-any-key | hostcert.go | 	case !slices.Equal(c.Key.Marshal(), pub.Marshal()): | 	case pub == nil: | TestCheckHostCertRefusesOtherSignerOrKey
+hostcert-extra-principal | hostcert.go | 	case !slices.Equal(c.ValidPrincipals, leaf.DNSNames): | 	case false: | TestCheckHostCertRefusesExtraPrincipal
+# Moving the issuer (spec/orgmove/OrgMove.tla): the fence's
+# refusal and the import's check (Arrive) (move.go, audit.go).
+serve-after-fence | move.go | 	if i.movedTo == "" || e.Act == ActArrived { | 	if true { | TestFencedIssuerRefusesEveryAct
+fence-names-no-recipient | move.go | 	if key != i.movedTo { | 	if false { | TestFencedIssuerRefusesEveryAct
+act-after-fence-verifies | audit.go | 		if (fence != "" || e.Act == ActArrived) && (e.Act != ActArrived || fence == "" || e.Key != fence) { | 		if false { | TestFencedIssuerRefusesEveryAct
+import-unfenced | move.go | 	if i.movedTo == "" { | 	if false { | TestMoveImportRefusesAnUnfencedCopy
+# The remote issuer renewal (renew.go; spec/proverif/orgmove.pv, its BIND:renew.* rows).
+renew-answer-unbound | renew.go | 	if pub, ok := issuerKey(c); !ok || !pub.Equal(i.key.Public()) { | 	if pub, ok := issuerKey(c); !ok || pub == nil { | TestIssuerRenewalModelBindings
+renew-answer-unbound | renew.go | 	if !i.heads[a.Head] { | 	if false { | TestIssuerRenewalModelBindings
+renew-unsigned-request | renew.go | 	case !ed25519.Verify(pub, renewalMessage(req), req.Sig): | 	case false: | TestIssuerRenewalModelBindings
+# Members refuse a CRL whose issuer certificate expired (orgid TakeCRL):
+# the issuer signs none then, and signs one at once after the renewal.
+sign-after-expiry | issuer.go | 	if !now.Before(i.cert.NotAfter) { | 	if false { | TestNoCRLPastTheIssuerCertificate
+crl-not-due-on-renewal | issuer.go | 		i.cert, i.crlDue = c, true | 		i.cert = c | TestNoCRLPastTheIssuerCertificate
+crl-not-due-on-revoke | issuer.go | 		i.crlDue = true | 		_ = 0 | TestNoCRLPastTheIssuerCertificate
+issuer-crl-drops-prev | issuercrl.go | 			entries = append(entries, x509.RevocationListEntry{SerialNumber: e.SerialNumber, RevocationTime: e.RevocationTime}) | 			_ = e | TestSignIssuerCRL
+issuer-crl-any-cert | issuercrl.go | 		if !c.IsCA || c.CheckSignatureFrom(root) != nil { | 		if false { | TestSignIssuerCRL
+renew-revoked-issuer | issuercrl.go | 		if e.SerialNumber.Cmp(c.SerialNumber) == 0 { | 		if e.SerialNumber == nil { | TestSignIssuerCRL
+# An app's device for a person (spec/appenrol/AppEnrol.tla, nfltr
+# docs/decisions/app-device-identity-2026-11-16.md).
+renew-takes-attrs | issuer.go | 	der, err := i.issue(ActRenewed, rec.name, n.groups, n.machineID, n.dev, cr.PublicKey, "", sn, now) | 	der, err := i.issue(ActRenewed, rec.name, n.groups, n.machineID, Device{}, cr.PublicKey, "", sn, now) | TestDeviceTokenNamesPersonAndApp
+revoke-user-one-name | issuer.go | 				if n.dev.of(e.Person, e.App) { | 				if n.dev.of(e.Person, e.App) && n.revoked { | TestRevokePersonRevokesEveryName
+sso-skips-deny | issuer.go | 	if i.deniedDev(t.dev) { // AppEnrol.tla RevokedUserCut: a code made before the revoke | 	if false { | TestRevokePersonRevokesEveryName
+revoke-app-sso-only | people.go | 	return d.Person != "" && i.denied[denyKey(d.Person, "")] || d.App != "" && i.denied[denyKey("", d.App)] | 	return d.Person != "" && i.denied[denyKey(d.Person, "")] | TestRevokeAppRevokesEveryName
+uri-unconstrained | profile.go | 		PermittedURIDomains: []string{orgid.Domain(orgID)}, | 		PermittedURIDomains: nil, | TestIssuerConstrainsURIs
+# The sign-in path (signin.go; AppEnrol.tla EnrolSSO, Renew, Reauth;
+# app_enrol.pv IssuerSSO, its BIND:app.* rows).
+signin-no-nonce-check | signin.go | 	if err := appenrol.CheckNonce(si.nonce, kr, pub); err != nil { | 	if err := error(nil); err != nil { | TestAppEnrolSignInModelBindings
+no-aud-check | signin.go | 	case client == "" || c.AZP != "" && !slices.Contains(rule.ClientIDs, c.AZP): | 	case false: | TestAppEnrolSignInModelBindings
+no-token-exp | signin.go | 	t, err := p.VerifierContext(ctx, &oidc.Config{SkipClientIDCheck: true, Now: func() time.Time { return now }}).Verify(ctx, raw) | 	t, err := p.VerifierContext(ctx, &oidc.Config{SkipClientIDCheck: true, SkipExpiryCheck: true, Now: func() time.Time { return now }}).Verify(ctx, raw) | TestAppEnrolSignInModelBindings
+email-unverified | signin.go | 	case !c.Verified: | 	case false: | TestAppEnrolSignInModelBindings
+signin-skips-deny | signin.go | 	if i.deniedDev(dev) { // AppEnrol.tla EnrolSSO, Reauth: the deny lists | 	if false { | TestSignInOnlyForItsPersonNotRevoked
+reauth-any-user | signin.go | 		case n.dev != dev: // AppEnrol.tla Reauth (mutant reauth-any-user) | 		case false: | TestSignInOnlyForItsPersonNotRevoked
+signin-takes-code-key | signin.go | 		case n.authUntil.IsZero(): | 		case false: | TestSignInOnlyForItsPersonNotRevoked
+renew-ignores-auth | issuer.go | 	if !n.authUntil.IsZero() && now.After(n.authUntil) { // AppEnrol.tla Renew (mutant renew-ignores-auth) | 	if false { | TestSignInRenewalEndsWithAuthLife
+# A rebind (spec/enrol/Enrol.tla Rebind; nfltr docs/decisions/org-rebind-2026-11-17.md):
+rebind-keeps-serials | issuer.go | 		sns := n.serials[:n.retired] // Enrol.tla Rebind (mutant rebind-keeps-serials) | 		sns := n.serials[:0] | TestRebindRetiresTheOldID
+renew-rebound | issuer.go | 	if n.isRetired(sn) { // Enrol.tla NoRenewOfRetired (mutant renew-rebound): the old machine id's disk | 	if false { | TestRebindRetiresTheOldID
+rebind-keeps-id | issuer.go | 			n.retired, n.machineID, i.crlDue = len(n.serials), e.MachineID, true | 			n.retired, i.crlDue = len(n.serials), true | TestRebindRetiresTheOldID
+rebind-reusable | issuer.go | 	if redeemed { | 	if _ = redeemed; false { | TestRebindTokenRules
+# A reissue (Enrol.tla Rebind same, ReissueRetiresOnlyExpired; nfltr
+# docs/decisions/org-reissue-2026-11-22.md): no-reissue is the code before
+# (the own machine id always refused: the canary machines of 2026-11-22
+# stuck); reissue-while-valid, at the token's making or its redemption.
+no-reissue | issuer.go | 	case n.machineID == machineID && !i.validUntil(n, now).IsZero(): | 	case n.machineID == machineID: | TestReissueTheCanaryState
+reissue-while-valid | issuer.go | 	case n.machineID == machineID && !i.validUntil(n, now).IsZero(): | 	case false: | TestReissueTheCanaryState
+reissue-while-valid-redeemed | issuer.go | 	if until := i.validUntil(n, now); same && !until.IsZero() { // Enrol.tla ReissueRetiresOnlyExpired (mutant reissue-while-valid) | 	if until := i.validUntil(n, now); false && same && !until.IsZero() { | TestReissueRefusedOnceTheNameRenewed
+# A move (spec/enrol/Enrol.tla Move, enrol.pv query 20; lane SEAMLESS): the
+# new relay machine id beside the signed renewal (the relay's to change);
+# the move policy not asked (another account's machine takes the name).
+move-id-unsigned | issuer.go | 		msg = moveMessage(req.CSR, req.MachineID) | 		msg = renewMessage(req.CSR) | TestMoveModelBindings
+move-id-unsigned | issuer.go | 	return RenewRequest{Cert: cert, CSR: csr, MachineID: machineID, Sig: ed25519.Sign(current, moveMessage(csr, machineID))} | 	return RenewRequest{Cert: cert, CSR: csr, MachineID: machineID, Sig: ed25519.Sign(current, renewMessage(csr))} | TestMoveModelBindings
+move-any-account | issuer.go | 	if err := i.move(name, id); err != nil { | 	if err := i.move(name, id); false && err != nil { | TestMoveRefusedOutsideThePolicy
+# OrgMove.tla Revive (spec/orgmove/restore-mutants.txt): a restore from a
+# backup takes the newest published CRL (restore.go).
+number-not-above-published | restore.go | 	i.crlNumber = max(i.crlNumber, e.Number) | 	i.crlNumber = i.crlNumber | TestRestoreResumesAboveThePublishedCRL
+merge-skipped | issuer.go | 	for _, sn := range append(i.carriedSerials(seen, now), grantSNs...) { // OrgMove.tla Revive (mutant merge-skipped) | 	for _, sn := range grantSNs { | TestRestoreKeepsThePublishedRevocations
+merge-skipped | issuer.go | 	if until, ok := i.carried[sn]; ok && now.Before(until) { // OrgMove.tla Revive: revoked in the CRL a restore took | 	if until, ok := i.carried[sn]; false && ok && now.Before(until) { | TestRestoreKeepsThePublishedRevocations
+revive-keeps-tokens | issuer.go | 	if t.void { // OrgMove.tla Revive (mutant revive-keeps-tokens): the lost issuer may have redeemed it | 	if false { | TestRestoreVoidsTheCopysTokens
+restore-not-lapsed | restore.go | 	if now.Sub(crl.ThisUpdate) < RestoreQuiet { | 	if false { | TestRestoreRefusals
+restore-any-issuer | restore.go | 	if err := crl.CheckSignatureFrom(i.cert); err != nil { | 	if err := error(nil); err != nil { | TestRestoreRefusals
+adopt-any-signer | restore.go | 	if i.restoredAt.IsZero() || !cur.NotBefore.Before(i.restoredAt) || cur.CheckSignatureFrom(i.cert) != nil { | 	if i.restoredAt.IsZero() || !cur.NotBefore.Before(i.restoredAt) { | TestRestoreAdoptsNothingElse
+adopt-unknown-name | restore.go | 	if n == nil || n.revoked || i.deniedDev(n.dev) || orgid.MachineID(cur) != n.machineID { | 	if n == nil { | TestRestoreAdoptsNothingElse
+restore-older-than-copy | restore.go | 	if crl.Number.Int64() < i.crlNumber { | 	if false { | TestRestoreRefusals
+adopt-without-restore | restore.go | 	if i.restoredAt.IsZero() || !cur.NotBefore.Before(i.restoredAt) || cur.CheckSignatureFrom(i.cert) != nil { | 	if cur.CheckSignatureFrom(i.cert) != nil { | TestRestoreRefusals
+# Join.tla Issue (lane LOGINREDS): the join's stated relay machine id.
+# bind-none is the code before (a login bundle's certificate named no id);
+# bind-unmacd binds an id the token's MAC does not cover; bind-any-account
+# binds one the move policy refuses.
+bind-none | issuer.go | 	if t.machineID != "" || stated == "" || i.move == nil || validMachineID(stated) != nil { | 	if true { | TestEnrolBindsTheStatedMachineID
+bind-unmacd | issuer.go | 		if !hmac.Equal(req.MachineMAC, enrolIDMAC(i.tokenSecret(req.TokenID), req.MachineID, req.CSR)) { | 		if false { | TestEnrolIDModelBindings
+bind-any-account | issuer.go | 	if err := i.move(t.name, stated); err != nil { | 	if err := i.move(t.name, stated); false && err != nil { | TestEnrolBindsTheStatedMachineID
+# The people layer (people.go; spec/people/People.tla, spec/proverif/people.pv):
+# a model mutant each, or the check that holds the same rule. Not here:
+# role-unlogged and offboard-unlogged (an act takes effect only by its log
+# line: commit applies what it wrote), no-fail-closed (the verifier's:
+# client/orgid fail-open), no-deny (a removed person's names are revoked:
+# Renew's revoked check, sso-skips-deny).
+idp-alone-enrols | signin.go | 		if inv, why = i.checkInvite(req, dev.Person, now); why != "" { | 		if inv, why = i.checkInvite(req, dev.Person, now); false { | TestInviteJoinsAPerson
+invite-unproved | people.go | 	case len(req.Invite.Key) != ed25519.PublicKeySize || !ed25519.Verify(req.Invite.Key, joinMessage(i.orgID, req.CSR, req.RelayKey), req.Invite.Sig): | 	case false: | TestPeopleModelBindings
+invite-any-person | people.go | 	case inv.person != person: | 	case false: | TestPeopleModelBindings
+invite-no-expiry | people.go | 	case !now.Before(inv.expires): | 	case false: | TestInviteJoinsAPerson
+invite-reused | people.go | 	case inv.used: | 	case false: | TestInviteJoinsAPerson
+invite-reused | people.go | 	case i.roster.people[person] != nil: | 	case false: | TestInviteJoinsAPerson
+role-from-request | signin.go | 			e.Invite, e.Role = inviteID(req.Invite.Key), inv.role | 			e.Invite, e.Role = inviteID(req.Invite.Key), RoleAdmin | TestPeopleModelBindings
+admin-invites-admin | people.go | 		actorRole == RoleAdmin && (act == PeopleInvite || act == PeopleRemove) && subjectRole == RoleMember | 		actorRole == RoleAdmin && (act == PeopleInvite || act == PeopleRemove) && (subjectRole == RoleMember || act == PeopleInvite) | TestRolesDecideWhoActs
+admin-offboards-admin | people.go | 		actorRole == RoleAdmin && (act == PeopleInvite || act == PeopleRemove) && subjectRole == RoleMember | 		actorRole == RoleAdmin && (act == PeopleInvite || act == PeopleRemove) && (subjectRole == RoleMember || act == PeopleRemove) | TestRolesDecideWhoActs
+admin-changes-role | people.go | 	return actorRole == RoleOwner || | 	return actorRole == RoleOwner || actorRole == RoleAdmin && act == PeopleRole || | TestRolesDecideWhoActs
+reinvite-demotes | people.go | 	case i.roster.people[person] != nil || i.deniedDev(Device{Person: person}): | 	case false: | TestRolesDecideWhoActs
+no-role-check | people.go | 	return n.dev.Person, p.role, "" | 	return n.dev.Person, RoleAdmin, "" | TestPeopleModelBindings
+admin-sig-unchecked | people.go | 	case !verifyRenewSig(c.PublicKey, msg, r.Sig): | 	case false: | TestPeopleModelBindings
+admin-cert-unchecked | people.go | 	if rec == nil || rec.digest != hex.EncodeToString(sum[:]) { | 	if rec == nil || len(sum) == 0 { | TestPeopleModelBindings
+admin-after-offboard | people.go | 	if p == nil || p.removed { // people.pv admin-after-offboard | 	if p == nil { | TestPeopleModelBindings
+admin-after-offboard | people.go | 	case !now.Before(rec.notAfter) || n.revoked || n.isRetired(sn): | 	case !now.Before(rec.notAfter) || n.isRetired(sn): | TestPeopleModelBindings
+offboard-misses-machine | people.go | 		if n.dev.Person == person && !n.revoked { | 		if n.dev.Person == person && !n.revoked && n.machineID == "" { | TestRemovalFilesEveryMachine
+relay-not-filed | people.go | 			e.Filed = append(e.Filed, Filed{Name: name, MachineID: n.machineID}) | 			e.Filed = append(e.Filed, Filed{Name: name}) | TestRemovalFilesEveryMachine
+code-outlives-offboard | issuer.go | 	if i.deniedDev(t.dev) { // AppEnrol.tla RevokedUserCut: a code made before the revoke | 	if false { | TestRemovalFilesEveryMachine
+# The root's access policy (policy.go; lane SA3, relay-server
+# spec/GroupMirror.tla RuleApply, RuleOnlyAsked): a replay or an older one
+# refused, the status carrying the one taken.
+policy-replay | policy.go | 	if p.Number <= i.policyNum { | 	if false { | TestIssuerCarriesTheRootsPolicy
+policy-not-carried | status.go | 		CRL: StatusCRL{Number: i.crlNumber, NextUpdate: i.crlNext}, Members: []StatusMember{}, Tokens: []StatusToken{}, Renewal: &req, Policy: i.policy} | 		CRL: StatusCRL{Number: i.crlNumber, NextUpdate: i.crlNext}, Members: []StatusMember{}, Tokens: []StatusToken{}, Renewal: &req} | TestIssuerCarriesTheRootsPolicy
+# Grants (lane SA4; spec/grant/Grant.tla, whose mutant each is named
+# after when it has one, and spec/proverif/svc_access.pv's BIND:svc.grant*
+# and svc.apprall): the issuer's (grant.go, issuer.go) and the serving
+# agent's check (client/orgid grant.go, verify.go), whose tests are here.
+grant-any-signer | ../../client/orgid/grant.go | 	chains, err := v.verify(g, issuer, "", now) // BIND:svc.grantsig | 	chains, err := [][]*x509.Certificate{{g, issuer, v.root}}, error(nil) | TestSvcAccessModelBindingsGrants
+grant-any-holder | ../../client/orgid/grant.go | 	case !bytes.Equal(g.RawSubjectPublicKeyInfo, leaf.RawSubjectPublicKeyInfo), gr.Who != PrincipalOf(client): // BIND:svc.grantwho | 	case false: | TestSvcAccessModelBindingsGrants
+grant-any-service | ../../client/orgid/grant.go | 	case !slices.Contains(services, gr.Service) || !matches(gr.Where, self): // BIND:svc.grantsvc | 	case false: | TestSvcAccessModelBindingsGrants
+grant-no-expiry-check | ../../client/orgid/grant.go | 	case !now.Before(g.NotAfter): // Grant.tla Open: now < until (crypto/x509 admits at NotAfter itself) | 	case false: | TestGrantRequestApproveAdmit
+grant-no-rev-check | ../../client/orgid/grant.go | 	case crl.revoked[g.SerialNumber.String()]: | 	case false: | TestGrantRevokedAndRemoved
+grant-stale-list-admits | ../../client/orgid/grant.go | 	case !now.Before(crl.next): | 	case false: | TestGrantStaleListRefused
+grant-until-uncapped | ../../client/orgid/grant.go | 	for _, t := range []time.Time{client.Until, chains[0][0].NotAfter, chains[0][1].NotAfter, chains[0][len(chains[0])-1].NotAfter} { | 	for _, t := range []time.Time{client.Until} { | TestGrantRequestApproveAdmit
+grant-as-machine | ../../client/orgid/verify.go | 	if isGrant(leaf) { // a grant (grant.go) is never a machine's certificate | 	if false { | TestGrantRequestApproveAdmit
+issuer-no-replay-set | grant.go | 	case req.answered != "": // Grant.tla Sign: ap.id \notin used (issuer-no-replay-set, issuer-signs-denied) | 	case false: | TestGrantRefusals
+issuer-any-approver | grant.go | 	case !(owner && a.Act == GrantDeny) && !pol.Approves(person, req.Where, req.Service): // BIND:svc.apprpol (Grant.tla issuer-any-approver) | 	case false: | TestGrantRefusals
+self-approve | grant.go | 	case !owner && req.Who == orgid.KindPerson+":"+person: // Grant.tla self-approve | 	case false: | TestGrantRefusals
+approval-any-body | grant.go | 	case a.Digest != req.Digest: // BIND:svc.apprall | 	case false: | TestSvcAccessModelBindingsGrants
+dur-from-request | grant.go | 	until := now.Add(time.Duration(req.ForS) * time.Second) // Grant.tla dur-from-request: the request's, never the act's | 	until := now.Add(MaxGrantFor) | TestGrantRequestApproveAdmit
+revoke-not-listed | issuer.go | 	grantSNs := i.grantSerials(now)                                       // Grant.tla Publish: every revoked grant until it ends (RevokeBound) | 	grantSNs := []string(nil) | TestGrantRevokedAndRemoved
+removal-keeps-grants | issuer.go | 			i.grants.revokeOf(orgid.KindPerson + ":" + e.Person) // a removed person's grants (lead decision 2026-11-26) | 			_ = 0 | TestGrantRevokedAndRemoved
+revoke-by-anyone | grant.go | 	case !owner && !pol.Approves(person, g.Where, g.Service) && g.Who != orgid.KindPerson+":"+person: | 	case pol.Number < 0: | TestGrantRevokedAndRemoved
+host-check-any-life | hostcert.go | 	case c.ValidBefore-c.ValidAfter > uint64((issueBackdate+HostLife)/time.Second): | 	case false: | TestHostCertLifeIsItsOwn
+host-no-backdate | hostcert.go | 	until := leaf.NotBefore.Add(issueBackdate + HostLife) // mutant host-life-equal | 	until := leaf.NotBefore.Add(HostLife) | TestStepAHostCertPassesTheOldCheck

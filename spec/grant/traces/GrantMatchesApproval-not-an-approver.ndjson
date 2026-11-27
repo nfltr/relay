@@ -1,0 +1,2 @@
+{"ev": "req", "o": "o-x", "id": "r1", "who": "person:bob@a.com", "where": "machine:crm", "svc": "web", "d": 3600, "t": 1000}
+{"ev": "sign", "o": "o-x", "id": "r1", "sn": "aa", "who": "person:bob@a.com", "where": "machine:crm", "svc": "web", "by": "alice@a.com", "ap": ["carol@a.com"], "until": 4600, "t": 1000}

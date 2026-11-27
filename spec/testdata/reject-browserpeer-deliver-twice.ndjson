@@ -1,0 +1,8 @@
+{"ev":"Serve","maxdc":1}
+{"ev":"CtlOpen"}
+{"ev":"CtlAdmit"}
+{"ev":"Offer"}
+{"ev":"PCUp"}
+{"ev":"OpenDC","s":1}
+{"ev":"Deliver","s":1}
+{"ev":"Deliver","s":1}

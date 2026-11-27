@@ -1,0 +1,9 @@
+# Planted bugs of an nf1 session's path layer over per-epoch channels
+# (scripts/go-mutants.sh client/agent/testdata/direct_once_mutants.txt,
+# make test-go-mutants; spec/proverif/direct_once.pv, nfltr
+# docs/decisions/direct-once-2026-11-22.md): one per BIND:once.* row of
+# direct_once_bindings_test.go, each the code's form of a model mutant.
+reattach-any-channel | direct_nf1.go | 	m := tokenMatch(o, x) | 	m := func(*directSession) bool { return true } | TestDirectOnceModelBindings
+frames-outside-channel | direct_client.go | 	return d.start(tc, raw, raw) | 	return d.start(raw, raw, raw) | TestDirectOnceModelBindings
+reattach-no-pin-check | direct_nf1.go | 		VerifyConnection:   addr.VerifyConnection, | 		VerifyConnection:   func(tls.ConnectionState) error { return nil }, | TestDirectOnceModelBindings
+agent-plain-relayed | direct_nf1.go | 		d.reattachNF1(l, s) // s: the mark consumed | 		d.reattach(pathStream{Conn: s}) | TestDirectOnceModelBindings

@@ -1,0 +1,204 @@
+# Copyright 2026 nfltr
+# SPDX-License-Identifier: Apache-2.0
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+    tags: ['client/v*', 'proto/v*', 'org/v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The long parts as jobs of their own, longest first: make ci
+  # (scripts/ci.sh) starts the jobs in this order, at most one per CPU at
+  # once, in one checkout; each job's steps run in order. The TLA+ and
+  # ProVerif models are jobs side by side (lanes CIFAST, SPECFAST).
+  # the ProVerif models (spec/proverif), a job of their own (lane SPECFAST)
+  spec-proverif:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      # ProVerif is built from source once (scripts/fetch-proverif.sh).
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/relay-proverif
+          key: proverif-${{ runner.os }}-${{ hashFiles('scripts/fetch-proverif.sh') }}
+      - run: make spec-proverif
+  # the organisation certificates' model (spec/enrol)
+  spec-enrol:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      - run: make spec-enrol-ci
+  go-mutants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      - run: make test-go-mutants
+  # the organisation's move to another machine (spec/orgmove)
+  spec-orgmove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      - run: make spec-orgmove-ci
+  # make test is not run: test-race runs the same tests with -race.
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      - run: make test-race
+      - run: make test-linkdebug
+  # an app's enrolment, people, grants (spec/appenrol, spec/people,
+  # spec/grant)
+  # and a machine's key and certificate replaced as one pair (spec/pair)
+  spec-org:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      - run: make spec-appenrol-ci spec-people-ci spec-grant-ci
+      - run: make spec-pair-ci
+  # the TLA+ models of spec/ (scripts/spec.sh): their mutants and
+  # witnesses, and beside them their configurations and traces
+  spec-mutants:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      - run: make spec-mutants
+  spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      - run: make spec spec-cltraces spec-astraces spec-dgtraces spec-ptraces spec-stoptraces spec-tetraces spec-bptraces
+  # The cheap checks (each under a minute).
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # check-api compares against each module's latest release tag
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      # every Go mutant list names lines that are still there (seconds):
+      # a stale one fails here, not after the go-mutants job
+      - run: make check-go-mutants
+      - run: make check-no-legacy-name
+      - run: make test-identity
+      - run: make build
+      - run: make vet
+      - run: make check-fmt
+      - run: make check-testknobs
+      - run: make check-linkvet
+      # the nf1 handshake as js/wasm: reproducible, under its size budget, runs under node
+      - run: make wasm-nf1
+      # the nf1 browser extension: reproducible (two builds, equal SHA256SUMS), nf1.wasm under budget
+      - run: make browser-bundle
+      # gosec over first-party code, gated by scripts/gosec-baseline.txt (as in
+      # relay-server: findings landed unnoticed while it was not here).
+      - run: make check-gosec
+      # semgrep (docker, pinned image and rules), gated by
+      # scripts/semgrep-baseline.txt: a finding landed unnoticed while it was not here.
+      - run: make check-semgrep
+      # the models' bindings against the code (spec/proverif/README.md "Bindings")
+      - run: make spec-bindings
+      - run: make check-spec-drift
+      - run: make check-grepq
+      # each module's API changes since its latest tag are the ones api/ lists
+      - run: make check-api
+      - run: make check-spec-actions
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.work
+          cache-dependency-path: |
+            proto/go.sum
+            client/go.sum
+            org/go.sum
+      - run: make fuzz-short

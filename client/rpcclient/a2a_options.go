@@ -1,0 +1,243 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+package rpcclient
+
+import (
+	"crypto/tls"
+	"time"
+
+	"github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/agentwire"
+	"google.golang.org/grpc/keepalive"
+)
+
+// DialOption configures an Agent during Dial.
+type DialOption func(*dialOptions)
+
+// AgentOption configures an Agent created around an existing AgentTunnel.
+// These options are applied before receive processing starts.
+type AgentOption func(*agentOptions)
+
+type agentOptions struct {
+	ref         string // the agent ref (Agent.Ref); "" is the agent id
+	noHeartbeat bool
+}
+
+type dialOptions struct {
+	agentID           string
+	token             string                      // a token a provider of the relay authenticates (x-nfltr-token)
+	a2aE2EE           bool                        // transparently encrypt A2A payloads end to end
+	a2aPairingKeyFile string                      // with a2aE2EE: authenticate handshakes with this pairing key
+	a2aKeyring        A2AE2EEKeyring              // with a2aE2EE: authenticate handshakes with these keys
+	a2aReplayDir      string                      // with a2aE2EE: the callee's replay record (sessions)
+	labels            map[string]string           // optional fleet labels for this agent
+	capabilities      []string                    // optional: advertised capabilities (e.g. "p2p", "ssh", "http")
+	tlsEnable         bool                        // enable TLS for the gRPC connection
+	clientCert        string                      // client cert file for mTLS
+	clientKey         string                      // client key file for mTLS
+	caFile            string                      // CA file for mTLS server verification
+	clientTLS         *tls.Config                 // TLS with the caller's client certificate (WithClientTLS)
+	heartbeatInterval time.Duration               // optional: heartbeat send interval (0 = use default agentHeartbeatInterval)
+	keepalive         *keepalive.ClientParameters // optional: gRPC transport keepalive for long-idle connections
+	liveness          agentwire.Liveness          // optional: zero = agentwire.LivenessDefault
+}
+
+// WithAgentID sets the agent's AgentID for authentication.
+func WithAgentID(agentID string) DialOption {
+	return func(o *dialOptions) { o.agentID = agentID }
+}
+
+// WithToken provides a token a provider of the relay authenticates (an
+// OIDC token, a custom provider's); a machine uses WithClientCert.
+// This is the preferred auth method. The server derives the agent's AgentID
+// from its key store so the agent identity cannot be forged.
+// When set, the token is sent as "x-nfltr-token" gRPC metadata. WithAgentID is
+// still required for client-side logging/routing but the server-side
+// identity comes from the key store.
+func WithToken(key string) DialOption {
+	return func(o *dialOptions) { o.token = key }
+}
+
+// WithA2AE2EE transparently encrypts A2A request and response payloads end
+// to end (wire v2: Noise NNpsk0 under a key of WithA2AE2EEKeyring or
+// WithA2AE2EEPairingKeyFile, then AES-256-GCM with counter nonces). It is
+// keyed only: Dial refuses it without a key (ErrA2AE2EENoKey).
+//
+// An agent with E2EE on refuses every plaintext request, the relay's own
+// too (FailedPrecondition), so a relay cannot downgrade a stream or inject
+// one of its own. Streams to the relay's own agent (RelayAgentID) are sent
+// plaintext: they end at the relay.
+func WithA2AE2EE() DialOption {
+	return func(o *dialOptions) { o.a2aE2EE = true }
+}
+
+// WithA2AE2EEPairingKeyFile authenticates every E2EE handshake with a
+// pairing key: a file of at least 32 bytes of random secret that only the
+// user's machines hold (e.g. `openssl rand -hex 32`). Each end proves it
+// holds the key with an HMAC over the transaction and both ephemeral public
+// keys, and the key is mixed into the session key, so a relay that swaps
+// keys (man in the middle) is refused. Both ends need the same file; Dial
+// fails if it cannot be read or E2EE is off. It proves "one of your
+// machines", not which one. An empty path sets nothing.
+func WithA2AE2EEPairingKeyFile(path string) DialOption {
+	return func(o *dialOptions) { o.a2aPairingKeyFile = path }
+}
+
+// WithA2AE2EEKeyring authenticates every E2EE handshake with kr's keys
+// (A2AE2EEKeyring): a root holder answers machines by their key ids and a
+// machine proves its own; a key kr no longer holds (Valid) ends the calls
+// under it at their next frame. Exclusive with WithA2AE2EEPairingKeyFile;
+// Dial fails when E2EE is off.
+func WithA2AE2EEKeyring(kr A2AE2EEKeyring) DialOption {
+	return func(o *dialOptions) { o.a2aKeyring = kr }
+}
+
+// WithA2AE2EEReplayDir keeps this agent's A2A E2EE replay record in dir
+// (made 0700 if missing): as callee it writes each call number it takes on
+// a session there, synced, before the call starts, so a call a relay
+// replays or retries after a restart of this agent is refused, not run
+// again (nfltr docs/decisions/a2a-at-most-once-restart-2026-11-09.md). Without it
+// the agent offers no sessions as callee: every call to it handshakes. The
+// directory must survive the agent's restart (not a temporary one); the
+// agent's processes may share it. Dial fails when dir cannot be made or
+// E2EE is off. An empty dir sets nothing.
+func WithA2AE2EEReplayDir(dir string) DialOption {
+	return func(o *dialOptions) { o.a2aReplayDir = dir }
+}
+
+// CheckA2AE2EEPairingKeyFile reports why a pairing key file would fail Dial,
+// for callers that must refuse to start rather than retry a Dial that cannot
+// succeed.
+func CheckA2AE2EEPairingKeyFile(path string) error {
+	_, err := LoadA2AE2EEPairingKey(path)
+	return err
+}
+
+// WithoutHeartbeat makes an Agent created with NewAgent send no idle
+// heartbeats: it starts no heartbeat timer or goroutine at all. It is for
+// in-process tunnels whose peer never times the agent out (the relay's own
+// agent); over a network the relay ends an agent that stays silent.
+func WithoutHeartbeat() AgentOption {
+	return func(o *agentOptions) { o.noHeartbeat = true }
+}
+
+// WithTLS enables TLS for the gRPC connection to the relay.
+func WithTLS(enable bool) DialOption {
+	return func(o *dialOptions) { o.tlsEnable = enable }
+}
+
+// WithClientCert configures mTLS client authentication. When set, the agent
+// presents a client certificate to the server during the TLS handshake; a
+// relay running the mTLS identity provider (security.mtls) maps it to the
+// agent's owner and id by its configured rules, so no token is needed.
+//
+// - certFile: path to PEM-encoded client certificate
+// - keyFile:  path to PEM-encoded client private key
+// - caFile:   path to PEM-encoded CA bundle to verify the server (empty = system pool)
+func WithClientCert(certFile, keyFile, caFile string) DialOption {
+	return func(o *dialOptions) {
+		o.clientCert = certFile
+		o.clientKey = keyFile
+		o.caFile = caFile
+		o.tlsEnable = true // mTLS implies TLS
+	}
+}
+
+// WithClientTLS dials over TLS with cfg, which presents the agent's client
+// certificate (a machine certificate the caller renews: GetClientCertificate
+// is asked at each handshake) and verifies the relay. The certificate
+// authenticates the agent; with WithToken as well the relay takes the key.
+func WithClientTLS(cfg *tls.Config) DialOption {
+	return func(o *dialOptions) {
+		o.clientTLS = cfg
+		o.tlsEnable = true
+	}
+}
+
+// WithLabels attaches fleet labels to this agent. Labels are sent as the
+// "x-agent-labels" gRPC header as a JSON object (values may hold , and =) and stored
+// server-side for fleet selector matching. They stay for the lifetime of
+// the connection; an UpdateLabels request to RelayAgentID advertises more
+// on top of them without reconnecting (ExampleAgent_updateLabels).
+//
+// Example:
+//
+//	rpcclient.Dial(ctx, addr,
+//	    rpcclient.WithAgentID("sensor-42"),
+//	    rpcclient.WithLabels(map[string]string{
+//	        "fleet": "hvac",
+//	        "zone":  "building-a",
+//	    }),
+//	)
+func WithLabels(labels map[string]string) DialOption {
+	return func(o *dialOptions) { o.labels = labels }
+}
+
+// WithHeartbeatInterval sets the per-agent heartbeat send interval.
+// If not provided, 15 s (synchronized with server config).
+func WithHeartbeatInterval(interval time.Duration) DialOption {
+	return func(o *dialOptions) { o.heartbeatInterval = interval }
+}
+
+// KeepaliveParams is an alias for grpc's keepalive.ClientParameters. It lets
+// callers declare keepalive-typed values (e.g. function return types) without
+// importing google.golang.org/grpc/keepalive directly; being a type alias
+// (not a defined type), it is fully interchangeable with keepalive.ClientParameters.
+type KeepaliveParams = keepalive.ClientParameters
+
+// DefaultKeepaliveParams returns the recommended gRPC keepalive parameters for
+// all A2A connections (workers, orchestrators, cluster dials). The 60-second
+// ping interval keeps connections alive through typical NAT idle timeouts while
+// staying clear of the relay's 30-second enforcement MinTime (nfltr's
+// deploy/relay-settings.yaml: grpc.keepalive.enforcement_policy.min_time). The
+// 20-second ACK timeout tolerates transient network delays without
+// false-positive disconnections.
+func DefaultKeepaliveParams() keepalive.ClientParameters {
+	return keepalive.ClientParameters{
+		Time:                60 * time.Second,
+		Timeout:             20 * time.Second,
+		PermitWithoutStream: true,
+	}
+}
+
+// WithLiveness sets how the agent notices a relay gone without a FIN: the
+// heartbeat interval it asks of the relay and how long past the relay's
+// stated interval it waits for a frame (agentwire.Liveness.DeadAfter).
+// Default agentwire.LivenessDefault. A relay that states no interval leaves
+// liveness to the gRPC keepalive.
+func WithLiveness(l agentwire.Liveness) DialOption {
+	return func(o *dialOptions) { o.liveness = l }
+}
+
+// WithKeepalive enables gRPC transport-level keepalive on the underlying
+// connection. This is recommended for nfltr worker connections to prevent
+// TCP idle timeout when the worker is idle between task assignments.
+func WithKeepalive(params keepalive.ClientParameters) DialOption {
+	return func(o *dialOptions) { o.keepalive = &params }
+}
+
+// WithCapabilities advertises the agent's capabilities to the server.
+// Capabilities describe what the agent can serve (e.g. "p2p", "ssh",
+// "http", "a2a"). They are sent as the "x-agent-capabilities" gRPC header
+// and displayed in peer listings.
+func WithCapabilities(caps ...string) DialOption {
+	return func(o *dialOptions) { o.capabilities = caps }
+}
+
+// CallOption configures a single outgoing call.
+type CallOption func(*callOptions)
+
+type callOptions struct {
+	messageType string
+}
+
+type outboundFrame struct {
+	frame  *pb.TunnelFrame
+	result chan error
+}
+
+// WithMessageType overrides the message type (default "a2a-request").
+func WithMessageType(mt string) CallOption {
+	return func(o *callOptions) { o.messageType = mt }
+}

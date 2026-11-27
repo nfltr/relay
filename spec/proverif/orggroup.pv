@@ -1,0 +1,133 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   orggroup.pv: one set of groups (nfltr docs/decisions/one-group-2026-11-25.md,
+   lane ONEGROUP; the state machine, freshness and the relay's mirror are
+   relay-server spec/GroupMirror.tla). spec/proverif/README.md.
+
+   With an organisation, a machine's groups come from the issuer only: the
+   token the owner made (`nfltr org token --groups`) or a move the owner
+   ordered (`nfltr machines move` on the root's machine, or the dashboard's
+   wish approved there with Touch ID: the root signs the order). The issuer
+   reissues the member certificate with the new groups (its OU) and signs a
+   status listing (name, groups). The relay mirrors that status for its
+   reach and the peers check the certificate. The attacker owns the relay,
+   the dashboard and the network, holds machines of the account (it puts
+   statuses of its own making under an issuer certificate of its own) and
+   offers any group in its routing; the root's and the issuer's machines are
+   honest, and the relay's mirror code (it pins the account's organisation
+   root) runs as written for its own operator.
+
+   Bindings (make spec-bindings; rows to add with the code lane, ONEGROUP-C1,
+   each changing that field of the honest message and requiring a refusal):
+     BIND:group.movesig  the issuer applies only a move the root signed (checksign(o, pk(kroot)))
+     BIND:group.ou       the peer takes the groups from the member certificate the issuer signed, no other field
+     BIND:group.pin      the relay's mirror takes a status only under an issuer certificate chained to the account's pinned root *)
+
+free c: channel.
+
+type skey.
+fun pk(skey): bitstring.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, s: skey; checksign(sign(m, s), pk(s)) = m.
+const lIssuer, lStatus, lMember, lMove: bitstring.
+
+free kroot: skey [private].
+free kiss: skey [private].
+
+table tokens(bitstring, bitstring).        (* the owner's tokens: name, groups *)
+table members(bitstring, bitstring).       (* the issuer's enrolments: name, serial *)
+table intents(bitstring, bitstring, bitstring). (* the owner asked to move (name, serial) into groups *)
+
+event TokenMade(bitstring, bitstring).     (* the owner made a token for (name, groups) *)
+event AskedGroup(bitstring, bitstring).    (* the owner asked that name be in groups *)
+event Placed(bitstring, bitstring).        (* the issuer certified name in groups and listed it *)
+event Moved(bitstring, bitstring).         (* ... by an order *)
+event Mirrored(bitstring, bitstring).      (* the relay's reach took name in groups *)
+event Admitted(bitstring, bitstring).      (* a peer admitted name for groups *)
+
+(* The issuer's certificate and its signed listing of one placement. *)
+letfun place(n: bitstring, s: bitstring, g: bitstring, k: bitstring) =
+  (sign((lMember, n, s, g, k), kiss), sign((lStatus, n, g), kiss)).
+
+(* The owner makes a token on the issuer's machine. *)
+let Token =
+  !(new n: bitstring; new g: bitstring;
+    event TokenMade(n, g); insert tokens(n, g); out(c, (n, g))).
+
+(* A machine enrols with a token: the issuer certifies the token's groups. *)
+let Enrol =
+  !(in(c, (n: bitstring, k: bitstring));
+    get tokens(=n, g) in
+    new s: bitstring;
+    insert members(n, s);
+    event Placed(n, g);
+    out(c, place(n, s, g, k))).
+
+(* The owner asks to move an enrolment into new groups (the CLI on the
+   root's machine, or the dashboard's Move: a wish shown there). *)
+let AskMove =
+  !(get members(n, s) in
+    new g: bitstring;
+    event AskedGroup(n, g);
+    insert intents(n, s, g);
+    out(c, (n, s, g))).
+
+(* The root's machine: an order only for what the owner asked. *)
+let RootMove =
+  !(in(c, (n: bitstring, s: bitstring, g: bitstring));
+    get intents(=n, =s, =g) in                       (* NOT:no-owner-gate *)
+    out(c, sign((lMove, n, s, g), kroot))).
+
+(* The issuer applies an order: reissue (same key, new serial), list it.
+   The new enrolment is not moved again here (one move per enrolment: a
+   second is the same step; the order of moves is GroupMirror.tla's). *)
+let Apply =
+  !(in(c, (o: bitstring, k: bitstring));
+    let (=lMove, n: bitstring, s: bitstring, g: bitstring) = checksign(o, pk(kroot)) in   (* NOT:relay-only-move *)
+    (* ONLY:relay-only-move *) let (=lMove, n: bitstring, s: bitstring, g: bitstring) = o in
+    get members(=n, =s) in
+    new s2: bitstring;
+    event Placed(n, g);
+    event Moved(n, g);
+    out(c, place(n, s2, g, k))).
+
+(* The relay's mirror (relay-server org_status.go with the pin): a status
+   whose issuer certificate chains to the pinned root, signed by that
+   issuer. *)
+let Mirror =
+  !(in(c, (cert: bitstring, st: bitstring));
+    let (=lIssuer, p: bitstring) = checksign(cert, pk(kroot)) in          (* NOT:mirror-no-pin *)
+    (* ONLY:mirror-no-pin *) let (=lIssuer, p: bitstring) = cert in
+    let (=lStatus, n: bitstring, g: bitstring) = checksign(st, p) in
+    event Mirrored(n, g)).
+
+(* A serving peer (relay client orgid, its access rules): the groups of
+   the member certificate the issuer signed; the relay's claim is ignored. *)
+let Peer =
+  !(in(c, (mc: bitstring, claimed: bitstring));
+    let (=lMember, n: bitstring, s: bitstring, g: bitstring, k: bitstring) = checksign(mc, pk(kiss)) in
+    event Admitted(n, g)                                (* NOT:relay-chosen-group *)
+    (* ONLY:relay-chosen-group *) event Admitted(n, claimed)
+    ).
+
+(* 1. the relay's reach takes only a membership the issuer placed *)
+query n: bitstring, g: bitstring; event(Mirrored(n, g)) ==> event(Placed(n, g)).
+(* 2. witness: a status mirrored *)
+query n: bitstring, g: bitstring; event(Mirrored(n, g)).
+(* 3. a peer admits only a membership the issuer placed *)
+query n: bitstring, g: bitstring; event(Admitted(n, g)) ==> event(Placed(n, g)).
+(* 4. witness: a peer admits *)
+query n: bitstring, g: bitstring; event(Admitted(n, g)).
+(* 5. the issuer places a machine in groups only by the owner's token or the owner's order *)
+query n: bitstring, g: bitstring; event(Placed(n, g)) ==> event(TokenMade(n, g)) || event(AskedGroup(n, g)).
+(* 6. witness: a move takes effect *)
+query n: bitstring, g: bitstring; event(Moved(n, g)).
+(* 7, 8. neither key leaves its machine *)
+query attacker(kroot).
+query attacker(kiss).
+
+process
+  let cert0 = sign((lIssuer, pk(kiss)), kroot) in
+  out(c, pk(kroot)); out(c, pk(kiss)); out(c, cert0);
+  (Token | Enrol | AskMove | RootMove | Apply | Mirror | Peer)

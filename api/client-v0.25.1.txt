@@ -1,0 +1,3 @@
+Compatible changes:
+- ./agent.TransportStats.WindowGrown: added
+- ./agent.TransportStats.WindowGrowths: added

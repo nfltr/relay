@@ -1,0 +1,586 @@
+(* A2A E2EE wire v2 (nfltr docs/decisions/a2a-machine-identity-2026-11-07.md),
+   as client/rpcclient implements it: a2a_e2ee.go (handshake, frames),
+   a2a_e2ee_agent.go (the responder), client_stream.go and server_stream.go
+   (frames on the streams), a2a.go (the end of a served call); each rule
+   below cites its code (file:line, relay client/rpcclient). Interactive
+   only (wire v2 has no 0-RTT flight).
+
+   Trust anchor: the owner's root pairing key, never a relay. A machine's
+   key K_m = HKDF(root, machine id, generation) (nfltr a2akeys Derive), its
+   key id <machine id>.<generation>; the machine id is the TENANTS machine
+   id, the first label of every agent id the machine registers, so a caller
+   derives the key id from the agent id it calls.
+
+   Handshake: Noise NNpsk0 (github.com/flynn/noise, a2a_e2ee.go
+   newA2AE2EEHandshake), psk = HMAC(K_kid, "nfltr-a2a-e2ee-v2-psk")
+   (a2aE2EEPsk), prologue = v2 0 txn 0 role 0 caller agent ref 0 callee agent
+   ref 0 key id (a2aE2EEPrologue), the role the initiator's (a2aE2EERole: a
+   machine calls as a machine and answers root holders only; a root
+   holder calls as root and answers a machine key id from a machine); the
+   role is not sent, each end puts the one it expects. -> psk, e (empty
+   payload: its AEAD tag proves the psk); <- e, ee (empty payload). The
+   init carries caller, callee and key id in the clear before message 1
+   (initMessage). Frames: Noise transport keys, one per direction, counter
+   nonces, AD = txn (seal, open), plaintext = type ||
+   body: DATA, END, ERROR and HEADER (the a2aFrame constants); ERROR is sealed as END is and ends
+   the stream the same way, so the model's END stands for both.
+
+   Abstractions: the key id is mid(n, gen) and an agent id is its machine
+   name; the code's key id is opaque and A2AE2EEKeyring.For(ref) maps an
+   agent ref to it (A2AE2EEKeyring; nfltr a2akeys rootKeyring.For keys a call
+   by the machine id the ref names, <machine id>-<service>, refusing a learned
+   machine the ref does not name).
+   A callee's own ref is the one the relay told it at connect (a2a.go
+   Dial, agentwire.AgentRefKey; the callee check in newServerA2AE2EEState), so the model takes
+   it from the attacker at every answer: the key id and the role are the
+   binding. Without the role a relay returns a machine's call to R to that
+   machine (or another agent of it, same key) told "you are R", which
+   answers it (queries 7 and 16; mutant drop-role).
+
+   Topology as a2a_today.pv: R (root holder) on relay X; B, E honest, C
+   compromised, D compromised and revoked at phase 1, all on relay Y; the
+   relays' CA is the attacker's (a compromised relay mints any machine
+   certificate; nothing here trusts one). Flag leak: phase 2 leaks the root
+   key (so every machine key): forward secrecy of what came before.
+   Mutants (run.sh flags): drop-psk, drop-txn, skip-revoke, relay-cert,
+   no-target-check, drop-role, mach-resp-clear, and wire v1's findings put back: one-key (F1: one key
+   both ways), clear-end (F2: the end of a stream in the clear).
+
+   Sessions (lane A2ASESS, a2a_e2ee_session.go): a keyed handshake leaves
+   both ends a session secret S = HKDF(k_i2r, k_r2i) (sess), its id
+   hsid(S); a later call between the pair skips the handshake: resume =
+   sid, call number c (fresh: unique per session, the code's counter; the
+   callee's replay window is the table seen), tag = HMAC(S, txn, c); the
+   call's keys HKDF(S, txn, c, direction), counter nonces from 0, AD = txn.
+   The caller finds its session by the agent it calls, the callee by sid
+   among its own. Mutants: sess-unbound (a session not bound to the pair),
+   txn-unbound (txn not in the call's keys, tag and AD), survive-revoke (a
+   revoked machine's session resumed), counter-reset (one key per session,
+   counters restarted each call). The replay window's at-most-once is a
+   state property (get/insert on a table is not atomic in ProVerif):
+   spec/A2ASession.tla AtMostOnce, its mutant AS:no-window.
+
+   Warm (lane A2AWARM, a2a.go WarmA2AE2EE, a2a_e2ee_agent.go
+   handleE2EEWarm): R runs the handshake with a machine alone, no call;
+   both keep the session, the machine starts no handler. A warm's
+   message 1 carries the payload WARM (a2aWarmMark), a call's none, so
+   the AEAD of message 1 binds which it is: a relay that retags a warm
+   as an init, or an init as a warm, is refused (mutant warm-untyped: the
+   warm's payload empty; R then accepts a call the machine took as a
+   warm, and 5, R's agreement with the callee, fails). Every query holds
+   with warms present. A request never rides the
+   handshake: message 1's payload is sealed under psk and e alone, so a
+   relay replays it to the machine, which opens it again (mutant
+   early-data: the request in message 1, served on receipt, fails 7). *)
+
+type key.
+type exponent.
+type G.
+
+const g: G [data].
+fun exp(G, exponent): G.
+equation forall x: exponent, y: exponent; exp(exp(g, x), y) = exp(exp(g, y), x).
+
+fun mackey(key, bitstring): key.
+fun hkdf(key, bitstring, bitstring): key.
+fun aenc(key, bitstring, bitstring, bitstring): bitstring.
+reduc forall k: key, n: bitstring, a: bitstring, m: bitstring; adec(k, n, a, aenc(k, n, a, m)) = m.
+fun ck1(key, G): key.          (* MixKey(psk), MixKey(e) *)
+fun ck2(key, G, G): key.       (* MixKey(re), MixKey(DH(ee)) *)
+fun split1(key): key.          (* initiator -> responder *)
+fun split2(key): key.          (* responder -> initiator *)
+
+const Lpsk, Lempty, N0, N1, DATA, END, HDR: bitstring.
+const INIT, WARM, ACK, FRAME, V2: bitstring.
+const ROLER, ROLEM: bitstring.   (* the initiator's role: root holder, machine *)
+const RESUME, I2R, R2I, HS, RS: bitstring.
+
+(* Sessions, a2a_e2ee_session.go *)
+fun sess(key, key): key.                          (* S = HKDF(k_i2r || k_r2i) *)
+fun hsid(key): bitstring.                         (* sid = HMAC(S, sid label) *)
+fun callkey(key, bitstring, bitstring): key.     (* HKDF(S, (txn, c), dir) *)
+fun mac(key, bitstring): bitstring.
+table rsess(bitstring, bitstring, key).           (* R as caller: callee, key id, S *)
+table bsess(bitstring, bitstring, key).           (* machine as caller: own name, key id, S *)
+table msess(bitstring, bitstring, bitstring, key).  (* machine as callee: own name, caller, key id, S *)
+table rrsess(bitstring, bitstring, key).          (* R as callee: caller, key id, S *)
+table seen(bitstring, bitstring).                 (* a callee's replay window: sid, c *)
+fun mid(bitstring, bitstring): bitstring [data].
+const G1: bitstring.
+const nameR, nameB, nameE, nameC, nameD: bitstring.
+
+fun reqTo(bitstring): bitstring [private].
+fun respFrom(bitstring): bitstring [private].
+fun mreq(bitstring): bitstring [private].
+fun rrespTo(bitstring): bitstring [private].
+fun hdrFrom(bitstring): bitstring.     (* a callee's response headers: public, authenticated *)
+
+free Kroot: key [private].
+free KrelayCA: key.            (* the relays' issuing CA: the attacker's *)
+free PublicPsk: key.
+free att: channel.
+
+free xUp: channel.                (* NOT:honestX *)
+free xUp: channel [private].      (* ONLY:honestX *)
+free xDown: channel.              (* NOT:honestX *)
+free xDown: channel [private].    (* ONLY:honestX *)
+free l1, l2: channel.
+free yUpB, yUpE: channel.                (* NOT:honestY *)
+free yUpB, yUpE: channel [private].      (* ONLY:honestY *)
+free yDownB, yDownE: channel.            (* NOT:honestY *)
+free yDownB, yDownE: channel [private].  (* ONLY:honestY *)
+
+(* Bindings (README "Bindings"): the fields and keys of the messages below
+   that the queries rely on and a relay could change on the wire. Each
+   BIND:<id> has one row in client/rpcclient/a2a_e2ee_bindings_test.go
+   (TestA2AE2EEModelBindings, make spec-bindings) that changes just that in
+   the real code's honest messages and requires a refusal; the test fails
+   when its rows and these ids differ.
+     BIND:init.txn      prologue t
+     BIND:init.role     prologue prole(r)
+     BIND:init.caller   prologue caller
+     BIND:init.callee   prologue callee
+     BIND:init.kid      prologue k
+     BIND:init.psk      psk(K)
+     BIND:init.warm     message 1's payload WARM
+     BIND:ack.transcript  the ack's AD (h1, ct1, r)
+     BIND:frame.dir     back(c) = split2
+     BIND:frame.order   the frame nonces N0, N1
+     BIND:frame.end     (END, Lempty) sealed
+     BIND:frame.header  (HDR, hdrFrom(m), ...) sealed
+     BIND:call.txn      callk(S, (t, c), dir), rad(t): t
+     BIND:call.ctr      callk(S, (t, c), dir): c
+     BIND:resume.txn    rtag(S, t, c): t
+     BIND:resume.ctr    rtag(S, t, c): c
+     BIND:resume.pair   msess(m, ...): the session's pair *)
+
+(* A machine's A2A key: the owner's derivation, or (mutant relay-cert) a
+   credential the relays' CA issues. *)
+letfun mkey(n: bitstring, gen: bitstring) =
+  hkdf(Kroot, n, gen).        (* NOT:relay-cert *)
+  hkdf(KrelayCA, n, gen).     (* ONLY:relay-cert *)
+letfun psk(K: key) =             (* a2a_e2ee.go a2aE2EEPsk *)
+  mackey(K, Lpsk).            (* NOT:drop-psk *)
+  PublicPsk.                  (* ONLY:drop-psk *)
+(* a2a_e2ee.go a2aE2EEPrologue; the role a2aE2EERole, or (mutant drop-role) none *)
+letfun prole(r: bitstring) =
+  r.                                (* NOT:drop-role *)
+  Lempty.                           (* ONLY:drop-role *)
+letfun prologue(t: bitstring, r: bitstring, caller: bitstring, callee: bitstring, k: bitstring) =
+  (V2, t, prole(r), caller, callee, k).       (* NOT:drop-txn *)
+  (V2, prole(r), caller, callee, k).          (* ONLY:drop-txn *)
+letfun ad(t: bitstring) =           (* a2a_e2ee.go seal, open: AD = txn *)
+  t.                                (* NOT:drop-txn *)
+  Lempty.                           (* ONLY:drop-txn *)
+(* The responder -> initiator key: split2, or (mutant one-key, finding F1)
+   the initiator's key both ways. *)
+letfun back(c: key) =
+  split2(c).                        (* NOT:one-key *)
+  split1(c).                        (* ONLY:one-key *)
+(* a2a_e2ee_session.go: the txn in a call's keys, tag and AD, or (mutant
+   txn-unbound) not; a call's keys per (S, txn, c, direction), or (mutant
+   counter-reset) one per session and direction, counters from 0 each call. *)
+letfun ctxn(t: bitstring) =
+  t.                                (* NOT:txn-unbound *)
+  Lempty.                           (* ONLY:txn-unbound *)
+letfun callk(S: key, t: bitstring, c: bitstring, dir: bitstring) =
+  callkey(S, (ctxn(t), c), dir).    (* NOT:counter-reset *)
+  callkey(S, Lempty, dir).          (* ONLY:counter-reset *)
+letfun rtag(S: key, t: bitstring, c: bitstring) = mac(S, (RESUME, ctxn(t), c)).
+letfun rad(t: bitstring) = ad(ctxn(t)).
+letfun known(n: bitstring) = n = nameB || n = nameE || n = nameC || n = nameD.
+
+event RootAccept(bitstring, bitstring, bitstring, G, G).
+event MachAnswer(bitstring, bitstring, bitstring, G, G).
+event RootSendReq(bitstring, bitstring, bitstring).
+event RootSendEnd(bitstring, bitstring).
+event MachRecvReq(bitstring, bitstring, bitstring, bitstring).
+event MachRecvEnd(bitstring, bitstring, bitstring).
+event MachSendResp(bitstring, bitstring, bitstring).
+event RootRecvResp(bitstring, bitstring, bitstring, bitstring, bitstring).
+event MachAccept(bitstring, bitstring, G, G).
+event MachStart(bitstring, bitstring, G).
+event RootAnswer(bitstring, bitstring, bitstring, G, G).
+event MachSendReq(bitstring, bitstring, bitstring).
+event RootSendResp(bitstring, bitstring, bitstring).
+event MachRecvResp(bitstring, bitstring, bitstring, bitstring).
+event RootRecvReq(bitstring, bitstring, bitstring, bitstring).
+event RootFrameAfterRevoke(bitstring, bitstring).
+event RootHandshakeAfterRevoke(bitstring, bitstring).
+event Leaked(bitstring).
+event MachGot(bitstring, bitstring).
+event Seal(key, bitstring, bitstring).
+event RootResumeAfterRevoke(bitstring, bitstring).
+event MachSendHeader(bitstring, bitstring, bitstring).
+event RootHeader(bitstring, bitstring, bitstring).
+
+(* 1-4 secrecy between R and honest B, with relays, their CA and C, D the
+   attacker's (and, with leak, every key after the fact). *)
+query attacker(reqTo(nameB)).
+query attacker(respFrom(nameB)).
+query attacker(mreq(nameB)).
+query attacker(rrespTo(mid(nameB, G1))).
+(* 5 R as caller: the callee that answered is the target R called, on the
+   same txn, both keys and key id. *)
+query t: bitstring, tgt: bitstring, k: bitstring, i: G, r: G;
+  inj-event(RootAccept(t, tgt, k, i, r)) ==> inj-event(MachAnswer(t, tgt, k, i, r)).
+(* 6 R as callee: the caller R answered as machine n is n, on that txn
+   with that key (or n leaked); not injective: msg1 is replayable, and a
+   replayed msg1 gets no frame accepted (8). *)
+query t: bitstring, n: bitstring, gen: bitstring, i: G, r: G;
+  event(RootAnswer(t, n, mid(n, gen), i, r)) ==> event(MachStart(t, mid(n, gen), i)) || event(Leaked(n)).
+(* 7 frames, injective, R -> machine: each request handled once, as sent
+   (handshake calls: HS; a resumed call is handled once by the callee's
+   replay window, a state property: spec/A2ASession.tla AtMostOnce; 16
+   is 7 for every call without injectivity). *)
+query t: bitstring, k: bitstring, x: bitstring;
+  inj-event(MachRecvReq(HS, t, k, x)) ==> inj-event(RootSendReq(t, k, x)).
+(* 8 frames, injective, machine -> R (17 for every call). *)
+query t: bitstring, n: bitstring, gen: bitstring, x: bitstring;
+  inj-event(RootRecvReq(HS, t, mid(n, gen), x)) ==> inj-event(MachSendReq(t, mid(n, gen), x)) || event(Leaked(n)).
+(* 9 frames, direction: no reflection (every call). *)
+query v: bitstring, t: bitstring, tgt: bitstring, k: bitstring, x: bitstring;
+  event(RootRecvResp(v, t, tgt, k, x)) ==> event(MachSendResp(t, k, x)).
+(* 10 the end of a stream is the sender's: no truncation (18 for every call). *)
+query t: bitstring, k: bitstring;
+  inj-event(MachRecvEnd(HS, t, k)) ==> inj-event(RootSendEnd(t, k)).
+(* 11 revoke: no frame of D is handled after its revoke. *)
+query t: bitstring; event(RootFrameAfterRevoke(t, mid(nameD, G1))).
+(* Revoke: no handshake of D is answered after its revoke. *)
+query t: bitstring; event(RootHandshakeAfterRevoke(t, mid(nameD, G1))).
+
+(* 13 revoke ends the session: no resumed call of D is answered after
+   its revoke. *)
+query t: bitstring; event(RootResumeAfterRevoke(t, mid(nameD, G1))).
+(* 14 a session is its pair's: R's request to B is never handled by E. *)
+query t: bitstring; event(MachGot(nameE, reqTo(nameB))).
+(* 15 no nonce reuse: a key seals at a nonce in one call only. *)
+query k: key, n: bitstring, t1: bitstring, t2: bitstring;
+  event(Seal(k, n, t1)) && event(Seal(k, n, t2)) ==> t1 = t2.
+(* 16-18 every call, handshake or resumed: no cross-call splice or replay
+   into another call: a frame accepted in call t was sent in call t, by
+   the other end (7, 8, 10 without injectivity). *)
+query v: bitstring, t: bitstring, k: bitstring, x: bitstring;
+  event(MachRecvReq(v, t, k, x)) ==> event(RootSendReq(t, k, x)).
+query v: bitstring, t: bitstring, n: bitstring, gen: bitstring, x: bitstring;
+  event(RootRecvReq(v, t, mid(n, gen), x)) ==> event(MachSendReq(t, mid(n, gen), x)) || event(Leaked(n)).
+query v: bitstring, t: bitstring, k: bitstring;
+  event(MachRecvEnd(v, t, k)) ==> event(RootSendEnd(t, k)).
+
+(* Witnesses (must read F: reachable): the honest flows complete. *)
+query t: bitstring; event(RootRecvResp(HS, t, nameB, mid(nameB, G1), respFrom(nameB))).
+query t: bitstring; event(RootRecvReq(HS, t, mid(nameB, G1), mreq(nameB))).
+query t: bitstring; event(MachRecvEnd(HS, t, mid(nameB, G1))).
+(* ... and on resumed calls. *)
+query t: bitstring; event(RootRecvResp(RS, t, nameB, mid(nameB, G1), respFrom(nameB))).
+query t: bitstring; event(RootRecvReq(RS, t, mid(nameB, G1), mreq(nameB))).
+query t: bitstring; event(MachRecvEnd(RS, t, mid(nameB, G1))).
+(* 25 response headers are the callee's (E2EEPROOF2): the headers R takes
+   on call t under key id k were sent by the machine on t (sealed with the
+   first response, a2aFrameHeader; mutant clear-header: in the clear). *)
+query t: bitstring, k: bitstring, h: bitstring;
+  event(RootHeader(t, k, h)) ==> event(MachSendHeader(t, k, h)).
+(* 26 a machine calling R (a node fetching from its hub): the response it
+   takes on call t under key id k is R's on t (9 the other way; every
+   call; mutant mach-resp-clear: the machine takes R's response in the
+   clear). With 1-4 and 9 this is "a relay cannot read or alter a call
+   between the owner's machines" (nfltr
+   docs/decisions/orch-public-app-plan-2026-11-19.md L1). *)
+query v: bitstring, t: bitstring, k: bitstring, x: bitstring;
+  event(MachRecvResp(v, t, k, x)) ==> event(RootSendResp(t, k, x)).
+(* Witnesses (F): B takes R's response, on a handshake call and a resumed one. *)
+query t: bitstring; event(MachRecvResp(HS, t, mid(nameB, G1), rrespTo(mid(nameB, G1)))).
+query t: bitstring; event(MachRecvResp(RS, t, mid(nameB, G1), rrespTo(mid(nameB, G1)))).
+
+(* R calls agent tgt: the key id is the target's machine id at the store's
+   generation (a2a_e2ee.go initMessage: For(callee)); nothing the relay or the peer
+   says picks it. Message 1 initMessage (role root), the ack complete, a request frame
+   client_stream.go Send (seal after its credit), its END there too
+   (CloseSend), the response client_stream.go recvE2EE (its HEADER frame, then DATA: a frame
+   in the clear is the relay's, one that does not open ends the call,
+   a2a_e2ee.go open). *)
+let RootInit(tgt: bitstring) =
+  in(att, pick: bitstring);                 (* ONLY:no-target-check *)
+  let n = pick in                           (* ONLY:no-target-check *)
+  let n = tgt in                            (* NOT:no-target-check *)
+  if known(n) then
+  let k = mid(n, G1) in
+  let K = mkey(n, G1) in
+  new t: bitstring; new x: exponent; let i = exp(g, x) in
+  let h1 = (prologue(t, ROLER, nameR, tgt, k), i) in
+  let c1 = ck1(psk(K), i) in
+  let ct1 = aenc(c1, N0, h1, Lempty) in                    (* NOT:early-data *)
+  event RootSendReq(t, k, reqTo(tgt));                      (* ONLY:early-data *)
+  let ct1 = aenc(c1, N0, h1, (DATA, reqTo(tgt))) in         (* ONLY:early-data *)
+  out(xUp, (tgt, (t, INIT, nameR, tgt, k, i, ct1)));
+  in(xDown, (src: bitstring, (=t, =ACK, r: G, ct2: bitstring)));
+  let c2 = ck2(c1, r, exp(r, x)) in
+  let z = adec(c2, N0, (h1, ct1, r), ct2) in
+  if z = Lempty then
+  event RootAccept(t, tgt, k, i, r);
+  insert rsess(tgt, k, sess(split1(c2), split2(c2)));   (* ONLY:sess *)
+  event RootSendReq(t, k, reqTo(tgt));                      (* NOT:early-data *)
+  event Seal(split1(c2), N0, t);
+  out(xUp, (tgt, (t, FRAME, aenc(split1(c2), N0, ad(t), (DATA, reqTo(tgt))))));
+  event RootSendEnd(t, k);
+  event Seal(split1(c2), N1, t);
+  out(xUp, (tgt, (t, FRAME, aenc(split1(c2), N1, ad(t), (END, Lempty)))));
+  in(xDown, (src2: bitstring, (=t, =FRAME, ct3: bitstring)));                  (* NOT:clear-header *)
+  let (=HDR, h: bitstring, y: bitstring) = adec(back(c2), N0, ad(t), ct3) in   (* NOT:clear-header *)
+  in(xDown, (src2: bitstring, (=t, =FRAME, h: bitstring, ct3: bitstring)));    (* ONLY:clear-header *)
+  let (=DATA, y: bitstring) = adec(back(c2), N0, ad(t), ct3) in                (* ONLY:clear-header *)
+  event RootHeader(t, k, h);
+  event RootRecvResp(HS, t, tgt, k, y).
+
+(* R warms tgt (WarmA2AE2EE): the handshake alone; the session, no call. *)
+let RootWarm(tgt: bitstring) =
+  let k = mid(tgt, G1) in
+  let K = mkey(tgt, G1) in
+  new t: bitstring; new x: exponent; let i = exp(g, x) in
+  let h1 = (prologue(t, ROLER, nameR, tgt, k), i) in
+  let c1 = ck1(psk(K), i) in
+  let ct1 = aenc(c1, N0, h1, WARM) in                       (* NOT:warm-untyped *)
+  let ct1 = aenc(c1, N0, h1, Lempty) in                     (* ONLY:warm-untyped *)
+  out(xUp, (tgt, (t, WARM, nameR, tgt, k, i, ct1)));
+  in(xDown, (src: bitstring, (=t, =ACK, r: G, ct2: bitstring)));
+  let c2 = ck2(c1, r, exp(r, x)) in
+  if adec(c2, N0, (h1, ct1, r), ct2) = Lempty then
+  insert rsess(tgt, k, sess(split1(c2), split2(c2))).
+
+(* A machine serves a call: the request, its END, the response
+   (server_stream.go: the request frames; Send seals the HEADER frame
+   with the first response). *)
+let MachServe(via: bitstring, m: bitstring, cin: channel, cout: channel, t: bitstring, caller: bitstring, k: bitstring, kin: key, kout: key, a: bitstring) =
+  in(cin, (=t, =FRAME, ct3: bitstring));
+  let (=DATA, z: bitstring) = adec(kin, N0, a, ct3) in
+  event MachRecvReq(via, t, k, z);
+  event MachGot(m, z);
+  ( (
+     in(cin, (=t, =FRAME, ct4: bitstring));                               (* NOT:clear-end *)
+     let (=END, e: bitstring) = adec(kin, N1, a, ct4) in                 (* NOT:clear-end *)
+     in(cin, (=t, =END));                                                 (* ONLY:clear-end *)
+     event MachRecvEnd(via, t, k))
+  | (event MachSendResp(t, k, respFrom(m));
+     event MachSendHeader(t, k, hdrFrom(m));
+     event Seal(kout, N0, t);
+     out(cout, (caller, (t, FRAME, aenc(kout, N0, a, (HDR, hdrFrom(m), respFrom(m))))))) ).   (* NOT:clear-header *)
+     out(cout, (caller, (t, FRAME, hdrFrom(m), aenc(kout, N0, a, (DATA, respFrom(m))))))) ).   (* ONLY:clear-header *)
+
+(* Machine m answers (a2a_e2ee_agent.go answerE2EEInit -> a2a_e2ee.go
+   newServerA2AE2EEState): the callee the ref the relay told it,
+   the key id the one For gives for the caller, a machine's own
+   (a2aE2EEAnswerKey), message 1 opens under it with the role root, the
+   ack; requests and their END in server_stream.go, the response's HEADER
+   frame and data from serverStream.Send. *)
+let MachResp(m: bitstring, cin: channel, cout: channel) =
+  ! in(cin, (t: bitstring, =INIT, caller: bitstring, callee: bitstring, k: bitstring, i: G, ct1: bitstring));
+  in(att, own: bitstring);           (* the ref the relay told m: the attacker's *)
+  if callee = own && k = mid(m, G1) then
+  let K = mkey(m, G1) in
+  let h1 = (prologue(t, ROLER, caller, callee, k), i) in
+  let c1 = ck1(psk(K), i) in
+  if adec(c1, N0, h1, ct1) = Lempty then                    (* NOT:early-data *)
+  let (=DATA, z: bitstring) = adec(c1, N0, h1, ct1) in      (* ONLY:early-data *)
+  event MachRecvReq(HS, t, k, z);                           (* ONLY:early-data *)
+  event MachGot(m, z);                                      (* ONLY:early-data *)
+  new y: exponent; let r = exp(g, y) in
+  let c2 = ck2(c1, r, exp(i, y)) in
+  event MachAnswer(t, m, k, i, r);
+  insert msess(m, caller, k, sess(split1(c2), split2(c2)));   (* ONLY:sess *)
+  out(cout, (caller, (t, ACK, r, aenc(c2, N0, (h1, ct1, r), Lempty))));
+  0.                                                        (* ONLY:early-data *)
+  MachServe(HS, m, cin, cout, t, caller, k, split1(c2), back(c2), ad(t)).   (* NOT:early-data *)
+
+(* Machine m answers a warm (a2a_e2ee_agent.go handleE2EEWarm): the init's
+   checks, the ack, the session; no handler. *)
+let MachWarm(m: bitstring, cin: channel, cout: channel) =
+  ! in(cin, (t: bitstring, =WARM, caller: bitstring, callee: bitstring, k: bitstring, i: G, ct1: bitstring));
+  in(att, own: bitstring);
+  if callee = own && k = mid(m, G1) then
+  let K = mkey(m, G1) in
+  let h1 = (prologue(t, ROLER, caller, callee, k), i) in
+  let c1 = ck1(psk(K), i) in
+  if adec(c1, N0, h1, ct1) = WARM then                      (* NOT:warm-untyped *)
+  if adec(c1, N0, h1, ct1) = Lempty then                    (* ONLY:warm-untyped *)
+  new y: exponent; let r = exp(g, y) in
+  let c2 = ck2(c1, r, exp(i, y)) in
+  insert msess(m, caller, k, sess(split1(c2), split2(c2)));
+  out(cout, (caller, (t, ACK, r, aenc(c2, N0, (h1, ct1, r), Lempty)))).
+
+(* Machine m calls R: For(callee) is its own key id (a2a_e2ee.go initMessage),
+   the role machine. *)
+let MachInit(m: bitstring, cin: channel, cout: channel) =
+  let k = mid(m, G1) in
+  let K = mkey(m, G1) in
+  new t: bitstring; new x: exponent; let i = exp(g, x) in
+  let h1 = (prologue(t, ROLEM, m, nameR, k), i) in
+  let c1 = ck1(psk(K), i) in
+  let ct1 = aenc(c1, N0, h1, Lempty) in
+  event MachStart(t, k, i);
+  out(cout, (nameR, (t, INIT, m, nameR, k, i, ct1)));
+  in(cin, (=t, =ACK, r: G, ct2: bitstring));
+  let c2 = ck2(c1, r, exp(r, x)) in
+  if adec(c2, N0, (h1, ct1, r), ct2) = Lempty then
+  event MachAccept(t, k, i, r);
+  insert bsess(m, k, sess(split1(c2), split2(c2)));   (* ONLY:sess *)
+  event MachSendReq(t, k, mreq(m));
+  event Seal(split1(c2), N0, t);
+  out(cout, (nameR, (t, FRAME, aenc(split1(c2), N0, ad(t), (DATA, mreq(m))))));
+  in(cin, (=t, =FRAME, ct3: bitstring));                                 (* NOT:mach-resp-clear *)
+  let (=DATA, y: bitstring) = adec(back(c2), N0, ad(t), ct3) in          (* NOT:mach-resp-clear *)
+  in(cin, (=t, =FRAME, (=DATA, y: bitstring)));                          (* ONLY:mach-resp-clear *)
+  event MachRecvResp(HS, t, k, y).
+
+(* R answers a machine: the key id must be For(caller), the caller's
+   machine (a2a_e2ee.go a2aE2EEAnswerKey), the role machine
+   (a2aE2EERole); For refuses a revoked machine, Valid (before each frame:
+   seal, open) a revoked id. *)
+let RootFrame(via: bitstring, src: bitstring, t: bitstring, k: bitstring, kin: key, kout: key, a: bitstring) =
+  in(xDown, (=src, (=t, =FRAME, ct3: bitstring)));
+  let (=DATA, z: bitstring) = adec(kin, N0, a, ct3) in
+  event RootRecvReq(via, t, k, z);
+  event RootSendResp(t, k, rrespTo(k));
+  event Seal(kout, N0, t);
+  out(xUp, (src, (t, FRAME, aenc(kout, N0, a, (DATA, rrespTo(k)))))).
+
+let RootFrameRevoked(via: bitstring, src: bitstring, t: bitstring, k: bitstring, kin: key, a: bitstring) =
+  in(xDown, (=src, (=t, =FRAME, ct3: bitstring)));
+  if k <> mid(nameD, G1) then                     (* NOT:skip-revoke *)
+  let (=DATA, z: bitstring) = adec(kin, N0, a, ct3) in
+  event RootFrameAfterRevoke(t, k);
+  event RootRecvReq(via, t, k, z).
+
+let RootResp =
+  ! in(xDown, (src: bitstring, (t: bitstring, =INIT, caller: bitstring, callee: bitstring, k: bitstring, i: G, ct1: bitstring)));
+  in(att, own: bitstring);           (* the ref the relay told R: the attacker's *)
+  if callee = own then
+  let mid(n, gen) = k in
+  if n = caller && gen = G1 && known(n) then
+  let K = mkey(n, gen) in
+  let h1 = (prologue(t, ROLEM, caller, callee, k), i) in
+  let c1 = ck1(psk(K), i) in
+  if adec(c1, N0, h1, ct1) = Lempty then
+  new y: exponent; let r = exp(g, y) in
+  let c2 = ck2(c1, r, exp(i, y)) in
+  event RootAnswer(t, n, k, i, r);
+  insert rrsess(n, k, sess(split1(c2), split2(c2)));   (* ONLY:sess *)
+  out(xUp, (src, (t, ACK, r, aenc(c2, N0, (h1, ct1, r), Lempty))));
+  (RootFrame(HS, src, t, k, split1(c2), back(c2), ad(t)) | phase 1; if k = mid(nameD, G1) then RootFrameRevoked(HS, src, t, k, split1(c2), ad(t))).
+
+(* After the revoke: Peer refuses D. *)
+let RootRespAfter =
+  ! in(xDown, (src: bitstring, (t: bitstring, =INIT, caller: bitstring, callee: bitstring, k: bitstring, i: G, ct1: bitstring)));
+  in(att, own: bitstring);           (* the ref the relay told R: the attacker's *)
+  if callee = own then
+  let mid(n, gen) = k in
+  if n = caller && gen = G1 && known(n) then
+  if n <> nameD then                              (* NOT:skip-revoke *)
+  let K = mkey(n, gen) in
+  let h1 = (prologue(t, ROLEM, caller, callee, k), i) in
+  let c1 = ck1(psk(K), i) in
+  if adec(c1, N0, h1, ct1) = Lempty then
+  new y: exponent; let r = exp(g, y) in
+  let c2 = ck2(c1, r, exp(i, y)) in
+  event RootAnswer(t, n, k, i, r);
+  event RootHandshakeAfterRevoke(t, k);
+  out(xUp, (src, (t, ACK, r, aenc(c2, N0, (h1, ct1, r), Lempty))));
+  RootFrameRevoked(HS, src, t, k, split1(c2), ad(t)).
+
+(* Resumed calls (a2a_e2ee_session.go). R calls agent tgt on its session
+   with tgt: the resume, then the request and its END at once (0-RTT), the
+   response under the call's other key. *)
+let RootResume(tgt: bitstring) =
+  get rsess(=tgt, k: bitstring, S: key) in                (* NOT:sess-unbound *)
+  get rsess(other: bitstring, k: bitstring, S: key) in    (* ONLY:sess-unbound *)
+  new t: bitstring; new c: bitstring;
+  let ki = callk(S, t, c, I2R) in
+  let kr = callk(S, t, c, R2I) in
+  out(xUp, (tgt, (t, RESUME, hsid(S), c, rtag(S, t, c))));
+  event RootSendReq(t, k, reqTo(tgt));
+  event Seal(ki, N0, t);
+  out(xUp, (tgt, (t, FRAME, aenc(ki, N0, rad(t), (DATA, reqTo(tgt))))));
+  event RootSendEnd(t, k);
+  event Seal(ki, N1, t);
+  out(xUp, (tgt, (t, FRAME, aenc(ki, N1, rad(t), (END, Lempty)))));
+  in(xDown, (src2: bitstring, (=t, =FRAME, ct3: bitstring)));                  (* NOT:clear-header *)
+  let (=HDR, h: bitstring, y: bitstring) = adec(kr, N0, rad(t), ct3) in        (* NOT:clear-header *)
+  in(xDown, (src2: bitstring, (=t, =FRAME, h: bitstring, ct3: bitstring)));    (* ONLY:clear-header *)
+  let (=DATA, y: bitstring) = adec(kr, N0, rad(t), ct3) in                     (* ONLY:clear-header *)
+  event RootHeader(t, k, h);
+  event RootRecvResp(RS, t, tgt, k, y).
+
+(* Machine m answers a resume: a session of its own by sid, the tag, a call
+   number its window has not seen. *)
+let MachResume(m: bitstring, cin: channel, cout: channel) =
+  ! in(cin, (t: bitstring, =RESUME, s: bitstring, c: bitstring, tag: bitstring));
+  get msess(=m, caller: bitstring, k: bitstring, S: key) suchthat hsid(S) = s in             (* NOT:sess-unbound *)
+  get msess(other: bitstring, caller: bitstring, k: bitstring, S: key) suchthat hsid(S) = s in (* ONLY:sess-unbound *)
+  if tag = rtag(S, t, c) then
+  get seen(=s, =c) in 0 else
+  insert seen(s, c);
+  MachServe(RS, m, cin, cout, t, caller, k, callk(S, t, c, I2R), callk(S, t, c, R2I), rad(t)).
+
+(* Machine m calls R on its session. *)
+let MachResumeInit(m: bitstring, cin: channel, cout: channel) =
+  get bsess(=m, k: bitstring, S: key) in
+  new t: bitstring; new c: bitstring;
+  let ki = callk(S, t, c, I2R) in
+  out(cout, (nameR, (t, RESUME, hsid(S), c, rtag(S, t, c))));
+  event MachSendReq(t, k, mreq(m));
+  event Seal(ki, N0, t);
+  out(cout, (nameR, (t, FRAME, aenc(ki, N0, rad(t), (DATA, mreq(m))))));
+  in(cin, (=t, =FRAME, ct3: bitstring));                                 (* NOT:mach-resp-clear *)
+  let (=DATA, y: bitstring) = adec(callk(S, t, c, R2I), N0, rad(t), ct3) in  (* NOT:mach-resp-clear *)
+  in(cin, (=t, =FRAME, (=DATA, y: bitstring)));                          (* ONLY:mach-resp-clear *)
+  event MachRecvResp(RS, t, k, y).
+
+(* R answers a resume: a session it answered by sid, the tag, the window;
+   after the revoke none of D's (the lookup checks For/Valid). *)
+let RootResumeResp =
+  ! in(xDown, (src: bitstring, (t: bitstring, =RESUME, s: bitstring, c: bitstring, tag: bitstring)));
+  get rrsess(n: bitstring, k: bitstring, S: key) suchthat hsid(S) = s in
+  if tag = rtag(S, t, c) then
+  get seen(=s, =c) in 0 else
+  insert seen(s, c);
+  let ki = callk(S, t, c, I2R) in
+  (RootFrame(RS, src, t, k, ki, callk(S, t, c, R2I), rad(t)) | phase 1; if k = mid(nameD, G1) then RootFrameRevoked(RS, src, t, k, ki, rad(t))).
+
+let RootResumeRespAfter =
+  ! in(xDown, (src: bitstring, (t: bitstring, =RESUME, s: bitstring, c: bitstring, tag: bitstring)));
+  get rrsess(n: bitstring, k: bitstring, S: key) suchthat hsid(S) = s in
+  if tag = rtag(S, t, c) then
+  if n <> nameD then                          (* NOT:survive-revoke *)
+  get seen(=s, =c) in 0 else
+  insert seen(s, c);
+  event RootResumeAfterRevoke(t, k);
+  RootFrameRevoked(RS, src, t, k, callk(S, t, c, I2R), rad(t)).
+
+let RelayX = (! in(xUp, m: bitstring); out(l1, m)) | (! in(l2, m: bitstring); out(xDown, m)).
+let RelayY =
+  (! in(l1, (dst: bitstring, p: bitstring));
+     if dst = nameB then out(yDownB, p) else if dst = nameE then out(yDownE, p) else out(att, p))
+  | (! in(yUpB, (dst: bitstring, p: bitstring)); out(l2, (nameB, p)))
+  | (! in(yUpE, (dst: bitstring, p: bitstring)); out(l2, (nameE, p)))
+  | (! in(att, (src: bitstring, dst: bitstring, p: bitstring)); if src = nameC || src = nameD then out(l2, (src, p))).
+
+process
+  event Leaked(nameC); out(att, mkey(nameC, G1));
+  event Leaked(nameD); out(att, mkey(nameD, G1));
+  ( RelayX | RelayY
+  | ! RootInit(nameB) | ! RootInit(nameE)
+  | MachResp(nameB, yDownB, yUpB)
+  | MachResp(nameE, yDownE, yUpE)
+  | ! MachInit(nameB, yDownB, yUpB)
+  | RootResp
+  | ! RootResume(nameB) | ! RootResume(nameE)   (* ONLY:sess *)
+  | MachResume(nameB, yDownB, yUpB)   (* ONLY:sess *)
+  | ! RootWarm(nameB) | ! RootWarm(nameE)   (* ONLY:sess *)
+  | MachWarm(nameB, yDownB, yUpB)   (* ONLY:sess *)
+  | MachWarm(nameE, yDownE, yUpE)   (* ONLY:sess *)
+  | MachResume(nameE, yDownE, yUpE)   (* ONLY:sess *)
+  | ! MachResumeInit(nameB, yDownB, yUpB)   (* ONLY:sess *)
+  | RootResumeResp   (* ONLY:sess *)
+  | phase 1; (RootRespAfter | RootResumeRespAfter)   (* ONLY:sess *)
+  | phase 1; RootRespAfter                          (* NOT:sess *)
+  | phase 2; out(att, Kroot)         (* ONLY:leak *)
+  )

@@ -1,0 +1,10 @@
+{"ev":"Serve","n":256}
+{"ev":"AssocOpen","n":256}
+{"ev":"Read","s":"a","adm":true,"f":1,"op":"open"}
+{"ev":"RecvA","k":"open","f":1,"out":"accept"}
+{"ev":"RecvC","k":"accept","f":1,"out":""}
+{"ev":"ReplyA","f":1,"out":"stream"}
+{"ev":"RecvC","k":"d","f":1,"out":"deliver"}
+{"ev":"Cut","who":"agent"}
+{"ev":"RecvC","k":"close","f":1,"out":"tail"}
+{"ev":"NoticeC"}

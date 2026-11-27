@@ -1,0 +1,173 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   app_enrol.pv: an app's device enrolled for a person into an organisation
+   (nfltr docs/decisions/app-device-identity-2026-11-16.md; lifecycle in
+   spec/appenrol/AppEnrol.tla).
+
+   An app on a person's device makes two keys: kr for the relay (the
+   account machine certificate, relay-server services/accounts) and ko for
+   the organisation (the org machine certificate, org/orgenrol). It enrols
+   ko one of two ways:
+
+   - sign-in: OpenID Connect authorization code + PKCE (RFC 7636, native
+     apps RFC 8252) at the organisation's IdP, nonce = commit(kr, ko) (the
+     key commitment of OpenPubkey). The ID token comes from the IdP over
+     TLS; the device then sends it, ko's CSR and kr through the relay. The
+     issuer takes the token only for an app client id the owner configured
+     (aud), with the nonce of the keys in the request, and puts the
+     person (email SAN) and the app (URI SAN .../app/<id>) its rule names
+     in the certificate;
+   - admin code: an organisation token made for a person and an app (as
+     enrol.pv's, HMAC over the request), delivered out of band.
+
+   Renewal (with the current key, enrol.pv's) keeps the person and the app
+   of the certificate. A service's policy admits a person and an app
+   (allow_user, allow_app) after the chain check.
+
+   The attacker owns the relay: it reads every token and request and sends
+   anything. It also runs a rogue app registered at the same IdP (client
+   id appX), so it receives ID tokens of honest people for appX with any
+   nonce it picks; it holds the account and key of a person mal; the code
+   made for a person lc leaked (the residual enrol.pv states for tokens).
+   The IdP is honest, its signatures ideal.
+
+   Bindings (spec/proverif/README.md "Bindings"; make spec-bindings):
+     BIND:app.nonce   the nonce: SHA-256 of both keys' SPKIs, length-prefixed, in order (client/appenrol)
+     BIND:app.attrs   the person and app SANs: a service admits by them (client/orgid Peer.Users, Peer.Apps)
+     BIND:app.urihost an nfltr URI SAN names the organisation's domain (client/orgid; the issuer's DNS constraints do not cover it)
+     BIND:app.aud     the issuer takes a token only for a client id of the rule, aud and azp (org/orgpki EnrolSignIn)
+     BIND:app.idtoken the token is the rule's IdP's: its signature, iss and exp (org/orgpki EnrolSignIn, go-oidc) *)
+
+free c: channel.                       (* the relay *)
+free cidp: channel [private].          (* a device's TLS session with the IdP *)
+
+type skey.
+type pkey.
+type user.
+type app.
+
+fun pk(skey): pkey.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+fun hmac(bitstring, pkey): bitstring.
+fun commit(pkey, pkey): bitstring.     (* SHA-256 of both SPKIs, length-prefixed *)
+fun commit1(pkey): bitstring.          (* the relay key's alone (mutant) *)
+
+free alice, bob, mal, lc: user.
+free app1, app2, appX: app.            (* app1, app2 the owner's rules name; appX the attacker's client *)
+
+fun idtoken(user, app, bitstring): bitstring [data].   (* sub/email, aud, nonce *)
+fun leaf(user, app, pkey): bitstring [data].           (* email SAN, app URI SAN, key *)
+fun csr(pkey): bitstring [data].
+fun renewal(pkey): bitstring [data].
+
+free skIdP: skey [private].
+free skIss: skey [private].
+
+event Login(user, app, pkey).          (* the person signed in for app on the device holding the key *)
+event CodeMade(bitstring, user, app).
+event Holds(user, app, pkey).          (* an honest device of that person made this key for that app *)
+event Issued(user, app, pkey).
+event Admitted(user, app, pkey).
+
+(* The IdP: an honest device's sign-in (the person authenticated, PKCE
+   ties the code to that device's session). *)
+let IdP =
+  in(cidp, (u: user, a: app, n: bitstring));
+  out(cidp, sign(idtoken(u, a, n), skIdP)).
+
+(* The rogue client appX: honest people sign in to it (phishing, a
+   malicious app); it picks the nonce. *)
+let Rogue =
+  in(c, (u: user, n: bitstring));
+  if u <> mal then
+  out(c, sign(idtoken(u, appX, n), skIdP)).
+
+(* An honest device of person u running app a, by sign-in. *)
+let Device(u: user, a: app) =
+  new sko: skey; new skr: skey;
+  event Holds(u, a, pk(sko));
+  event Login(u, a, pk(sko));
+  out(cidp, (u, a, commit(pk(skr), pk(sko))));        (* NOT:nonce-relay-key-only *)
+  out(cidp, (u, a, commit1(pk(skr))));                (* ONLY:nonce-relay-key-only *)
+  in(cidp, tok: bitstring);
+  out(c, (tok, pk(skr), pk(sko), sign(csr(pk(sko)), sko))).
+
+(* The issuer, sign-in path. *)
+let IssuerSSO =
+  in(c, (tok: bitstring, kr: pkey, ko: pkey, req: bitstring));
+  let idtoken(u, a, n) = checksign(tok, pk(skIdP)) in
+  if a = app1 || a = app2 then                        (* NOT:no-aud-check *)
+  if n = commit(kr, ko) then                          (* NOT:no-nonce-check *)
+  if n = commit1(kr) then                             (* ONLY:nonce-relay-key-only *)
+  if checksign(req, ko) = csr(ko) then
+  event Issued(u, a, ko);
+  out(c, sign(leaf(u, a, ko), skIss)).
+
+(* The issuer, admin-code path: the code names the person and the app. *)
+let IssuerCode(t: bitstring, u: user, a: app) =
+  in(c, (ur: user, ko: pkey, m: bitstring));
+  if m = hmac(t, ko) then
+  let uu = u in                                       (* NOT:user-from-request *)
+  let uu = ur in                                      (* ONLY:user-from-request *)
+  event Issued(uu, a, ko);
+  out(c, sign(leaf(uu, a, ko), skIss)).
+
+let CodeDevice(t: bitstring, u: user) =
+  new sko: skey;
+  event Holds(u, app1, pk(sko));
+  out(c, (u, pk(sko), hmac(t, pk(sko)))).
+
+(* Renewal: the current certificate, a CSR for the new key signed with
+   the current one; the person and the app are the certificate's. *)
+let Renew =
+  in(c, (cert: bitstring, k2: pkey, pop: bitstring, ur: user, ar: app));
+  let leaf(u, a, k) = checksign(cert, pk(skIss)) in
+  if checksign(pop, k) = renewal(k2) then
+  let uu = u in let aa = a in                          (* NOT:renew-takes-attrs *)
+  let uu = ur in let aa = ar in                        (* ONLY:renew-takes-attrs *)
+  event Issued(uu, aa, k2);
+  out(c, sign(leaf(uu, aa, k2), skIss)).
+
+(* A service admitting app1 (allow_app); the person is what it logs and
+   what allow_user names. TLS then binds the session to the key's holder. *)
+let Service =
+  in(c, lcert: bitstring);
+  let leaf(u, a, k) = checksign(lcert, pk(skIss)) in
+  if a = app1 then                                    (* NOT:no-app-check *)
+  event Admitted(u, app1, k).
+
+let Setup =
+  (* mal: a person of the organisation whose account and enrolled device
+     the attacker holds *)
+  new skm: skey;
+  event Holds(mal, app1, pk(skm));
+  event Login(mal, app1, pk(skm));
+  event Issued(mal, app1, pk(skm));
+  out(c, sign(leaf(mal, app1, pk(skm)), skIss)); out(c, skm);
+  (* and mal's own sign-ins, any nonce *)
+  !(in(c, (a: app, n: bitstring)); event Login(mal, a, pk(skm)); out(c, sign(idtoken(mal, a, n), skIdP))).
+
+(* 1. alice (sign-in only) is certified only for a key her own sign-in
+   named, for the app it named *)
+query a: app, k: pkey; event(Issued(alice, a, k)) ==> event(Login(alice, a, k)).
+(* 2. bob (an admin code, never leaked) only for a key his device made *)
+query a: app, k: pkey; event(Issued(bob, a, k)) ==> event(Holds(bob, a, k)).
+(* 3. a certificate of app1 for any person but mal and lc is a key an
+   honest device of that person made for app1 *)
+query u: user, k: pkey; event(Admitted(u, app1, k)) ==> event(Holds(u, app1, k)) || u = mal || u = lc.
+(* 4. no certificate of appX's client: the owner's rules name app1, app2 *)
+query u: user, k: pkey; event(Issued(u, appX, k)) ==> u = mal.
+(* 5-8. witnesses: alice certified; bob certified; a service admits
+   alice; the leaked code enrols the attacker's key for lc (the residual:
+   one person and app, once) *)
+query k: pkey; event(Issued(alice, app1, k)).
+query k: pkey; event(Issued(bob, app1, k)).
+query k: pkey; event(Admitted(alice, app1, k)).
+query a: app, k: pkey; event(Issued(lc, a, k)).
+
+process
+  Setup | !IdP | !Rogue | !Device(alice, app1) | !Device(alice, app2) | !IssuerSSO | !Renew | !Service |
+  (new tb: bitstring; event CodeMade(tb, bob, app1); (IssuerCode(tb, bob, app1) | CodeDevice(tb, bob))) |
+  (new tl: bitstring; event CodeMade(tl, lc, app1); out(c, tl); IssuerCode(tl, lc, app1))

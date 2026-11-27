@@ -1,0 +1,16 @@
+# <mutant> <property> [cfg]: TLC with that Mutant must report <property>
+# violated (scripts/spec-grant.sh mutants).
+issuer-no-replay-set ApprovalOnce
+issuer-any-approver GrantMatchesApproval
+self-approve GrantMatchesApproval
+dur-from-request GrantMatchesApproval
+agent-any-principal GrantedOnly
+agent-any-service GrantedOnly
+agent-no-expiry-check ExpiryBound
+expiry-refuses-only ExpiryBound
+expiry-refuses-only SessionsEnd GrantLive.cfg
+agent-no-rev-check RevokeBound
+revoke-refuses-only RevokeBound
+stale-list-admits RevokeBound
+stale-list-keeps RevokeBound
+issuer-signs-denied DenyFinal

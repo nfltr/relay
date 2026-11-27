@@ -1,0 +1,4 @@
+{"ev": "req", "o": "o-x", "id": "r1", "who": "person:bob@a.com", "where": "machine:crm", "svc": "web", "d": 3600, "t": 1000}
+{"ev": "sign", "o": "o-x", "id": "r1", "sn": "aa", "who": "person:bob@a.com", "where": "machine:crm", "svc": "web", "by": "alice@a.com", "ap": ["alice@a.com"], "until": 4600, "t": 1000}
+{"ev": "crl", "o": "o-x", "num": 1, "next": 90000, "t": 1000, "rev": []}
+{"ev": "admit", "o": "o-x", "sn": "aa", "who": "person:bob@a.com", "cwho": "person:bob@a.com", "where": "machine:crm", "svc": "web", "svcs": ["web"], "until": 4600, "t": 1100, "ok": true, "why": "", "u": 4600, "num": 1, "next": 1100, "rev": false}

@@ -1,0 +1,2 @@
+{"ev":"revoke","o":"o1","u":"alice@example.com","a":"","names":[],"t":40}
+{"ev":"sso","o":"o1","n":"send-1","why":"","u":"alice@example.com","a":"send","k":"k1","kn":"N1","nonce":"N1","exp":200,"au":100,"t":50}

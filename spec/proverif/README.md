@@ -1,0 +1,1230 @@
+# ProVerif models: A2A end-to-end encryption
+
+Symbolic (Dolev-Yao) models of the A2A E2EE protocol in `client/rpcclient`,
+checked with [ProVerif](https://bblanche.gitlabpages.inria.fr/proverif/)
+2.05 (`make spec-proverif`, in `make ci`). The attacker is every relay and
+the link between relays: it reads, drops, reorders, replays and forges any
+message, chooses connect labels and routing, and holds the relays' CA. The
+crypto is perfect (X25519 as Diffie-Hellman with its one equation, HMAC,
+HKDF and the Noise KDF chain as free functions, AES-GCM as an AEAD that
+opens only under its key, nonce and AD). Lane A2AID; the design of Part 2
+is nfltr's `docs/decisions/a2a-machine-identity-2026-11-07.md`.
+
+ProVerif ships as source only: `scripts/fetch-proverif.sh` builds it once,
+with a pinned OCaml 4.14.2 also from source, into `~/.cache/relay-proverif`
+(both tarballs pinned by sha256; a C compiler, make and curl; offline after
+the first run, about 5 minutes on the Mac). `run.sh [model]` runs each line
+of `expect.txt`: `<model> <flags> <results>`, the model with those flags
+(a line ending `(* ONLY:f *)` is kept only with flag f, one ending
+`(* NOT:f *)` only without it) and its `RESULT` lines in order must read
+`<results>`: `T` the query holds, `F` ProVerif found an attack (its trace
+is in the log, `PROVERIF_OUT=<dir>` keeps them), `?` not proved. A mutant
+is a flag that puts a bug back; its line lists the queries that must then
+fail. In make ci a mutant's line (it reads `F` or `?` where its base, the
+line with its flags but the last, else `-`, reads `T`) runs only the
+queries whose results differ from its base's (ProVerif proves each `query`
+declaration on its own; the base's line proves the rest): about a third of
+the CPU of every query of every line, which `PROVERIF_FULL=1` (nightly, make
+spec-traces) still runs. A variant whose witnesses turn reachable (`sess`)
+is no mutant: its line ends `full` (lane SPECFAST). Other E2EE paths' models (lane E2EEPROOF) use the same layout, script
+and pin.
+
+## Environment assumptions
+
+| assumption | source |
+|---|---|
+| X25519 is a Diffie-Hellman group (CDH hard, small-subgroup keys refused) | RFC 7748; Go `crypto/ecdh` rejects the all-zero shared secret |
+| HMAC-SHA256 and HKDF-SHA256 are PRFs; SHA-256 collision resistant | RFC 2104, RFC 5869 |
+| AES-256-GCM is an AEAD; a nonce never repeats under one key (v1: random 96-bit nonces; v2: Noise's 64-bit counter per direction) | NIST SP 800-38D (2^32 random-nonce messages per key); Noise rev. 34 §5.1 |
+| Noise NNpsk0 as specified | Noise Protocol Framework rev. 34, `github.com/flynn/noise` |
+| the HMAC input encoding `label 0 txn 0 keys` is injective | the labels are prefix-free; the keys after the second 0 have fixed length (`a2a_e2ee.go` `a2aE2EEPairingTag`) |
+| a call's frames reach the other end in order, unless the relay misbehaves | gRPC stream per agent, relay-core sessions (relied on by v2's counters only) |
+| the root pairing key and machine keys never pass through a relay | nfltr `a2akeys`: files made on a root holder, copied out of band |
+
+## Models
+
+| file | what |
+|---|---|
+| `a2a_today.pv` | wire v1 (removed; relay 3977c04, the findings' evidence): interactive handshake, frames, machine keys, revoke; root holder R on relay X, machines B, E (honest), C (leaked), D (leaked, revoked at phase 1) on relay Y |
+| `a2a_machine.pv` | wire v2, what `client/rpcclient` ships: Noise NNpsk0 under the owner-derived machine key, key id from the called agent id, prologue binding txn, the initiator's role, caller, callee and key id (the callee's own ref the relay's), per-direction counter keys, authenticated end; each rule cites its code |
+
+Wire v2 is interactive only: v1's 0-RTT first flight (Noise NK to a
+static key advertised as a connect label, its replay register and NK's
+early-data limit) is gone, with its models (lane A2AV2, the hub's default;
+cost: one more round trip per E2EE call).
+
+Two relays (the owner's 2026-11-07 addition): caller on X, callee on Y,
+frames over the link (today the replica link, `relay-server`
+`core/replicas`). Flags `honestX`, `honestY` make that relay's hops private
+channels with an honest forwarding process (Y routes by agent id, stamps
+the source by connection); the link is public in every variant, since a
+compromised relay holds its end of it. So the variants are: `-` both
+relays (colluding), `honestY` X alone, `honestX` Y alone,
+`honestX,honestY` the link alone.
+
+- `a2a_machine.pv` (v2) is checked in all four: every query holds. With
+  sessions (`sess`) ProVerif does not terminate on `honestX,honestY`;
+  that variant's `T` results follow from `sess,honestX` (or
+  `sess,honestY`) by the monotonicity below, and its witnesses are
+  checked in the others, so it is not run.
+- `a2a_today.pv`: ProVerif does not terminate on its private-channel
+  variants (replicated frame loops behind private forwarders). Its `T`
+  results hold for them anyway: making a channel private only takes
+  capabilities from the attacker, so every trace of a variant is a trace
+  of the all-public model (secrecy and correspondence are monotone). Its
+  attacks need only the link: an honest relay forwards everything it gets
+  on the link to its machines and everything they send onto the link, so
+  the attacker on the link reads, injects, replays and re-addresses (the
+  routing id travels in the clear) exactly as in the traces of the
+  all-public model.
+
+No property here holds only with one relay; none is weaker with two. A
+relay rerouting a call to a third machine is the attacker changing the
+routing id on its hop (`RelayY` routes on it): finding F3 today, refused
+by v2 (query 5).
+
+Witnesses: each model ends with reachability queries for its honest flows
+(R gets B's response, R gets B's request, B gets R's end of stream); they
+must read `F` (reachable), so no `T` above is true because a flow never
+completes.
+
+## Queries and results
+
+`a2a_today.pv`, wire v1 (positions in `expect.txt`):
+
+| # | query | today |
+|---|---|---|
+| 1 | secrecy of R's request to B | **F** (F3) |
+| 2 | secrecy of B's response to R | T |
+| 3 | secrecy of B's request to R | T |
+| 4 | secrecy of R's response to B | T |
+| 5 | R as caller agrees with the machine its ack's key id names (txn, both keys, key id), injective | T |
+| 6 | R as caller agrees with the target it called | **F** (F3) |
+| 7 | a request R handles under B's key id was sent by B | **F** (F1: R's own response reflected) |
+| 8 | each request B handles was sent once by R (injective frames) | ? (F2: a replayed frame decrypts again) |
+| 9 | what R reads as B's response, B sent | **F** (F1: R's request reflected) |
+| 10 | no frame of revoked D handled after the revoke | T (mutant `skip-valid`: F) |
+| 11 | no handshake of revoked D answered after the revoke | T (mutant `skip-peer-revoke`: F) |
+| 12-13 | witnesses: R gets B's response; R gets B's request | F (reachable) |
+
+`a2a_machine.pv` (wire v2), every variant and `leak` (phase 2 leaks the
+root key, so every machine key: forward secrecy of all earlier calls):
+
+| # | query | v2 | fails under mutant |
+|---|---|---|---|
+| 1-4 | secrecy of both directions, R calling B and B calling R, with C and D leaked and the relays' CA the attacker's | T | `drop-psk`, `relay-cert`; 1 also `no-target-check` |
+| 5 | R as caller agrees with the target it called (txn, keys, key id), injective | T | `drop-psk`, `relay-cert`, `drop-txn`, `no-target-check`, `warm-untyped` (sessions) |
+| 6 | R as callee: the caller it answered as machine n is n, on that txn and key (non-injective: msg1 replays, and gets no frame accepted, 8) | T | `drop-psk`, `relay-cert`, `drop-txn` |
+| 7 | each request B handles was sent once by R | T | `drop-psk`, `relay-cert`, `drop-txn`, `drop-role` (F6), `early-data` (A2AWARM) |
+| 8 | each request R handles under B's key id was sent once by B | T | `drop-psk`, `relay-cert`, `drop-txn` |
+| 9 | no reflection | T | `drop-psk`, `relay-cert`, `drop-txn`, `no-target-check`; `one-key` (F1) now only `?` on 8 and 17: the response's first frame is a HEADER, which no request frame is, so in the model (one frame each way) a reflected frame is refused by its type too; the code's later DATA frames are what the split keys keep apart |
+| 10 | the end of a stream is the sender's | T | `drop-psk`, `relay-cert`, `drop-txn`, `clear-end` (F2) |
+| 11 | no frame of revoked D after the revoke | T | `skip-revoke` |
+| 12 | no handshake of revoked D after the revoke | T | `skip-revoke` |
+| 13 | revoke ends the session: no resumed call of revoked D answered after the revoke | T | `survive-revoke` |
+| 14 | a session is its pair's: R's request to B is never handled by E | T | `sess-unbound`, `no-target-check` |
+| 15 | no nonce reuse: a key seals at one nonce in one call only | T | `counter-reset` |
+| 16-18 | 7, 8, 10 for every call, handshake or resumed (non-injective): no cross-call splice or replay into another call | T | `txn-unbound` (16-18), `drop-psk`, `relay-cert`, `drop-txn`, `drop-role` (16, F6) |
+| 19-21 | witnesses: R gets B's response, B's request, B gets R's end, on a handshake | F (reachable) | |
+| 22-24 | the same on a resumed call | F (reachable) | |
+| 25 | response headers are the callee's: the headers R takes on call t are the machine's on t (sealed with its first response, frame type HEADER) | T | `clear-header`, and the mutants that break the frames' keys |
+| 26 | B calling R (a node fetching from its hub, which holds the root): the response B takes on call t under its key id is R's on t, every call (9 the other way). 1-4, 9 and 26 are "a relay cannot read or alter a call between two machines of one owner" (nfltr `docs/decisions/orch-public-app-plan-2026-11-19.md` L1) | T | `mach-resp-clear` (B takes R's response in the clear), `one-key` (R's response is a DATA frame, so a reflected request opens as one), and the mutants that break the frames' keys |
+| 27-28 | witnesses: B takes R's response, on a handshake call and a resumed one | F (reachable; 28 with `sess`) |
+
+Sessions (lane A2ASESS, flag `sess`: the lines without it are wire v2
+with a handshake every call, where 13-18 hold trivially and the resumed
+witnesses 22-24 read T, unreachable): 5-8 and 10 are over handshake calls (`HS`), as
+ProVerif's injectivity cannot hold across a table read and write; a
+resumed call is served at most once by the callee's replay window, which
+`spec/A2ASession.tla` checks (`AtMostOnce`, mutant `AS:no-window`), with
+the callee's restart, expiry and the one rehandshake after a refusal. The
+model's resume, tag and call keys are `client/rpcclient/a2a_e2ee_session.go`;
+each query and mutant has a test in `a2a_e2ee_session_test.go`
+(`TestA2AE2EESessionBoundToPair` 14, `TestA2AE2EEResumedFrameNotInAnotherCall`
+16-18, `TestA2AE2EEResumedCallReplayRefused` and `TestA2AE2EESessionWindow`
+the window, `TestA2AE2EECallKeysUnique` 15, `TestA2AE2EERevokeEndsSession` 13,
+`TestA2AE2EERotationRekeys`, `TestA2AE2EEResponderRestartRehandshakes`); the
+wire vectors gain the session secret, its id, a resume and its first frames.
+The retry after an unknown (its message 1 names the resume it retries) is
+a state property, `spec/A2ASession.tla` (finding S1 there).
+
+Warm (lane A2AWARM, `Agent.WarmA2AE2EE`, `handleE2EEWarm`): a handshake
+with no call, so a peer's first call resumes (no round trip before its
+request). The model runs warms beside calls (`RootWarm`, `MachWarm`,
+with `sess`); every query holds. Message 1's payload says it is a warm
+(`a2aWarmMark`; a call's is empty or a retry), so its AEAD binds the type:
+a relay that retags a warm as an init, or an init as a warm, is refused
+(mutant `warm-untyped`, the warm's payload empty: R accepts a call the
+machine took as a warm, and 5 fails; `TestA2AE2EEWarmRetagRefused`). A request
+never rides the handshake (no 0-RTT): message 1's payload is sealed
+under the psk and the initiator's e alone, so a relay replays it to the
+machine, which opens it again (mutant `early-data`: the request in
+message 1 and served on receipt fails 7, injective delivery).
+
+`expect.txt` lists every result exactly, mutants included (a mutant
+also fails queries it does not target, e.g. `drop-txn` breaks agreement
+everywhere but not secrecy).
+
+Conformance: these are symbolic models of a message exchange, not state
+machines, so there is no trace recorder; the code is tied to the model by
+its wire vectors (`TestA2AE2EEv2Vectors`: prologue, psk, both handshake
+messages and the first frames of each direction, the model's term beside
+each), by its bindings ("Bindings" below: a row per field the model
+binds, each a relay's change the code must refuse), by each rule's file:line citation in `a2a_machine.pv`, by one test
+per finding (`client/rpcclient/a2a_e2ee_v2_test.go`: F1
+`TestA2AE2EERefusesReflectedFrame`; F2 `TestA2AE2EERefusesReplayedFrame`,
+`TestA2AE2EERefusesDroppedFrame`, `TestA2AE2EERefusesForgedEnd`; F3
+`TestA2AE2EERefusesReroute`; each fails on v1) and by the code map below
+(the drift check makes a change to those files update the models or carry
+`Spec-Reviewed`). Runtime: about 4 CPU minutes for all lines (229 s user,
+82 s wall on a Mac at load average 7-10); lines run side by side
+(`PROVERIF_JOBS`).
+
+## Bindings
+
+The vectors pin the bytes the code sends; a change to the wire re-pins
+them, and a re-pinned vector cannot tell a dropped binding from a new
+field. So each model lists, as `BIND:<id>` lines in a comment, the fields
+and keys of its messages that its queries rely on and a relay could change
+on the wire, and a Go test has one row per id: it changes just that field
+in an honest message of the real code (fixed keys, as the vectors) and
+requires a refusal. The test fails when the model's ids and its rows
+differ, so a binding added to a model needs its row, and a row outlives any
+re-pinning (`make spec-bindings`, in `make ci`; nfltr
+`docs/decisions/e2ee-model-code-link-2026-11-09.md`). A model whose
+bindings test is missing would be checked by nothing:
+`client/model_bindings_guard_test.go` `TestEveryModelBindingHasARow` (in
+`make test`) fails when a model declares a `BIND` id that no
+`*_bindings_test.go` has as a quoted row key, or whose test `make
+spec-bindings` does not run, unless `client/internal/modelbind` `Pending`
+lists the id with where its row comes from. Each bindings test compares
+its model's ids with its rows through `modelbind.Check`, which exempts the
+pending ids, and every one of these tests fails once a pending id has a
+row, so the list cannot go stale.
+
+| model | test | rows |
+|---|---|---|
+| `a2a_machine.pv` | `client/rpcclient/a2a_e2ee_bindings_test.go` `TestA2AE2EEModelBindings` | 17: message 1 (txn, role, caller, callee, key id, psk, warm), the ack's transcript, frames (direction, order, end, header), resumed calls' keys (txn, call number), the resume (txn, call number, pair) |
+| `e2ee_tcp.pv` (direct paths) | `client/agent/direct_bindings_test.go` `TestDirectModelBindings` | 6, one per `BIND:direct.*`: a look-alike certificate and another machine's name answering the punch (`refused_cert`), the token keyed by another session, bound to another or no QUIC connection, the other role's token (both ways), another epoch's token (lane DIRECTPATH3; Go mutants `direct-no-name`, `direct-no-cert-check`, `token-no-epoch`, `token-unbound`, `token-no-role`, `direct-no-token`). Under a group dial (36), `TestDirectGroupDialGoesDirectToItsInstance`: the relay's pick of the other instance for the first exchange refused and excluded, the session's instance taken (lane DIRECTGROUP; Go mutants `group-control-no-name`, `group-control-no-exclude`) |
+| `e2ee_tcp.pv` (services by name) | `client/agent/service_bindings_test.go` `TestServiceModelBindings` | 4 here, one per `BIND:org.*`: web serving pg as tcp and udp, a session routed to the datagram pg refuses the stream protocols and the stream pg the datagram ones, the client refuses a negotiated protocol of the other kind (`org.kind`, lane UDP2; Go mutant `agent-ignores-kind` in `org_mutants.txt`: `serviceBind.protos` offering both kinds); a session routed to pg refuses an offer of web/vault, another agent's pg and no protocol, a session routed to vault refuses web/pg, and the client's `BindServiceTLS` refuses a server that negotiated none (`org.service`); a service published under a group the certificate lacks refused at `NewServiceTable`, and pg@db refused once a renewed certificate lacks db (`org.group`); pg@db refused for a pg published under ops, vault@db for a vault under none (`org.publish`) (lane SVCBIND; Go mutants `client-no-alpn-check`, `agent-no-alpn-check`, `no-protocol-accepted`, `agent-no-publish-check`, `agent-no-ou-check`, `publish-not-in-cert`). The group-dial client's own check (OU contains the group, no name) is `client/orgid/group_dial_bindings_test.go` `TestE2EETCPModelBindingsGroupDialClient` (`org.group`; Go mutant `no-group-check` in `client/orgid/testdata/mutants.txt`). The dialling client's half through `nfnet.Conn`'s organisation TLS is `client/nfnet/dial_bindings_test.go` `TestE2EETCPModelBindingsDialClient`: web/pg refuses web's vault and a server negotiating none (`org.service`; Go mutant caught by hand: `BindServiceTLS` dropped), pg@db reaches machines of db whatever their name and refuses eve (group web), naming her for the next pick's exclude, and a server negotiating vault@db (`org.group`) |
+| `app_enrol.pv` | `client/appenrol/appenrol_bindings_test.go` `TestAppEnrolModelBindingsNonce`, `client/orgid/app_identity_bindings_test.go` `TestAppEnrolModelBindingsAttrs`, `org/orgpki/signin_test.go` `TestAppEnrolSignInModelBindings` | 6: the sign-in nonce refuses the org key swapped, the relay key swapped and the keys reordered (`app.nonce`; Go mutants `no-nonce-check`, `nonce-relay-key-only` in `client/appenrol/testdata/mutants.txt`); a service admitting alice's `send` refuses bob's `send`, alice's other app and a machine enrolled for neither (`app.attrs`; `no-app-check`, `no-user-check` in `client/orgid/testdata/mutants.txt`); an app URI SAN of another organisation is refused though the chain verifies (`app.urihost`, finding F1; `uri-host-unchecked`); `org/orgpki/signin_test.go` `TestAppEnrolSignInModelBindings`: the issuer refuses a sign-in whose nonce names another org or relay key (`app.nonce`; `signin-no-nonce-check`), a token for a rogue client id or azp (`app.aud`; `no-aud-check`), and a token another key signed, of another issuer, expired or with an unverified email (`app.idtoken`; `no-token-exp`; the rule's email domains were removed with domain rules, lane PEOPLE2: a new key enrols only by an invite, `people.invite`) |
+| `nf1_anon.pv` | `client/agent/direct_nf1_anon_bindings_test.go` `TestNF1AnonModelBindings` | 1, `anon.cands`: candidates sent outside the admitted TLS (the control exchange's open before TLS, to the client; after the control mark, to the agent) are taken by neither end (lane NFA1) |
+| `orghosted.pv` | `client/orgid/hosted_bindings_test.go` `TestOrgHostedModelBindings` | 2: a chain through an issuer certificate the root's CRL of issuers lists refused, and a CRL of issuers signed by another key than the root not taken (`hosted.rootcrl`; Go mutants `ignore-root-crl`, `root-crl-unsigned`); a leaf a stolen issuer key signed past the issuer's NotAfter admitted only until the issuer's NotAfter and refused at it (`hosted.until`, finding F1 of nfltr's `org-hosted-issuer-2026-11-16.md`; Go mutant `until-leaf-only`) (lane ORGH1) |
+| `cap_address.pv` | `client/capaddr/capaddr_bindings_test.go` `TestCapAddressModelBindings` | 5 of 6, one per `BIND:cap.*` but `cap.kind` (the transport's), against the codec `client/capaddr` (real TLS 1.3 over a pipe): the answer's key and the TLS certificate's key of another server, and a plain answer with no key (`cap.pin`); the record over another relay, rid, tag or hints, under another key, or none (`cap.rendezvous`); the proof over another session's exporter, under another secret, without the exporter (`cap.secret`); A1's proof at A2's acceptor and A2's at A1's, one key (`cap.service`). A declaration of A1's rid (`cap.register`, lane NF1RISKS): under another key with the holder's nonce, another key's signature, the rendezvous record (with hints, and with none: an answer's record before direct paths, which an untagged proof would equal byte for byte), another tag, no signature, truncated, empty, the server's proof at another relay or for A2's rid: each refused. Go mutants caught by hand: the rid's binding to the key unchecked, the proof under the record's tag. Go mutants caught by hand: the answer's key unchecked, the certificate unchecked, the relay out of the record, the exporter out of the proof. `pin-unkeyed` is no binding: `TestRoundTrip` requires two addresses of one key to differ in pin; and 5 of 5 against the transport, `client/nf1/nf1_bindings_test.go` `TestNF1ModelBindings` (lane NF1RDV): a relay routing to another server or running TLS under another key (`cap.pin`), a record over another rid or with hints it does not cover (`cap.rendezvous`), a proof over another exporter (`cap.secret`, no verdict), A1's client at A2's listener (`cap.service`), a stream dial to a `u1` record and a datagram dial to one without, a `u1` the record does not cover (`cap.kind`, lane UDP2; Go mutant `kind-unchecked` in `client/nf1/testdata/mutants.txt`, `make test-go-mutants`); Go mutants caught by hand: the answer unchecked, `VerifyConnection` dropped, `Admit` skipped; and 1 of 1 for the direct phase (lane NF1DIRECT), `client/agent/direct_nf1_bindings_test.go` `TestNF1DirectModelBindings`: a holder of another key answering the punch at the agent's candidate, for the session's own server name, is refused (`refused_cert`) and the session stays relayed with its bytes intact (`nf1direct.pin`; Go mutant `nf1-direct-no-pin` in `org_mutants.txt`); the tokens are `e2ee_tcp.pv`'s rows (`TestDirectModelBindings`), and the `d1` hint's binding is `cap.rendezvous` (a hint the record does not cover) |
+
+| `direct_once.pv` | `client/agent/direct_once_bindings_test.go` `TestDirectOnceModelBindings` | 4, one per `BIND:once.*` (lane DIRECTONCE), on the nf1 rig: the honest client's re-attach token for another channel, replayed on the relay's own re-attach, attaches nothing, the token over that channel would (`once.channel`; Go mutant `reattach-any-channel`); a byte the relay changes on epoch 0's relayed stream cuts that epoch (a TLS error) and the session resumes on a re-attach, every byte intact (`once.offset`; `frames-outside-channel`); a re-attach answered under another key, the honest answer replayed, refused by the client's pin, and a token over the session's own TLS (its key continued) refused by the agent (`once.reattach`; `reattach-no-pin-check`); a session framed outside its TLS (a path frame after the answer) and a re-attach without its TLS (a plain OPEN with the honest relayed token) refused by the agent, and the client's re-attach starts its ClientHello whatever the stream answers (`once.plain`; `agent-plain-relayed`); mutants `client/agent/testdata/direct_once_mutants.txt` |
+| `svc_access.pv` (identity to the app) | `client/agent/svc_access_bindings_test.go` `TestSvcAccessModelBindings` | 2 of 8 (lane SA2; the rest `modelbind.Pending`, lanes SA3, SA4): a person's device and a machine send every identity header (`Nfltr-*`, `X-Nfltr-Caller*`, lower case, `Nfltr_Person`) on two requests of one session and the app gets only the certificate's name, person, groups and the session's service; over PROXY v2 the same in the TLVs (`svc.hdrwho`; Go mutants `header-from-client`, `header-underscore`, `proxy-no-header`, `identity-off`); the assertion verifies under the agent's JWKS for its own service, pg's app refuses vault's and one past `exp` (`svc.aud`; `jwt-no-aud`) |
+
+`modelbind.Pending` is empty: every binding has its row (the `once.*`
+rows since lane DIRECTONCE). `cap.kind` and `org.kind` have their rows
+since lane UDP2, `dgram.tag` since lane UDP3.
+
+A planted Go mutant fails its row (lane E2EEVECTORS): the role, caller,
+callee or txn left out of `a2aE2EEPrologue`, the psk not keyed, a warm's
+message 1 untyped, a call's keys or a resume's tag without the call number,
+a resume's tag without the txn. Where the existing hostile-relay tests
+already make the attack (`frame.end`, `frame.header`, `init.warm`,
+`resume.pair`), the row runs them.
+
+`client/agent/e2ee_share_bindings_test.go` `TestE2EEShareModelBindingsAgent`
+holds the agent's row of relay-core's `e2ee_share.pv` (`relay.agent.cred`:
+the share credential checked on every E2EE request; mutant: the check
+skipped).
+
+## Findings (lane A2AID, 2026-11-07; F1-F3 and F5 fixed by wire v2, lane A2AV2)
+
+- **F1 (medium) reflection.** The interactive handshake derives one
+  session key for both directions and frames carry only the txn as AAD
+  (`a2a_e2ee.go` `deriveA2AE2EESessionKey`, `encrypt`/`decrypt`,
+  `a2aE2EEAAD`); a 0-RTT call that fell back kept that key (`adopt`). The
+  relay returns a frame to its sender, which opens it as the peer's: a
+  caller reads its own request as the response, a handler its own response
+  as a new request. Traces: `a2a_today` queries 7 and 9.
+- **F2 (medium) no frame order, no authenticated end.** Frames have random
+  nonces and no counter; the end of a stream (an empty `Eom` frame) and
+  error frames are in the clear, and `clientStream.statusDetail` shows the
+  plaintext payload when it does not decrypt. The relay replays, drops or
+  reorders frames within a call, ends a stream early as a clean EOF, and
+  forges a peer's error text. Query 8 (ProVerif finds no proof; the replay
+  is: send the same DATA frame twice on the txn) and by reading the code.
+- **F3 (high) the callee is not bound to the agent called.** Nothing
+  compares the ack's key id (interactive, `complete`) or the label's key
+  id and name (0-RTT, `parseA2AE2EEStaticLabel`, `Agent.Call`) with the
+  target agent id, and the tags do not cover it. A relay reroutes a call to
+  another machine of the owner unnoticed; with any one compromised machine
+  key, the relay plus that machine read every request a root holder sends
+  to any machine (a 0-RTT label could even claim another agent's name
+  under the compromised key). Traces: `a2a_today` 1, 6 (and v1's 0-RTT
+  model, removed with the flight).
+- **F4 (expected) no pairing key, no authentication.** Without a pairing
+  key the relay runs a handshake with each end (Noise NN). Removed: A2A
+  E2EE is keyed only (lane A2AFINAL; `Dial` refuses `WithA2AE2EE` without
+  a key, `ErrA2AE2EENoKey`, and an agent without keys refuses every E2EE
+  call), so its model and the unkeyed Noise NN are gone.
+- **F5 (low)** a machine answers a root holder's init (key id "") without
+  checking its tag (`newServerA2AE2EEState`): authentication is implicit
+  (no frame of such a call decrypts for anyone without the machine's key,
+  query 5 holds), but anyone can start the machine's handler. v2 removes
+  the case (the caller names the callee's key id).
+- **F6 (medium, lane A2AREF, fixed before release) reflection to the
+  caller's own machine.** A callee's own ref is the one the relay states
+  at connect (`agentwire.AgentRefKey`, `Agent.Ref`): the model takes it
+  from the attacker at every answer. With the prologue binding only txn,
+  caller, callee and key id, a relay returns a machine's call to R to that
+  machine, or to another agent of it (same machine key), told "you are
+  R"; it answers and handles its own request as R's (queries 7, 16).
+  Fixed by the initiator's role in the prologue (`a2aE2EERole`: a machine
+  answers root holders only, a root holder a machine key id from a
+  machine; `A2AE2EEKeyring.Machine`); mutant `drop-role`; test
+  `TestA2AE2EEMachineInitNotAnsweredByAMachine` (sibling and itself).
+  Root holders hold one root key and stay interchangeable: a relay can
+  route a call between them whatever the callee check (Open item 2).
+- Revocation holds at the root holder (10, 11; each check alone is caught
+  by its mutant). A revoked machine itself learns nothing: frames a root
+  holder sealed before the revoke still open there, which is harmless.
+
+## E2EE paths: TCP (lane E2EEPROOF, 2026-11-07)
+
+`e2ee_tcp.pv` models the other E2EE path whose ends live in this
+repository (Part 4 of `expect.txt`; `p2p_e2e.pv`, Part 3, was deleted
+with client/p2p's calls and file transfer, lane P2PDEL); nfltr's
+`docs/e2ee.md` "Formal proofs" is the overview of every path. The
+attacker owns every relay: with two relays (each end on another relay or
+replica, the replica link between them, a relay rerouting a session to a
+third machine) one Dolev-Yao attacker plays all of them, which is the
+colluding case and so covers each relay hostile alone. A query that holds
+holds for two relays too; none needs one relay.
+
+Not re-proven: TLS 1.3, DTLS-SRTP. Each is an
+ideal channel to the holder of the key its end checked (citations in each
+model and below). Modelled is ours: where each end gets the other's key or
+fingerprint, the check, the pairing key, rotation, the plaintext
+fallbacks a relay could steer to. An F on a model's base line is a
+documented limit or a finding (nfltr's LEFTOVERS, lane E2EEPROOF).
+
+### e2ee_tcp.pv: TCP sessions in organisation mode (lanes ORG2, ORGCUT)
+
+Organisation mode is the only end-to-end encrypted TCP mode: lane ORGCUT
+deleted pins (`--pin`, `pin:`, `Config.TCPE2EEClients`,
+`Service.E2EEClients`) and folded `e2ee_tcp_org.pv` into this model. A tcp
+service with E2EE On is in organisation mode (`agent.Service.Org`; a
+tunnel's `Config.TCPE2EEOrg`), else the SDK refuses it. It ends its sessions' TLS with
+its machine certificate, issued under the organisation's root (nfltr
+`docs/decisions/org-enrolment-2026-11-09.md`); a client names the machine
+(`nfltr dial web/pg`, `to: web/pg`) and checks the chain and the name; the
+service admits a client certificate of the organisation that the root's
+signed access rules let use it (`orgid.Identity.CheckClient`, lane SA3;
+the rule's signature is `svc_access.pv`'s), and sends its plaintext only to the target it fixed (its table's,
+`--forward`'s). The attacker owns the relays and holds the keys of eve
+(live, another group), lost (revoked), old (expired), and an expired and a
+revoked key of web itself. Who can get a certificate at all is `enrol.pv`; the times (a session ends at `Identity.Until`, a newer CRL cuts
+what it lists) are `spec/enrol/Enrol.tla` (`NoExpiredSession`,
+`RevocationBound`), whose session-level mutants `no-expiry-timer` and
+`no-cut-on-update` are Go mutants of `client/agent` (`make
+test-go-mutants`).
+
+| # | query | result |
+|---|---|---|
+| 1 | the client's bytes reach only machine web's own service | holds |
+| 2 | injective agreement: the answer the client takes, web's agent sent in that session | holds |
+| 3, 4, 5 | the client refuses a server certificate of another name, a revoked one, an expired one | holds |
+| 6 | the service's answer reaches only an admitted client | holds |
+| 7 | what reaches the service was sent by an admitted client | holds |
+| 8, 9, 10 | the service refuses a client outside its groups, a revoked one, an expired one | holds |
+| 11 | a clean end the client passes on was web's agent's close_notify | holds: a stream that ends without the peer's close_notify (the relay cutting it between two records) is a reset to the local application (`client/tlsend`; claims review CLAIMS-A Q5, mutant `clear-end`: crypto/tls's `io.EOF` for both) |
+| 12 | the service's half close was the client's close_notify after the bytes it got | holds (the agent side, `serveE2EETCP`; mutant `agent-clear-end`) |
+| 13 | a clean end at the client was the target's clean end | holds: a target's reset ends the TLS stream without close_notify (`tlsend.Conn.Reset`, which link's `peerlink.Join` calls on an abort); lane TCPRESET, mutant `abort-as-close` |
+| 14 | the service's half close was the client's local application's clean end | holds: the application's reset resets the session (nfltr `transportcli.Pump`, `tlsSession.Reset`); mutant `client-abort-as-close` |
+| 15, 16 | witnesses: an allowed client reaches the service and gets its answer | attack (reachable), as they must |
+| 17, 18 | witnesses: both clean ends happen | attack (reachable) |
+| 19, 20 | witnesses: both aborts happen | attack (reachable) |
+| 21 | what the client sends on a direct connection it took reaches only web's agent | holds (design, lane DIRECTPATH) |
+| 22 | injective agreement: a direct connection the client takes ends at web's agent, bound to the client's own session and the same QUIC key | holds |
+| 23 | the agent binds a direct connection to a session only for that session's client | holds |
+| 24 | the client takes no other machine's certificate on the direct path | holds |
+| 25, 26 | witnesses: the client takes a direct connection; the agent binds one | attack (reachable) |
+| 27 | injective agreement per (session, epoch): the agent attaches a stream at epoch e only on the client's OPEN for e | holds (lane DIRECTPATH2, gap G2; mutant `token-no-epoch`) |
+| 28 | what the client sends on a re-attached relayed stream stays secret | holds, also under `token-no-epoch`: a replay is a denial only |
+| 29 | witness: the agent attaches a relayed re-attach | attack (reachable) |
+| 30 | what the group-dial client sends for `pg@db` reaches no one outside group db | holds (lane SVCBIND; mutant `group-dial-no-group-check`) |
+| 31 | ... and only a service its machine publishes under db: not web's `vault`, not mal's `pg` published under ops | holds (mutants `agent-no-alpn-check`, `agent-no-publish-check`, `client-no-alpn-check`) |
+| 32 | injective agreement for the group dial: the answer it takes, an agent sent in that session | holds (mutant `group-dial-no-group-check`) |
+| 33 | a machine dial reaches only the named agent's named service: the relay cannot route `web/pg` to web's `vault` | holds (mutants `client-no-alpn-check`, `agent-no-alpn-check`) |
+| 34, 35 | witnesses: the group dial completes; web's second service serves | attack (reachable) |
+| 36 | a direct connection a client takes names its session's machine: the relay cannot move a group dial's session to another instance | holds (lane DIRECTGROUP; mutant `group-direct-no-name-check` with `direct-no-token`; every `direct-no-cert-check` line) |
+| 37 | witness: a group dial's session goes direct | attack (reachable) |
+| 38 | a datagram a client sends on a direct connection it took (a QUIC DATAGRAM frame) reaches only web's agent | holds (lane UDP1, design; fails where a machine dial's 21 does: `direct-no-cert-check`) |
+| 39 | the agent hands a datagram to session k only if k's own client sent it, on a connection bound to k (not injective: a replayed packet is QUIC's to discard) | holds (mutant `dgram-tag-unbound`; fails where 23 does, and with `direct-no-cert-check`: the direct key leaks) |
+| 40, 41 | witnesses: a client sends a datagram direct; the agent hands one on | attack (reachable) |
+| 42 | what reaches a service of a kind was dialled with that kind: the relay cannot route a stream client to the datagram service of the same name, or the reverse | holds (mutants `agent-ignores-kind`, `client-no-alpn-check`, `agent-no-alpn-check`; fails where 7 does) |
+| 43 | witness: the datagram client reaches the datagram service | attack (reachable) |
+
+A TLS record is bound to its place in its direction's stream (TLS 1.3's
+sequence number in the AEAD nonce): the model's close record names the
+bytes it follows. Without that binding the model finds the attacker
+splicing one agent session's close record onto a replay of the client's
+handshake to another; TLS's sequence numbers and the server's random
+rule it out, and the model does not re-prove TLS.
+
+Mutants, each check its own, the client's and the service's apart:
+`client-no-chain-check` (a certificate the relay made), `no-name-check`
+(another machine's), `client-no-expiry-check`, `client-no-crl-check`;
+`agent-no-chain-check`, `no-group-check`, `agent-no-expiry-check`,
+`agent-no-crl-check`, `skip-certificate-verify`. No downgrade: a client or
+service is in one mode, set by its own configuration (nfltr: an enrolled
+machine's client is in organisation mode; `--plain` per call), never by
+the relay's word, and never falls back. `downgrade-plain` (the client sends
+in plain when the relay answers that the service is plain) fails 1;
+`downgrade-any-client` (the service serves a client without an
+organisation certificate) fails 6 and 7. The target: `relay-names-target`
+(an agent without a target of its own dials the open's, E2EEPROOF finding
+1 before its fix; today `ErrE2EENoFixedTarget` at `New`) and
+`relay-names-target-with-forward` fail 1. `agreement-without-key-check`
+(a response taken without the session key) fails 2. The ends: `clear-end`,
+`agent-clear-end`, `abort-as-close`, `client-abort-as-close` (above).
+
+Direct paths (queries 21-26; lane DIRECTPATH, nfltr
+`docs/decisions/direct-paths-2026-11-11.md`; a design checked before any
+code). Once the session's TLS is up, its client may move the session's
+bytes, the same TLS records under the same key, to a direct QUIC
+connection to an address the relay hands it (a candidate, a QAD reply):
+the attacker decides who answers there. The client takes the direct
+connection only if the answer's certificate passes the session's own
+check (chain, name, NotAfter, CRL) and both ends prove the session: each
+sends, inside the QUIC session, an exporter of the TLS session bound to
+the QUIC key and to its role (`tokC`, `tokS`); the agent binds a direct
+connection to a session only on that session's client token. Mutants:
+`direct-no-cert-check` (whoever answers: 21, 24; with `direct-no-token`
+too, 22), `direct-no-token` (the agent's token unchecked at the client:
+22), `token-unbound` (tokens without the QUIC key: alone the certificate
+check holds; with `direct-no-cert-check`, a relay in the middle with two
+QUIC keys fails 21-24), `token-no-role` (one token both ways: reflected,
+22), `agent-direct-no-token` (bound on the relay's word: 23). The agent's
+checks of the session's client guard 23 as well: a client it admits
+wrongly holds the session key. The model's `BIND:direct.*` ids get their
+refusal rows in the code's bindings test when the code lands. The
+cut-over's byte order (none lost, duplicated or reordered) is link's
+`spec/DirectPath.tla`, not here.
+
+Re-attach (queries 27-29; lane DIRECTPATH2, gap G2 of the direct-paths
+doc). Each attach is a fresh stream, an epoch, opened by the client with
+`OPEN(epoch, token)`: ep1 the direct connection, ep2 and ep3 relayed
+streams after a fallback. Every token binds its epoch
+(`BIND:direct.epoch`); a relayed one is an exporter of the session's TLS
+(here `h((k, ns))`, with the server's random `ns`, as TLS 1.3's exporter
+takes the whole transcript; without it the relay replaying the client's
+handshake to a second agent session would give two sessions one
+exporter), the client's role and the epoch. The relay sees a relayed
+OPEN and can replay it on a new stream with another epoch; the agent, one
+acceptor per epoch of a session, attaches only on the token for that
+epoch. `token-no-epoch` (no epoch in the token) lets ep2's OPEN attach
+ep3 (27 fails) while the bytes on it stay the session's records under its
+key (28 holds): the replay is a denial only. A client mutant that takes
+the relay's certificate gives it the key, and so the re-attached bytes
+(28); an agent mutant that admits the relay's own client lets it attach
+its own session (27).
+
+Services by name (queries 30-35; lane SVCBIND, nfltr
+`docs/decisions/service-discovery-2026-11-12.md` section 4). The machine
+certificate names the machine, which every agent and service on it share,
+so the name check alone lets a relay route `web/pg` to web's `vault`, and,
+with discovery, `pg@db` to any service of any db machine. The model adds
+web's second service `vault` (published under no group), machine `mal`
+(group db, live; its `pg` published under ops, not db), and a group-dial
+client beside the machine-dial ones; web's certificate is in group db. A
+client offers one ALPN protocol naming what it dialled, `alpnM(agent,
+service)` (`nfltr-svc/<agent>/<service>`) or `alpnG(service, group)`
+(`nfltr-svc/<service>@<group>`); the model sends the offer in the clear
+(it does not lean on the transcript covering the ClientHello) and the
+agent's choice back in EncryptedExtensions under the session key. The
+agent accepts an offer only for the service the session was routed to,
+and for a group only one it publishes that service under and its
+certificate's OU holds, else the handshake ends (`no_application_protocol`);
+the client requires the negotiated protocol to equal its offer. The
+group-dial client checks the chain, OU contains the group, NotAfter and
+the CRL, and no name. The key exchange is bound to the server's random (as
+TLS 1.3's key schedule takes the transcript): without it the relay replays
+a client's handshake to a second agent session of the same machine, web's
+`vault`, which then reads the session; queries 1-29 keep their results
+with or without it. Mutants: `client-no-alpn-check` (the negotiated
+protocol ignored: the relay rewrites the offer, 31, 33), `agent-no-alpn-check`
+(any offer taken: the open names the service, 31, 33),
+`group-dial-no-group-check` (any organisation machine, eve: 30, 32),
+`agent-no-publish-check` (`<s>@<g>` served for a service not published
+under g, mal's `pg`: 31). Bindings `BIND:org.service`, `BIND:org.group`,
+`BIND:org.publish`. Not modelled: two agents on one machine (the ALPN
+names the agent; the model's agent is its machine).
+
+Direct paths under a group dial (queries 36-37; lane DIRECTGROUP, nfltr
+`docs/decisions/service-discovery-2026-11-12.md` section 4 "Direct paths
+under a group dial"). The group-dial client runs the direct path too; with
+no machine named, its direct check takes the name its session's
+certificate carries (the machine-dial client's, the name it dialled). 36:
+a direct connection any client takes names its session's machine, so the
+relay cannot move a group dial's session to another instance of the
+group. Mutant `group-direct-no-name-check` (the group's check on the
+direct answer, any db machine): alone it holds (the tokens bind the
+session: another instance holds no token for it); with `direct-no-token`
+the relay hands the client mal's certificate and the client takes it (36).
+`group-dial-no-group-check` now also gives the relay the direct path (21,
+22, 24): the session's machine is eve, so is the direct answer. Which agent
+the control exchange and a re-attach reach is the relay's routing, as the
+candidates already are: a wrong one is a denial. Not modelled, as above:
+two agents on one machine serving one `<s>@<g>` (the tokens refuse the
+other's direct answer).
+
+Datagram services (queries 38-43; lane UDP1, nfltr
+`docs/decisions/nf1-udp-2026-11-14.md` section 3; design, no code yet). A
+service has a kind, stream or datagram, and one name may serve both (dns
+over tcp and udp): web serves `pg` as a stream and as a datagram service,
+both published under db, and another machine-dial client dials web's
+datagram `pg`. The ALPN carries the kind, the prefix `nfltr-svc/` for a
+stream and `nfltr-dg/` for a datagram service in both dial forms
+(`alpnM(kind, agent, service)`, `alpnG(kind, service, group)`); the agent
+accepts an offer only of its service's kind (`BIND:org.kind`, its row
+`TestServiceModelBindings` `org.kind`), and the client's existing check of the negotiated
+protocol (`BIND:org.service`) carries the kind back. Mutant
+`agent-ignores-kind` (the agent takes an offer of either kind: the relay
+routes the stream client to the datagram `pg`) fails 42 alone;
+`client-no-alpn-check` now fails 42 too (the relay rewrites the offer's
+kind). The attack needs one name under both kinds: with names unique per
+agent the service name in the ALPN already refuses it and the prefix is
+defence in depth. Once a datagram session is direct, its datagrams ride the direct
+connection as QUIC DATAGRAM frames under its keys, tagged with the attach,
+and the agent hands one to a session only on a connection bound to it
+(`BIND:dgram.tag`, as `cap_address.pv` 21-24): `dgram-tag-unbound` (the
+agent accepts a datagram on any direct connection it accepted, before the
+client's token) fails 39 alone. Every earlier query keeps its result under
+every mutant. The flows inside the association are `spec/DatagramAssoc.tla`.
+
+### cap_address.pv: the capability address nf1 (lane NF1PV; codec `client/capaddr`, lane NF1CODEC)
+
+A server publishes one service under an address; whoever holds it reaches
+that service end to end encrypted, with no account and no certificate of
+their own (nfltr `docs/decisions/cli-cat-2026-11-12.md` section 5). The
+client knows only the address `A = (R, rid, pin, sec)`. The model fixes the
+message flow the address codec and its clients and servers implement:
+
+| field or message | what it is | what it binds |
+|---|---|---|
+| `R` | the relay host the server registered at | the client opens there and nowhere else (not a saved relay, `--server` or a redirect) |
+| `rid` | the rendezvous id: `ridOf(n, pk) = H("nf1-rid", n, pk)` (16 bytes), `n = H("nf1-n", sec)` (`capaddr.Nonce`, public: the relay learns it; lane NF1RISKS: before it, 16 random bytes) | what the relay routes by; the only field of the address a relay learns; bound to the server's key, so only its holder can declare it |
+| `sec` | the secret: 32 random bytes, always present (no empty or absent secret in the format; the codec refuses all zeros) | admission: only its holders are served |
+| `pin` | `H("nf1-pin", sec, pk)`: the server's TLS key, keyed by the secret | the key the client accepts, and unlinkability: a relay that sees `pk` cannot compute it |
+| encoding | `nf1` + a checksummed encoding of a version and the four fields | parsed offline; a bad checksum or a missing field is exit 1 |
+| 1. REGISTER (server -> R, on its agent session) | `rid`, `pk`, `rec = Sign_sk("nf1-rdv", R, rid, hints)`; to R only, with the declaration: the registration proof `(n, pk, Sign_sk("nf1-reg", R, rid))` | `hints` is whatever a client acts on before TLS (direct candidates); R takes the declaration only when `rid = ridOf(n, pk)` and the proof verifies (`BIND:cap.register`) |
+| 2. OPEN (client -> R) | `rid`, end to end encrypted | no plain mode: an answer "plain" is refused |
+| 3. rendezvous answer (R -> client) | `(pk, rec)` | the client requires `pinOf(sec, pk) = pin` and `rec` a signature under that `pk` over the tag, the relay it opened at, its `rid` and `hints`, before it uses `hints` or opens TLS |
+| 4. TLS 1.3 through the relay's stream | the server's certificate must carry exactly that `pk`; the client presents none | |
+| 5. PROOF (the client's first record inside TLS) | `H("nf1-proof", sec, exporter)` | the exporter covers the handshake transcript, the server's certificate included; the server checks it with the secret of the address the session was routed to (`rid`'s acceptor), never another address it serves under the same key, and closes the session otherwise; nothing of the service runs before |
+| 6. the service | its bytes both ways under the TLS key | |
+
+The codec (`client/capaddr`): the text is `nf1` + base32 (RFC 4648
+alphabet, lowercase, no padding) of `version (1) | len(R) | R | rid | pin |
+sec | CRC-32C` of the bytes before it; only the canonical text parses. The
+pin and the proof are HMAC-SHA256 keyed by `sec` over the model's tag and
+the key's DER SubjectPublicKeyInfo (`nf1-pin`) or the TLS exporter
+(`nf1-proof`, label `EXPORTER-nf1-proof`, 32 bytes); the record is Ed25519
+over `nf1-rdv | len(R) | R | rid | hints`. Vectors:
+`client/capaddr/testdata/vectors.json`.
+
+The wire (lane NF1RDV, package `client/nf1`; nfltr
+`docs/decisions/nf1-rendezvous-2026-11-13.md`): REGISTER is the service's
+declaration on the agent's session (`agentservices` `;nf1=<rid hex>`), so
+the relay gets `rid` at registration and `pk`, `rec` only on an open, which
+the model's attacker can make (it knows `rid`); the answer is the agent's
+first bytes in the routed session (`"nf1a"` and three length-prefixed
+fields), which every relay on the way may replace, as in the model; after
+`Admit` the server sends one verdict byte inside the pinned TLS. The model
+is unchanged: each step gives the attacker no more than the model's.
+
+The attacker owns every relay, answers every open, opens sessions of its
+own to any `rid`, and holds a second address (A2) of the same server and
+key. TLS 1.3 as in `e2ee_tcp.pv`; the exporter is `h((k, ns, pk))`
+(RFC 8446 7.5: the exporter secret derives from the transcript).
+
+| # | query | result | fails under mutant |
+|---|---|---|---|
+| 1 | secrecy of what A1's client sends | T | `client-no-pin-check`, `rendezvous-any-key`, `downgrade-plain` |
+| 2 | secrecy of what A1's service answers (only holders of `sec1` admitted, the holder of A2 included) | T | `server-no-secret-check`, `address-secret-optional`, `server-any-secret`, `client-no-pin-check` with `proof-unbound` |
+| 3 | what A1's acceptor takes was sent once by A1's client in that session | T | as 2 |
+| 4 | what the client of `rid` takes was sent once, in that session, by `rid`'s acceptor: injective agreement on the service | T | `client-no-pin-check`, `rendezvous-any-key`, `server-no-secret-check`, `server-any-secret` |
+| 5 | the client's TLS session ends only at the pinned key | T | `client-no-pin-check`, `rendezvous-any-key` |
+| 6 | A1's acceptor admits only a session whose client proved `sec1` | T | as 2 |
+| 7 | the rendezvous answer the client takes is the server's registration (key, `rid`, `hints`) | T | `rendezvous-any-key` |
+| 8 | a session the client completes went through the relay the server registered `rid` at | T | `relay-substitutes-relay`, `rendezvous-any-key` |
+| 9 | the client never sends in plain | T | `downgrade-plain` |
+| 10 | the attacker, which sees `rid1`, the key, the registration and every session and holds A2, cannot produce A1's pin | T | `pin-unkeyed`, `address-secret-optional` |
+| 11-14 | witnesses: the client takes the answer; A1's acceptor admits it; A1's service gets its bytes; the client gets the answer | F (reachable) | |
+| 15 | what A1's client sends on a direct connection it took reaches only A1's server, wherever the relay routed the punch | T | `client-no-pin-check`, `rendezvous-any-key`, `direct-no-pin-check` with `nf1-token-unbound` |
+| 16 | the client's direct handshake ends only at the pinned key | T | `direct-no-pin-check`, `client-no-pin-check`, `rendezvous-any-key` |
+| 17 | a direct connection the client takes is bound, once, by A1's agent to the client's own session | T | `nf1-direct-no-token`, `direct-no-pin-check` with `nf1-token-unbound`, `server-any-secret`, `server-no-secret-check` |
+| 18 | A1's agent binds a direct connection only for the session's own client | T | `nf1-agent-no-token`, the secret-check mutants |
+| 19, 20 | witnesses: the client takes a direct connection; A1's agent binds one | F (reachable) | |
+| 21 | a datagram A1's client sends on a direct connection (a QUIC DATAGRAM frame) reaches only A1's server | T | as 15 |
+| 22 | A1's agent hands a datagram to session k only if k's own client sent it, on a connection bound to k (not injective: a replayed packet is QUIC's to discard) | T | `dgram-tag-unbound`, `nf1-agent-no-token`, the secret-check mutants |
+| 23, 24 | witnesses: the client sends a datagram direct; A1's agent hands one on | F (reachable) | |
+| 25 | a client takes an answer for its dial's kind (stream, datagram) only if the server registered the address with that kind | T | `client-no-kind-check`, `hint-unbound-u1`, `hint-unbound`, `rendezvous-any-key` |
+| 26 | witness: a datagram client takes A1's answer | F (reachable) | |
+| 27 | R takes a declaration of A1's `rid` only from the holder of its server key: an address holder, which sees every answer and holds A2, cannot make an agent serve it | T | `rid-unbound`, `reg-is-rec`, `reg-unsigned` |
+| 28 | witness: R takes the server's own declaration | F (reachable) | |
+
+Direct paths (lane NF1DIRECT, nfltr `docs/decisions/nf1-direct-2026-11-14.md`):
+the record's `hints` carry one fact, `d1` (the listener takes direct
+paths), which the client acts on (it frames its session) only once the
+record covers it; the candidates travel inside the session's TLS. After
+admission the session may move to a direct QUIC connection (link
+pathswitch under the session's TLS, the organisation's mechanism of
+`e2ee_tcp.pv` 21-26): the client takes it only from the pinned key
+(`BIND:nf1direct.pin`) and with the agent's token, the agent binds it to a
+session only on that session's client token; the tokens are keyed by the
+session's exporter and bind the direct connection's exporter, which covers
+its handshake's key. Mutants: `hint-unbound` (hints taken from the frame,
+not the record: fails 7, and the kind's 25), `direct-no-pin-check` (16; with
+`nf1-token-unbound` 15-18), `nf1-token-unbound` (holds alone),
+`nf1-direct-no-token` (17), `nf1-agent-no-token` (18).
+
+Datagrams (lane NF1UDP, nfltr `docs/decisions/nf1-udp-2026-11-14.md`;
+design, no code yet): once a session is bound to a direct connection, its
+datagrams may ride that connection as QUIC DATAGRAM frames under the
+connection's keys, tagged with the attach (the attach stream's id); the
+agent hands a frame to a session only under a tag of a session attached
+on that connection (`BIND:dgram.tag`, its row pending the code lane).
+Mutant `dgram-tag-unbound` (the agent accepts a datagram on any direct
+connection it accepted, bound or not): fails 22 alone. The flows inside
+the session, the tag's lifetime across associations and the revocation
+are the relay's `spec/DatagramAssoc.tla`.
+
+The kind (lane UDP1, queries 25-26; design, no code yet): the hints are a
+flag list (`d1`, `u1`, `d1,u1`), modelled as the pair (direct, kind); `u1`
+says the address serves datagrams. A1 is a datagram service, A2 a stream
+service, and A1 has two clients, one dialling each kind (`cat forward
+--udp` or not). A client takes an answer only when the record's kind is
+its dial's (`BIND:cap.kind`, its row `TestNF1ModelBindings` `cap.kind`), so a relay cannot
+make a stream client speak to a datagram service or the reverse. Mutants:
+`client-no-kind-check` (the dial's kind not compared) and
+`hint-unbound-u1` (the kind taken from the answer frame's hints, `d1`
+still from the record) each fail 25 alone; 1-24 and 27-28 keep their
+results under every mutant.
+
+Registration (lane NF1RISKS, nfltr `docs/decisions/nf1-risks-2026-11-14.md`;
+design, no code yet): an open is refused unless the relay can route it, and
+before this lane any agent could declare any `rid`, so an address holder's
+declaration made every open of the address fail (the relay refused a `rid`
+two agents declare). Now `rid = ridOf(n, pk)` and the declaration carries
+the proof `(n, pk, Sign_sk("nf1-reg", R, rid))`, which the server sends
+only to R inside its agent session (never in an answer) and R does not
+store; R takes the declaration only if both check (`BIND:cap.register`:
+the codec `capaddr.RegistrationProof`, `CheckRegistration`, whose
+message bytes and check are `proto/wire/agentservices` `RegisterMessage`,
+`RIDOf`, `CheckRegistration`, the code the relay links (it never links
+`client/`); the relay's check and the agent's header are lanes NF1REG and
+NF1ROUTE). The model gives R's check its own process,
+fed by the server's private channel and by the attacker. `n` is public
+(the relay learns it), so `rid` stays public as before: queries 1-24 and
+`cap_address_link.pv` are unchanged, and so are the kind's 25-26. Mutants: `rid-unbound` (R does not
+check `rid = ridOf(n, pk)`: the holder declares A1's `rid` under its own
+key), `reg-is-rec` (R takes the rendezvous record, which every opener
+gets, as the proof), `reg-unsigned`: each fails 27 alone. Which of several
+holders of the key an open reaches is relay-core `spec/NF1Claim.tla`.
+
+`cap_address_link.pv` states 10 as an observational equivalence: two
+servers register `rid1` and `rid2`, the attacker reads both registrations,
+opens TLS sessions to both and is handed one pin (rid1's on the left,
+rid2's on the right); it cannot tell which (T). Under `pin-unkeyed` it
+hashes each registration's key (`?`: ProVerif's answer for a broken
+diff-equivalence; the derivation is in its log).
+
+Mutants: `client-no-pin-check` (the TLS certificate's key not compared),
+`rendezvous-any-key` (the answer's key not compared to the pin),
+`relay-substitutes-relay` (the client opens at another relay than its
+address's), `server-no-secret-check`, `address-secret-optional` (the
+format lets the secret be empty: A1 has none), `server-any-secret` (an
+acceptor takes a proof under any of its key's secrets and serves its own
+service: a client of A1 routed to A2's acceptor, and the holder of A2 into
+A1), `pin-unkeyed` (`pin = H(pk)`: the relay reads `pk` in every
+registration and TLS handshake, so it links `rid` to the pin),
+`downgrade-plain`, `proof-unbound` (the proof without the exporter: caught
+only with `client-no-pin-check`, where a fooled client's proof opens the
+real server; with the exporter it does not, 2, 3 and 6 hold).
+
+Not covered: an active relay sees `pk` (TLS shows the certificate to
+whoever opens a session), so the rendezvous ids of addresses that share a
+key link to each other; addresses that must not link use a key each. A
+leaked address is a capability: revoking it is stopping the server (no
+rotation, no relay state across opens: nfltr's cli-cat decision, "TLA+:
+none").
+
+### browser_peer.pv: an nf1 address opened in a browser (lane BROWSERPEER)
+
+The design is nfltr's `docs/decisions/browser-peer-2026-11-16.md`. A
+visitor opens an `nf1` address in a browser extension's page: the address
+is in the page URL's fragment (RFC 3986 3.5: never sent in a request), the
+page's code is the published bundle the extension store installed (its
+hash the release's), and that code runs the `nf1` client unchanged
+(`client/nf1` `Handshake` compiled to js/wasm: `cap_address.pv` steps 3-6)
+over a WebSocket to the address's relay, or over a WebRTC data channel to
+the agent's machine. The data channel's SDP travels inside an admitted
+`nf1` session (the control session) and every data channel carries its own
+`nf1` handshake, so DTLS is transport only. The attacker owns every relay,
+TURN and the network, may serve any code from any origin it runs, and
+holds a second address of the same key. That client is built: `make
+wasm-nf1` (lane BP1, in `make ci`) builds `client/nf1` for js/wasm without
+its relay dial, reproducibly and under a size budget, and runs one session
+of it under node.
+
+| # | query | holds because |
+|---|---|---|
+| 1, 2 | the visitor's bytes over the WebSocket and over a data channel are secret | each rides its own pinned `nf1` TLS session |
+| 3 | A1's service's answers are secret (only holders of `sec1` are admitted, on either path) | the proof on every session, the data channel's included |
+| 4 | A1's secret is secret | the fragment never leaves the bundle's page |
+| 5, 6 | injective agreement both ways on a session's bytes (not on its path: the attacker may carry a session on either transport; nothing relies on it) | as `cap_address.pv` 3, 4 |
+| 7 | the agent admits only a session whose visitor proved `sec1` | as `cap_address.pv` 6 |
+| 8 | the agent's SDP (addresses, ICE credentials) goes only into an admitted control session | the agent writes it after `Admit`, inside the TLS |
+| 9-12 | witnesses: the service gets bytes over the WebSocket and over a data channel; the visitor gets an answer; the agent sends its SDP | (each reads F) |
+
+Mutants (`expect.txt` "Part 6"): `hosted-page` (the code is whatever the
+relay's origin serves on this load: 1-5 and 7 fail, the guarantee the
+hosted page cannot give), `fragment-sent` (the address reaches a server:
+the visitor's own sessions stay secret, 1 and 2 hold, but the attacker is
+now a visitor: 3-5, 7), `ws-relay-tls` (the fallback trusts the
+WebSocket's TLS to the relay: 1, 2), `dc-trust-dtls` (a data channel's
+bytes under DTLS alone, to the fingerprint the relay's signaling gave: 2,
+5), `dc-no-proof` (the agent serves a data channel without the proof: 3,
+5-7), `signal-before-admit` (8).
+
+Bindings: `BIND:browser.dc.nf1` (a data channel's bytes only after its
+own `nf1` handshake: a stream whose proof is under a second address of
+the agent's key is refused before the service) and `BIND:browser.signal`
+(the agent's SDP only after `Admit`, inside the TLS: a control session
+under that second address, or one sending its offer in the clear, gets no
+answer and no connection) are the agent's, `client/p2p`
+`browser_peer_bindings_test.go` (lane BP3; each row fails against its
+mutant planted in `browserpeer.go`). `BIND:browser.bundle` (the
+extension's code is the release's bundle: a package with a byte of a file
+changed, a file added or one missing fails `client/internal/bundle`
+`Verify`, the check `make browser-bundle BROWSER_SUMS=<release
+SHA256SUMS>` runs on a rebuild) is the same test's row (lane BP4; mutant
+`hosted-page` in `testdata/browser_mutants.txt`).
+
+### nf1_anon.pv: an nf1 address served with no account, direct only (lane NF1ANON; design, no code yet)
+
+The design is nfltr's `docs/decisions/nf1-anon-2026-11-16.md`. The
+server's agent connects to the address's relay with no credential: its
+registration is the registration proof alone (`cap_address.pv` step 1, on
+the agent's TLS to R). The session runs `cap_address.pv` steps 2-5 (the
+record's hints `d1,a1`: direct paths, direct only); after the proof is
+admitted the control exchange carries both ends' candidates inside the
+session's TLS, the punch goes where the attacker routes it, and the
+transfer's bytes go only on a direct connection taken from the pinned key
+with the agent's token (as `cap_address.pv` 15-18). The relay's byte
+budget, which keeps the bulk off it, counts ciphertext and is no secrecy
+matter: relay-core `spec/NF1Anon.tla`. The attacker owns every relay,
+opens any rid, holds a second address of the same key, and knows both
+ends' public mappings (it answered their QAD); the candidates modelled are
+what QAD did not tell it (LAN addresses).
+
+| # | query | holds because |
+|---|---|---|
+| 1 | the transfer's bytes are secret | direct only, under the pinned key and the session's tokens |
+| 2 | the agent's candidates reach only a client that proved `sec1` | sent inside the TLS after `Admit` |
+| 3 | the client's candidates reach only A1's server | sent inside the pinned TLS |
+| 4 | the candidates the client punches toward are A1's agent's, sent in that session, once: a relay cannot aim the punch | taken only from a frame under the session key (`BIND:anon.cands`) |
+| 5 | the agent takes candidates only from its session's own client | the same, the other way |
+| 6-8 | the direct handshake ends only at the pinned key; the client's direct connection is bound by A1's agent to its own session, once; the agent binds only on that session's client token | as `cap_address.pv` 16-18 |
+| 9 | A1's acceptor admits only a client that proved `sec1` | as `cap_address.pv` 6 |
+| 10 | with no account behind it, R takes a declaration of A1's rid only from the key's holder | as `cap_address.pv` 27: the account added nothing an attacker could not have |
+| 11-15 | witnesses: both candidate exchanges, the client's direct connection, the agent's binding, R's taking the server's own declaration | (each reads F) |
+
+Mutants (`expect.txt` "Part 7"): `cands-in-answer` (the agent's
+candidates in the cleartext rendezvous answer: 2), `cands-before-admit`
+(sent after TLS, before the proof is checked: 2, 4), `client-cands-unbound`
+(4), `agent-cands-unbound` (5), `server-no-secret-check` (2, 4, 5, 7-9),
+`direct-no-pin-check` (6 alone: the transcript-bound tokens refuse a
+middle), `nf1-agent-no-token` (8), `rid-unbound` and `reg-unsigned` (10).
+
+Bindings: `BIND:anon.cands`'s row is
+`client/agent/direct_nf1_anon_bindings_test.go` `TestNF1AnonModelBindings`
+(lane NFA1: a relay sends candidates outside the admitted TLS, to the
+client in the control exchange's open before TLS and to the agent after the
+control mark before TLS: neither end punches toward them); the rest are
+`cap_address.pv`'s rows. The SDK's rule (a client that reads `a1` sends no
+byte of the service before the direct path, never re-attaches relayed,
+gives up with `ERROR_REASON_ACCOUNT_REQUIRED`; the agent dials the service
+only once the session is direct) is `TestNF1AnonDirectRequired` with the Go
+mutants of `client/agent/testdata/nf1_anon_mutants.txt` (`reattach-relayed`,
+`no-bound`, `target-before-direct`, `plain-served`) and
+`client/nf1/testdata/mutants.txt` (`anon-unframed`, `anon-early`). Code map:
+below.
+
+### direct_once.pv: decrypt each byte once on a direct path (lane DIRECTCRYPT; code lane DIRECTONCE)
+
+The design is nfltr's `docs/decisions/direct-once-2026-11-22.md`. Today
+link pathswitch sits under the session's TLS, so a direct path seals each
+byte twice (the session's TLS and the direct QUIC connection's). The design
+moves pathswitch above per-epoch channels, each a TLS 1.3 channel to the
+pinned key bound to the session by an exporter token: epoch 0 the session's
+own TLS (the PROOF first), epoch 1 a direct QUIC connection (frames under
+QUIC's keys alone: the one decrypt), epoch 2 a relayed re-attach, a fresh
+TLS handshake to the pinned key on the new stream, its token over its own
+exporter. A pathswitch frame names its offset inside its channel's AEAD;
+the sender resends every unacknowledged offset on any epoch it binds. That
+offsets are delivered once and in order over channels that deliver in
+order or are cut is link `spec/DirectPath.tla`; this model proves the
+channels are such channels. The attacker owns every relay and the network,
+routes the punch, opens its own QUIC connections and relayed streams to the
+agent and holds a second address of the same key. Rendezvous, pin and proof
+are `cap_address.pv`'s (5-7): the client starts with the pinned key. A TLS
+traffic key covers both randoms (RFC 8446 7.1); event `Seal` names (key,
+direction, sequence number), the AEAD nonce.
+
+| # | query | holds because |
+|---|---|---|
+| 1, 2 | secrecy of both directions on every epoch | each epoch a channel to the pinned key, bound to the session |
+| 3, 4 | what either end takes on any epoch, at an offset, its peer sent in that session at that offset | the offset inside the AEAD (`BIND:once.offset`), a frame taken only on a bound epoch (`BIND:once.channel`) |
+| 5 | A1's agent admits only a session whose client proved `sec1` | as `cap_address.pv` 6 |
+| 6, 7 | the agent binds a channel to session k only on k's client's offer for that channel; a channel the client binds, the agent bound to k (injective) | tokens over the session key, the channel's exporter, role and epoch |
+| 8 | no frame outside a channel, on any word from the path | `BIND:once.plain` |
+| 9 | the direct handshake ends only at the pinned key | `BIND:nf1direct.pin` |
+| 10 | no nonce reuse: a TLS key seals one plaintext at a sequence number | a re-attach is a fresh handshake (`BIND:once.reattach`) |
+| 11-16 | witnesses: each epoch carries each direction | (each reads F) |
+
+Mutants (`expect.txt` "Part 8"): `direct-no-pin-check` (9 alone: the
+session-bound tokens refuse a middle; with `client-no-token` also 1, 4, 7),
+`client-no-token` (holds alone: the pin), `agent-no-token` (an
+unauthenticated direct path: 2, 3, 6), `relayed-plain` (the client drops the
+channel on a re-attach the relay calls direct: 1, 8), `agent-plain-relayed`
+(3), `token-no-session` (a channel bound to another session: 2-4, 6, 7),
+`reattach-key-reuse` (the session's key with its counter restarted: 10),
+`pos-unbound` (the offset outside the AEAD: 3, 4). Bindings `once.*` have
+their refusal rows (`TestDirectOnceModelBindings`, above).
+
+The code (lane DIRECTONCE), nf1 sessions only: epoch 0 is
+`nf1.ClientTLSFramed` / `AdmitKind` (the session asks by ALPN
+`nf1-framed`, in the TLS transcript, never by the stream's first byte;
+a listener taking these paths signs hint `d2`, the older layering's `d1`
+reads as none, so older and newer ends meet relayed) with
+`DirectClient.StartNF1` /
+`serveNF1Session` running pathswitch on that TLS; epoch 1 is unchanged
+(`tryDirect`, `acceptDirect`: pin, both tokens over the QUIC exporter),
+its frames under QUIC alone; a relayed re-attach is `nf1Reattach` /
+`reattachNF1` (mark `A`, a fresh TLS 1.3 to the pinned key, ALPN
+`nf1-reattach`, the tokens over its exporter `EXPORTER-nfltr-direct-reattach`,
+the agent's token first and checked before any frame: `tokenCheck`).
+Organisation sessions (`e2ee_tcp.pv` 21-28) keep pathswitch under their
+TLS (`DirectClient.Start`, `startDirect`, `serveService`'s `reattach`)
+and take the same epochs only after that model has them.
+
+### First use
+
+| path | what the first contact trusts |
+|---|---|
+| TCP (organisation mode) | nothing on first contact: both ends hold the organisation's root from their enrolment; never the relay's word |
+| `nfltr shell` | organisation mode since nfltr lane ORGCUT: the host certificate under the organisation's root (nfltr's model) |
+| nf1 in a browser | the address (from whoever gave it) and the extension's code (the store and the release key), never the relay or a page it serves |
+| nf1 with no account | the address alone, as with an account: the account behind a server never was a trust anchor of the session |
+
+### Environment assumptions of these paths
+
+| assumption | source |
+|---|---|
+| TLS 1.3 with a checked server key is an authenticated channel; no resumption skips the certificate check | Cremers et al., IEEE S&P 2017; Bhargavan et al., IEEE S&P 2017; organisation TLS (`orgServerConfig`) disables session tickets |
+| Noise IKpsk2 gives a key only to the holder of the peer key it used and the same psk | Donenfeld and Milner 2017 (Tamarin); Dowling and Paterson, ACNS 2018; Lipp, Blanchet and Bhargavan, EuroS&P 2019 |
+| DTLS-SRTP keys only the holder of the fingerprinted certificate | RFC 5763, RFC 8827 |
+| a URL's fragment is not sent in an HTTP request | RFC 3986 section 3.5; Fetch Standard (a request's URL is serialized with "exclude fragment") |
+| an installed extension's code is the package the store signed; an update is a new package for every user | Chrome Web Store CRX3 (store and publisher signatures, "verified uploads"); Firefox AMO signing |
+| X25519 refuses low-order points | Go `crypto/ecdh` (`ECDH` errors on the all-zero output) |
+| SHA-256, HKDF, HMAC, AES-GCM are ideal | standard; nonces unique per key |
+
+### enrol.pv: enrolment through an organisation root (`org/`)
+
+Enrolment through an organisation root of trust. The root (its primary
+key in a hardware key store or a passphrase-sealed file) certifies an issuer; the issuer, on the owner's machine,
+gives each machine a short-lived x509 certificate (name, key, serial,
+expiry, group) for a single-use bootstrap token made for that name, and
+renews it against the current key; clients take a peer "signed by the
+organisation with name X", services admit "an organisation certificate in
+group Y", both checking expiry and the issuer's current CRL. The attacker
+owns the relay (every request, certificate, CRL and rotation it carries:
+it replays an old CRL, withholds a new one), an enrolled machine's key
+(`mallory`), a revoked stolen laptop's key (`lost`), web's rotated-out key
+whose certificate expired, a leaked bootstrap token for a machine not yet
+enrolled (`new1`), and the old root's primary key. Time is two epochs: now
+and expired. The lifecycle over time (renewal, CRL push and backstop, fail
+closed, rotation) is `spec/enrol/Enrol.tla`. Code: `org/orgpki` (issuer, profile),
+`client/orgid` (verifier).
+
+| # | query | result |
+|---|---|---|
+| 1 | every accepted name and key was issued (no name without the root) | holds |
+| 2 | a client taking `web` reaches a key web made | holds |
+| 3 | an expired certificate is refused | holds |
+| 4 | a revoked machine is refused, also after it tries to renew | holds |
+| 5 | a token enrols one key (single use) | holds |
+| 6 | a token enrols only the name it was made for (never an existing one) | holds |
+| 7 | a service admits only certificates issued in its group | holds |
+| 8 | a rotation is taken only when the recovery key signed it | holds |
+| 9 | after the rotation, only issuers the new root certified are trusted | holds |
+| 10 | a token answered again (its answer lost, or late) certifies only the key it enrolled | holds |
+| 11 | a rebind token (nfltr `docs/decisions/org-rebind-2026-11-17.md`) rebinds only the enrolled name it was made for | holds |
+| 12-18 | witnesses: web reached; a client admitted; the leaked token's own name enrolled by whoever redeems it first (the residual: one new name, once, and the real machine's enrolment then fails visibly); a rotation; an issuer trusted after it; web's token answered again; mallory's leaked rebind token redeemed (the same residual: its own name, once) | attack (reachable), as they must |
+| 19 | witness: web's certificate, expired within the grace (`orgpki.RenewGrace`, the name's newest serial), renewed with its own key (`ep_grace`; no verifier admits it, query 3's ep_old is everything else expired, a superseded serial however recent) | attack (reachable), as it must |
+| 20 | a move (lane SEAMLESS, `org/orgpki` `NewMoveRequest`, `Issuer.Renew` with a machine id): web's name moves only to the relay machine id web asked for with its key; the issuer's account policy is the relay's word, so the signature over the id is the check (BIND:move.id, `TestMoveModelBindings`) | true; mutant `move-id-unsigned` (the id beside the signed renewal) false |
+| 21 | witness: web's name moved to its new relay machine id | attack (reachable), as it must |
+| 22 | a join's relay machine id (lane LOGINREDS, `org/orgpki` `NewEnrolRequestFor`, `Issuer.Enrol` of a token naming none; `spec/enrol/Join.tla` JoinedBound): web's name is certified at its enrolment only for the id web stated under the token's HMAC, or none; the policy is the relay's word, as for a move (BIND:enrol.id, `TestEnrolIDModelBindings`) | true; mutant `bind-id-unmacd` (the id beside the HMAC) false, and `name-from-request`, `token-in-request` (the attacker redeems web's name) false |
+| 23 | witness: web's name certified for the id it stated | attack (reachable), as it must |
+| 24 | witness: a renewal asked again answered again (lane CANARYCERT, `Repeat`: the superseded expired serial renewed for the key its newest successor renewed it for, `Issuer.Renew` `askedAgain`); 2 holds with it, the answer is for web's key, never the old disk's | attack (reachable), as it must |
+
+Mutants: `no-chain-check` (an issuer certificate not checked against the
+root: 1, 2, 4, 7 fail), `no-name-check` (1, 2, 4), `no-expiry-check` (3),
+`stale-crl` (an old CRL the relay replays: 4), `no-crl-check` (4),
+`crl-any-signer` (a CRL taken without the issuer's signature: one any
+carrier made, the relay's copy included, lane MAILBOXSPOF: 4),
+`renew-expired` (renewal with an expired certificate: 2), `renew-revoked`
+(4), `reusable-token` (5), `name-from-request` (the issuer takes the name
+from the request: 2, 4, 5, 6), `token-in-request` (the token itself sent
+through the relay, which redeems it first: 2), `no-group-check` (7),
+`rotate-by-primary` (8, 9), `keep-old-root` (9), `reissue-any-key` (a
+token answered again for any key: 10), `rebind-any-name` (a rebind token
+moves the name the request gives: 2, 4, 11), `repeat-any-key` (a
+renewal asked again answered for any key: the old disk's rotated-out key
+renews web, 2, 20), `reissue-unpresented` (lane REISSUE's rejected
+zero-action recovery, nfltr `docs/decisions/org-reissue-2026-11-22.md`: a
+superseded serial renewed when its newer serial was never presented to the
+issuer; the relay withholds web's renewal from it: 2, 20). A reissue (a
+rebind token to the name's own machine id) is `RebindRedeem` unchanged; it
+is made only while the name holds no valid certificate
+(`spec/enrol/Enrol.tla` `ReissueRetiresOnlyExpired`). A rebind retiring the name's
+earlier serials, and the issuer refusing to renew one, is
+`spec/enrol/Enrol.tla` `Rebind` (`Rebind.cfg`). The join's root check is
+`RotClient`'s: a machine joining with pins made before a rotation takes the
+root the pinned recovery key certifies (8); the join's retries, the revoke
+and a renewal since are `spec/enrol/Join.tla`.
+
+### orgdash.pv: the organisation in the dashboard (`org/`)
+
+nfltr `docs/decisions/org-dashboard-2026-11-21.md`. The attacker owns the
+relay and the dashboard. The issuer signs its status; a pinned reader
+shows only a list the issuer signed with its root-signed certificate's
+NotAfter (1, witness 2). The root signs a revoke order only for an
+enrolment the owner asked to revoke, and the issuer revokes only that
+enrolment (3, witness 4). The root answers the issuer's own signed
+request only for a Renew the owner pressed, both signatures under one
+approval, and the issuer installs only that answer (5, 6, witness 7).
+Neither key leaves its machine (8, 9). Mutants: `forged-status-accepted`,
+`notafter-unsigned` (1), `relay-only-revoke`, `order-by-name` (3),
+`no-owner-gate` (3, 6), `renew-without-root` (5). The state (who asked
+what when, replays, one organisation per account) is
+`spec/orgmove/OrgDash.tla`. Bindings: `BIND:dash.statussig`,
+`BIND:dash.notafter`, `BIND:dash.ordersig`, `BIND:dash.serial`,
+`BIND:dash.org` (`org/orgpki` `TestOrgDashModelBindings`).
+
+### orggroup.pv: one set of groups (`org/`, design)
+
+nfltr `docs/decisions/one-group-2026-11-25.md` (lane ONEGROUP); the state
+(freshness, the relay's mirror, lost and reordered puts, the window) is
+relay-server `spec/GroupMirror.tla`. With an organisation a machine's
+groups come from the issuer only: the owner's token, or a move the owner
+ordered (the root signs it on the root's machine, from the CLI or a
+dashboard wish approved there). The issuer reissues the member certificate
+with the new groups and lists (name, groups) in its signed status; the
+relay mirrors that status for its reach, the peers check the certificate.
+The attacker owns the relay, the dashboard and the network, holds account
+machines and an issuer key of its own. The relay's mirror takes only a
+membership the issuer placed (1, witness 2); a peer admits only one (3,
+witness 4); the issuer places a machine in groups only by the owner's token
+or order (5, witness 6); neither key leaves its machine (7, 8). Mutants:
+`mirror-no-pin` (1), `relay-chosen-group` (3), `relay-only-move`,
+`no-owner-gate` (5). Bindings, rows with the code (lane ONEGROUP-C1):
+`BIND:group.movesig`, `BIND:group.ou`, `BIND:group.pin`.
+
+### orgmove.pv: moving an organisation's issuer (`org/`)
+
+An organisation's issuer moving to another machine. The new machine
+makes a single-use receive key and shows its public half; the owner types
+it on the old machine (out of band, as a pairing link). The old
+machine seals the bundle (the issuer key, the log's issuer certificate
+and the fence naming the receive key; not the root, which stays with its
+owner; not the machine-key root beside it, which stays where its users
+run) to it with `crypto/hpke` and sends it through the
+relay. The new machine opens it and imports it when the fence names its
+own receive key and the issuer certificate chains to the root it pinned.
+The attacker owns the relay and an organisation of its own, and seals
+what it likes to any receive key (HPKE Base mode does not say who
+sealed). Who serves when, the fence's order and the tokens' single use
+are state: `spec/orgmove/OrgMove.tla`.
+
+Then the issuer renews from the root's machine (`org/orgpki/renew.go`): the issuer signs a request (its key, a fresh log head), the
+root holder answers only a request for the issuer key it pins and signed
+by it, with the certificate and the root's checkpoint of that head, and
+the issuer installs only an answer for its own key and head. In phase 1
+the new machine is compromised (it hands over all it holds) while the
+root holder keeps answering.
+
+| # | query | result |
+|---|---|---|
+| 1 | the issuer key stays secret during the move (phase 0) | holds |
+| 2 | the root's key never reaches the attacker, also after the new machine's compromise | holds |
+| 3 | a machine imports only the organisation's own issuer key, as the old machine sealed it for its receive key | holds |
+| 4 | witness: an import happens (3 not vacuous) | attack (reachable), as it must |
+| 5 | no root certificate of another key, with the relay, the wire and (phase 1) the new machine the attacker's | holds |
+| 6 | the issuer installs only the root's answer for its own key and head | holds |
+| 7 | the root checkpoints only a head the issuer asked for (before a compromise) | holds |
+| 8 | witness: a renewal is installed (6 not vacuous) | attack (reachable), as it must |
+
+Mutants: `plain-bundle` (the bundle not sealed: 1, 3, 7 fail),
+`recipient-via-relay` (the receive key reaches the old machine through
+the relay, which swaps its own in: 1, 3, 7 fail), `no-root-check` (the new
+machine does not check the issuer against the pinned root: 3 fails, the
+relay hands it an organisation of its own), `root-moves` (the bundle
+carries the root: the new machine's compromise yields it, 2 and 5 fail),
+`sign-any-issuer` (the root holder signs a request for any key: 3, 5, 6,
+7 fail), `unsigned-request` (it does not check the request's signature: 7
+fails), `answer-unbound` (the issuer installs a root checkpoint of
+another head: 6 fails). The fence's recipient binding is not a mutant
+here: HPKE already confines a bundle to its receive key, and what the
+binding prevents (a second recipient after a re-send) is `OrgMove.tla`'s
+`fence-names-no-recipient`. Bindings: `BIND:move.*` are orgissuer's
+`TestOrgMoveModelBindings`, `BIND:renew.*` orgpki's
+`TestIssuerRenewalModelBindings` (`make spec-bindings`).
+
+### app_enrol.pv: an app's device enrolled for a person (`org/`)
+
+An app on a person's device makes a relay key `kr` and an organisation key
+`ko` and enrols `ko` by the person's sign-in at the organisation's IdP
+(OpenID Connect authorization code + PKCE, RFC 7636 / RFC 8252) whose ID
+token's nonce commits to both keys (OpenPubkey's key commitment), or by an
+admin code made for that person and app (an organisation token, as
+`enrol.pv`'s). The issuer takes a token only for an app client id the
+owner's rule names (`aud`) and only with the nonce of the keys in the
+request; the certificate names the person (email SAN) and the app (URI
+SAN); renewal keeps both; a service admits by app (`allow_app`) and logs
+or admits by person (`allow_user`). The attacker owns the relay (it reads
+every ID token and request), runs a rogue client `appX` at the same IdP
+(honest people sign in to it, with nonces it picks), holds a person `mal`'s
+account and enrolled device, and a leaked code for person `lc`. The
+lifecycle (sign-in bound renewal, re-authentication, revocation by person
+and by app) is `spec/appenrol/AppEnrol.tla`. The design is nfltr's
+`docs/decisions/app-device-identity-2026-11-16.md`.
+
+| # | query | result |
+|---|---|---|
+| 1 | a person who enrols by sign-in (alice) is certified only for a key her own sign-in named, for the app it named | holds |
+| 2 | a person with an admin code (bob) only for a key his device made | holds |
+| 3 | a service admitting app1 takes a key an honest device of that person made for app1 (the attacker's `mal` and the leaked `lc` aside) | holds |
+| 4 | no certificate for the rogue client's app | holds |
+| 5-8 | witnesses: alice certified; bob certified; a service admits alice; the leaked code enrols its own person and app (the residual: one person and app, once) | attack (reachable), as they must |
+
+Mutants: `no-aud-check` (a token of any client id taken: 1, 2, 4 fail;
+the rogue client's tokens enrol alice and bob), `no-nonce-check` (1, 3:
+the relay attaches its own key to alice's token), `nonce-relay-key-only`
+(with `no-nonce-check`: the nonce commits only the relay key, the issuer
+checks only that: 1, 3), `user-from-request` (the code path takes the
+person from the request: 1, 2, 3), `renew-takes-attrs` (renewal takes the
+person and app from the request: 1-4), `no-app-check` (the service admits
+any app: 3). Bindings `BIND:app.nonce` (`client/appenrol`, and the
+issuer's check in `org/orgpki`), `BIND:app.attrs` and `BIND:app.urihost`
+(`client/orgid`), `BIND:app.aud` and `BIND:app.idtoken` (`org/orgpki`
+`EnrolSignIn`, the ID token checked with go-oidc): the table under
+"Bindings".
+
+Environment assumptions of these models, beside the table above:
+
+| assumption | source |
+|---|---|
+| Ed25519 / ECDSA P-256 signatures and HMAC-SHA256 are ideal; x509 parsing is exact (crypto/x509) | standard; `enrol.pv` |
+| HPKE Base mode (DHKEM X25519, HKDF-SHA256, ChaCha20-Poly1305) is ideal IND-CCA2 sealing to a public key, by anyone; the machine's X25519 key is its Ed25519 key's birational image (as age's ssh-ed25519 recipients) | RFC 9180, `crypto/hpke`; `orgmove.pv` |
+| the receive key the owner types on the old machine is the one the new machine showed (an authentic channel: the owner's eyes and keyboard) | `orgmove.pv` |
+| a bootstrap token reaches its machine through the fleet's provisioning (cloud-init, a Kubernetes secret, MDM), not the relay | `enrol.pv` |
+| a 0600 file is readable only by its owner uid | POSIX |
+| the IdP authenticates the person, issues ID tokens only for the client id the person signed in to, and echoes the authorization request's nonce | OpenID Connect Core 1.0 §2, §3.1.2.1; `app_enrol.pv` |
+| a device's sessions with the IdP (the browser, the PKCE exchange) do not pass through the relay | RFC 8252 (loopback or claimed https redirect), TLS to the IdP; `app_enrol.pv` |
+
+### people.pv: the people layer (`org/orgpki` people.go, lane PEOPLE2)
+
+A person joins through an invite: the inviter makes a key pair, the
+issuer's log holds its public key for (person, role), and the person's
+device proves the private key with a signature over its own keys (lane
+PEOPLE2; neither the issuer nor the relay ever holds the invite, so
+nothing is sealed to the issuer) beside an ID token whose nonce commits
+to that key (`app_enrol.pv`'s sign-in). The sign-in only
+authenticates the request; the role is the invite's. The owner invites
+and offboards on the issuer's side (the order's path through the relay
+is `orgdash.pv`'s); an admin is a person certified with the role admin,
+which only the owner's invite gives, and signs its requests (invite a
+member: the invite's public key; offboard a member) with that
+certificate's key. The attacker owns the relay and the IdP (its key is
+published unless `idp-honest`), holds two insiders' devices (`lc`, a
+member; `eve`, an admin) and, after the offboard (phase 1), the keys of
+the leavers alice and carol. The state machine (roles, single use, the
+race of a removal with a redemption, the reach bound) is
+`spec/people/People.tla`; the design is nfltr's
+`docs/decisions/people-layer-2026-11-25.md`.
+
+| # | query | result |
+|---|---|---|
+| 1-2 | alice (the owner's invite) and bob (an admin's) are certified only for keys their own devices made, unless an admin the attacker holds acted (its authority: it may invite anyone) | holds |
+| 3-5 | no certificate with role admin, no admin act and no invite as admin without the owner's invite as admin | holds |
+| 6 | an offboard is the owner's, or of a person certified as a member | holds |
+| 7-8 | after the offboard, no certificate for the leaver alice (her key in the attacker's hands) and no act of the leaver carol, an admin | holds |
+| 9-13 | witnesses: alice certified; bob certified through carol's invite; carol acted; bob renewed after the offboards (phase 1 is live); a leaked invite enrols the attacker's key for its person (the residual: one person, the invite's role, once) | attack (reachable), as they must |
+
+Mutants: `no-invite` (a sign-in rule for the IdP's domain certifies from
+the ID token alone: 1, 2; a compromised IdP enrols anyone, so domain rules
+were removed: owner decision 2026-11-25, invites only), `invite-in-clear`
+(the invite's private key itself sent through the relay: 1, 2), `role-from-request`
+(1, 3, 4), `no-role-check` (a member's request taken as an admin's: 1, 4),
+`admin-invites-admin` (3, 5), `admin-offboards-any` (an admin offboards
+an admin: 6), `no-deny` (the leaver renews: 1, 7, not proved: ProVerif
+finds the derivation in phase 1, not the trace), `admin-after-offboard`
+(8, not proved, likewise). Since the invite became a signature key
+(lane PEOPLE2), `role-from-request`, `no-role-check` and
+`admin-after-offboard` also break 2 and `admin-invites-admin` also 4: an
+insider with admin power invites bob, or a new admin, to the attacker's
+key. The sealed-secret model hid this because it never published the
+issuer's public key, which is public in fact; the honest results are
+unchanged. Bindings: `org/orgpki/people_test.go`
+`TestPeopleModelBindings`, one row each: `people.invite` (no proof, a
+proof over other keys, by another key, for another organisation, another
+person's invite: refused; Go mutants `invite-unproved`, `invite-any-person`,
+`idp-alone-enrols`), `people.role` (the invite act's role changed by the
+relay: refused; the join's role the invite's: `role-from-request`),
+`people.admin` (a member's request, a member's certificate under an
+admin's signature, another key's signature, a certificate the issuer did
+not sign, no signature: refused; `no-role-check`, `admin-sig-unchecked`,
+`admin-cert-unchecked`), `people.removed` (a removed admin's request,
+renewal, join and a new invite: refused; `admin-after-offboard`) (lane
+PEOPLE2; `org/orgpki/testdata/mutants.txt`).
+
+### svc_access.pv: service-level access, grants and the identity an app gets (identity to the app: code since lane SA2; rules in code: lane SA3; grants: a design)
+
+The organisation's root signs who may approve access to a service and
+which group may use a service; a requester asks for a service and a
+duration, an approver signs the whole request on a prompt naming it, and
+the issuer signs a grant (principal, service, duration, request id) only
+under an approval by a key the root's policy names for that service. The
+client presents the grant inside the session's end-to-end TLS; the
+serving agent admits by a grant that names the session's certified
+principal and the service the session opened (the ALPN binding of
+`e2ee_tcp.pv`), or by a root-signed rule for the principal's certified
+group, and tells the app who called: on loopback, or beyond it as an
+assertion signed by the agent's machine key whose audience is the
+service. The attacker owns the relay and is a member (`mallory`, group
+dev, its key). Replay of approvals and the expiry and revoke bounds are
+state: `spec/grant/Grant.tla`. The design is nfltr's
+`docs/decisions/service-access-2026-11-25.md`.
+
+| # | query | result |
+|---|---|---|
+| 1 | the agent admits by a grant only one the issuer signed, for that principal and service | holds |
+| 2 | the issuer grants only what the authorised approver approved (no field widened) | holds |
+| 3 | a session admitted as bob is one bob opened | holds |
+| 4 | the agent admits by a rule only one the root signed, for the principal's certified group | holds |
+| 5 | the identity an app takes on loopback is an admitted session's certified name and group | holds |
+| 6 | the same for an assertion beyond loopback, for that app's own service | holds |
+| 7-10 | witnesses: bob admitted by a grant; a member admitted by a rule; an app takes bob on loopback; an app takes bob's assertion | attack (reachable), as they must |
+
+Mutants: `policy-unsigned` (the issuer takes the approver from an unsigned
+document: mallory approves, 2), `approval-unbound` (the approval signs the
+request id only: the relay changes the service or duration, 2),
+`grant-unsigned` (1), `agent-any-principal` (mallory presents bob's grant,
+1), `agent-any-service` (a grant for sv1 opens sv2, 1), `rule-unsigned`
+(4), `group-from-client` (the group the client claims, 4 and 5),
+`header-from-client` (the agent passes on the name the client sent, 5),
+`jwt-no-aud` (an assertion for sv1 taken by sv2's app, 6),
+`app-on-network` (the app takes identity headers from the network, 5).
+
+Identity to the app is code (lane SA2): `client/agent/org_identity.go`
+(`Service.Identity`: `http` sets `Nfltr-Machine`, `-Person`, `-Groups`,
+`-Service` and the EdDSA JWT `Nfltr-Assertion` (its key set `JWKSHandler`) after deleting every
+`Nfltr-*`/`X-Nfltr-*` header of the client, underscores read as dashes;
+`proxy-v2` sends the same in PROXY v2 TLVs), its rows
+`BIND:svc.hdrwho` and `BIND:svc.aud` in
+`client/agent/svc_access_bindings_test.go` `TestSvcAccessModelBindings`,
+Go mutants `header-from-client`, `header-underscore`, `jwt-no-aud`,
+`proxy-no-header`, `identity-off` in `client/agent/testdata/org_mutants.txt`.
+The model's loopback hop is a private channel: the code's is the target
+address the agent dials, which the app must bind to loopback (or a unix
+socket) for query 5 to hold; beyond it only the assertion is evidence
+(query 6). The grant rows come with lane SA4 (`modelbind.Pending`).
+
+Code map (lane SA3, the rules and approvers): the root's policy is
+`client/orgid/policy.go` (`VerifyPolicy`: `BIND:svc.rulesig`, `Approves`:
+`BIND:svc.apprpol`), signed by `org/orgpki/policy.go` `SignPolicy` and
+carried in the issuer's signed status (`Issuer.TakePolicy`, `Status.Policy`);
+the agent takes it with `orgid.Identity.TakeStatus` and admits by it in
+`Identity.CheckClient`. A rule's principal is typed (`group:`, `machine:`,
+`person:`), each matched against its own certified field, so a machine
+named as a group never matches a group rule (the model's group is one of
+the three: the same lookup). Rows: `client/orgid/svc_access_bindings_test.go`
+(`TestSvcAccessModelBindingsPolicy`). Code map (lane SA4, grants): the
+issuer signs a grant certificate in `org/orgpki/grant.go`
+(`Issuer.ApplyGrant`: an approval only over the request's digest,
+`BIND:svc.apprall`, by an approver `Policy.Approves` names), and the
+serving agent admits by it in `client/orgid/grant.go`
+(`Verifier.CheckGrant`: under the issuer key, `BIND:svc.grantsig`; for
+the session's key and principal, `BIND:svc.grantwho`; for the opened
+service and place, `BIND:svc.grantsvc`; `AdmitClient`). Rows:
+`org/orgpki/svc_access_bindings_test.go`
+(`TestSvcAccessModelBindingsGrants`). The identity ids are SA2's.
+
+## Code map
+
+| model | code |
+|---|---|
+| handshake, keys, frames | client/rpcclient/a2a_e2ee.go |
+| sessions: resume, call keys, window | client/rpcclient/a2a_e2ee_session.go, client/rpcclient/a2a_e2ee_session_test.go |
+| responder policy | client/rpcclient/a2a_e2ee_agent.go |
+| frames on the streams, the end of a served call, v1 refused | client/rpcclient/client_stream.go, client/rpcclient/server_stream.go, client/rpcclient/a2a.go |
+| one test per finding, wire vectors | client/rpcclient/a2a_e2ee_v2_test.go |
+| runner, prover pin | spec/proverif/run.sh, scripts/fetch-proverif.sh |
+| svc_access.pv | client/agent/org_identity.go |
+| svc_access.pv | client/agent/svc_access_bindings_test.go |
+| direct_once.pv | client/agent/direct_nf1.go |
+| direct_once.pv | client/agent/direct_client.go |
+| direct_once.pv | client/agent/direct_once_bindings_test.go |
+| direct_once.pv | client/agent/testdata/direct_once_mutants.txt |
+| direct_once.pv | client/nfnet/nf1.go |
+| nf1_anon.pv | client/agent/direct_nf1.go |
+| nf1_anon.pv | client/agent/direct_nf1_anon_bindings_test.go |
+| nf1_anon.pv | client/agent/testdata/nf1_anon_mutants.txt |
+| nf1_anon.pv | client/nf1/nf1.go |
+| nf1_anon.pv | client/nf1/early.go |
+| e2ee_tcp.pv | client/agent/session_plan.go |
+| e2ee_tcp.pv | client/agent/agent.go |
+| e2ee_tcp.pv | client/agent/services.go |
+| e2ee_tcp.pv | client/agent/org.go |
+| e2ee_tcp.pv | client/agent/testdata/org_mutants.txt |
+| e2ee_tcp.pv | client/tlsend/tlsend.go |
+| e2ee_tcp.pv | client/agent/direct.go |
+| e2ee_tcp.pv | client/agent/direct_server.go |
+| e2ee_tcp.pv | client/agent/direct_client.go |
+| e2ee_tcp.pv | client/agent/direct_bindings_test.go |
+| e2ee_tcp.pv | client/agent/service_alpn.go |
+| e2ee_tcp.pv | client/agent/service_bindings_test.go |
+| e2ee_tcp.pv | client/orgid/verify.go |
+| e2ee_tcp.pv | client/orgid/identity.go |
+| e2ee_tcp.pv | client/orgid/follow.go |
+| e2ee_tcp.pv | client/orgid/group_dial_bindings_test.go |
+| e2ee_tcp.pv | client/orgid/testdata/mutants.txt |
+| e2ee_tcp.pv | client/nfnet/org.go |
+| e2ee_tcp.pv | client/nfnet/dial_bindings_test.go |
+| cap_address.pv | client/capaddr/capaddr.go |
+| cap_address.pv | client/capaddr/capaddr_bindings_test.go |
+| cap_address.pv | client/nf1/nf1.go |
+| cap_address.pv | client/nf1/dial.go |
+| cap_address.pv | client/nfnet/nf1.go |
+| cap_address.pv | client/agent/direct_nf1.go |
+| cap_address.pv | client/agent/direct_nf1_bindings_test.go |
+| enrol.pv | org/orgpki/profile.go |
+| app_enrol.pv | org/orgpki/profile.go |
+| enrol.pv | org/orgpki/issuer.go |
+| enrol.pv | client/orgid/verify.go |
+| orgmove.pv | org/orgpki/renew.go |
+| orgdash.pv | org/orgpki/status.go |
+| orggroup.pv | org/orgpki/status.go |
+| orggroup.pv | client/agent/service_alpn.go |
+| orgdash.pv | org/orgpki/order.go |
+| orgmove.pv | org/orgissuer/bundle.go |
+| orghosted.pv | client/orgid/verify.go |
+| orghosted.pv | client/orgid/hosted_bindings_test.go |

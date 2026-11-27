@@ -1,0 +1,140 @@
+# <mutant> <property> [<cfg>]: TLC on Enrol.cfg's constants (or <cfg>'s)
+# with that Mutant must report <property> violated (scripts/spec-enrol.sh
+# mutants); a temporal property (TakesEffect, MachinesFollowRotation) runs
+# under LiveSpec.
+no-expiry-check NoExpiredSession
+no-expiry-timer NoExpiredSession
+fail-open RevocationBound
+no-crl-check RevokedMachineRefused
+no-cut-on-update RevokedMachineRefused
+accept-older-crl RevokedMachineRefused
+revoke-current-only RevokedMachineRefused
+renew-revoked NoRenewAfterRevoke
+renew-revoked RevokedMachineRefused
+renew-forged ForgedOnlyUnderStolenRoot
+keep-old-root SessionsOnTrustedRoot
+rotate-by-primary RootsAreOwners
+push-only TakesEffect
+no-reissue-on-rotation MachinesFollowRotation
+check-at-request NoRenewAfterRevoke
+install-stale-answer MachineHoldsItsKey
+no-retry MachinesFollowRotation EnrolLoss.cfg
+# renewal after the NotAfter (nfltr docs/decisions/org-renew-after-outage-2026-11-20.md):
+# no-renew-after-expiry is the design before 2026-11-20 (an issuer outage
+# through the last third of the lifetime made the name re-enrol by hand);
+# the issuer renews past the grace, or a superseded serial (an answer the
+# machine never installed: the relay lost it).
+no-renew-after-expiry RenewsAfterExpiry EnrolLive.cfg
+renew-past-grace NoRenewPastGrace
+grace-any-serial GraceOnlyNewest EnrolLoss.cfg
+# an answer the machine did not take (lane CANARYCERT, nfltr
+# docs/decisions/org-renew-answer-again-2026-11-22.md): new-key-per-retry
+# and no-repeat are the code before (each ask a new key; the issuer
+# refused the certificate such an answer superseded once it expired: the
+# canary machines of v2.1.80 re-enrol by hand); repeat-any-key answers a
+# request asked again for any key (the old disk's rotated-out key renews).
+new-key-per-retry RenewsAfterExpiry EnrolLoss.cfg
+no-repeat RenewsAfterExpiry EnrolLoss.cfg
+repeat-any-key GraceOnlyNewest
+# a rebind (nfltr docs/decisions/org-rebind-2026-11-17.md): the CRL it
+# signs lists none of the name's earlier serials; the issuer renews one.
+rebind-keeps-serials RetiredRefused Rebind.cfg
+rebind-keeps-serials RebindBound Rebind.cfg
+renew-rebound NoRenewOfRetired Rebind.cfg
+# a reissue (lane REISSUE, nfltr docs/decisions/org-reissue-2026-11-22.md):
+# the owner's rebind token to the name's own relay machine id while the
+# name holds a valid certificate (a retired one admitted until the CRL
+# arrives); reissue-unpresented is the rejected zero-action recovery (a
+# superseded serial renewed when its successors expired unpresented: the
+# old disk's copied key takes over a machine that took the newer one).
+reissue-while-valid ReissueRetiresOnlyExpired Rebind.cfg
+reissue-unpresented OldDiskNeverCertified
+reissue-unpresented GraceOnlyNewest
+grace-any-serial OldDiskNeverCertified EnrolLoss.cfg
+repeat-any-key OldDiskNeverCertified
+# a move (lane SEAMLESS, nfltr docs/decisions/seamless-certificates-2026-11-20.md):
+# a rebind on the name's own key's request, to a machine of the issuer's
+# account: the request unsigned (anyone moves the name), the policy not
+# checked (another account's machine takes the name's membership).
+move-no-key MoveOnlyByKey Rebind.cfg
+move-any-account MoveOnlyOwnAccount Rebind.cfg
+# Join.tla (the join by token, Join.cfg): burn-name and new-key-per-join
+# are the code before 2026-11-15 (a lost or late answer burnt the name);
+# pin-root-only refused a root the pinned recovery key certifies.
+burn-name RefusedOnlyForCause Join.cfg
+new-key-per-join RefusedOnlyForCause Join.cfg
+reissue-any-key OneKeyPerToken Join.cfg
+reissue-revoked NoIssueAfterRevoke Join.cfg
+reissue-after-renewal NoRetiredKeyRevived Join.cfg
+pin-root-only RefusedOnlyForCause Join.cfg
+any-root JoinRootsAreOwners Join.cfg
+# the join's relay machine id (lane LOGINREDS): bind-none is the code
+# before (a login's certificate named no id, so the first serve moved the
+# name while a second serve read the pair); bind-unmacd binds an id the
+# token's MAC does not cover (the sender the relay names); bind-any-account
+# binds an id the move policy refuses.
+bind-none JoinedBound Join.cfg
+bind-unmacd BindOnlyStated Join.cfg
+bind-any-account BindOnlyOwnAccount Join.cfg
+# RevokePush.tla (a revoke's events and backstops, RevokePush.cfg):
+# poll-only is the code before 2026-11-16 (the issuer published a CRL
+# another process wrote at its next round, serveWait).
+poll-only EventBound RevokePush.cfg
+clear-wake-after-publish EventBound RevokePush.cfg
+no-serve-backstop BackstopBound RevokePush.cfg
+no-follow-backstop BackstopBound RevokePush.cfg
+admit-after-crl NoAdmitAfterLearn RevokePush.cfg
+no-cut NoAdmitAfterLearn RevokePush.cfg
+# CrlCarriers.tla (the CRL on the mailbox and the relay's copy,
+# CrlCarriers.cfg; nfltr docs/decisions/crl-off-mailbox-2026-11-20.md):
+# the copy's CRL kept valid from its read instead of its NextUpdate (a
+# stale CRL accepted), an older one taken from the copy (a revoked machine
+# admitted again by the second path), one the relay made (unsigned); the
+# issuer deciding a renewal by the copy's CRL instead of its log (a revoked
+# machine renews by the second path); mailbox-only is the design before
+# 2026-11-20 (the mailbox the CRL's only carrier); the alert keyed on the
+# mailbox's health.
+stale-copy RevocationBound CrlCarriers.cfg
+copy-rollback RevokedMachineRefused CrlCarriers.cfg
+copy-unsigned RevokedMachineRefused CrlCarriers.cfg
+renew-by-copy NoRenewAfterRevoke CrlCarriers.cfg
+mailbox-only CurrentWithoutMailbox CrlCarriers.cfg
+alert-on-mailbox AlertOnlyOnIssuer CrlCarriers.cfg
+alert-on-mailbox AlertBeforeLapse CrlCarriers.cfg
+# Replicas and the alert's memory (lane MAILBOXSPOF2): a put kept only by
+# the replica it landed on (a member reading another lapses), and an
+# alert with no memory of a copy a restart lost (a restart during an
+# issuer outage silences it).
+one-replica CurrentWithoutMailbox CrlCarriersReplicas.cfg
+one-replica AlertOnlyOnIssuer CrlCarriersReplicas.cfg
+# A peer replica keeping whatever the bus delivers, older than a put it
+# took directly meanwhile (two puts landing on different replicas).
+deliver-lww AlertOnlyOnIssuer CrlCarriersReplicas.cfg
+alert-forgets AlertWhileIssuerDown CrlCarriers.cfg
+# Issuer outages (lane ISSUEROUT, nfltr
+# docs/decisions/issuer-outage-2026-11-25.md): the CRL valid a little
+# longer than its re-sign interval (the design before: an hour, an outage
+# past it refused every session); a member that keeps admitting on a
+# lapsed CRL (a stale CRL accepted forever); the mailbox dropping a
+# revoking CRL silently (only the copy's read carries it: past the push
+# bound); a member that says nothing until its CRL lapses (the design
+# before), or warns at the re-sign age (a false alarm every hour).
+hour-life RideOutage CrlCarriers.cfg
+lapsed-accepted RevocationBound CrlCarriers.cfg
+lapsed-accepted NoSessionOnLapsed CrlCarriers.cfg
+push-dropped PushBound CrlCarriers.cfg
+warn-on-lapse WarnWhileIssuerDown CrlCarriers.cfg
+warn-early QuietWhileIssuerUp CrlCarriers.cfg
+# a machine certificate through an issuer outage (lane ORGCERT72, nfltr
+# docs/decisions/issuer-outage-2026-11-25.md "Machine certificates"):
+# day-life is the 24 h lifetime before (renewed at 12-14.4 h, it lapsed
+# 9.6 h into an outage the CRL rode out); two-thirds renews too late;
+# ask-once never asks again after a failed ask (both now lapse the 24 h
+# host certificate first, which drives the renewal: lane ORGCERT72b);
+# host-life-equal: the host certificate as long as the machine's (72 h:
+# ssh trusted a revoked machine that long with every CRL withheld).
+day-life CertRideOutage CertRide.cfg
+two-thirds HostRideOutage CertRide.cfg
+ask-once HostRideOutage CertRide.cfg
+host-life-equal HostRevokeBound CertRideHost.cfg
+ask-once HostRideOutage CertRideDay.cfg

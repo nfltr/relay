@@ -1,0 +1,9 @@
+Compatible changes:
+- ./nfnet.ListenOptions.RelayCap: added
+- ./machinecred.(*Credential).TransportFor: added
+- ./orgid.(*Identity).ShortName: added
+- ./orgid.(*Verifier).CRLStale: added
+- ./orgid.CRLWarnAge: added
+- ./orgid.ShortName: added
+- ./orgid.ValidShortName: added
+- ./orgid.WarnStale: added

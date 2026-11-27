@@ -1,0 +1,78 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+package rpcclient
+
+import (
+	"io"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/nfltr/relay/client/handoff"
+	"github.com/nfltr/relay/proto/pb"
+	"google.golang.org/grpc/codes"
+)
+
+// TestStuckHandlerDoesNotHoldTheReceiveLoop guards the agent-to-agent
+// sibling of the stuck-client rule: a handler that takes none of its
+// call's frames must not stop the tunnel's receive loop, which serves every
+// call and response of the agent. A caller that sends past the call's
+// RequestWindow (it broke the credit rules) has that call refused at once
+// (ResourceExhausted), and the agent's other calls go on. Its frames after
+// the first are continuations, as a caller sends them: those that reach the
+// agent after the refused handler returned start no second handler call
+// (spec/CallLifecycle.tla AtMostOneCall; unmarked, they did, in about 2 of
+// 3 runs, and its recorded trace was rejected).
+func TestStuckHandlerDoesNotHoldTheReceiveLoop(t *testing.T) {
+	ms := newMockStream(t.Context())
+	agent := NewAgent(testTargetAgentId, ms)
+	defer agent.Close() //nolint:errcheck
+	var stuckCalls atomic.Int32
+	agent.Handle(func(stream ServerStream) error {
+		if stream.SourceAgentID() == "stuck" {
+			stuckCalls.Add(1)
+			<-stream.Context().Done() // takes none of its frames
+			return stream.Context().Err()
+		}
+		_, _ = io.ReadAll(recvReader{stream})
+		return stream.Send([]byte("ok"))
+	})
+	go func() {
+		for i := range 40 { // past the call's buffer and the stream's
+			ms.recvCh <- &pb.TunnelFrame{Payload: []byte("x"), MessageType: "a2a-request", TransactionId: "stuck", Continuation: i > 0,
+				Routing: &pb.RoutingInfo{AgentId: "stuck", TargetAgentId: testTargetAgentId}}
+		}
+		ms.recvCh <- &pb.TunnelFrame{Payload: []byte("hi"), MessageType: "a2a-request", TransactionId: "other", Eom: true,
+			Routing: &pb.RoutingInfo{AgentId: "agent-a", TargetAgentId: testTargetAgentId}}
+	}()
+	var refused, answered bool
+	deadline := time.After(handoff.Stall / 2) // the code before waited handoff.Stall
+	for !refused || !answered {
+		select {
+		case f := <-ms.sendCh:
+			switch {
+			case f.GetTransactionId() == "stuck" && f.GetMessageType() == "error" && codes.Code(f.GetStatusCode()) == codes.ResourceExhausted:
+				refused = true
+			case f.GetTransactionId() == "other" && string(f.GetPayload()) == "ok":
+				answered = true
+			}
+		case <-deadline:
+			t.Fatalf("refused the stuck call %v, answered the other %v: the receive loop waits on a stuck handler", refused, answered)
+		}
+	}
+	// The other call's frame came last: every frame of the stuck call was
+	// taken. Close waits for every handler.
+	_ = agent.Close()
+	if n := stuckCalls.Load(); n != 1 {
+		t.Fatalf("the stuck call ran %d handler calls, want 1", n)
+	}
+}
+
+// recvReader reads a ServerStream's request messages as one stream.
+type recvReader struct{ s ServerStream }
+
+func (r recvReader) Read(b []byte) (int, error) {
+	data, err := r.s.Recv()
+	return copy(b, data), err
+}

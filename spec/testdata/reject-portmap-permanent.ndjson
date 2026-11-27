@@ -1,0 +1,4 @@
+{"ev":"Round","p":"pcp","del":false,"life":7200}
+{"ev":"NotMapped","p":"pcp","del":false,"life":0}
+{"ev":"NotMapped","p":"natpmp","del":false,"life":0}
+{"ev":"Mapped","p":"upnp","del":false,"life":0}

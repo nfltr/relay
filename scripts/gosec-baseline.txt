@@ -1,0 +1,25 @@
+# gosec baseline (scripts/sast-baseline.py): accepted or false-positive
+# findings, triaged by rule.
+# Regenerate only after triaging every new finding:
+#   scripts/check-gosec.sh --update
+G104 client/agent/run.go bf160ffe13386785  # resp.Body.Close() //nolint:errcheck
+G115 client/agent/run.go 94053e50ea90345e  # StatusCode:    int32(resp.StatusCode),
+G115 client/agent/run.go 94053e50ea90345e  # StatusCode:    int32(resp.StatusCode),
+G115 client/agent/run.go 94053e50ea90345e  # StatusCode:    int32(resp.StatusCode),
+G115 client/agent/run.go 94053e50ea90345e  # StatusCode:    int32(resp.StatusCode),
+G115 client/agent/tcp.go 0ace0730f96d5102  # growth.want.Store(int32(min(n, tcpMaxStreams)))
+G115 client/agent/tcp.go 2cdc9754c89a7840  # t.growth.add(-int32(n))
+G115 client/mailboxclient/client.go 3c9a41d019c70689  # Limits: &mailboxv1.WebhookLimits{MaxEventsPerMinute: uint32(max(maxEventsPerMinu
+G115 client/mailboxclient/client.go 3c9a41d019c70689  # Limits: &mailboxv1.WebhookLimits{MaxEventsPerMinute: uint32(max(maxEventsPerMinu
+G115 client/mailboxclient/client.go d5a981eb38aa2080  # in := &mailboxv1.PullMessagesRequest{Mailbox: mailbox, AfterSeq: after, MaxMessa
+G115 client/rpcclient/a2a.go 1a9da1053aebab97  # code := codes.Code(msg.GetStatusCode())
+G115 client/rpcclient/a2a.go 31d573c40dfd405a  # StatusCode:    int32(code),
+G115 client/rpcclient/a2a_e2ee_agent.go 31d573c40dfd405a  # StatusCode:    int32(code),
+G115 proto/wire/grpccodec/codec.go e41f76adf6afbfd4  # head = protowire.AppendVarint(head, uint64(respLen))
+G115 proto/wire/wsframe/wsframe.go 819262fde2349646  # dst = append(dst, 0x80|op, m|byte(n))
+G304 client/grpcclient/mtls.go d4374a08c9ca4645  # caPEM, err := os.ReadFile(caFile)
+G304 client/rpcclient/a2a_e2ee.go 40198b332da0a69d  # raw, err := os.ReadFile(path)
+G402 client/agent/http_tunnel.go 7bbd6a6edc0c064d  # tlsCfg = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // opt-in, dev onl
+G403 client/relaytrust/relaytrusttest/certs.go e7d5b68757efd78c  # weak, err := rsa.GenerateKey(rand.Reader, 1024)
+G404 client/relayoutage/redial.go bc7d74e7f1fc0233  # d += time.Duration(rand.Int64N(half + 1))
+G505 proto/wire/turnwire/turnwire.go f2141ce84264b419  # "crypto/sha1" //nolint:gosec // HMAC-SHA1 is what the TURN REST API scheme (and 

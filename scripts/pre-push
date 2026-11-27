@@ -1,0 +1,149 @@
+#!/usr/bin/env bash
+# Copyright 2026 nfltr
+# SPDX-License-Identifier: Apache-2.0
+#
+# pre-push: every ref's new commits and tags are nfltr's (check-identity.sh);
+# and a push to main or a tag needs a green `make ci` for that exact
+# commit, on this Mac or on the Linux CI VM (lead 2026-11-26; both runs land
+# in this Mac's results, scripts/ci.sh writing every clean-tree run here):
+# its line there or this clone's ci.sh stamp for its tree; or a rule of
+# admit() below admits it (docs-only, or a rebase of a green commit).
+# Installed by `make hooks` (.git/hooks/pre-push calls this file).
+#
+# Bypass: NFLTR_CI_BYPASS="<reason>" git push ...  Each bypassed ref is
+# logged to <git-common-dir>/ci-bypass.log and to stderr.
+set -uo pipefail
+
+remote="${1:-}"
+root="$(git rev-parse --show-toplevel)" || exit 1
+common="$(cd "$(git rev-parse --git-common-dir)" && pwd)"
+results="${NFLTR_CI_RESULTS:-$HOME/.local/state/nfltr-ci/results.jsonl}"
+repo=relay
+
+# --- admit (the same block in nfltr, link, relay, relay-core and relay-server)
+# A push to main may go without a result for its own sha under one of two
+# rules; tags never: they need their exact sha green.
+#  docs:   <main>..<sha> adds or edits only files in $docsonly (prose nothing
+#          builds, embeds or renders), deletes nothing, and adds no line with
+#          a Go code block (the repositories' tests read every Markdown file
+#          for one; nfltr's copy also refuses its pre-rename name, which this
+#          public copy does not spell).
+#  rebase: <sha> is a green B rebased onto <main>: the files B changes (from
+#          its base on main) and the files main changed since that base do
+#          not overlap, <sha> is B's tree with main's files, and <main> is
+#          green (its tree holds every main commit since B's base): its own
+#          result, or green_main's: a green main with only docs-only commits
+#          (the docs rule's) on top; a code commit never inherits.
+# Anything else needs the exact sha green: when unsure, the rules refuse.
+docsonly='docs/decisions/*.md docs/reports/*.md docs/task-analysis/*.md docs/evidence/*.md CHANGELOG.md LICENSE LICENSE.* NOTICE'
+LC_ALL=C && export LC_ALL # sort and comm agree on order
+
+# green <sha>: a green make ci result for it (a run of one target, "target",
+# is not one), or this clone's ci.sh pass stamp for its tree.
+green() {
+	grep -F "\"repo\":\"$repo\",\"sha\":\"$1\"" "$results" 2>/dev/null | grep -vF '"target":' | grep -F '"ok":true' >/dev/null ||
+		{ [ -x "$root/scripts/ci.sh" ] && "$root/scripts/ci.sh" verified "$1" 2>/dev/null; }
+}
+
+# docs_only: 0 when every path on stdin matches $docsonly.
+docs_only() {
+	while read -r f; do
+		ok=1
+		for p in $docsonly; do
+			# shellcheck disable=SC2254
+			case $f in $p) ok=0 && break ;; esac
+		done
+		[ $ok -eq 0 ] || return 1
+	done
+}
+
+# docs_change <a> <b>: 0 when <a>..<b> changes only $docsonly files, deletes
+# nothing and adds no line with a Go block.
+docs_change() {
+	[ -n "$(git diff --name-only --no-renames "$1" "$2")" ] &&
+		[ -z "$(git diff --name-only --no-renames --diff-filter=D "$1" "$2")" ] &&
+		git diff --name-only --no-renames "$1" "$2" | docs_only &&
+		! git diff "$1" "$2" | grep -iE "^\+.*\`\`\`go" >/dev/null # not -q: no SIGPIPE under pipefail
+}
+
+# green_main <main>: prints the green commit <main> inherits from: itself
+# when green, else the nearest green ancestor reached through single-parent
+# docs-only commits (at most 100); nonzero when there is none.
+green_main() {
+	c=$1 n=0
+	until green "$c"; do
+		[ $n -lt 100 ] && [ -z "$(git rev-parse -q --verify "$c^2")" ] && pa="$(git rev-parse -q --verify "$c^1")" &&
+			docs_change "$pa" "$c" || return 1
+		c=$pa n=$((n + 1))
+	done
+	echo "$c"
+}
+
+# admit <sha> <main>: prints the rule that admits <sha> over the remote's
+# <main>; nonzero when none does.
+admit() {
+	s=$1 m=$2
+	case "$m" in *[!0]*) ;; *) return 1 ;; esac
+	git cat-file -e "$m^{commit}" 2>/dev/null && git merge-base --is-ancestor "$m" "$s" || return 1
+	t="$(mktemp -d)"
+	git diff --name-only --no-renames "$m" "$s" | sort >"$t/s"
+	if docs_change "$m" "$s"; then
+		echo "docs only: $(wc -l <"$t/s" | tr -d ' ') prose files" && rm -rf "$t" && return 0
+	fi
+	gm="$(green_main "$m")" || { rm -rf "$t"; return 1; }
+	[ "$gm" = "$m" ] && gm="" || gm=" (docs only since green $(git rev-parse --short "$gm"))"
+	# Candidates: green shas of this repository this clone has, not on main.
+	git rev-list "$m" | sort >"$t/main"
+	grep -F "\"repo\":\"$repo\"" "$results" 2>/dev/null | grep -vF '"target":' | grep -F '"ok":true' |
+		sed -n 's/.*"sha":"\([0-9a-f]\{40\}\)".*/\1/p' | sort -u |
+		git cat-file --batch-check='%(objectname) %(objecttype)' 2>/dev/null | awk '$2 == "commit" { print $1 }' |
+		comm -23 - "$t/main" >"$t/cand"
+	while read -r b; do
+		base="$(git merge-base "$b" "$m")" || continue
+		git diff --name-only --no-renames "$base" "$b" | sort >"$t/b"
+		git diff --name-only --no-renames "$base" "$m" | sort >"$t/m"
+		[ -z "$(comm -12 "$t/b" "$t/m")" ] || continue                                      # disjoint
+		[ -z "$(git diff --name-only --no-renames "$b" "$s" | sort | comm -23 - "$t/m")" ] || continue # B's tree outside main's files
+		[ -z "$(comm -23 "$t/s" "$t/b")" ] || continue                                       # main's tree outside B's files
+		rm -rf "$t" && echo "rebase of green $(git rev-parse --short "$b") onto green $(git rev-parse --short "$m")$gm" && return 0
+	done <"$t/cand"
+	rm -rf "$t"
+	return 1
+}
+# --- end admit
+
+rc=0
+while read -r _lref lsha rref rsha; do
+	# Public: every ref's new commits and tags are nfltr's (no bypass).
+	case "$lsha" in *[!0]*)
+		"$root/scripts/check-identity.sh" "$lsha" "$rsha" ||
+			{ echo "pre-push: $rref: a commit or tag not by nfltr <oss@nfltr.xyz> (public repository): push refused" >&2; exit 1; } ;;
+	esac
+	case "$rref" in refs/heads/main | refs/tags/*) ;; *) continue ;; esac
+	case "$lsha" in *[!0]*) ;; *) continue ;; esac # a delete
+	sha="$(git rev-parse -q --verify "$lsha^{commit}")" || continue
+	short="$(git rev-parse --short "$sha")"
+	# Spec drift: code a spec's code map lists changes only with its spec
+	# or a Spec-Reviewed trailer (scripts/check-spec-drift.sh; not bypassed).
+	if [ "$rref" = refs/heads/main ] && [ -x "$root/scripts/check-spec-drift.sh" ] &&
+		git cat-file -e "$rsha^{commit}" 2>/dev/null &&
+		! "$root/scripts/check-spec-drift.sh" "$rsha..$sha" >&2; then
+		echo "pre-push: $rref $(git rev-parse --short "$sha"): spec drift (above): push refused" >&2
+		exit 1
+	fi
+	if [ -n "${NFLTR_CI_BYPASS:-}" ]; then
+		line="$(date -u +%Y-%m-%dT%H:%M:%SZ) bypass $remote $rref $sha user=$(git config user.email || id -un) reason=$NFLTR_CI_BYPASS"
+		echo "$line" >>"$common/ci-bypass.log"
+		echo "pre-push: gate BYPASSED for $rref $short ($NFLTR_CI_BYPASS), logged to $common/ci-bypass.log" >&2
+		continue
+	fi
+	if green "$sha"; then
+		echo "pre-push: $rref $short: green (make ci on this Mac or the Linux CI VM)" >&2
+	elif [ "$rref" = refs/heads/main ] && why="$(admit "$sha" "$rsha")"; then
+		echo "pre-push: $rref $short: admitted without its own make ci result: $why" >&2
+	else
+		echo "pre-push: $rref $short: no green make ci result for this commit and no rule admits it: run make ci in a clean checkout at $short on this Mac, push again" >&2
+		exit 1
+	fi
+done
+exit $rc

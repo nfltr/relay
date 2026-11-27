@@ -1,0 +1,18 @@
+# <mutant> <property> [<cfg>]: TLC on OrgMove.cfg's constants (or <cfg>'s)
+# with that Mutant must report <property> violated (scripts/spec-orgmove.sh
+# mutants); MoveCompletes runs under LiveSpec.
+no-fence AtMostOneIssuer
+no-fence TokenOnce
+no-fence CRLMonotone
+serve-after-fence OldCannotIssue
+serve-after-fence AtMostOneIssuer
+fence-names-no-recipient AtMostOneIssuer
+fence-names-no-recipient TokenOnce
+import-unfenced AuditContinuous
+import-unfenced CRLMonotone
+import-unfenced RevokedStaysRevoked
+reusable-receive-key AuditContinuous
+reusable-receive-key TokenOnce
+rekey-on-import FleetUnderServingIssuer
+no-resend MoveCompletes OrgMoveLive.cfg
+ephemeral-receive-key MoveCompletes OrgMoveLive.cfg

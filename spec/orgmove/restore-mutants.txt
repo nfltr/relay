@@ -1,0 +1,10 @@
+# <mutant> <property> [<cfg>]: TLC on OrgMoveRestore.cfg's constants with
+# that Mutant must report <property> violated (scripts/spec-orgmove.sh
+# restore).
+revive-behind CRLMonotone
+revive-behind RevokedStaysRevoked
+revive-while-held AtMostOneIssuer
+merge-skipped RevokedStaysRevoked
+merge-skipped CRLMonotone
+number-not-above-published CRLMonotone
+revive-keeps-tokens TokenOnce

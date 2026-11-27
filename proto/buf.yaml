@@ -1,0 +1,19 @@
+# Copyright 2026 nfltr
+# SPDX-License-Identifier: Apache-2.0
+
+# buf module of the relay's v1 protos (proto/nfltr/<area>/v1). proto/pb is
+# the frozen agent-wire report, not part of it.
+version: v2
+modules:
+  - path: .
+    excludes:
+      - pb
+deps:
+  - buf.build/googleapis/googleapis
+lint:
+  use: [STANDARD, COMMENTS]
+  enum_zero_value_suffix: _UNSPECIFIED
+  rpc_allow_google_protobuf_empty_requests: false
+  rpc_allow_google_protobuf_empty_responses: false
+breaking:
+  use: [FILE, WIRE_JSON]

@@ -1,0 +1,293 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   direct_once.pv: decrypt each byte once on a direct path (lane
+   DIRECTCRYPT, a design: nfltr docs/decisions/direct-once-2026-11-22.md;
+   code lane DIRECTONCE). spec/proverif/README.md "direct_once.pv".
+
+   Today (cap_address.pv 15-20, e2ee_tcp.pv 21-28) link pathswitch sits
+   under the session's end-to-end TLS: on a direct path each byte is
+   sealed twice, by the session's TLS and by the direct QUIC connection.
+   The design moves pathswitch above per-epoch channels, each an
+   authenticated TLS 1.3 channel to the pinned server key and bound to the
+   session by an exporter token:
+     epoch 0  the session's own TLS over the relayed stream (the
+              admission's PROOF first, then pathswitch frames inside it)
+     epoch 1  a direct QUIC connection (TLS 1.3 in QUIC, RFC 9001): the
+              client takes it only from the pinned key, both ends send a
+              token h(k, quic exporter, role, epoch); pathswitch frames ride
+              its stream under QUIC's keys only (the one decrypt)
+     epoch 2  a relayed re-attach: a fresh TLS 1.3 handshake to the pinned
+              key on the new relayed stream, bound by the same token over
+              its own exporter (never the session's key with its record
+              counter restarted)
+   A pathswitch frame names its direction's offset (here a position, p1 or
+   p2) inside its channel's AEAD; the sender sends every unacknowledged
+   position on every epoch it binds (resends), the receiver hands on what
+   it opens on any bound epoch by position. That no position is lost,
+   duplicated or reordered across epochs, given channels that deliver in
+   order or are cut, is link spec/DirectPath.tla; this model proves the
+   channels give it that: each frame a receiver opens on any epoch is its
+   peer's, in this session, at that position, and secret.
+
+   The attacker owns every relay and the network: it routes the punch
+   (whoever answers a direct candidate is its choice), opens its own QUIC
+   connections and relayed streams to the agent, and holds a second
+   address of the same server key (sec2, its own admitted sessions). TLS
+   1.3 is not re-proven (as cap_address.pv): a handshake to a checked key
+   shares a fresh key only with that key's holder; the exporter covers the
+   key, the server random and the server key. A TLS record's sequence
+   number is its AEAD nonce: event Seal names (key, direction, sequence)
+   and the plaintext, so a key reused with a restarted counter is a nonce
+   reuse (query 12). QUIC's packet numbers are QUIC's (RFC 9001 5.3).
+
+   Rendezvous, pin and proof are cap_address.pv's (its queries 5-7): here
+   the client starts with the pinned key.
+
+   Mutants (expect.txt "Part 8"):
+     direct-no-pin-check   the client takes a direct connection under any key
+                           (caught by 9 alone: the session-bound tokens keep a
+                           middle out; with client-no-token also 1, 2, 4)
+     client-no-token       the client sends on a direct connection without the
+                           agent's token (holds alone: the pin)
+     agent-no-token        the agent binds a direct connection to a session
+                           without the client's token: an unauthenticated
+                           direct path
+     relayed-plain         the client, on a re-attach the relay's answer calls
+                           direct, drops the channel (downgrade on relayed)
+     agent-plain-relayed   the agent takes plain frames on a relayed re-attach
+     token-no-session      the token without the session key: a channel of
+                           one session bound to another (key reuse across
+                           sessions)
+     reattach-key-reuse    a re-attach keeps the session's key, counter
+                           restarted (key and nonce reuse across epochs)
+     pos-unbound           the frame's offset outside the AEAD
+   Bindings (each a refusal row: client/agent/direct_once_bindings_test.go):
+     BIND:once.channel   a frame is taken only on an epoch bound to the session (token checked)
+     BIND:once.offset    the frame's offset inside its channel's AEAD
+     BIND:once.reattach  a relayed re-attach is a fresh TLS handshake to the pinned key, its token over its own exporter
+     BIND:once.plain     no channel is dropped on any word from the path: only a QUIC connection this end verified carries frames under QUIC alone
+   and the existing BIND:nf1direct.pin, BIND:direct.token, direct.quic,
+   direct.role, direct.epoch. *)
+
+free c: channel.
+
+type skey.
+type pkey.
+fun pk(skey): pkey.
+fun aenc(bitstring, pkey): bitstring.
+reduc forall m: bitstring, k: skey; adec(aenc(m, pk(k)), k) = m.
+fun senc(bitstring, bitstring): bitstring.
+reduc forall m: bitstring, k: bitstring; sdec(senc(m, k), k) = m.
+fun h(bitstring): bitstring.
+
+const labProof, labExp, labQ, labC, labS, labTK: bitstring.
+const c2s, s2c: bitstring.             (* directions *)
+const ep0, ep1, ep2: bitstring.        (* epochs: the session's TLS, direct, a relayed re-attach *)
+const p1, p2: bitstring.               (* two offsets of a direction's stream *)
+const s0, s1, s2: bitstring.           (* a TLS record's sequence number *)
+const kindDirect: bitstring.           (* the relay's word: "this path is direct" *)
+const rid1, rid2: bitstring.           (* the agent's two addresses *)
+
+free skS: skey [private].              (* the server's key, both addresses' *)
+free sec1: bitstring [private].        (* A1's secret *)
+free sec2: bitstring.                  (* A2's: the attacker's *)
+free payC: bitstring [private].        (* what A1's client sends *)
+free payA: bitstring [private].        (* what A1's service sends *)
+free payA2: bitstring.                 (* what A2's service sends: the attacker's *)
+
+letfun tlsExp(k: bitstring, ns: bitstring, x: pkey) = h((labExp, k, ns, x)).
+(* A TLS traffic key: the key schedule covers both randoms (RFC 8446 7.1). *)
+letfun tkOf(k: bitstring, ns: bitstring) = h((labTK, k, ns)).
+letfun qexp(kd: bitstring, dn: bitstring, x: pkey) = h((labQ, kd, dn, x)).
+letfun proofOf(s: bitstring, k: bitstring, ns: bitstring, x: pkey) = h((labProof, s, tlsExp(k, ns, x))).
+letfun tok(k: bitstring, x: bitstring, role: bitstring, e: bitstring) = h((k, x, role, e)). (* NOT:token-no-session *)
+letfun tok(k: bitstring, x: bitstring, role: bitstring, e: bitstring) = h((x, role, e)). (* ONLY:token-no-session *)
+
+(* A pathswitch frame: direction, offset, bytes, under a channel key (a TLS
+   record also names its sequence number, its nonce). *)
+letfun frame(d: bitstring, p: bitstring, m: bitstring, key: bitstring) = senc((d, p, m), key). (* NOT:pos-unbound *)
+letfun frame(d: bitstring, p: bitstring, m: bitstring, key: bitstring) = (p, senc((d, m), key)). (* ONLY:pos-unbound *)
+letfun unframe(d: bitstring, y: bitstring, key: bitstring) = let (=d, p: bitstring, m: bitstring) = sdec(y, key) in (p, m). (* NOT:pos-unbound *)
+letfun unframe(d: bitstring, y: bitstring, key: bitstring) = let (p: bitstring, e: bitstring) = y in let (=d, m: bitstring) = sdec(e, key) in (p, m). (* ONLY:pos-unbound *)
+letfun rec(d: bitstring, s: bitstring, p: bitstring, m: bitstring, key: bitstring) = senc((d, s, p, m), key). (* NOT:pos-unbound *)
+letfun rec(d: bitstring, s: bitstring, p: bitstring, m: bitstring, key: bitstring) = (p, senc((d, s, m), key)). (* ONLY:pos-unbound *)
+letfun unrec(d: bitstring, y: bitstring, key: bitstring) = let (=d, s: bitstring, p: bitstring, m: bitstring) = sdec(y, key) in (p, m). (* NOT:pos-unbound *)
+letfun unrec(d: bitstring, y: bitstring, key: bitstring) = let (p: bitstring, e: bitstring) = y in let (=d, s: bitstring, m: bitstring) = sdec(e, key) in (p, m). (* ONLY:pos-unbound *)
+
+event ServerKey(pkey).
+event Admitted(bitstring, bitstring).                            (* rid, session key *)
+event ClientProved(bitstring).                                   (* session key *)
+event ClientSent(bitstring, bitstring, bitstring).               (* k, offset, bytes *)
+event AgentSent(bitstring, bitstring, bitstring, bitstring).     (* rid, k, offset, bytes *)
+event AgentGot(bitstring, bitstring, bitstring, bitstring, bitstring). (* rid, k, epoch, offset, bytes *)
+event ClientGot(bitstring, bitstring, bitstring, bitstring).      (* k, epoch, offset, bytes *)
+event ClientQUIC(bitstring, pkey).                               (* k, the direct handshake's key *)
+event ClientOffer(bitstring, bitstring, bitstring).              (* k, epoch, channel exporter: token sent *)
+event ClientBound(bitstring, bitstring, bitstring).              (* k, epoch, exporter: the agent's token taken *)
+event AgentBound(bitstring, bitstring, bitstring, bitstring).    (* rid, k, epoch, exporter *)
+event ClientPlain(bitstring).                                    (* k: a frame sent with no channel *)
+event Seal(bitstring, bitstring, bitstring).                     (* (key, direction), sequence, plaintext *)
+
+(* Epoch 1: A1's client's direct connection for session k. *)
+let DirectClient(k: bitstring, rpk: pkey, m1: bitstring, m2: bitstring) =
+  in(c, (dpk: pkey, dn: bitstring));
+  if dpk = rpk then (* NOT:direct-no-pin-check *)
+  new kd: bitstring;
+  out(c, aenc((kd, dn), dpk));
+  let qx = qexp(kd, dn, dpk) in
+  event ClientQUIC(k, dpk);
+  event ClientOffer(k, ep1, qx);
+  out(c, senc((labC, tok(k, qx, labC, ep1)), kd));
+  in(c, x: bitstring);
+  let (=labS, =tok(k, qx, labS, ep1)) = sdec(x, kd) in (* NOT:client-no-token *)
+  let (=labS, t: bitstring) = sdec(x, kd) in (* ONLY:client-no-token *)
+  event ClientBound(k, ep1, qx);
+  ( out(c, frame(c2s, p1, m1, kd)) | out(c, frame(c2s, p2, m2, kd)) |
+    !(in(c, y: bitstring); let (p: bitstring, m: bitstring) = unframe(s2c, y, kd) in event ClientGot(k, ep1, p, m)) ).
+
+(* Epoch 1 at the agent: a direct connection under its key, bound to its
+   admitted session k only on k's client token. *)
+let DirectAgent(r: bitstring, k: bitstring, m1: bitstring, m2: bitstring) =
+  new dn: bitstring;
+  out(c, (pk(skS), dn));
+  in(c, ekd: bitstring);
+  let (kd: bitstring, =dn) = adec(ekd, skS) in
+  let qx = qexp(kd, dn, pk(skS)) in
+  in(c, x: bitstring);
+  let (=labC, =tok(k, qx, labC, ep1)) = sdec(x, kd) in (* NOT:agent-no-token *)
+  let (=labC, t: bitstring) = sdec(x, kd) in (* ONLY:agent-no-token *)
+  event AgentBound(r, k, ep1, qx);
+  out(c, senc((labS, tok(k, qx, labS, ep1)), kd));
+  ( out(c, frame(s2c, p1, m1, kd)) | out(c, frame(s2c, p2, m2, kd)) |
+    !(in(c, y: bitstring); let (p: bitstring, m: bitstring) = unframe(c2s, y, kd) in event AgentGot(r, k, ep1, p, m)) ).
+
+(* Epoch 2: a relayed re-attach, a fresh TLS handshake to the pinned key. *)
+let ReattachClient(k: bitstring, tk: bitstring, rpk: pkey, m1: bitstring, m2: bitstring) =
+  in(c, kind: bitstring); (* ONLY:relayed-plain *)
+  if kind = kindDirect then (event ClientPlain(k); out(c, (c2s, p1, m1)) | out(c, (c2s, p2, m2))) else (* ONLY:relayed-plain *)
+  in(c, (spk: pkey, ns2: bitstring));
+  if spk = rpk then
+  new k2: bitstring;
+  out(c, aenc((k2, ns2), spk));
+  let x2 = tlsExp(k2, ns2, spk) in
+  let tk2 = tkOf(k2, ns2) in (* NOT:reattach-key-reuse *)
+  let tk2 = tk in (* ONLY:reattach-key-reuse *)
+  event ClientOffer(k, ep2, x2);
+  event Seal((tk2, c2s), s0, tok(k, x2, labC, ep2));
+  out(c, senc((c2s, s0, tok(k, x2, labC, ep2)), tk2));
+  in(c, z: bitstring);
+  let (=s2c, =s0, =tok(k, x2, labS, ep2)) = sdec(z, tk2) in
+  event ClientBound(k, ep2, x2);
+  ( (event Seal((tk2, c2s), s1, (p1, m1)); out(c, rec(c2s, s1, p1, m1, tk2))) |
+    (event Seal((tk2, c2s), s2, (p2, m2)); out(c, rec(c2s, s2, p2, m2, tk2))) |
+    !(in(c, y: bitstring); let (p: bitstring, m: bitstring) = unrec(s2c, y, tk2) in event ClientGot(k, ep2, p, m)) ).
+
+let ReattachAgent(r: bitstring, k: bitstring, tk: bitstring, m1: bitstring, m2: bitstring) =
+  (!(in(c, (=c2s, p: bitstring, m: bitstring)); event AgentGot(r, k, ep2, p, m))) | (* ONLY:agent-plain-relayed *)
+  new ns2: bitstring;
+  out(c, (pk(skS), ns2));
+  in(c, ek2: bitstring);
+  let (k2: bitstring, =ns2) = adec(ek2, skS) in
+  let x2 = tlsExp(k2, ns2, pk(skS)) in
+  let tk2 = tkOf(k2, ns2) in (* NOT:reattach-key-reuse *)
+  let tk2 = tk in (* ONLY:reattach-key-reuse *)
+  in(c, z: bitstring);
+  let (=c2s, =s0, =tok(k, x2, labC, ep2)) = sdec(z, tk2) in
+  event AgentBound(r, k, ep2, x2);
+  event Seal((tk2, s2c), s0, tok(k, x2, labS, ep2));
+  out(c, senc((s2c, s0, tok(k, x2, labS, ep2)), tk2));
+  ( (event Seal((tk2, s2c), s1, (p1, m1)); out(c, rec(s2c, s1, p1, m1, tk2))) |
+    (event Seal((tk2, s2c), s2, (p2, m2)); out(c, rec(s2c, s2, p2, m2, tk2))) |
+    !(in(c, y: bitstring); let (p: bitstring, m: bitstring) = unrec(c2s, y, tk2) in event AgentGot(r, k, ep2, p, m)) ).
+
+(* Epoch 0: an acceptor of address r (secret sec): the session's TLS, the
+   PROOF its first record, then pathswitch frames inside it. *)
+let Acceptor(r: bitstring, sec: bitstring, pay: bitstring) =
+  new ns: bitstring;
+  out(c, (pk(skS), ns));
+  in(c, ek: bitstring);
+  let (k: bitstring, =ns) = adec(ek, skS) in
+  let tk = tkOf(k, ns) in
+  in(c, e: bitstring);
+  let (=c2s, =s0, pr: bitstring) = sdec(e, tk) in
+  if pr = proofOf(sec, k, ns, pk(skS)) then
+  event Admitted(r, k);
+  new a1: bitstring; new a2: bitstring;
+  let m1 = (pay, a1) in let m2 = (pay, a2) in
+  event AgentSent(r, k, p1, m1);
+  event AgentSent(r, k, p2, m2);
+  ( (event Seal((tk, s2c), s0, (p1, m1)); out(c, rec(s2c, s0, p1, m1, tk))) |
+    (event Seal((tk, s2c), s1, (p2, m2)); out(c, rec(s2c, s1, p2, m2, tk))) |
+    !(in(c, y: bitstring); let (p: bitstring, m: bitstring) = unrec(c2s, y, tk) in event AgentGot(r, k, ep0, p, m)) |
+    !DirectAgent(r, k, m1, m2) | !ReattachAgent(r, k, tk, m1, m2) ).
+
+(* A1's client, with the pinned key rpk. *)
+let Client(rpk: pkey, sec: bitstring) =
+  in(c, (spk: pkey, ns: bitstring));
+  if spk = rpk then
+  new k: bitstring;
+  out(c, aenc((k, ns), spk));
+  let tk = tkOf(k, ns) in
+  event ClientProved(k);
+  event Seal((tk, c2s), s0, proofOf(sec, k, ns, spk));
+  out(c, senc((c2s, s0, proofOf(sec, k, ns, spk)), tk));
+  new n1: bitstring; new n2: bitstring;
+  let m1 = (payC, n1) in let m2 = (payC, n2) in
+  event ClientSent(k, p1, m1);
+  event ClientSent(k, p2, m2);
+  ( (event Seal((tk, c2s), s1, (p1, m1)); out(c, rec(c2s, s1, p1, m1, tk))) |
+    (event Seal((tk, c2s), s2, (p2, m2)); out(c, rec(c2s, s2, p2, m2, tk))) |
+    !(in(c, y: bitstring); let (p: bitstring, m: bitstring) = unrec(s2c, y, tk) in event ClientGot(k, ep0, p, m)) |
+    !DirectClient(k, rpk, m1, m2) | !ReattachClient(k, tk, rpk, m1, m2) ).
+
+(* 1, 2. secrecy of both directions on every epoch *)
+(* expect true *)
+query attacker(payC).
+(* expect true *)
+query attacker(payA).
+(* 3. what A1's agent takes on any epoch, at an offset, A1's client sent
+   in that session at that offset *)
+(* expect true *)
+query k: bitstring, e: bitstring, p: bitstring, m: bitstring; event(AgentGot(rid1, k, e, p, m)) ==> event(ClientSent(k, p, m)).
+(* 4. what the client takes on any epoch, at an offset, A1's agent sent
+   in that session at that offset *)
+(* expect true *)
+query k: bitstring, e: bitstring, p: bitstring, m: bitstring; event(ClientGot(k, e, p, m)) ==> event(AgentSent(rid1, k, p, m)).
+(* 5. A1's agent admits only a session whose client proved sec1 *)
+(* expect true *)
+query k: bitstring; event(Admitted(rid1, k)) ==> event(ClientProved(k)).
+(* 6. A1's agent binds an epoch's channel to session k only on k's own
+   client's offer for that channel *)
+(* expect true *)
+query k: bitstring, e: bitstring, x: bitstring; event(AgentBound(rid1, k, e, x)) ==> event(ClientOffer(k, e, x)).
+(* 7. a channel the client binds to k is bound by A1's agent to k, injective *)
+(* expect true *)
+query k: bitstring, e: bitstring, x: bitstring; inj-event(ClientBound(k, e, x)) ==> inj-event(AgentBound(rid1, k, e, x)).
+(* 8. no downgrade: the client never sends a frame outside a channel *)
+(* expect true *)
+query k: bitstring; event(ClientPlain(k)).
+(* 9. the client's direct handshake ends only at the pinned key *)
+(* expect true *)
+query k: bitstring, x: pkey; event(ClientQUIC(k, x)) ==> event(ServerKey(x)).
+(* 10. no nonce reuse: a TLS key seals at one sequence number one plaintext *)
+(* expect true *)
+query k: bitstring, s: bitstring, x: bitstring, y: bitstring; event(Seal(k, s, x)) && event(Seal(k, s, y)) ==> x = y.
+(* 11-16. witnesses: each epoch carries each direction *)
+(* expect false *)
+query k: bitstring, p: bitstring, m: bitstring; event(AgentGot(rid1, k, ep0, p, m)).
+(* expect false *)
+query k: bitstring, p: bitstring, m: bitstring; event(AgentGot(rid1, k, ep1, p, m)).
+(* expect false *)
+query k: bitstring, p: bitstring, m: bitstring; event(AgentGot(rid1, k, ep2, p, m)).
+(* expect false *)
+query k: bitstring, p: bitstring, m: bitstring; event(ClientGot(k, ep0, p, m)).
+(* expect false *)
+query k: bitstring, p: bitstring, m: bitstring; event(ClientGot(k, ep1, p, m)).
+(* expect false *)
+query k: bitstring, p: bitstring, m: bitstring; event(ClientGot(k, ep2, p, m)).
+
+process
+  event ServerKey(pk(skS));
+  out(c, pk(skS));
+  ( (!Acceptor(rid1, sec1, payA)) | (!Acceptor(rid2, sec2, payA2)) | (!Client(pk(skS), sec1)) )

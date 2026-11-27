@@ -1,0 +1,7 @@
+*.test
+*.out
+/bin/
+
+# TLC writes counterexample traces (<Spec>_TTrace_<epoch>.tla/.bin) beside a spec.
+*_TTrace_*.tla
+*_TTrace_*.bin

@@ -1,0 +1,13 @@
+{"ev":"Start","att":1}
+{"ev":"Sync","rtt_us":400}
+{"ev":"Dial","rtt_us":400,"wait_us":200,"since_us":201}
+{"ev":"NoAnswer","reason":"no_answer"}
+{"ev":"Start","att":2}
+{"ev":"Sync","rtt_us":400}
+{"ev":"Dial","rtt_us":400,"wait_us":200,"since_us":201}
+{"ev":"NoAnswer","reason":"no_answer"}
+{"ev":"Start","att":3}
+{"ev":"Sync","rtt_us":400}
+{"ev":"Dial","rtt_us":400,"wait_us":200,"since_us":201}
+{"ev":"NoAnswer","reason":"no_answer"}
+{"ev":"Start","att":4}

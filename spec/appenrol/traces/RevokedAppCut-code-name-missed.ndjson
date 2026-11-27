@@ -1,0 +1,3 @@
+{"ev":"code","o":"o1","n":"n1","u":"alice@example.com","a":"send","tok":"tok1","k":"k1","t":10}
+{"ev":"sso","o":"o1","n":"send-1","why":"","u":"bob@example.com","a":"send","k":"k3","kn":"N3","nonce":"N3","exp":200,"au":100,"t":50}
+{"ev":"revoke","o":"o1","u":"","a":"send","names":["send-1"],"t":60}

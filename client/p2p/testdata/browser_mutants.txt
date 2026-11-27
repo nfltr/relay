@@ -1,0 +1,12 @@
+# Planted bugs of the agent's browser direct path (scripts/go-mutants.sh
+# client/p2p/testdata/browser_mutants.txt, make test-go-mutants, in make
+# ci): each line "<mutant> | <file> | <exact line text> | <replacement> |
+# <test>". Models: spec/proverif/browser_peer.pv (dc-no-proof,
+# signal-before-admit, hosted-page; BIND:browser.dc.nf1, BIND:browser.signal,
+# BIND:browser.bundle) and
+# spec/BrowserPeer.tla (no-dc-cap, pc-outlives-ctl).
+dc-no-proof | browserpeer.go | 	tc, err := p.l.Accept(p.ctx, c) | 	var tc net.Conn = c; var err error | TestBrowserPeerModelBindings
+signal-before-admit | browserpeer.go | 	tc, err := p.l.Admit(hctx, p.ctl) | 	_ = writeSignal(p.ctl, nil); tc, err := p.l.Admit(hctx, p.ctl) | TestBrowserPeerModelBindings
+no-dc-cap | browserpeer.go | 		if !p.held || p.state != "up" || len(p.dcs) >= p.maxDC { | 		if !p.held || p.state != "up" { | TestBrowserDirectCapsDataChannels
+pc-outlives-ctl | browserpeer.go | 	reap := p.reapLocked() | 	reap := func() {} | TestBrowserDirectReapsWithTheControlSession
+hosted-page | ../internal/bundle/bundle.go | 	if !bytes.Equal(got, sums) { | 	if false { | TestBrowserPeerModelBindings

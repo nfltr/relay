@@ -1,0 +1,14 @@
+# Copyright 2026 nfltr
+# SPDX-License-Identifier: Apache-2.0
+
+# buf checks of service.proto (package github.com/nfltr/relay/proto/pb, the
+# agent wire), run in REPORT mode: findings are printed, never fail. Rules as for the v1 protos;
+# the v0 proto breaks most of them by design.
+version: v2
+lint:
+  use: [STANDARD, COMMENTS]
+  enum_zero_value_suffix: _UNSPECIFIED
+  rpc_allow_google_protobuf_empty_requests: false
+  rpc_allow_google_protobuf_empty_responses: false
+breaking:
+  use: [FILE, WIRE_JSON]

@@ -1,0 +1,3 @@
+Compatible changes:
+- ./orgenrol.SendRenewal: added
+- ./orgpki.Request.IssuerRenewal: added

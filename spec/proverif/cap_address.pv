@@ -1,0 +1,459 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   cap_address.pv: the capability address nf1... (the address codec and
+   its checks: client/capaddr; the clients and servers that use it come
+   next). spec/proverif/README.md "cap_address.pv".
+
+   A server publishes one service under an address; whoever holds the
+   address reaches that service, end to end encrypted, with no account and
+   no certificate of their own. The client knows only the address:
+     A = (R, rid, pin, sec)
+     R    the relay host the server registered at
+     rid  the rendezvous id: ridOf(n, pk) = H("nf1-rid", n, pk), n =
+          nonceOf(sec) = H("nf1-n", sec) (public: the relay learns it), so
+          rid is fresh per address and bound to the server's key (lane
+          NF1RISKS; queries 1-24 hold for any public rid)
+     sec  the secret: 32 random bytes, always present (the format has no
+          empty or absent secret)
+     pin  pinOf(sec, pk) = H("nf1-pin", sec, pk): the server's TLS key pk,
+          keyed by the secret, so a relay that sees pk cannot compute it
+   The address is nf1 followed by a checksummed encoding of a version and
+   these four fields; the codec parses offline and refuses a bad checksum,
+   a missing field and an all-zero secret.
+
+   Message flow (each line: what it binds):
+     1. REGISTER, server -> relay R, on its agent session:
+          rid, pk, rec = Sign_sk("nf1-rdv", R, rid, hints)
+        hints: whatever the client acts on before TLS (direct candidates);
+        the relay learns rid, pk, hints, never sec or pin. With the
+        declaration, to R only (inside the agent's TLS to R, never in an
+        answer): the registration proof (n, pk, Sign_sk("nf1-reg", R,
+        rid)); R takes a declaration of rid only when rid = ridOf(n, pk)
+        and the signature verifies under pk (BIND:cap.register), so only
+        the holder of sk makes an agent serve rid: an address holder
+        cannot declare it and turn every open into "not served" (nfltr
+        docs/decisions/nf1-risks-2026-11-14.md). Queries 27, 28.
+     2. OPEN, client -> R (the address's relay, never a saved one, --server
+        or a redirect): rid, end to end encrypted (no plain mode).
+     3. RENDEZVOUS answer, R -> client: (pk, rec). The client requires
+        pinOf(sec, pk) = pin (BIND:cap.pin) and rec a signature under that
+        pk over ("nf1-rdv", the relay it opened at, its rid, hints)
+        (BIND:cap.rendezvous); only then does it use hints or take any
+        byte of the server's TLS. An answer "plain" is refused. Its
+        ClientHello (no secret, no answer in it; not modeled, as TLS 1.3 is
+        not re-proven) may go with the OPEN, before the answer (lane
+        NF1TTFB, client/nf1 AnswerConn): the client's first secret-bearing
+        message, below, still follows the answer's checks.
+     4. TLS 1.3 through the relay's stream: the server's certificate must
+        carry exactly pk (BIND:cap.pin); the client presents none.
+     5. PROOF, the client's first record inside TLS:
+          H("nf1-proof", sec, exporter)
+        exporter: the TLS exporter of this session, which covers the whole
+        handshake transcript, the server's certificate included
+        (BIND:cap.secret). The server checks it against the secret of the
+        address the session was routed to (rid's acceptor), never another
+        address it serves, even under the same key (BIND:cap.service), and
+        closes the session otherwise. Nothing of the service runs before.
+     6. The service's bytes both ways, under the TLS key.
+
+   The attacker owns every relay (R and any other: one Dolev-Yao attacker
+   is the colluding case), the network and the rendezvous: it reads every
+   registration, answers every open, opens sessions of its own to any rid,
+   and holds a second address of the same server and key (A2: rid2, sec2,
+   so pin2): a holder of one address gains nothing on another. The server
+   key skS serves both A1 (service 1) and A2 (service 2).
+
+   TLS 1.3 is not re-proven (as e2ee_tcp.pv): a client that checked the
+   server's key shares a fresh key only with that key's holder; the key
+   share is modelled as encryption to the key, bound to the server random.
+   The exporter (RFC 8446 7.5) is derived from the transcript: h((k, ns,
+   pk)). Without pk in it a client fooled about the key would hand the
+   attacker a proof it can forward to the real server (see proof-unbound).
+
+   Mutants (each a check left out; expect.txt "Part 5"):
+     client-no-pin-check       the TLS certificate's key not compared
+     rendezvous-any-key        the answer's key not compared to the pin
+     relay-substitutes-relay   the client opens at a relay other than its
+                               address's and takes the answer's relay
+     server-no-secret-check    the proof not checked
+     address-secret-optional   the format lets the secret be empty: A1 has
+                               none
+     server-any-secret         an acceptor takes a proof under any secret
+                               of its key and serves its own service
+     pin-unkeyed               pin = H(pk)
+     downgrade-plain           the client sends in plain on the answer
+     proof-unbound             the proof without the exporter (caught only
+                               with client-no-pin-check)
+
+   Direct paths (lane NF1DIRECT, nfltr docs/decisions/nf1-direct-2026-11-14.md):
+   the record's hints carry one fact, hintD ("d1": this listener takes
+   direct paths); the client acts on it only once the record covers it.
+   After admission the session may move to a direct QUIC connection
+   (link pathswitch below the session's TLS, the organisation's mechanism,
+   e2ee_tcp.pv 21-26): the attacker routes the client's punch wherever it
+   likes; whoever answers shows a key and a server random; the client takes
+   the connection only from the pinned key (BIND:nf1direct.pin) and only
+   with the agent's token; the agent binds the connection to a session only
+   on that session's client token. Tokens: h((k, qx, role, ep1)), k the
+   session key (its exporter), qx the QUIC exporter h((labQ, kd, dn, dpk)),
+   which covers the direct handshake's key as TLS 1.3's exporter does.
+   Queries 15-20; mutants:
+     hint-unbound              the client takes hints from the answer frame,
+                               not from what the record signs
+     direct-no-pin-check       the direct answer's key not compared to the
+                               pinned key (caught by 16 alone; by 15, 17,
+                               18 only with nf1-token-unbound, because the
+                               transcript-bound tokens refuse a middle)
+     nf1-token-unbound         the tokens without the QUIC exporter (holds
+                               alone: the pin keeps the middle out)
+     nf1-direct-no-token       the client does not check the agent's token
+     nf1-agent-no-token        the agent binds a direct connection to a
+                               session on the relay's word, no token
+
+   Datagrams (lane NF1UDP, nfltr docs/decisions/nf1-udp-2026-11-14.md):
+   once bound, the session's datagrams may ride the direct connection as
+   QUIC DATAGRAM frames under its keys, tagged with the attach. Queries
+   21-24; mutant:
+     dgram-tag-unbound         the agent hands a datagram to a session on any
+                               direct connection it accepted, bound or not
+   The kind (lane UDP1): the hints are a flag list, modelled as the pair
+   (direct, kind): "d1" or none, "u1" (a datagram service) or none (a
+   stream service). A1 serves datagrams, A2 streams. A client dials with
+   a kind of its own (cat forward --udp or not) and takes an answer only
+   when the record's kind is its dial's (BIND:cap.kind), so a relay cannot
+   make a stream client speak to a datagram service or the reverse.
+   Queries 25-26; mutants:
+     client-no-kind-check      the dial's kind not compared to the record's
+     hint-unbound-u1           the kind taken from the answer frame's hints,
+                               "d1" still from the record (hint-unbound
+                               takes both from the frame)
+
+   Registration (lane NF1RISKS): R's check of a declaration of A1's rid
+   from any agent; the server's own declaration reaches R on a private
+   channel (its TLS to R), everything else on c. Mutants:
+     rid-unbound               R does not check rid = ridOf(n, pk): an
+                               address holder declares rid under its own key
+     reg-is-rec                R takes the rendezvous record (which every
+                               opener gets) as the proof
+     reg-unsigned              R does not check the signature
+
+   Bindings (README "Bindings"): each has a refusal row in
+   client/capaddr/capaddr_bindings_test.go:
+     BIND:cap.pin         the answer's key and the TLS certificate's key, each against pinOf(sec, key)
+     BIND:cap.secret      the proof: the address's secret over this session's exporter
+     BIND:cap.service     the acceptor checks the proof with the secret of the address routed to it
+     BIND:cap.rendezvous  the answer: signed under the pinned key, over the tag, the relay opened at, rid and hints
+     BIND:cap.register    a declaration of rid: rid = ridOf(n, key) and a signature under key over the tag, R and rid
+   and, for the direct phase (client/nf1 TestNF1DirectModelBindings, with
+   the organisation's direct.token, direct.quic, direct.role rows):
+     BIND:nf1direct.pin   the direct connection's key against the pinned key
+   and, for datagrams (pending: the code lane's row, client/internal/modelbind Pending):
+     BIND:dgram.tag       a frame's tag: a session attached on this connection, up
+     BIND:cap.kind        the dial's kind against the record's hints (u1 or none) *)
+
+free c: channel.
+
+type skey.
+type pkey.
+fun pk(skey): pkey.
+fun aenc(bitstring, pkey): bitstring.
+reduc forall m: bitstring, k: skey; adec(aenc(m, pk(k)), k) = m.
+fun senc(bitstring, bitstring): bitstring.
+reduc forall m: bitstring, k: bitstring; sdec(senc(m, k), k) = m.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+reduc forall m: bitstring, k: skey; getmsg(sign(m, k)) = m.
+fun h(bitstring): bitstring.
+
+const labPin, labRdv, labProof, labExp: bitstring.
+const labRid, labReg, labN: bitstring.        (* the rid's, the registration proof's and the nonce's tags *)
+free cReg: channel [private].                 (* the server's TLS session to R *)
+const c2s, s2c, appData: bitstring.
+const answerPlain: bitstring.                 (* the relay's word: "this rid is plain" *)
+const noSecret: bitstring.                    (* an empty secret (address-secret-optional) *)
+const relayR: bitstring.                      (* the relay the server registered at, A1's and A2's *)
+const hintD: bitstring.                       (* hints "d1": the listener takes direct paths *)
+const kindS, kindU: bitstring.                (* hints without "u1": a stream service; with: a datagram service *)
+const labC, labS, labQ, ep1: bitstring.       (* the direct token's roles, the QUIC exporter's label, the attach epoch *)
+free dirData: bitstring [private].            (* what A1's client sends on a direct connection it took *)
+free dgData: bitstring [private].             (* a datagram A1's client sends on it (lane NF1UDP) *)
+const labD: bitstring.                        (* a datagram frame's label *)
+free rid1, rid2: bitstring.                   (* rendezvous ids: the relay learns them *)
+
+free skS: skey [private].                     (* the server's TLS key, A1's and A2's *)
+free sec1: bitstring [private].               (* A1's secret *)
+free sec2: bitstring.                         (* A2's secret: the attacker holds A2 *)
+free payload: bitstring [private].            (* what A1's client sends *)
+free svcData1: bitstring [private].           (* what A1's service answers *)
+free svcData2: bitstring.                     (* what A2's service answers (the attacker may read it) *)
+
+letfun pinOf(s: bitstring, x: pkey) = h((labPin, s, x)). (* NOT:pin-unkeyed *)
+letfun pinOf(s: bitstring, x: pkey) = h((labPin, x)). (* ONLY:pin-unkeyed *)
+letfun secOf(s: bitstring) = s. (* NOT:address-secret-optional *)
+letfun secOf(s: bitstring) = noSecret. (* ONLY:address-secret-optional *)
+letfun exporter(k: bitstring, ns: bitstring, x: pkey) = h((labExp, k, ns, x)).
+letfun proofOf(s: bitstring, k: bitstring, ns: bitstring, x: pkey) = h((labProof, s, exporter(k, ns, x))). (* NOT:proof-unbound *)
+letfun proofOf(s: bitstring, k: bitstring, ns: bitstring, x: pkey) = h((labProof, s)). (* ONLY:proof-unbound *)
+
+(* The acceptor's proof check: its own address's secret. *)
+letfun accepts(p: bitstring, sec: bitstring, other: bitstring, k: bitstring, ns: bitstring) = (p = proofOf(sec, k, ns, pk(skS))). (* NOT:server-any-secret *)
+letfun accepts(p: bitstring, sec: bitstring, other: bitstring, k: bitstring, ns: bitstring) = (p = proofOf(sec, k, ns, pk(skS))) || (p = proofOf(other, k, ns, pk(skS))). (* ONLY:server-any-secret *)
+
+event ServerKey(pkey).                                  (* the server's key *)
+event Registered(bitstring, bitstring, bitstring, pkey). (* relay, rid, hints, key *)
+event ClientRdv(bitstring, bitstring, bitstring, pkey).  (* the relay opened at, rid, hints, key: the answer taken *)
+event ClientTLS(bitstring, pkey).                       (* rid, the key the client's TLS session ended at *)
+event ClientProved(bitstring, bitstring).               (* rid, session key: the proof sent *)
+event ClientSent(bitstring, bitstring, bitstring).      (* rid, session key, bytes *)
+event ClientRecv(bitstring, bitstring, bitstring, bitstring). (* relay opened at, rid, session key, response *)
+event ClientPlain(bitstring).                           (* rid: bytes sent in plain *)
+event Admitted(bitstring, bitstring).                   (* rid of the acceptor, session key *)
+event ServiceGot(bitstring, bitstring, bitstring).      (* rid of the acceptor, session key, bytes *)
+event AgentSent(bitstring, bitstring, bitstring).       (* rid of the acceptor, session key, response *)
+event PinGuessed.                                       (* the attacker produced A1's pin *)
+event ClientQUIC(bitstring, pkey).                      (* session key, the key the client's direct handshake ended at *)
+event ClientDirectOffer(bitstring, bitstring).          (* session key, QUIC exporter: the client's token sent *)
+event ClientDirect(bitstring, bitstring, pkey).         (* session key, QUIC exporter, the direct key: taken *)
+event AgentDirect(bitstring, bitstring, bitstring).     (* rid of the acceptor, session key, QUIC exporter: bound *)
+event ClientDgram(bitstring, bitstring).                (* session key, datagram: sent on its direct connection *)
+event AgentDgram(bitstring, bitstring, bitstring).      (* rid, session key, datagram: handed to the session's flow *)
+event ClientKind(bitstring, bitstring).                 (* rid, the dial's kind: the answer taken for it *)
+event RegOwn(bitstring, pkey).                          (* R took the server's own declaration of rid under key *)
+event Hijacked(bitstring, pkey).                        (* R took a declaration of rid from anyone else *)
+
+letfun ridOf(nn: bitstring, x: pkey) = h((labRid, nn, x)).
+letfun nonceOf(s: bitstring) = h((labN, s)).
+letfun regOK(rs: bitstring, x: pkey, r: bitstring) = let (=labReg, =relayR, =r) = checksign(rs, x) in true else false. (* NOT:reg-is-rec *)
+letfun regOK(rs: bitstring, x: pkey, r: bitstring) = let (=labRdv, =relayR, =r, hs: bitstring) = checksign(rs, x) in true else false. (* ONLY:reg-is-rec *)
+
+(* R's check of a declaration of rid r: from the server's own session (own)
+   or from anyone (c). *)
+let Registrar(r: bitstring, ch: channel, own: bool) =
+  in(ch, (=r, nn: bitstring, x: pkey, rs: bitstring));
+  if r = ridOf(nn, x) then (* NOT:rid-unbound *)
+  if regOK(rs, x, r) = true then (* NOT:reg-unsigned *)
+  if own = true then event RegOwn(r, x) else event Hijacked(r, x).
+
+(* The QUIC exporter, and the tokens (nf1-token-unbound: without it). *)
+letfun qexp(kd: bitstring, dn: bitstring, x: pkey) = h((labQ, kd, dn, x)).
+letfun tok(k: bitstring, qx: bitstring, role: bitstring) = h((k, qx, role, ep1)). (* NOT:nf1-token-unbound *)
+letfun tok(k: bitstring, qx: bitstring, role: bitstring) = h((k, role, ep1)). (* ONLY:nf1-token-unbound *)
+
+(* A1's client's direct path for its session k, its pinned key rpk: the
+   candidates came inside TLS, but the attacker routes the punch, so
+   whoever it routes there answers with a key and a server random. *)
+let DirectClient(k: bitstring, rpk: pkey) =
+  in(c, (dpk: pkey, dn: bitstring));
+  if dpk = rpk then (* NOT:direct-no-pin-check *)
+  new kd: bitstring;
+  out(c, aenc((kd, dn), dpk));
+  let qx = qexp(kd, dn, dpk) in
+  event ClientQUIC(k, dpk);
+  event ClientDirectOffer(k, qx);
+  out(c, senc((labC, tok(k, qx, labC)), kd));
+  in(c, x: bitstring);
+  let (=labS, =tok(k, qx, labS)) = sdec(x, kd) in (* NOT:nf1-direct-no-token *)
+  event ClientDirect(k, qx, dpk);
+  out(c, senc(dirData, kd));
+  (* a datagram of the session on that connection: a QUIC DATAGRAM frame
+     under the connection's keys, its tag naming the attach (BIND:dgram.tag) *)
+  event ClientDgram(k, dgData);
+  out(c, senc((labD, dgData), kd)).
+
+(* rid's agent: a direct connection under its key, bound to its admitted
+   session k only on that session's client token. *)
+let DirectAgent(rid: bitstring, k: bitstring) =
+  new dn: bitstring;
+  out(c, (pk(skS), dn));
+  in(c, ekd: bitstring);
+  let (kd: bitstring, =dn) = adec(ekd, skS) in
+  let qx = qexp(kd, dn, pk(skS)) in
+  (in(c, y: bitstring); let (=labD, m: bitstring) = sdec(y, kd) in event AgentDgram(rid, k, m)) | ( (* ONLY:dgram-tag-unbound *)
+  in(c, x: bitstring);
+  let (=labC, =tok(k, qx, labC)) = sdec(x, kd) in (* NOT:nf1-agent-no-token *)
+  event AgentDirect(rid, k, qx);
+  out(c, senc((labS, tok(k, qx, labS)), kd)); (* NOT:dgram-tag-unbound *)
+  (* a datagram is handed to session k only on a connection bound to k *)
+  in(c, y: bitstring); let (=labD, m: bitstring) = sdec(y, kd) in event AgentDgram(rid, k, m). (* NOT:dgram-tag-unbound *)
+  out(c, senc((labS, tok(k, qx, labS)), kd))). (* ONLY:dgram-tag-unbound *)
+
+(* The server registers rid at relay R (1). *)
+let Register(R: bitstring, rid: bitstring, hints: bitstring) =
+  event Registered(R, rid, hints, pk(skS));
+  out(c, (rid, pk(skS), sign((labRdv, R, rid, hints), skS))).
+
+(* rid's acceptor on the server: a session the relay routed to rid, its
+   address's secret sec; other is the secret of the key's other address
+   (server-any-secret). *)
+let Acceptor(rid: bitstring, sec: bitstring, other: bitstring, resp: bitstring) =
+  in(c, (=rid, e2ee: bool));
+  if e2ee = true then                                   (* a plain open to an address is refused *)
+  new ns: bitstring;
+  out(c, (pk(skS), ns));                                (* ServerHello, Certificate *)
+  in(c, ek: bitstring);
+  let (k: bitstring, =ns) = adec(ek, skS) in
+  in(c, ep: bitstring);
+  let (=c2s, p: bitstring) = sdec(ep, k) in
+  if accepts(p, sec, other, k, ns) then (* NOT:server-no-secret-check *)
+  event Admitted(rid, k);
+  ( DirectAgent(rid, k) | (
+  in(c, e: bitstring);
+  let (=c2s, =appData, m: bitstring) = sdec(e, k) in
+  event ServiceGot(rid, k, m);
+  new r: bitstring;
+  event AgentSent(rid, k, (r, resp));
+  out(c, senc((s2c, appData, (r, resp)), k)) )).
+
+(* A1's client: knows only A1 = (relayR, rid, pin, sec). *)
+let Client(rid: bitstring, pin: bitstring, sec: bitstring, kind: bitstring) =
+  in(c, other: bitstring);                              (* a saved relay, --server, a redirect *)
+  let ru = relayR in (* NOT:relay-substitutes-relay *)
+  let ru = other in (* ONLY:relay-substitutes-relay *)
+  out(c, (ru, rid, true));                              (* OPEN (2) *)
+  in(c, answer: bitstring);
+  if answer = answerPlain then (event ClientPlain(rid); out(c, payload)) else (* ONLY:downgrade-plain *)
+  let (rpk: pkey, rec: bitstring, hu: bitstring) = answer in (* the rendezvous answer (3); hu the frame's hints field *)
+  if pinOf(sec, rpk) = pin then (* NOT:rendezvous-any-key *)
+  let (=labRdv, rr: bitstring, =rid, hs: bitstring) = checksign(rec, rpk) in
+  let hints = hs in (* NOT:hint-unbound *)
+  let hints = hu in (* ONLY:hint-unbound *)
+  if rr = ru then (* NOT:relay-substitutes-relay *)
+  let (hd: bitstring, hk0: bitstring) = hints in
+  let hk = hk0 in (* NOT:hint-unbound-u1 *)
+  let (hdu: bitstring, hk: bitstring) = hu in (* ONLY:hint-unbound-u1 *)
+  if hk = kind then (* NOT:client-no-kind-check *)
+  event ClientKind(rid, kind);
+  event ClientRdv(ru, rid, hints, rpk);
+  in(c, (spk: pkey, ns: bitstring));                    (* TLS (4) *)
+  if spk = rpk then (* NOT:client-no-pin-check *)
+  new k: bitstring;
+  out(c, aenc((k, ns), spk));
+  event ClientTLS(rid, spk);
+  event ClientProved(rid, k);
+  out(c, senc((c2s, proofOf(sec, k, ns, spk)), k));      (* PROOF (5) *)
+  event ClientSent(rid, k, payload);
+  out(c, senc((c2s, appData, payload), k));             (* (6) *)
+  in(c, e: bitstring);
+  let (=s2c, =appData, r: bitstring) = sdec(e, k) in
+  event ClientRecv(ru, rid, k, r);
+  if hd = hintD then DirectClient(k, spk).
+
+(* 1, 2. session secrecy against every relay: A1's client's bytes, A1's
+   service's answer (the latter is also: only holders of sec1 are admitted) *)
+(* expect true *)
+query attacker(payload).
+(* expect true *)
+query attacker(svcData1).
+(* 3. integrity toward the service: what A1's acceptor takes was sent by
+   A1's client in that session, once *)
+(* expect true *)
+query k: bitstring, m: bitstring; inj-event(ServiceGot(rid1, k, m)) ==> inj-event(ClientSent(rid1, k, m)).
+(* 4. integrity toward the client and injective agreement on the service:
+   what the client of rid takes was sent once, in that session, by rid's
+   acceptor (not another address's of the same key) *)
+(* expect true *)
+query ru: bitstring, rid: bitstring, k: bitstring, r: bitstring; inj-event(ClientRecv(ru, rid, k, r)) ==> inj-event(AgentSent(rid, k, r)).
+(* 5. the client's TLS session ends only at the pinned key *)
+(* expect true *)
+query rid: bitstring, x: pkey; event(ClientTLS(rid, x)) ==> event(ServerKey(x)).
+(* 6. A1's acceptor admits only a session whose client proved sec1 *)
+(* expect true *)
+query k: bitstring; event(Admitted(rid1, k)) ==> event(ClientProved(rid1, k)).
+(* 7. the rendezvous answer the client takes is the server's registration:
+   its key, its rid, its hints *)
+(* expect true *)
+query ru: bitstring, rid: bitstring, hs: bitstring, x: pkey, r0: bitstring; event(ClientRdv(ru, rid, hs, x)) ==> event(Registered(r0, rid, hs, x)).
+(* 8. the relay is the address's: a session the client completes went
+   through the relay the server registered rid at *)
+(* expect true *)
+query ru: bitstring, rid: bitstring, k: bitstring, r: bitstring, hs: bitstring, x: pkey; event(ClientRecv(ru, rid, k, r)) ==> event(Registered(ru, rid, hs, x)).
+(* 9. no downgrade: the client never sends in plain *)
+(* expect true *)
+query rid: bitstring; event(ClientPlain(rid)).
+(* 10. the rendezvous id does not link to the pin: the attacker, which
+   sees rid1, the key, the registration, every session and holds A2,
+   cannot produce A1's pin *)
+(* expect true *)
+query event(PinGuessed).
+(* 11-14. witnesses: the client takes the answer; A1's acceptor admits it;
+   A1's service gets its bytes; the client gets the answer *)
+(* expect false *)
+query ru: bitstring, rid: bitstring, hs: bitstring, x: pkey; event(ClientRdv(ru, rid, hs, x)).
+(* expect false *)
+query k: bitstring; event(Admitted(rid1, k)).
+(* expect false *)
+query k: bitstring, m: bitstring; event(ServiceGot(rid1, k, m)).
+(* expect false *)
+query ru: bitstring, rid: bitstring, k: bitstring, r: bitstring; event(ClientRecv(ru, rid, k, r)).
+(* 15. what A1's client sends on a direct connection it took reaches only
+   A1's server: the relay's routing cannot put another host there *)
+(* expect true *)
+query attacker(dirData).
+(* 16. the client's direct handshake ends only at the pinned key (mutant
+   direct-no-pin-check) *)
+(* expect true *)
+query k: bitstring, x: pkey; event(ClientQUIC(k, x)) ==> event(ServerKey(x)).
+(* 17. a direct connection the client takes is bound, once, by A1's agent
+   to the client's own session (mutants nf1-direct-no-token;
+   direct-no-pin-check with nf1-token-unbound) *)
+(* expect true *)
+query k: bitstring, qx: bitstring, x: pkey; inj-event(ClientDirect(k, qx, x)) ==> inj-event(AgentDirect(rid1, k, qx)).
+(* 18. A1's agent binds a direct connection to a session only for that
+   session's own client (mutant nf1-agent-no-token) *)
+(* expect true *)
+query k: bitstring, qx: bitstring; event(AgentDirect(rid1, k, qx)) ==> event(ClientDirectOffer(k, qx)).
+(* 19, 20. witnesses: the client takes a direct connection; A1's agent binds one *)
+(* expect false *)
+query k: bitstring, qx: bitstring, x: pkey; event(ClientDirect(k, qx, x)).
+(* expect false *)
+query k: bitstring, qx: bitstring; event(AgentDirect(rid1, k, qx)).
+
+(* 21. a datagram A1's client sends on a direct connection reaches only
+   A1's server (lane NF1UDP) *)
+(* expect true *)
+query attacker(dgData).
+(* 22. A1's agent hands a datagram to session k only if k's own client sent
+   it, on a connection bound to k (mutant dgram-tag-unbound); not
+   injective: a replayed packet is QUIC's to discard (RFC 9000 12.3) *)
+(* expect true *)
+query k: bitstring, m: bitstring; event(AgentDgram(rid1, k, m)) ==> event(ClientDgram(k, m)).
+(* 23, 24. witnesses: the client sends a datagram direct; A1's agent hands one on *)
+(* expect false *)
+query k: bitstring, m: bitstring; event(ClientDgram(k, m)).
+(* expect false *)
+query k: bitstring, m: bitstring; event(AgentDgram(rid1, k, m)).
+
+(* 25. the kind (lane UDP1): a client takes an answer for its dial's kind
+   only if the server registered the address with that kind (mutants
+   client-no-kind-check, hint-unbound, hint-unbound-u1) *)
+(* expect true *)
+query rid: bitstring, kd: bitstring, r0: bitstring, hd: bitstring, x: pkey; event(ClientKind(rid, kd)) ==> event(Registered(r0, rid, (hd, kd), x)).
+(* 26. witness: a datagram client takes A1's answer *)
+(* expect false *)
+query event(ClientKind(rid1, kindU)).
+(* 27. only the server key's holder makes R take a declaration of its
+   address's rid: an address holder, which sees every answer and holds A2,
+   cannot (mutants rid-unbound, reg-is-rec, reg-unsigned) *)
+(* expect true *)
+query r: bitstring, x: pkey; event(Hijacked(r, x)).
+(* 28. witness: R takes the server's own declaration *)
+(* expect false *)
+query r: bitstring, x: pkey; event(RegOwn(r, x)).
+
+process
+  let s1 = secOf(sec1) in
+  let pin1 = pinOf(s1, pk(skS)) in
+  event ServerKey(pk(skS));
+  out(c, pk(skS));
+  ( Register(relayR, rid1, (hintD, kindU)) | Register(relayR, rid2, (hintD, kindS)) |
+    (!Acceptor(rid1, s1, sec2, svcData1)) | (!Acceptor(rid2, sec2, s1, svcData2)) |
+    (!Client(rid1, pin1, s1, kindU)) | (!Client(rid1, pin1, s1, kindS)) |
+    (let n1 = nonceOf(s1) in
+     let r1 = ridOf(n1, pk(skS)) in
+       out(c, n1) |                                    (* every relay learns n *)
+       Register(relayR, r1, (hintD, kindU)) |
+       out(cReg, (r1, n1, pk(skS), sign((labReg, relayR, r1), skS))) | (* NOT:reg-is-rec *)
+       out(cReg, (r1, n1, pk(skS), sign((labRdv, relayR, r1, (hintD, kindU)), skS))) | (* ONLY:reg-is-rec *)
+       Registrar(r1, cReg, true) | (!Registrar(r1, c, false))) |
+    (in(c, g: bitstring); if g = pin1 then event PinGuessed) )

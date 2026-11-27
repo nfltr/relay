@@ -1,0 +1,2 @@
+{"ev":"sso","o":"o1","n":"send-1","why":"","u":"alice@example.com","a":"send","k":"k1","kn":"N1","nonce":"N1","exp":200,"au":100,"t":50}
+{"ev":"renew","o":"o1","n":"send-1","u":"alice@example.com","a":"send","k":"k2","t":101}

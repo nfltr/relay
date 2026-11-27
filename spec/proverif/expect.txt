@@ -1,0 +1,365 @@
+# <model> <flags> <results>: run.sh. T holds, F attack, ? not proved.
+# The query of each position is in README.md "Queries and results".
+#
+# Part 1: wire v1, removed (an F is a finding, README "Findings"; kept as
+# their evidence).
+a2a_today - FTTTTFF?FTTFF
+a2a_today skip-valid FTTTTFF?FFTFF
+a2a_today skip-peer-revoke FTTTTFF?FTFFF
+#
+# Part 2: wire v2, on the machine identity, what client/rpcclient ships.
+# Every query holds; each mutant fails the ones it targets. With X's hops
+# private ProVerif finds no trace for the first witness (?): it is
+# reachable in the other variants. Without the flag sess every call
+# handshakes (13-18 hold trivially, the resumed witnesses 22-24 and 28 read T:
+# unreachable); with it a call resumes its pair's session (README
+# "Sessions").
+a2a_machine - TTTTTTTTTTTTTTTTTTFFFTTTTTFT
+a2a_machine honestX TTTTTTTTTTTTTTTTTT?FFTTTTTFT
+a2a_machine honestY TTTTTTTTTTTTTTTTTTFFFTTTTTFT
+a2a_machine honestX,honestY TTTTTTTTTTTTTTTTTT?FFTTTTTFT
+a2a_machine leak TTTTTTTTTTTTTTTTTTFFFTTTTTFT
+a2a_machine drop-psk FFFFFFFFFFTTTFTFFFFFFTTTFFFT
+a2a_machine drop-txn TTTTFFFFFFTTTTTFFFFFFTTTFFFT
+a2a_machine skip-revoke TTTTTTTTTTFFTTTTTTFFFTTTTTFT
+a2a_machine relay-cert FFFFFFFFFFTTTFTFFFFFFTTTFFFT
+# no-target-check also fails 14: the callee's own ref is the relay's, so
+# only the key id R picks binds its call to the target.
+a2a_machine no-target-check FTTTFTTTFTTTTFTTTTFFFTTTFTFT
+# drop-role: the initiator's role out of the prologue; a machine's call to
+# R, returned to that machine told it is R, is answered (7, 16).
+a2a_machine drop-role TTTTTTFTTTTTTTTFTTFFFTTTTTFT
+a2a_machine sess,drop-role TTTTTTFTTTTTTTTFTTFFFFFFTTFF
+# wire v1's findings put back: F1 (one key both ways) fails no reflection
+# (9; 7, 8 not proved), F2 (the end in the clear) fails the authenticated end (10).
+a2a_machine one-key TTTTTTT?TTTTTTTT?TFFFTTTTFFT
+a2a_machine clear-end TTTTTTTTTFTTTTTTTFFFFTTTTTFT
+# Sessions (lane A2ASESS): every query holds with calls resumed; each
+# mutant fails its query: sess-unbound 14, txn-unbound 9 and 16-18,
+# survive-revoke 13, counter-reset 15.
+a2a_machine sess TTTTTTTTTTTTTTTTTTFFFFFFTTFF full
+a2a_machine sess,honestX TTTTTTTTTTTTTTTTTT?FFFFFTTFF
+a2a_machine sess,honestY TTTTTTTTTTTTTTTTTTFFFFFFTTFF
+a2a_machine sess,leak TTTTTTTTTTTTTTTTTTFFFFFFTTFF
+a2a_machine sess,sess-unbound TTTTTTTTTTTTTFTTTTFFFFFFTTFF
+a2a_machine sess,txn-unbound TTTTTTTTFTTTTTFFFFFFFFFFFFFF
+a2a_machine sess,survive-revoke TTTTTTTTTTTTFTTTTTFFFFFFTTFF
+a2a_machine sess,counter-reset TTTTTTTTTTTTTTFTTTFFFFFFTTFF
+a2a_machine sess,warm-untyped TTTTFTTTTTTTTTTTTTFFFFFFTTFF
+a2a_machine early-data TTTTTTFTTTTTTTTTTTTFTTTTTTFT
+a2a_machine clear-header TTTTTTTTTTTTTTTTTTFFFTTTFTFT
+a2a_machine sess,clear-header TTTTTTTTTTTTTTTTTTFFFFFFFTFF
+a2a_machine mach-resp-clear TTTTTTTTTTTTTTTTTTFFFTTTTFTT
+a2a_machine sess,mach-resp-clear TTTTTTTTTTTTTTTTTTFFFFFFTFTT
+#
+# Part 3: deleted (p2p_e2e, lane P2PDEL).
+#
+# Part 4: TCP sessions end to end encrypted, organisation mode, the only
+# mode (e2ee_tcp; queries in README "e2ee_tcp.pv"; pins deleted, lane
+# ORGCUT). Each check is its own mutant, the client's (1-5) and the
+# service's (6-10) apart; the downgrade mutants are a mode that falls back:
+# the client to plain on the relay's word (1), the service to a client
+# without an organisation certificate (6, 7). relay-names-target(-with-
+# forward): the plaintext to a target the relay names (E2EEPROOF finding 1;
+# 1). The ends (CLAIMS-A Q5, lane TCPRESET): a raw end taken as a clean
+# end, either side (11, 12); a reset sent as close_notify, at the agent
+# (13) or the client (14). Direct paths (lane DIRECTPATH, 21-26, a design
+# before code): the agent's checks of the session's client also guard 23
+# (a client the agent admits wrongly holds the session's key, so binds a
+# direct connection to it). Re-attach (lane DIRECTPATH2, gap G2, 27-29): a
+# client mutant that takes the relay's certificate gives it the session's
+# key, so the re-attached bytes too (28); an agent mutant that admits the
+# relay's client lets it attach its own session (27).
+e2ee_tcp - TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp downgrade-plain FTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp client-no-chain-check FFFTFTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTFTTFFTF
+e2ee_tcp no-name-check FFFTTTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTFTTFFTF
+e2ee_tcp client-no-expiry-check FFTTFTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTFTTFFTF
+e2ee_tcp client-no-crl-check FFTFTTTTTTFTFTFFFFFFTTTTFFTFFTTTTFFTFTTFFTF
+e2ee_tcp agent-no-chain-check TTTTTFFFTFTFTFFFFFFFTTFTFFFTFTTTTFFTFTFFFFF
+e2ee_tcp no-group-check TTTTTFFFTTTFTFFFFFFFTTFTFFFTFTTTTFFTFTFFFFF
+e2ee_tcp agent-no-expiry-check TTTTTFFTTFTFTFFFFFFFTTFTFFFTFTTTTFFTFTFFFFF
+e2ee_tcp agent-no-crl-check TTTTTFFTFTTFTFFFFFFFTTFTFFFTFTTTTFFTFTFFFFF
+e2ee_tcp downgrade-any-client TFTTTFFTTTTTTTFFFFFFTTTTFFTTFTTFTFFTFTTFFTF
+e2ee_tcp skip-certificate-verify TTTTTFFTTTTFTFFFFFFFTTFTFFFTFTTTTFFTFTFFFFF
+e2ee_tcp relay-names-target FTTTTTTTTTTTTTFFFFFFTTTTFFTTFFTTTFFTFTTFFTF
+e2ee_tcp relay-names-target-with-forward FTTTTTTTTTTTTTFFFFFFTTTTFFTTFFTTTFFTFTTFFTF
+e2ee_tcp agreement-without-key-check TFTTTTTTTTTTTTFFTFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp clear-end TTTTTTTTTTFTFTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp agent-clear-end TTTTTTTTTTTFTFFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp abort-as-close TTTTTTTTTTTTFTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp client-abort-as-close TTTTTTTTTTTTTFFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+# Direct paths (lane DIRECTPATH): the answer at the relay's address taken
+# without the certificate check (21, 24; with direct-no-token too, 22), the
+# agent's token unchecked at the client (22), tokens without the QUIC key
+# (alone: the certificate check holds; without it a relay in the middle,
+# 21-24), one token for both roles (22: reflected), the agent binding a
+# connection on the relay's word (23).
+e2ee_tcp direct-no-cert-check TTTTTTTTTTTTTTFFFFFFFTTFFFTTFTTTTFFFFFFFFTF
+e2ee_tcp direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp direct-no-cert-check,direct-no-token TTTTTTTTTTTTTTFFFFFFFFTFFFTTFTTTTFFFFFFFFTF
+e2ee_tcp token-unbound TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp direct-no-cert-check,token-unbound TTTTTTTTTTTTTTFFFFFFFFFFFFTTFTTTTFFFFFFFFTF
+e2ee_tcp token-no-role TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp agent-direct-no-token TTTTTTTTTTTTTTFFFFFFTTFTFFTTFTTTTFFTFTFFFTF
+# The epoch in the token (gap G2): without it the relay replays ep2's
+# relayed OPEN as ep3's and the agent attaches (27), yet the bytes stay
+# secret (28 holds): a replay is denial only.
+e2ee_tcp token-no-epoch TTTTTTTTTTTTTTFFFFFFTTTTFFFTFTTTTFFTFTTFFTF
+# Services by name (lane SVCBIND, 30-35; nfltr
+# docs/decisions/service-discovery-2026-11-12.md section 4): the client
+# ignoring the negotiated ALPN protocol lets the relay rewrite its offer and
+# route web/pg to web's vault (33), and pg@db to vault as a machine dial
+# (31); the agent taking any offer serves the service the open names (31,
+# 33); the group-dial client taking any organisation machine (eve, group
+# web) gives the relay its bytes (30, 32) and, its direct check taking the
+# session's machine, the direct path to eve too (21, 22, 24); the agent
+# serving <s>@<g> for a service not published under g serves mal's pg,
+# published under ops (31).
+e2ee_tcp client-no-alpn-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTFFFTFTTFFFF
+e2ee_tcp agent-no-alpn-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTFFFTFTTFFFF
+e2ee_tcp group-dial-no-group-check TTTTTTTTTTTTTTFFFFFFFFTFFFTTFFTFTFFTFTTFFTF
+e2ee_tcp agent-no-publish-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTFTTFFTFTTFFTF
+# Direct paths under a group dial (lane DIRECTGROUP, 36-37): the group's
+# check on the direct answer instead of the session's machine holds alone
+# (the tokens bind the session); with the agent's token unchecked too the
+# relay moves the session's direct path to another instance, mal (36). The
+# certificate check off fails 36 with every direct-no-cert-check line.
+e2ee_tcp group-direct-no-name-check TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTTFFTF
+e2ee_tcp group-direct-no-name-check,direct-no-token TTTTTTTTTTTTTTFFFFFFTFTTFFTTFTTTTFFFFTTFFTF
+# Datagram services (lane UDP1, queries 38-43): a direct datagram is secret
+# wherever a machine dial's direct path is (38 fails with its 21; the group
+# dial sends none) and handed only to its own session (39 fails with 23,
+# and with direct-no-cert-check, whose direct key leaks). The kind:
+# what reaches a service was dialled with its kind (42) wherever the
+# agent's admission holds (it fails with 7) and the ALPN is checked at both
+# ends (client-no-alpn-check, agent-no-alpn-check); the kind ignored by the
+# agent fails 42 alone, a datagram taken on an unbound connection 39 alone.
+e2ee_tcp agent-ignores-kind TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTTFFFF
+e2ee_tcp dgram-tag-unbound TTTTTTTTTTTTTTFFFFFFTTTTFFTTFTTTTFFTFTFFFTF
+#
+# Part 5: the capability address nf1... (cap_address; a design, no code
+# yet; queries in README "cap_address.pv"). Every query holds; each mutant
+# fails the ones it targets. proof-unbound alone holds (the proof travels
+# only inside TLS to the pinned key); with client-no-pin-check the proof a
+# fooled client gives the attacker opens the real server (2, 3, 6), which
+# the exporter in the proof prevents (client-no-pin-check alone: 2, 3, 6
+# hold). cap_address_link is query 10 as an equivalence; ProVerif reads a
+# broken diff-equivalence as ? (its log has the derivation).
+cap_address - TTTTTTTTTTFFFFTTTTFFTTFFTFTF
+cap_address client-no-pin-check FTTFFTTTTTFFFFFFFTFFFTFFTFTF
+cap_address rendezvous-any-key FTTFFTFFTTFFFFFFFTFFFTFFFFTF
+cap_address relay-substitutes-relay TTTTTTTFTTFFFFTTTTFFTTFFTFTF
+cap_address server-no-secret-check TFFFTFTTTTFFFFTTFFFFTFFFTFTF
+cap_address address-secret-optional TFFTTFTTTFFFFFTTTFFFTFFFTFTF
+cap_address server-any-secret TFFFTFTTTTFFFFTTFFFFTFFFTFTF
+cap_address pin-unkeyed TTTTTTTTTFFFFFTTTTFFTTFFTFTF
+cap_address downgrade-plain FTTTTTTTFTFFFFTTTTFFTTFFTFTF
+cap_address proof-unbound TTTTTTTTTTFFFFTTTTFFTTFFTFTF
+cap_address client-no-pin-check,proof-unbound FFFFFFTTTTFFFFFFFFFFFFFFTFTF
+# Direct paths (lane NF1DIRECT, queries 15-20): a hint the record does not
+# cover fails only 7 and the kind's 25 (the client frames or not; the direct queries hold:
+# a forged hint is a refusal or a relayed session, never a wrong peer); the
+# direct key unpinned fails 16 alone (the transcript-bound tokens still
+# refuse a middle) and 15-18 with the tokens unbound from the QUIC exporter,
+# which alone holds (the pin keeps the middle out). Datagrams (lane NF1UDP,
+# queries 21-24): secret on the direct connection wherever 15 holds;
+# handed to a session only on a connection bound to it (22) wherever 18
+# holds, and failed alone by dgram-tag-unbound.
+cap_address hint-unbound TTTTTTFTTTFFFFTTTTFFTTFFFFTF
+cap_address direct-no-pin-check TTTTTTTTTTFFFFTFTTFFTTFFTFTF
+cap_address nf1-token-unbound TTTTTTTTTTFFFFTTTTFFTTFFTFTF
+cap_address nf1-direct-no-token TTTTTTTTTTFFFFTTFTFFTTFFTFTF
+cap_address nf1-agent-no-token TTTTTTTTTTFFFFTTTFFFTFFFTFTF
+cap_address dgram-tag-unbound TTTTTTTTTTFFFFTTTTFFTFFFTFTF
+cap_address direct-no-pin-check,nf1-token-unbound TTTTTTTTTTFFFFFFFFFFFFFFTFTF
+# The kind (lane UDP1, queries 25-26): a client takes an answer only for
+# the kind the record carries; the kind unchecked, or taken from the answer
+# frame, fails 25 alone (hint-unbound and rendezvous-any-key fail it too).
+cap_address client-no-kind-check TTTTTTTTTTFFFFTTTTFFTTFFFFTF
+cap_address hint-unbound-u1 TTTTTTTTTTFFFFTTTTFFTTFFFFTF
+# Registration (lane NF1RISKS, queries 27, 28): a declaration of A1's rid
+# from anyone but the server is taken once R skips the rid's binding to the
+# key, takes the rendezvous record as the proof, or skips the signature.
+cap_address rid-unbound TTTTTTTTTTFFFFTTTTFFTTFFTFFF
+cap_address reg-is-rec TTTTTTTTTTFFFFTTTTFFTTFFTFFF
+cap_address reg-unsigned TTTTTTTTTTFFFFTTTTFFTTFFTFFF
+cap_address_link - T
+cap_address_link pin-unkeyed ?
+enrol - TTTTTTTTTTTFFFFFFFFTFTFF
+enrol no-chain-check FFTFTTFTTTTFFFFFFFFTFTFF
+enrol no-name-check FFTFTTTTTTTFFFFFFFFTFTFF
+enrol no-expiry-check TTFTTTTTTTTFFFFFFFFTFTFF
+enrol stale-crl TTTFTTTTTTTFFFFFFFFTFTFF
+enrol no-crl-check TTTFTTTTTTTFFFFFFFFTFTFF
+enrol crl-any-signer TTTFTTTTTTTFFFFFFFFTFTFF
+enrol renew-expired TFTTTTTTTTTFFFFFFFFFFTFF
+enrol renew-revoked TTTFTTTTTTTFFFFFFFFTFTFF
+enrol reusable-token TTTTFTTTTTTFFFFFFFFTFTFF
+enrol name-from-request TFTFFFTTTTTFFFFFFFFFFFFF
+enrol token-in-request TFTTTTTTTTTFFFFFFFFFFFFF
+enrol no-group-check TTTTTTFTTTTFFFFFFFFTFTFF
+enrol rotate-by-primary TTTTTTTFFTTFFFFFFFFTFTFF
+enrol keep-old-root TTTTTTTTFTTFFFFFFFFTFTFF
+enrol reissue-any-key TTTTTTTTTFTFFFFFFFFTFTFF
+# a rebind token naming another name than its own (lane REBIND): the
+# attacker moves web (2) and the revoked lost (4) with mallory's leaked one.
+enrol rebind-any-name TFTFTTTTTTFFFFFFFFFFFTFF
+# a move (lane SEAMLESS) whose new relay machine id sits beside the signed
+# renewal: the relay moves web to an id of its own (20). Every mutant that
+# hands the attacker a key of web fails 20 too (it then signs a move).
+enrol move-id-unsigned TTTTTTTTTTTFFFFFFFFFFTFF
+# a join's relay machine id beside the token's HMAC (lane LOGINREDS): the
+# relay binds web to an id of its own (22). name-from-request and
+# token-in-request fail 22 too: the attacker redeems web's name itself.
+enrol bind-id-unmacd TTTTTTTTTTTFFFFFFFFTFFFF
+# a renewal asked again (lane CANARYCERT, 24 its witness) answered for any
+# key: the old disk's rotated-out key renews web (2, and 20: it then signs a
+# move); lane REISSUE's rejected zero-action recovery the same way: the
+# relay withholds web's renewal from its newer certificate.
+enrol repeat-any-key TFTTTTTTTTTFFFFFFFFFFTFF
+enrol reissue-unpresented TFTTTTTTTTTFFFFFFFFFFTFF
+orgmove - TTTFTTTF
+orgmove plain-bundle FTFFTTFF
+orgmove recipient-via-relay FTFFTTFF
+orgmove no-root-check TTFFTTTF
+orgmove root-moves TFTFFTTF
+orgmove sign-any-issuer TTFFFFFF
+orgmove unsigned-request TTTFTTFF
+orgmove answer-unbound TTTFTFTF
+#
+# Part 6: an nf1 address in a browser (browser_peer; a design, no code
+# yet, nfltr docs/decisions/browser-peer-2026-11-16.md; queries in README
+# "browser_peer.pv"). Every query holds; each mutant fails the ones it
+# targets. hosted-page: the relay's origin serves the code, so 1-4 (and
+# 5, 7) fail; fragment-sent: the visitor's own sessions stay secret (1, 2
+# hold) but the address is the attacker's (3-5, 7); ws-relay-tls and
+# dc-trust-dtls lose that path's bytes; dc-no-proof serves the attacker on
+# a data channel; signal-before-admit hands the agent's SDP out before the
+# proof.
+browser_peer - TTTTTTTTFFFF
+browser_peer hosted-page FFFFFTFTFFFF
+browser_peer fragment-sent TTFFFTFTFFFF
+browser_peer ws-relay-tls FFTTTTTTTTTF
+browser_peer dc-trust-dtls TFTTFTTTFFFF
+browser_peer dc-no-proof TTFTFFFTFFFF
+browser_peer signal-before-admit TTTTTTTFFFFF
+#
+# Part 7: an nf1 address served with no account, direct only (nf1_anon;
+# a design, lane NF1ANON). Every query holds; each mutant fails the ones it targets
+# (README "nf1_anon.pv").
+nf1_anon - TTTTTTTTTTFFFFF
+nf1_anon cands-in-answer TFTTTTTTTTFFFFF
+nf1_anon cands-before-admit TFTFTTTTTTFFFFF
+nf1_anon client-cands-unbound TTTFTTTTTTFFFFF
+nf1_anon agent-cands-unbound TTTTFTTTTTFFFFF
+nf1_anon server-no-secret-check TFTFFTFFFTFFFFF
+# direct-no-pin-check fails 6 alone: the transcript-bound tokens refuse
+# a middle (as cap_address.pv's).
+nf1_anon direct-no-pin-check TTTTTFTTTTFFFFF
+nf1_anon nf1-agent-no-token TTTTTTTFTTFFFFF
+nf1_anon rid-unbound TTTTTTTTTFFFFFF
+nf1_anon reg-unsigned TTTTTTTTTFFFFFF
+orghosted - TTTTTTTTFFFF
+orghosted unattested-receive-key FTTFTTTTFFFF
+orghosted unsigned-move-order FTTFTFTTFFFF
+orghosted any-member-commands TTTTFTTTFFFF
+orghosted service-key-certifies TTTTTTFTFFFF
+orghosted ignore-root-crl TTTTTTTFFFFF
+#
+# app_enrol (nfltr docs/decisions/app-device-identity-2026-11-16.md): an
+# app's device enrolled for a person by sign-in (OIDC code + PKCE, the
+# nonce committing both keys) or by an admin code. 1-4 hold; 5-8 are
+# witnesses (8: a leaked code enrols its own person and app once, the
+# residual enrol.pv states). Each mutant fails the queries it targets.
+app_enrol - TTTTFFFF
+app_enrol no-aud-check FFTFFFFF
+app_enrol no-nonce-check FTFTFFFF
+app_enrol no-nonce-check,nonce-relay-key-only FTFTFFFF
+app_enrol user-from-request FFFTFFFF
+app_enrol renew-takes-attrs FFFFFFFF
+app_enrol no-app-check TTFTFFFF
+#
+# orgdash.pv: the organisation in the dashboard (nfltr
+# docs/decisions/org-dashboard-2026-11-21.md). 1 status signed, 2 witness,
+# 3 revoke only as asked, 4 witness, 5 renewal only the root's, 6 approval
+# only for a Renew pressed, 7 witness, 8-9 keys stay.
+orgdash - TFTFTTFTT
+orgdash forged-status-accepted FFTFTTFTT
+orgdash notafter-unsigned FFTFTTFTT
+orgdash relay-only-revoke TFFFTTFTT
+orgdash order-by-name TFFFTTFTT
+orgdash no-owner-gate TFFFTFFTT
+orgdash renew-without-root TFTFFTFTT
+#
+# orggroup.pv: one set of groups (nfltr docs/decisions/one-group-2026-11-25.md;
+# a design, lane ONEGROUP). 1 the relay's mirror takes only a placed
+# membership, 2 witness, 3 a peer admits only a placed one, 4 witness, 5 the
+# issuer places only by the owner's token or order, 6 witness, 7-8 keys stay.
+orggroup - TFTFTFTT
+orggroup mirror-no-pin FFTFTFTT
+orggroup relay-chosen-group TFFFTFTT
+orggroup relay-only-move TFTFFFTT
+orggroup no-owner-gate TFTFFFTT
+#
+# Part 8: decrypt each byte once on a direct path (direct_once; a design,
+# no code yet: nfltr docs/decisions/direct-once-2026-11-22.md; queries in
+# README "direct_once.pv"). 1-2 secrecy both ways, 3-4 each frame its
+# peer's at its offset in its session, 5 admission, 6-7 channel binding,
+# 8 no plain, 9 direct key, 10 no nonce reuse, 11-16 witnesses (each epoch,
+# each direction). direct-no-pin-check alone fails only 9 (the
+# session-bound tokens keep a middle out); client-no-token alone holds
+# (the pin).
+direct_once - TTTTTTTTTTFFFFFF
+direct_once direct-no-pin-check TTTTTTTTFTFFFFFF
+direct_once client-no-token TTTTTTTTTTFFFFFF
+direct_once direct-no-pin-check,client-no-token FTTFTTFTFTFFFFFF
+direct_once agent-no-token TFFTTFTTTTFFFFFF
+direct_once relayed-plain FTTTTTTFTTFFFFFF
+direct_once agent-plain-relayed TTFTTTTTTTFFFFFF
+direct_once token-no-session TFFFTFFTTTFFFFFF
+direct_once reattach-key-reuse TTTTTTTTTFFFFFFF
+direct_once pos-unbound TTFFTTTTTTFFFFFF
+#
+# people.pv: the people layer (org/orgpki people.go: nfltr
+# docs/decisions/people-layer-2026-11-25.md; queries in README
+# "people.pv"). 1-2 a person's certificate is their own device's key,
+# with the IdP and the relay the attacker's (the residual: an admin the
+# attacker holds), 3-5 only the owner makes an admin, 6 an offboard is
+# the owner's or of a member, 7-8 nothing for a leaver after the offboard,
+# 9-13 witnesses (12: phase 1 is live; 13: a leaked invite's residual).
+# no-deny and admin-after-offboard read ? (not proved): ProVerif finds the
+# derivation in phase 1 but not the trace.
+# Since lane PEOPLE2 (the invite a signature key, its public key in the
+# invite act) a mutant that gives an insider admin power also lets it
+# invite bob (2) or an admin (4) to the attacker's key: the old model's
+# invite sealed to pk(skIss), which it never published, hid that.
+people - TTTTTTTTFFFFF
+people idp-honest TTTTTTTTFFFFF
+people no-invite FFTTTTTTFFF?F
+people invite-in-clear FFTTTTTTFFFFF
+people role-from-request FFFFTTTTFFFFF
+people no-role-check FFTFTTTTFFFFF
+people admin-invites-admin TTFFFTTTFFFFF
+people admin-offboards-any TTTTTFTTFFFFF
+people no-deny ?TTTTT?TFFFFF
+people admin-after-offboard TFTTTTT?FFFFF
+#
+# svc_access (nfltr docs/decisions/service-access-2026-11-25.md; a design,
+# no code yet; queries in README "svc_access.pv"): 1 admission only by a
+# grant the issuer signed for that principal and service, 2 the grant is
+# what the authorised approver approved, 3 an admitted bob is bob, 4 a rule
+# only as the root signed it for the certified group, 5-6 the identity an
+# app takes (loopback, assertion) is an admitted session's certified name
+# and group, 7-10 witnesses. Each mutant fails the queries it targets.
+svc_access - TTTTTTFFFF
+svc_access policy-unsigned TFTTTTFFFF
+svc_access approval-unbound TFTTTTFFFF
+svc_access grant-unsigned FTTTTTFFFF
+svc_access agent-any-principal FTTTTTFFFF
+svc_access agent-any-service FTTTTTFFFF
+svc_access rule-unsigned TTTFTTFFFF
+svc_access group-from-client TTTFFTFFFF
+svc_access header-from-client TTTTFTFFFF
+svc_access jwt-no-aud TTTTTFFFFF
+svc_access app-on-network TTTTFTFFFF

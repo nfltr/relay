@@ -1,0 +1,827 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+package agent
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"math/rand/v2"
+	"net"
+	"os"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/nfltr/link/pathswitch"
+	"github.com/nfltr/quic-go"
+	"github.com/nfltr/relay/proto/pb"
+	"github.com/nfltr/relay/proto/wire/agentservices"
+	"github.com/nfltr/relay/proto/wire/dataplane"
+)
+
+// testMachine is a client's DirectMachine of a testOrg: the chain to its
+// root and the machine's name (nfltr's orgpki is the real one).
+type testMachine struct {
+	o    *testOrg
+	cert tls.Certificate
+}
+
+func (m testMachine) Certificate() (*tls.Certificate, error) { return &m.cert, nil }
+
+func (m testMachine) CheckServer(certs []*x509.Certificate, name string, now time.Time) (time.Time, error) {
+	if len(certs) == 0 {
+		return time.Time{}, errors.New("no certificate")
+	}
+	if _, err := certs[0].Verify(x509.VerifyOptions{Roots: m.o.pool, CurrentTime: now, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}); err != nil {
+		return time.Time{}, err
+	}
+	if certs[0].Subject.CommonName != name {
+		return time.Time{}, fmt.Errorf("certificate of %q, want %q", certs[0].Subject.CommonName, name)
+	}
+	return certs[0].NotAfter, nil
+}
+
+// qadServer answers QAD on loopback as relay-core does: the observed
+// address on one unidirectional stream.
+func qadServer(t *testing.T) string {
+	t.Helper()
+	o := newTestOrg(t)
+	cert := o.machine(t, "relay", nil, time.Hour, false)
+	ln := qadListen(t, cert)
+	go func() {
+		for {
+			q, err := ln.Accept(context.Background())
+			if err != nil {
+				return
+			}
+			go func() {
+				s, err := q.OpenUniStream()
+				if err == nil {
+					_, _ = io.WriteString(s, q.RemoteAddr().String())
+					_ = s.Close()
+				}
+				<-q.Context().Done()
+			}()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+// directRig is an agent serving blob (an echo, direct mode) to db and a
+// client of db with its DirectClient, sessions on loopback TCP pairs (the
+// relay) and direct connections on loopback UDP.
+type directRig struct {
+	l      *linkSessions
+	d      *DirectClient
+	org    *fakeOrg // the agent's organisation
+	client testMachine
+	mu     sync.Mutex
+	conns  []net.Conn // the client ends of open's sessions
+	table  func() *ServiceTable
+	relay  string // the agent's relay's QAD (its tunnel's)
+	mode   DirectMode
+	wrap   func(net.Conn) net.Conn // the client's end of a session, if set
+	svc    string                  // blob's session target (blob, blob+udp)
+	alpn   string                  // and its ALPN
+}
+
+// directReflexive is a test rig's mode: on, with no host candidate sent
+// by either end (the endpoints' noHost): the reflexive candidate only.
+const directReflexive DirectMode = "test-reflexive"
+
+func newDirectRig(t *testing.T, mode DirectMode) *directRig {
+	t.Helper()
+	return newDirectRigOf(t, mode, agentservices.TCP, echoTarget(t))
+}
+
+// newDirectRigOf is newDirectRig with blob a service of kind at target.
+func newDirectRigOf(t *testing.T, mode DirectMode, kind agentservices.Kind, target string) *directRig {
+	t.Helper()
+	noHost := mode == directReflexive
+	if noHost {
+		mode = DirectOn
+	}
+	o := newTestOrg(t)
+	web := o.agentOrg(o.machine(t, "web", nil, time.Hour, false))
+	qad := qadServer(t)
+	mk := func() *ServiceTable {
+		table, err := NewServiceTable([]Service{{Name: "blob", Kind: kind, Target: target, E2EE: agentservices.E2EEOn,
+			Org: web, Direct: mode}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if table.direct != nil {
+			table.direct.ep.loopback = true
+			table.direct.ep.noHost = noHost
+			d := table.direct
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_ = d.node.Drain(ctx)
+				_ = d.ep.Close()
+			})
+		}
+		return table
+	}
+	table := mk()
+	r := &directRig{l: &linkSessions{ctx: t.Context(), targets: sessionTargets{services: table, agent: "web", qad: tunnelQAD(qad)}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}},
+		client: testMachine{o: o, cert: o.machine(t, "laptop", []string{"db"}, time.Hour, false)}, org: web, table: mk, relay: qad, mode: mode,
+		svc: "blob", alpn: MachineALPN("web", "blob")}
+	if kind == agentservices.UDP {
+		r.svc, r.alpn = agentservices.DatagramTarget("blob"), DatagramALPN(r.alpn)
+	}
+	var err error
+	r.d, err = NewDirectClient(DirectClientConfig{Machine: r.client,
+		Relayed: func(context.Context, string) (net.Conn, error) { return r.open(t, DirectServiceName) },
+		QADTLS:  func(string) *tls.Config { return &tls.Config{InsecureSkipVerify: true} }}) // #nosec G402 -- a test's relay
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.d.ep.loopback = true
+	r.d.ep.noHost = noHost
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = r.d.node.Drain(ctx)
+		_ = r.d.ep.Close()
+	})
+	return r
+}
+
+// tunnelQAD is a tunnel's relay QAD at addr, as its agent-link offer sets
+// it.
+func tunnelQAD(addr string) *atomic.Pointer[qadTarget] {
+	p := new(atomic.Pointer[qadTarget])
+	p.Store(&qadTarget{addr: addr, tls: &tls.Config{InsecureSkipVerify: true}}) // #nosec G402 -- a test's relay
+	return p
+}
+
+// open is a relayed session to target, answered.
+func (r *directRig) open(t *testing.T, target string) (net.Conn, error) {
+	s, c := sessionPair(t)
+	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: target, E2Ee: true, Answer: true})
+	if err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	l := r.l
+	r.mu.Unlock()
+	go l.accept("", h, s)
+	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
+		return nil, fmt.Errorf("answer %v, %v", a, err)
+	}
+	r.mu.Lock()
+	r.conns = append(r.conns, c)
+	r.mu.Unlock()
+	return c, nil
+}
+
+// session opens a framed session to blob, its TLS up and Run started;
+// events gets its path changes.
+func (r *directRig) session(t *testing.T) (*DirectSession, *tls.Conn, chan PathEvent) {
+	t.Helper()
+	ds, tc := r.handshake(t)
+	events := make(chan PathEvent, 16)
+	if err := ds.Run(tc.ConnectionState(), "web", "web", "blob", r.mode, pathSink(events)); err != nil {
+		t.Fatal(err)
+	}
+	return ds, tc, events
+}
+
+// handshake opens a framed session to blob, its TLS up, not Run.
+func (r *directRig) handshake(t *testing.T) (*DirectSession, *tls.Conn) {
+	t.Helper()
+	first, err := r.open(t, r.svc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.wrap != nil {
+		first = r.wrap(first)
+	}
+	ds := r.d.Start(first)
+	cfg := r.d.punchTLS(&directPair{machine: "web"})
+	BindServiceTLS(cfg, r.alpn)
+	tc := tls.Client(ds.Conn(), cfg)
+	if err := tc.HandshakeContext(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = tc.Close()
+		select {
+		case <-ds.Done():
+		case <-time.After(10 * time.Second):
+			t.Error("the session did not end after its Close")
+		}
+	})
+	return ds, tc
+}
+
+// pathSink is a session's path event callback that never blocks it: emit
+// runs under the session's lock (fallback), so a test that stopped reading
+// would deadlock the session's close (TestDirectGroupDialGoesDirectToItsInstance
+// hung CI); an event past the buffer is dropped, after the test's reads.
+func pathSink(events chan PathEvent) func(PathEvent) {
+	return func(e PathEvent) {
+		select {
+		case events <- e:
+		default:
+		}
+	}
+}
+
+func waitPath(t *testing.T, events chan PathEvent, path string) PathEvent {
+	t.Helper()
+	select {
+	case e := <-events:
+		if e.Path != path {
+			t.Fatalf("path event %+v, want %s", e, path)
+		}
+		return e
+	case <-time.After(15 * time.Second):
+		t.Fatalf("no path event %s", path)
+	}
+	return PathEvent{}
+}
+
+// echoConn is a session's conn as echo drives it (a TLS above the path
+// layer, or an nf1 session's path layer itself).
+type echoConn interface {
+	io.ReadWriter
+	CloseWrite() error
+}
+
+// echo writes n random bytes through tc, its end after them, and checks
+// the echo; mid runs once half went.
+func echo(t *testing.T, tc echoConn, n int, mid func()) {
+	t.Helper()
+	want := make([]byte, n)
+	r := rand.New(rand.NewPCG(uint64(n), 7))
+	for i := range want {
+		want[i] = byte(r.Uint32())
+	}
+	var got []byte
+	var rerr error
+	var wg sync.WaitGroup
+	// An echo is under a second; one stalled for a minute leaves every
+	// goroutine's stack in the log (relay ci-mac cb3837aff: a five-minute
+	// stall at 11860 of 1 MiB, then the detach bound, undiagnosable).
+	stall := time.AfterFunc(time.Minute, func() {
+		buf := make([]byte, 8<<20)
+		fmt.Fprintf(os.Stderr, "%s: echo stalled for a minute; goroutines:\n%s\n", t.Name(), buf[:runtime.Stack(buf, true)])
+	})
+	defer stall.Stop()
+	wg.Go(func() { got, rerr = io.ReadAll(tc) })
+	if _, err := tc.Write(want[:n/2]); err != nil {
+		t.Fatal(err)
+	}
+	mid()
+	if _, err := tc.Write(want[n/2:]); err != nil {
+		t.Fatal(err)
+	}
+	_ = tc.CloseWrite()
+	wg.Wait()
+	if rerr != nil || !bytes.Equal(got, want) {
+		t.Fatalf("echo: %d of %d bytes back: %v", len(got), n, rerr)
+	}
+}
+
+// TestDirectSessionMovesAndFallsBack: an organisation-mode session that
+// asked moves to a punched direct connection mid-transfer (the agent's
+// address from QAD), then that connection dies and the session falls back
+// to a relayed stream: every byte back once, in order.
+func TestDirectSessionMovesAndFallsBack(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	ds, tc, events := r.session(t)
+	echo(t, tc, 4<<20, func() {
+		e := waitPath(t, events, PathDirect)
+		if !e.Peer.IsValid() {
+			t.Fatalf("direct event without the peer's address: %+v", e)
+		}
+		if ds.Path() != PathDirect {
+			t.Fatalf("path %s", ds.Path())
+		}
+		p := r.d.pair("web", "web")
+		p.mu.Lock()
+		_ = p.q.CloseWithError(0, "the direct path dies")
+		p.mu.Unlock()
+		if e := waitPath(t, events, PathRelayed); e.Reason != ReasonDirectLost {
+			t.Fatalf("fallback reason %q", e.Reason)
+		}
+	})
+	st := r.d.Stats()
+	if st.DirectSent == 0 || st.RelayedSent == 0 || st.Punches["ok"] != 1 {
+		t.Fatalf("stats %+v", st)
+	}
+}
+
+// TestDirectOpenBeforeTheAgentsHandshake: the client moves once the agent
+// acknowledged its handshake's bytes (TestDirectSessionOpenedAfterThePairIsDirect),
+// but the agent's handshake ends only after that (it verifies the Finished,
+// then registers the session; a starved agent: CI relay a2a6b1de4, the
+// first event relayed/direct_lost), so the first direct OPEN can reach an
+// agent that has not registered the session yet: find waits for the
+// handshake under way and takes the OPEN once it registered, never refuses
+// it.
+func TestDirectOpenBeforeTheAgentsHandshake(t *testing.T) {
+	d := &directServer{sessions: map[*directSession]struct{}{}, quic: map[string][]byte{}}
+	key, qk := []byte("the session's exporter"), []byte("the connection's exporter")
+	handshook := d.handshaking()
+	found := make(chan *directSession, 1)
+	go func() { found <- d.find(pathswitch.Open{Epoch: 2, Token: pathToken(key, roleClient, 2, qk)}, qk) }()
+	select {
+	case s := <-found:
+		t.Fatalf("find returned %v during the handshake", s)
+	case <-time.After(50 * time.Millisecond):
+	}
+	a, b := net.Pipe()
+	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+	c := pathswitch.Server(pathStream{Conn: a}, PathRelayed, pathswitch.Config{Detach: 50 * time.Millisecond})
+	t.Cleanup(func() { c.Abort(); <-c.Done() }) // ends within its detach bound: register's goroutine with it
+	d.register(c, key)
+	handshook()
+	select {
+	case s := <-found:
+		if s == nil || s.c != c {
+			t.Fatalf("find returned %v, want the registered session", s)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("find did not return after the handshake")
+	}
+}
+
+// slowWrites delays each write on a session's relayed stream: the client's
+// path layer is still writing an earlier frame when its TLS hands it the
+// handshake's last flight, so that flight is in the path layer's buffer,
+// not on the stream, when the handshake returns (a loaded machine, a slow
+// relay path).
+type slowWrites struct {
+	net.Conn
+	d time.Duration
+}
+
+func (c slowWrites) Write(p []byte) (int, error) {
+	time.Sleep(c.d)
+	return c.Conn.Write(p)
+}
+
+// TestDirectSessionOpenedAfterThePairIsDirect (lane DIRECTSTALL): a session
+// opened while its pair already has a direct connection carries bytes at
+// once. Its move waits until the agent acknowledged the client's handshake
+// bytes: a move right after the client's handshake left the client's last
+// flight to the direct stream, which the agent takes only once its own
+// handshake ended (the token's key), so the session stalled until the
+// agent's 10 s TLS bound and reset (nfltr
+// docs/decisions/perf-command-2026-11-12.md "a session opened after its
+// pair is direct can stall").
+func TestDirectSessionOpenedAfterThePairIsDirect(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	_, tc, events := r.session(t)
+	echo(t, tc, 1<<16, func() { waitPath(t, events, PathDirect) })
+
+	r.wrap = func(c net.Conn) net.Conn { return slowWrites{Conn: c, d: 100 * time.Millisecond} }
+	_, tc2, events2 := r.session(t)
+	_ = tc2.SetDeadline(time.Now().Add(3 * time.Second)) // far below the agent's 10 s TLS bound
+	echo(t, tc2, 1<<16, func() { waitPath(t, events2, PathDirect) })
+}
+
+// strangerTLS is the state of a TLS session no agent holds.
+func strangerTLS(t *testing.T) tls.ConnectionState {
+	t.Helper()
+	cert := newTestOrg(t).machine(t, "stranger", nil, time.Hour, false)
+	a, b := net.Pipe()
+	t.Cleanup(func() { _ = a.Close(); _ = b.Close() })
+	go func() { _ = tls.Server(b, &tls.Config{Certificates: []tls.Certificate{cert}}).Handshake() }()
+	c := tls.Client(a, &tls.Config{InsecureSkipVerify: true}) // #nosec G402 -- a test's own session
+	if err := c.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	return c.ConnectionState()
+}
+
+// TestDirectUnprovedMoveIsRefusedNotLost: a move whose direct stream the
+// agent resets before its token (here a client token under a key no
+// agent's session holds) never announced a direct path: its fallback
+// reports refused_token, never direct_lost.
+func TestDirectUnprovedMoveIsRefusedNotLost(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	r.d.detach = 2 * time.Second
+	r.l.targets.services.direct.detach = 2 * time.Second // the agent's session ends too
+	ds, _ := r.handshake(t)
+	events := make(chan PathEvent, 16)
+	if err := ds.Run(strangerTLS(t), "web", "web", "blob", r.mode, pathSink(events)); err != nil {
+		t.Fatal(err)
+	}
+	if e := waitPath(t, events, PathRelayed); e.Reason != ReasonRefusedToken {
+		t.Fatalf("reason %q, want %s", e.Reason, ReasonRefusedToken)
+	}
+	select {
+	case <-ds.Done(): // its re-attaches are refused too: it ends after the detach bound
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session re-attaches past its detach bound")
+	}
+	for range len(events) {
+		if e := <-events; e.Path == PathDirect || e.Reason == ReasonDirectLost {
+			t.Fatalf("path event %+v of a move never proved", e)
+		}
+	}
+}
+
+// TestDirectSessionRelayLostReattaches: a session's relayed stream (its
+// fallback after the direct path died) is cut mid-transfer, as a relay
+// reconnect cuts it: the session re-attaches on a new relayed stream once,
+// every byte back once, in order.
+func TestDirectSessionRelayLostReattaches(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	_, tc, events := r.session(t)
+	echo(t, tc, 4<<20, func() {
+		waitPath(t, events, PathDirect)
+		p := r.d.pair("web", "web")
+		p.mu.Lock()
+		_ = p.q.CloseWithError(0, "the direct path dies")
+		p.mu.Unlock()
+		waitPath(t, events, PathRelayed)
+		r.mu.Lock()
+		_ = r.conns[len(r.conns)-1].Close()
+		r.mu.Unlock()
+		if e := waitPath(t, events, PathRelayed); e.Reason != ReasonRelayLost {
+			t.Fatalf("reason %q", e.Reason)
+		}
+		select {
+		case e := <-events:
+			t.Fatalf("a second re-attach: %+v", e)
+		case <-time.After(1500 * time.Millisecond):
+		}
+	})
+}
+
+// TestDirectSessionReattachesOnANewConnection: the agent's relay
+// connection is replaced (nfltr builds a table per connection, Continue
+// hands it the direct paths) and the session's relayed stream is cut
+// with the old one: it re-attaches through the new connection, every byte
+// back once, in order.
+func TestDirectSessionReattachesOnANewConnection(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	_, tc, events := r.session(t)
+	echo(t, tc, 4<<20, func() {
+		waitPath(t, events, PathDirect)
+		p := r.d.pair("web", "web")
+		p.mu.Lock()
+		_ = p.q.CloseWithError(0, "the direct path dies")
+		p.mu.Unlock()
+		waitPath(t, events, PathRelayed)
+		next := r.table()
+		next.Continue(r.l.targets.services)
+		if next.direct != r.l.targets.services.direct {
+			t.Fatal("Continue kept the new table's own direct paths")
+		}
+		r.mu.Lock()
+		r.l = &linkSessions{ctx: t.Context(), targets: sessionTargets{services: next, agent: "web", qad: r.l.targets.qad}, logger: slog.New(slog.DiscardHandler), growth: &tcpStreamGrowth{}}
+		_ = r.conns[len(r.conns)-1].Close()
+		r.mu.Unlock()
+		if e := waitPath(t, events, PathRelayed); e.Reason != ReasonRelayLost {
+			t.Fatalf("reason %q", e.Reason)
+		}
+		select {
+		case e := <-events:
+			t.Fatalf("a second re-attach: %+v", e)
+		case <-time.After(1500 * time.Millisecond):
+		}
+	})
+}
+
+// TestDirectSessionReattachRefusedEnds: an agent that no longer holds a
+// session resets every re-attach; the client's session ends after the
+// detach bound instead of re-attaching forever.
+func TestDirectSessionReattachRefusedEnds(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	r.d.detach = 2 * time.Second
+	r.l.targets.services.direct.detach = 2 * time.Second // the agent's session ends too
+	ds, _, events := r.session(t)
+	waitPath(t, events, PathDirect)
+	d := r.l.targets.services.direct
+	d.mu.Lock()
+	clear(d.sessions)
+	d.mu.Unlock()
+	p := r.d.pair("web", "web")
+	p.mu.Lock()
+	_ = p.q.CloseWithError(0, "the direct path dies")
+	p.mu.Unlock()
+	select {
+	case <-ds.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session re-attaches past its detach bound")
+	}
+	if n := len(events); n > 3 {
+		t.Fatalf("%d re-attaches in 2 s, want at most one a second", n)
+	}
+}
+
+// TestDirectSessionSlowRefusalsEnd: a path whose resets reach the client
+// later than a second (a loaded machine, a slow relay) still ends a
+// session whose agent refuses every re-attach after the detach bound: a
+// stream counts as answered by its first byte, never by how long it took
+// to die.
+func TestDirectSessionSlowRefusalsEnd(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	r.d.detach = 2 * time.Second
+	r.l.targets.services.direct.detach = 2 * time.Second
+	r.d.cfg.Relayed = func(context.Context, string) (net.Conn, error) {
+		c, err := r.open(t, DirectServiceName)
+		return &slowReads{Conn: c, delay: 1500 * time.Millisecond}, err
+	}
+	ds, _, events := r.session(t)
+	waitPath(t, events, PathDirect)
+	d := r.l.targets.services.direct
+	d.mu.Lock()
+	clear(d.sessions)
+	d.mu.Unlock()
+	p := r.d.pair("web", "web")
+	p.mu.Lock()
+	_ = p.q.CloseWithError(0, "the direct path dies")
+	p.mu.Unlock()
+	select {
+	case <-ds.Done():
+	case <-time.After(15 * time.Second):
+		t.Fatal("slow refusals kept the session re-attaching past its detach bound")
+	}
+}
+
+// slowReads delays a relayed stream's first read: its reset (or its
+// first byte) reaches the client delay late.
+type slowReads struct {
+	net.Conn
+	delay time.Duration
+	once  sync.Once
+}
+
+func (c *slowReads) Read(p []byte) (int, error) {
+	c.once.Do(func() { time.Sleep(c.delay) })
+	return c.Conn.Read(p)
+}
+
+// TestDirectPairDeathBacksOffWhateverItsNoticeOrder: a pair whose
+// connection died waits the first backoff before its next punch even
+// when a try finds the dead connection before the death's own notice ran
+// (the order a loaded runner showed: relay eb15a7a70594, a re-punch past
+// a death and five refused re-attaches in 2 s).
+func TestDirectPairDeathBacksOffWhateverItsNoticeOrder(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	ds, tc, events := r.session(t)
+	echo(t, tc, 1<<20, func() {
+		waitPath(t, events, PathDirect)
+		p := r.d.pair("web", "web")
+		p.mu.Lock()
+		q := p.q
+		p.mu.Unlock()
+		_ = q.CloseWithError(0, "the direct path dies")
+		waitPath(t, events, PathRelayed) // the fallback, then the loop's try finds the death
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			p.mu.Lock()
+			noticed := p.q == nil
+			if noticed { // the try that wins the race: the death's notice not yet run
+				p.q, p.fails, p.next = q, 0, time.Time{}
+			}
+			p.mu.Unlock()
+			if noticed {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the pair never noticed its connection's death")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		before := r.d.Stats().Punches["ok"]
+		if reason, _ := ds.tryDirect(); reason != "backoff" {
+			t.Errorf("a try past a death: %q, want backoff", reason)
+		}
+		if after := r.d.Stats().Punches["ok"]; after != before {
+			t.Errorf("punched again past a death: %d punches, want %d", after, before)
+		}
+	})
+}
+
+// TestDirectSessionStaleStreamEndMovesNothing: a stream end whose session
+// moved on since (another fallback, or a direct move, while it waited out
+// the second) re-attaches nothing: one re-attach a second, whatever the
+// ends' interleaving.
+func TestDirectSessionStaleStreamEndMovesNothing(t *testing.T) {
+	r := newDirectRig(t, DirectOn)
+	ds, _, events := r.session(t)
+	waitPath(t, events, PathDirect)
+	ds.mu.Lock()
+	e := ds.epoch
+	ds.mu.Unlock()
+	if e == 0 {
+		t.Fatal("the direct move recorded no epoch")
+	}
+	ds.fallback(e-1, nil)
+	select {
+	case ev := <-events:
+		t.Fatalf("a stale stream end moved the session: %+v", ev)
+	default:
+	}
+	if ds.Path() != PathDirect {
+		t.Fatalf("path %s, want direct", ds.Path())
+	}
+}
+
+// TestDirectServiceOff: a client that asks of a service without direct
+// paths gets a relayed session, framed, and the reason off.
+func TestDirectServiceOff(t *testing.T) {
+	r := newDirectRig(t, DirectOff)
+	r.mode = DirectOn // the client asks
+	r.l.targets.services.direct = nil
+	_, tc, events := r.session(t)
+	if e := waitPath(t, events, PathRelayed); e.Reason != ReasonWithheld {
+		t.Fatalf("reason %q, want %s (no reserved service)", e.Reason, ReasonWithheld)
+	}
+	echo(t, tc, 1<<20, func() {})
+}
+
+// TestParseDirectMode: true is on (LAN addresses included, owner
+// 2026-11-11), public withholds them, lan is gone.
+func TestParseDirectMode(t *testing.T) {
+	for in, want := range map[string]DirectMode{"": DirectOff, "false": DirectOff, "true": DirectOn, "on": DirectOn} {
+		if got, err := ParseDirectMode(in); err != nil || got != want {
+			t.Errorf("%q: %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if _, err := ParseDirectMode("lan"); err == nil {
+		t.Error("lan parsed")
+	}
+}
+
+// rebindConn is an agent's UDP socket behind a NAT that rebinds: after
+// rebind its packets leave from a new port and the old one is gone, so
+// the client's direct connection (to the old port) dies as a QUIC server
+// does not migrate.
+type rebindConn struct {
+	mu     sync.Mutex
+	cur    *net.UDPConn
+	closed bool
+}
+
+func newRebindConn(t *testing.T) *rebindConn {
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &rebindConn{cur: pc}
+}
+
+func (c *rebindConn) conn() *net.UDPConn { c.mu.Lock(); defer c.mu.Unlock(); return c.cur }
+
+func (c *rebindConn) rebind(t *testing.T) {
+	pc, err := net.ListenUDP("udp", &net.UDPAddr{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	old := c.cur
+	c.cur = pc
+	c.mu.Unlock()
+	_ = old.Close()
+}
+
+func (c *rebindConn) ReadFrom(p []byte) (int, net.Addr, error) {
+	for {
+		s := c.conn()
+		n, a, err := s.ReadFrom(p)
+		c.mu.Lock()
+		again := err != nil && !c.closed && c.cur != s
+		c.mu.Unlock()
+		if !again {
+			return n, a, err
+		}
+	}
+}
+
+func (c *rebindConn) WriteTo(p []byte, a net.Addr) (int, error) { return c.conn().WriteTo(p, a) }
+func (c *rebindConn) LocalAddr() net.Addr                       { return c.conn().LocalAddr() }
+func (c *rebindConn) SetDeadline(t time.Time) error             { return c.conn().SetDeadline(t) }
+func (c *rebindConn) SetReadDeadline(t time.Time) error         { return c.conn().SetReadDeadline(t) }
+func (c *rebindConn) SetWriteDeadline(t time.Time) error        { return c.conn().SetWriteDeadline(t) }
+func (c *rebindConn) Close() error {
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	return c.conn().Close()
+}
+
+// TestDirectAgentRebindDirectAgain: the agent's address changes mid
+// transfer (link spec/DirectPath.tla Rebind): the session falls back to
+// the relay within the fallback bound, then goes direct again on the new
+// address after one fresh exchange (RePunch), not after the pair's
+// backoff, every byte once in order.
+func TestDirectAgentRebindDirectAgain(t *testing.T) { rebindDirectAgain(t, false) }
+
+// TestDirectOpenOnADyingConnectionRepunches: the session's direct stream
+// ends before its connection's context does (quic-go closes a dying
+// connection's streams first), so the try after the fallback still sees
+// the connection up and its open fails: it waits for the death and
+// punches, never "no_answer" with no candidate asked (relay CI
+// a5f2b5acf990, linkdebug on a loaded runner).
+func TestDirectOpenOnADyingConnectionRepunches(t *testing.T) { rebindDirectAgain(t, true) }
+
+// rebindDirectAgain: lag, the first check of the pair's connection after
+// the rebind finds it up, as in that window.
+func rebindDirectAgain(t *testing.T, lag bool) {
+	r := newDirectRig(t, DirectOn)
+	r.d.repunch = 0 // the last punch is old enough: as a connection that lived past the backoff
+	var lagging atomic.Bool
+	// The first check after the rebind finds the connection up, whether it
+	// is (quic-go not yet done closing it) or not: the lag taken on the
+	// check, never carried to the next (a check that found it genuinely up
+	// left the lag to the check after the open failed, which then reported
+	// no_answer: relay ci-mac 425e6cff3c2a).
+	r.d.ended = func(q *quic.Conn) bool { return !lagging.CompareAndSwap(true, false) && connEnded(q) }
+	table := r.l.targets.services
+	old := table.direct
+	rc := newRebindConn(t)
+	ep := &DirectEndpoint{pc: rc, tr: &quic.Transport{Conn: rc}, loopback: true}
+	d, err := newDirectServerOn(ep, old.org, old.services, old.modes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	table.direct = d
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = d.node.Drain(ctx)
+		_ = ep.Close()
+	})
+	_, tc, events := r.session(t)
+	within := func(path string, bound time.Duration) (PathEvent, time.Duration) {
+		t.Helper()
+		start := time.Now()
+		select {
+		case e := <-events:
+			if e.Path != path {
+				t.Fatalf("path event %+v, want %s", e, path)
+			}
+			return e, time.Since(start)
+		case <-time.After(bound):
+			t.Fatalf("no path event %s within %s", path, bound)
+		}
+		return PathEvent{}, 0
+	}
+	echo(t, tc, 8<<20, func() {
+		first := waitPath(t, events, PathDirect)
+		t0 := time.Now()
+		lagging.Store(lag)
+		rc.rebind(t)
+		if e, _ := within(PathRelayed, 10*time.Second); e.Reason != ReasonDirectLost {
+			t.Fatalf("fallback reason %q, want %s", e.Reason, ReasonDirectLost)
+		}
+		fell := time.Since(t0)
+		// one exchange: its QAD (3 s) and punch (5 s) bounds, not the
+		// pair's backoff (20 s)
+		e, _ := within(PathDirect, 8*time.Second)
+		if e.Peer.Port() == first.Peer.Port() || int(e.Peer.Port()) != rc.LocalAddr().(*net.UDPAddr).Port {
+			t.Fatalf("direct again at %s, want the agent's new port %s (was %s)", e.Peer, rc.LocalAddr(), first.Peer)
+		}
+		t.Logf("agent rebind: relayed after %s, direct again after %s", fell.Round(time.Millisecond), time.Since(t0).Round(time.Millisecond))
+	})
+	if st := r.d.Stats(); st.Punches["ok"] != 2 {
+		t.Fatalf("punches %v, want 2 ok", st.Punches)
+	}
+	if lagging.Load() {
+		t.Fatal("no try checked the connection after the rebind")
+	}
+}
+
+// TestDirectSessionStreamEndBeforeRunEnds (lane R15FIX): a session whose
+// relayed stream ends before Run (a refusal during its TLS handshake: an
+// nf1 address not found, a relay that answers with its own TLS) has no
+// token to re-attach with, so it ends with its stream; it waited out the
+// 30 s detach bound and the CLI hung past its tests' bound.
+func TestDirectSessionStreamEndBeforeRunEnds(t *testing.T) {
+	d, err := NewDirectClient(DirectClientConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close() //nolint:errcheck
+	first, relay := net.Pipe()
+	ds := d.Start(first)
+	_ = relay.Close()
+	read := make(chan error, 1)
+	go func() { _, err := ds.Conn().Read(make([]byte, 1)); read <- err }()
+	select {
+	case err := <-read:
+		if err == nil {
+			t.Fatal("read on a session whose stream ended returned no error")
+		}
+	case <-time.After(10 * time.Second): // a bound against the hang only
+		t.Fatal("a session whose stream ended before Run still reads after 10 s (the detach bound)")
+	}
+}

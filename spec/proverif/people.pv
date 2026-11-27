@@ -1,0 +1,235 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   people.pv: the people layer (nfltr docs/decisions/people-layer-2026-11-25.md;
+   the state machine is spec/people/People.tla). spec/proverif/README.md.
+
+   A person joins through an invite: the inviter makes a key pair t, the
+   issuer's log holds pk(t) for (person, role) and the person's device
+   proves t with sign(commit(key), t), a signature over its keys (lane
+   PEOPLE2: the issuer and the relay never hold t, so no secret needs
+   sealing to the issuer; org/orgpki people.go NewInvite, ProveInvite),
+   beside an ID token from the organisation's IdP whose nonce commits to
+   the device's key (app_enrol.pv's sign-in). The sign-in only authenticates the request;
+   the issuer decides from its own log: the invite names the role. The
+   owner (the root's machine) makes invites and offboards on the issuer's
+   side (the order's path through the relay is orgdash.pv's,
+   BIND:dash.ordersig). An admin is a person whose certificate the issuer
+   issued with the role admin, which only an owner's invite gives; an
+   admin's request (invite a member, offboard a member) is signed with
+   its certificate's key; an admin's invite carries pk(t) and the admin
+   hands t to the person out of band.
+
+   The attacker owns the relay (channel c) and the IdP (its signing key
+   is published unless flag idp-honest): it signs any ID token for any
+   person and nonce. It holds two insiders' devices, lc (a member) and
+   eve (an admin): their invites are published (also the residual of a
+   leaked invite). The issuer, the owner, alice, bob and carol (an admin)
+   are honest until they leave: alice's and carol's keys are published
+   after their offboard (a leaver keeps the laptop).
+
+   Phase 1 is after the owner's offboard of alice and carol (in phase 0):
+   the issuer's log is a single writer, so "after" is the log's order,
+   and in phase 1 every path that certifies or acts checks the removed
+   list, which then holds alice and carol (written as that check: a
+   table's absence is not provable in ProVerif). Single use of an invite
+   and a removal racing a redemption are People.tla's (JoinNeedsInvite,
+   code-outlives-offboard).
+
+   Bindings (make spec-bindings: org/orgpki people_test.go TestPeopleModelBindings):
+     BIND:people.invite  the issuer certifies a sign-in only with an open invite for the token's person, proved over the request's keys (the invite key's signature)
+     BIND:people.role    the certificate's role is the invite's, never the request's
+     BIND:people.admin   an admin request is signed by a key whose certificate the issuer signed with role admin
+     BIND:people.removed the issuer refuses a removed person's join, renewal and admin requests *)
+
+free c: channel.                    (* the relay *)
+
+type skey.
+type pkey.
+type person.
+type role.
+
+fun pk(skey): pkey.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, k: skey; checksign(sign(m, k), pk(k)) = m.
+fun commit(pkey): bitstring.        (* the nonce: SHA-256 of the key's SPKI (app_enrol.pv's commit) *)
+
+free alice, bob, carol, lc, eve: person.
+
+fun cinv(person): channel [private].  (* an invite link handed to the person out of band *)
+free cidp: channel [private].         (* a device's TLS session with the IdP: the request ... *)
+fun cidr(person): channel [private].  (* ... and the ID token back to that person's device *)
+const rAdmin, rMember: role.
+
+fun idtoken(person, bitstring): bitstring [data].    (* verified email, nonce *)
+fun leaf(person, role, pkey): bitstring [data].      (* email SAN, role, key *)
+fun renewal(pkey): bitstring [data].
+fun inviteReq(person, role, pkey): bitstring [data].   (* person, role, the invite's public key *)
+fun offReq(person): bitstring [data].
+
+free skIdP: skey [private].
+free skIss: skey [private].
+
+table invites(person, role, pkey).        (* the issuer's open invites: person, role, the invite's public key *)
+table roster(person, role).               (* people the issuer certified, with their role *)
+
+event OwnerInvited(person, role).
+event AdminAsked(person, person).         (* honest admin a asked to invite p *)
+event AdminAskedOff(person, person).      (* honest admin a asked to offboard p *)
+event OwnerOff(person).
+event Invited(person, role).
+event Holds(person, pkey).
+event Issued(bool, person, role, pkey).   (* phase 1?, person, role, key *)
+event AdminActed(bool, person).
+event Offboarded(person).
+
+(* The IdP over the device's TLS session (honest; its key may leak). *)
+let IdP =
+  in(cidp, (p: person, n: bitstring));
+  out(cidr(p), sign(idtoken(p, n), skIdP)).
+
+(* A person's device: takes its invite out of band, signs in with the
+   nonce of its key, sends the token and the invite's proof via the relay. *)
+let Join(p: person, ko: skey) =
+  in(cinv(p), t: skey);
+  event Holds(p, pk(ko));
+  out(cidp, (p, commit(pk(ko))));
+  in(cidr(p), tok: bitstring);
+  out(c, (tok, pk(ko), pk(t), sign(commit(pk(ko)), t), rMember)).  (* NOT:invite-in-clear *)
+  out(c, (tok, pk(ko), t, rMember)).                               (* ONLY:invite-in-clear *)
+
+(* carol, an admin: after her certificate, she invites bob (a member)
+   and later asks to offboard him. *)
+let Carol(ko: skey) =
+  in(c, lcert: bitstring);
+  let leaf(=carol, =rAdmin, =pk(ko)) = checksign(lcert, pk(skIss)) in
+  new t: skey;
+  event AdminAsked(carol, bob);
+  out(c, (inviteReq(bob, rMember, pk(t)), sign(inviteReq(bob, rMember, pk(t)), ko), lcert));
+  out(cinv(bob), t);
+  event AdminAskedOff(carol, bob);
+  out(c, (offReq(bob), sign(offReq(bob), ko), lcert)).
+
+(* The issuer: a join. *)
+let IssuerJoin(late: bool) =
+  in(c, (tok: bitstring, ko: pkey, vk: pkey, pr: bitstring, rr: role));  (* NOT:invite-in-clear *)
+  in(c, (tok: bitstring, ko: pkey, ts: skey, rr: role));                 (* ONLY:invite-in-clear *)
+  let idtoken(p, n) = checksign(tok, pk(skIdP)) in
+  if n = commit(ko) then
+  get invites(=p, ri, =vk) suchthat checksign(pr, vk) = commit(ko) in   (* NOT:invite-in-clear *)
+  get invites(=p, ri, =pk(ts)) in                                        (* ONLY:invite-in-clear *)
+  if late && (p = alice || p = carol) then 0 else       (* NOT:no-deny *)
+  let r = ri in                                          (* NOT:role-from-request *)
+  let r = rr in                                          (* ONLY:role-from-request *)
+  event Issued(late, p, r, ko);
+  insert roster(p, r);
+  out(c, sign(leaf(p, r, ko), skIss)).
+
+(* Mutant no-invite: a sign-in rule for the IdP's domain certifies a
+   member from the ID token alone (APPID2's domain rules: removed, owner decision 2026-11-25, invites only). *)
+let IssuerDomain =                                       (* ONLY:no-invite *)
+  in(c, (tok: bitstring, ko: pkey));                     (* ONLY:no-invite *)
+  let idtoken(p, n) = checksign(tok, pk(skIdP)) in       (* ONLY:no-invite *)
+  if n = commit(ko) then                                 (* ONLY:no-invite *)
+  event Issued(false, p, rMember, ko);                   (* ONLY:no-invite *)
+  insert roster(p, rMember);                             (* ONLY:no-invite *)
+  out(c, sign(leaf(p, rMember, ko), skIss)).             (* ONLY:no-invite *)
+
+(* The issuer: renewal with the current key; person and role are the
+   certificate's. *)
+let Renew(late: bool) =
+  in(c, (cert: bitstring, k2: pkey, pop: bitstring));
+  let leaf(p, r, k) = checksign(cert, pk(skIss)) in
+  if checksign(pop, k) = renewal(k2) then
+  if late && (p = alice || p = carol) then 0 else       (* NOT:no-deny *)
+  event Issued(late, p, r, k2);
+  out(c, sign(leaf(p, r, k2), skIss)).
+
+(* The issuer: an admin's request, checked the same way for each act. *)
+let IssuerInvite(late: bool) =
+  in(c, (req: bitstring, s: bitstring, lcert: bitstring));
+  let leaf(a, ra, ka) = checksign(lcert, pk(skIss)) in
+  if ra = rAdmin then                                    (* NOT:no-role-check *)
+  if checksign(s, ka) = req then
+  if late && (a = alice || a = carol) then 0 else       (* NOT:admin-after-offboard *)
+  let inviteReq(p, r, vk) = req in
+  if r = rMember then                                    (* NOT:admin-invites-admin *)
+  event AdminActed(late, a);
+  insert invites(p, r, vk);
+  event Invited(p, r).
+
+let IssuerOff(late: bool) =
+  in(c, (req: bitstring, s: bitstring, lcert: bitstring));
+  let leaf(a, ra, ka) = checksign(lcert, pk(skIss)) in
+  if ra = rAdmin then                                    (* NOT:no-role-check *)
+  if checksign(s, ka) = req then
+  if late && (a = alice || a = carol) then 0 else       (* NOT:admin-after-offboard *)
+  let offReq(p) = req in
+  get roster(=p, =rMember) in                            (* NOT:admin-offboards-any *)
+  event AdminActed(late, a);
+  event Offboarded(p).
+
+(* The owner, on the issuer's side: invites, then offboards. *)
+let OwnerInvite(p: person, r: role) =
+  new t: skey;
+  event OwnerInvited(p, r);
+  insert invites(p, r, pk(t));
+  event Invited(p, r);
+  out(cinv(p), t).
+
+let OwnerOffboard(p: person) =
+  event OwnerOff(p);
+  event Offboarded(p).
+
+(* Insiders: the attacker holds the invite (and so the device) of lc, a
+   member, and of eve, an admin, and their own sign-ins with any nonce. *)
+let Insider(p: person, r: role) =
+  new t: skey;
+  event OwnerInvited(p, r);
+  insert invites(p, r, pk(t));
+  event Invited(p, r);
+  out(c, t);
+  !(in(c, n: bitstring); out(c, sign(idtoken(p, n), skIdP))).
+
+let Setup =
+  out(c, skIdP);                                         (* NOT:idp-honest *)
+  0.
+
+(* 1, 2. alice (the owner's invite) and bob (an admin's) are certified
+   only for keys their own devices made: neither the IdP nor the relay
+   enrols them. The residual: an admin the attacker holds invites anyone
+   (its authority), so with the IdP it also takes alice's email. *)
+query b: bool, r: role, k: pkey, b2: bool; event(Issued(b, alice, r, k)) ==> event(Holds(alice, k)) || event(AdminActed(b2, eve)).
+query b: bool, r: role, k: pkey, b2: bool; event(Issued(b, bob, r, k)) ==> event(Holds(bob, k)) || event(AdminActed(b2, eve)).
+(* 3-5. only the owner makes an admin: no certificate with role admin,
+   no admin act, no invite as admin without the owner's invite as admin *)
+query b: bool, p: person, k: pkey; event(Issued(b, p, rAdmin, k)) ==> event(OwnerInvited(p, rAdmin)).
+query b: bool, a: person; event(AdminActed(b, a)) ==> event(OwnerInvited(a, rAdmin)).
+query p: person; event(Invited(p, rAdmin)) ==> event(OwnerInvited(p, rAdmin)).
+(* 6. an offboard is the owner's, or of a member *)
+query p: person, b: bool, k: pkey; event(Offboarded(p)) ==> event(OwnerOff(p)) || event(Issued(b, p, rMember, k)).
+(* 7, 8. after the offboard (the leavers' keys then leak: they keep their
+   laptops): no certificate for alice, no act of carol *)
+query r: role, k: pkey; event(Issued(true, alice, r, k)) && event(Offboarded(alice)) ==> false.
+query b: bool; event(AdminActed(true, carol)) && event(Offboarded(carol)) ==> false.
+(* 9-13. witnesses: alice certified; bob (an admin's invite) certified;
+   carol acted; bob certified after the offboards (phase 1 is live); the
+   insider's leaked invite enrols the attacker's key (the residual: one
+   person, member, once) *)
+query k: pkey; event(Issued(false, alice, rMember, k)).
+query k: pkey; event(Issued(false, bob, rMember, k)).
+query b: bool; event(AdminActed(b, carol)).
+query k: pkey; event(Issued(true, bob, rMember, k)).
+query b: bool, k: pkey; event(Issued(b, lc, rMember, k)).
+
+process
+  Setup | !IdP |
+  (new ka: skey; (Join(alice, ka) | (phase 1; out(c, ka)))) |
+  (new kb: skey; Join(bob, kb)) |
+  (new kc: skey; (Join(carol, kc) | Carol(kc) | (phase 1; out(c, kc)))) |
+  Insider(lc, rMember) | Insider(eve, rAdmin) |
+  OwnerInvite(alice, rMember) | OwnerInvite(carol, rAdmin) |
+  OwnerOffboard(alice) | OwnerOffboard(carol) |
+  !IssuerJoin(false) | !Renew(false) | !IssuerInvite(false) | !IssuerOff(false) |
+  !IssuerDomain |                                        (* ONLY:no-invite *)
+  (phase 1; (!IssuerJoin(true) | !Renew(true) | !IssuerInvite(true) | !IssuerOff(true)))

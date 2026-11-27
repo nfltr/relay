@@ -1,0 +1,912 @@
+// Copyright 2026 nfltr
+// SPDX-License-Identifier: Apache-2.0
+
+package agent
+
+import (
+	"bufio"
+	"context"
+	"crypto/hmac"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"io"
+	"maps"
+	"net"
+	"net/netip"
+	"slices"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/nfltr/link"
+	"github.com/nfltr/link/pathswitch"
+	"github.com/nfltr/link/peerlink"
+	"github.com/nfltr/link/peerlink/quiclink"
+	"github.com/nfltr/quic-go"
+	"github.com/nfltr/relay/client/dgram"
+	"github.com/nfltr/relay/client/tlsend"
+	"github.com/nfltr/relay/proto/wire/agentservices"
+	"github.com/nfltr/relay/proto/wire/dataplane"
+)
+
+// DirectMachine is a client's organisation identity for direct paths:
+// its certificate, and the check of an agent machine's (client/orgid's
+// Identity: the chain to the root, the name the session asked for,
+// NotAfter, CRL).
+type DirectMachine interface {
+	Certificate() (*tls.Certificate, error)
+	CheckServer(certs []*x509.Certificate, name string, now time.Time) (time.Time, error)
+}
+
+// DirectClientConfig is what a client's direct paths use. Every policy
+// is the caller's: whether a session asks (DirectClient.Start), its mode
+// (DirectSession.Run).
+type DirectClientConfig struct {
+	Machine DirectMachine
+	// Relayed opens a session through the relay to agent's
+	// DirectServiceName (organisation mode), answered: a control
+	// exchange's or a fallback's stream. Its bytes are this file's.
+	Relayed func(ctx context.Context, agent string) (net.Conn, error)
+	// RelayedGroup opens a session through the relay to the group dial
+	// name (<service>@<group>, its service), the instances exclude names
+	// (machine names) left out, answered: a group dial's first control
+	// exchange toward an instance (nfltr
+	// docs/decisions/service-discovery-2026-11-12.md "Direct paths under a
+	// group dial"). nil: group-dialled sessions stay relayed.
+	RelayedGroup func(ctx context.Context, name string, exclude []string) (net.Conn, error)
+	// QADTLS is the TLS QAD dials the relay at addr with.
+	QADTLS func(addr string) *tls.Config
+	// OwnQAD is the QAD address of the client's own relay (its agent
+	// link's UDP port, host:port), asked beside the one the agent's offer
+	// names and taken when that one gives no answer (the client cannot
+	// reach the agent's relay, the offer names none); "": none.
+	OwnQAD string
+}
+
+// Punch results and fallback reasons, as path events carry them.
+const (
+	ReasonWithheld     = "withheld"      // no control exchange (the relay withheld it, an agent without direct paths)
+	ReasonOff          = reasonOff       // the agent's service takes no direct path
+	ReasonNoQAD        = reasonNoAddr    // an end knows no address of its own
+	ReasonNoAnswer     = "no_answer"     // no candidate answered the punch
+	ReasonRefusedCert  = "refused_cert"  // a candidate answered with another certificate
+	ReasonRefusedToken = "refused_token" // the answer did not prove the session
+	ReasonDirectLost   = "direct_lost"   // the direct path died: back on the relay
+	ReasonRelayLost    = "relay_lost"    // the relayed stream died: a new one
+)
+
+// Where a client's reflexive candidate came from, as DirectStats.QAD
+// counts it (direct-paths doc, QAD against more than one relay).
+const (
+	QADAgentRelay = "agent_relay" // the relay the agent's offer names: the pair's rendezvous
+	QADOwnRelay   = "own_relay"   // the client's own relay (OwnQAD): the agent's gave no answer
+	QADNone       = "none"        // neither answered
+	QADDiffer     = "differ"      // both answered, differently: the NAT is endpoint dependent (information, never policy)
+)
+
+// PathEvent is a session's change of path: Path direct (Peer the agent's
+// address it learned) or relayed (Reason why).
+type PathEvent struct {
+	Path   string
+	Reason string
+	Peer   netip.AddrPort
+	// Attempts is the punch round's attempts that led to this event (at
+	// most three); 0 when the event followed none (a session that joined
+	// the pair's connection, a fallback, a backoff).
+	Attempts int
+}
+
+// DirectStats are a client's direct-path counts: bytes per path (path
+// frames included), punches by result, sessions by path, reflexive
+// candidates by source (QADAgentRelay...). No label names a machine.
+type DirectStats struct {
+	DirectSent, DirectReceived, RelayedSent, RelayedReceived uint64
+	Punches                                                  map[string]uint64
+	Sessions                                                 map[string]int
+	QAD                                                      map[string]uint64
+}
+
+// DirectClient is a client process's direct paths: its DirectEndpoint,
+// one direct connection per agent (a quiclink Node dialling by Punch) and
+// the sessions that asked.
+type DirectClient struct {
+	cfg  DirectClientConfig
+	ep   *DirectEndpoint
+	node *quiclink.Node
+	// detach: a session with no stream (or only re-attaches reset within a
+	// second) this long ends; the agent's pathswitch default
+	detach time.Duration
+	// repunch: a pair whose direct connection died punches again at once
+	// when its last punch is this old (the agent's address may have
+	// changed: a fresh exchange learns the new one), else this long after
+	// that punch; directBackoff[0]
+	repunch time.Duration
+	// qadGrace: how long the own relay's QAD answer is waited for once the
+	// agent's relay's is in (only to see whether they differ)
+	qadGrace time.Duration
+	// anonBound: how long a session to an address served with no account
+	// waits for its direct path (nf1AnonDirectBound)
+	anonBound time.Duration
+	// ended: whether a pair's connection is over, its context's word (a
+	// test's stand-in: quic-go ends a dying connection's streams first)
+	ended func(*quic.Conn) bool
+	// punchBound: one attempt's dials (the design's 5 s)
+	punchBound time.Duration
+	// attempted: tests see each punch attempt's account
+	attempted func(punchAttempt)
+
+	directSent, directRecv, relayedSent, relayedRecv atomic.Uint64
+
+	mu       sync.Mutex
+	pairs    map[string]*directPair
+	punches  map[string]uint64
+	qad      map[string]uint64
+	sessions map[*DirectSession]struct{}
+}
+
+// directPair is the client's state toward one agent: the direct
+// connection, the candidates its next punch dials, the backoff. A group
+// dial's pair is one instance: its key the name and the session's machine,
+// its route (the agent the reserved service's opens go to) learnt from its
+// first exchange's offer, <machine>.<agent>.
+type directPair struct {
+	mu      sync.Mutex // one exchange at a time
+	key     string     // DirectClient.pairs' and the Node's peer
+	group   string     // <service>@<group>: a group dial's; "" a machine dial
+	route   atomic.Pointer[string]
+	machine string
+	cands   []netip.AddrPort
+	refused atomic.Bool // the last punch met a certificate the check refused
+	q       *quic.Conn
+	qk      []byte
+	fails   int
+	next    time.Time
+	punched time.Time // the last punch's start
+	nf1     *NF1Route // a capability address's pair (direct_nf1.go); nil: organisation mode
+	sni     string    // ... the server name of its last punch (the punching session's); mu
+}
+
+// directBackoff is the wait after the nth failed punch round toward a
+// pair (at most three rounds in ten minutes after the first two: the
+// design's bound; a round is up to punchAttempts attempts).
+var directBackoff = []time.Duration{20 * time.Second, time.Minute, 10 * time.Minute}
+
+// NewDirectClient opens the client's endpoint.
+func NewDirectClient(cfg DirectClientConfig) (*DirectClient, error) {
+	ep, err := NewDirectEndpoint()
+	if err != nil {
+		return nil, err
+	}
+	d := &DirectClient{cfg: cfg, ep: ep, detach: 30 * time.Second, anonBound: nf1AnonDirectBound, repunch: directBackoff[0], qadGrace: 250 * time.Millisecond, ended: connEnded, punchBound: 5 * time.Second, pairs: map[string]*directPair{}, punches: map[string]uint64{},
+		qad: map[string]uint64{}, sessions: map[*DirectSession]struct{}{}}
+	d.node, err = quiclink.New(quiclink.Config{Dial: d.dial, Liveness: link.LivenessFast, Datagrams: true, Window: tcpDataWindow, MaxWindow: directMaxWindow})
+	if err != nil {
+		_ = ep.Close()
+		return nil, err
+	}
+	return d, nil
+}
+
+// Stats are the client's counts now.
+func (d *DirectClient) Stats() DirectStats {
+	st := DirectStats{DirectSent: d.directSent.Load(), DirectReceived: d.directRecv.Load(),
+		RelayedSent: d.relayedSent.Load(), RelayedReceived: d.relayedRecv.Load(),
+		Sessions: map[string]int{PathDirect: 0, PathRelayed: 0}}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	st.Punches = maps.Clone(d.punches)
+	st.QAD = maps.Clone(d.qad)
+	for s := range d.sessions {
+		st.Sessions[s.c.Path()]++
+	}
+	return st
+}
+
+func (d *DirectClient) count(result string) {
+	d.mu.Lock()
+	d.punches[result]++
+	d.mu.Unlock()
+}
+
+// reflexive is this socket's address as a relay sees it, at most one: the
+// answer of agentRelay (the offer's QAD), else that of the client's own
+// relay (OwnQAD), asked at once beside it. Never both: they differ only
+// under an endpoint-dependent NAT, where neither reaches the agent. With
+// the agent's relay's answer in, the own one is waited for qadGrace at
+// most (an own address that never answers delays no punch).
+func (d *DirectClient) reflexive(ctx context.Context, agentRelay string) []netip.AddrPort {
+	if d.cfg.QADTLS == nil {
+		return nil
+	}
+	ownc := make(chan netip.AddrPort, 1)
+	if o := d.cfg.OwnQAD; o != "" && o != agentRelay {
+		go func() { a, _ := d.ep.QAD(ctx, o, d.cfg.QADTLS(o)); ownc <- a }()
+	} else {
+		close(ownc)
+	}
+	var theirs, own netip.AddrPort
+	if agentRelay != "" {
+		theirs, _ = d.ep.QAD(ctx, agentRelay, d.cfg.QADTLS(agentRelay))
+	}
+	if !theirs.IsValid() {
+		own = <-ownc
+	} else {
+		select {
+		case own = <-ownc:
+		case <-time.After(d.qadGrace):
+		}
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if theirs.IsValid() && own.IsValid() && theirs != own {
+		d.qad[QADDiffer]++
+	}
+	switch {
+	case theirs.IsValid():
+		d.qad[QADAgentRelay]++
+		return []netip.AddrPort{theirs}
+	case own.IsValid():
+		d.qad[QADOwnRelay]++
+		return []netip.AddrPort{own}
+	}
+	d.qad[QADNone]++
+	return nil
+}
+
+// pair is the client's pair toward agent as dialled, the session's
+// machine machine: per agent for a machine dial, per instance for a group
+// dial (<service>@<group>, whose route the first exchange learns).
+func (d *DirectClient) pair(agent, machine string) *directPair {
+	key, group := agent, ""
+	if _, _, ok := groupName(agent); ok {
+		key, group = agent+" "+machine, agent
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	p := d.pairs[key]
+	if p == nil {
+		p = &directPair{key: key, group: group, machine: machine}
+		if group == "" {
+			p.route.Store(&agent)
+		}
+		d.pairs[key] = p
+	}
+	return p
+}
+
+// groupName splits a group dial's name, <service>@<group>.
+func groupName(agent string) (service, group string, ok bool) {
+	service, group, ok = strings.Cut(agent, "@")
+	return service, group, ok && agentservices.ValidName(service) && agentservices.ValidLabel(group)
+}
+
+// routeOf is the agent p's reserved-service opens go to; "": none known
+// (a group dial's pair before its first exchange).
+func (p *directPair) routeOf() string {
+	if r := p.route.Load(); r != nil {
+		return *r
+	}
+	return ""
+}
+
+// DirectSession is a client session framed for direct paths from its
+// first byte (pathswitch), its TLS above it.
+type DirectSession struct {
+	d     *DirectClient
+	c     *pathswitch.Conn
+	nc    *psConn
+	first pathStream // epoch 0's stream
+	raw   net.Conn   // an nf1 session's relayed stream under its TLS (nil: organisation mode)
+	dg    *sessionDatagrams
+	moved chan struct{} // a fallback happened: the loop tries again
+	// direct is closed at the session's first direct path; anon: the
+	// address is served with no account (nf1.HintAnonymous): direct only,
+	// ended with nf1.ErrDirectRequired (err) when no direct path forms
+	// within the client's anonBound or the one it had dies
+	direct     chan struct{}
+	directOnce sync.Once
+	anon       bool
+	err        atomic.Pointer[error]
+	gaveUp     chan struct{} // closed with err set (the abort lingers until Done)
+	gaveUpOnce sync.Once
+	// falling: one fallback at a time, so that a stream end while another
+	// waits out its second does not re-attach beside it
+	falling sync.Mutex
+
+	mu      sync.Mutex
+	key     []byte
+	service string
+	mode    DirectMode
+	on      func(PathEvent)
+	pair    *directPair
+	moveAt  time.Time    // the last fallback's move
+	epoch   uint64       // the last move's stream (either path)
+	heard   *atomic.Bool // that stream's peer answered (a RESUME, the agent's token)
+	lostAt  time.Time    // since then no re-attached stream was answered
+}
+
+// Start frames an organisation-mode session whose first stream (relayed)
+// is first: the session's TLS runs on Conn, pathswitch under it
+// (e2ee_tcp.pv's layering, kept for organisation sessions until
+// direct_once.pv covers their client certificate). Run starts its moves
+// once TLS is up.
+func (d *DirectClient) Start(first net.Conn) *DirectSession {
+	return d.start(first, first, nil)
+}
+
+// StartNF1 frames an nf1 session for direct paths inside its admitted
+// TLS tc (nf1.ClientTLSFramed on raw, its relayed stream: direct_once.pv
+// epoch 0): pathswitch runs on tc and the session's bytes on Conn, each
+// later epoch a channel of its own (the direct QUIC connection, a fresh
+// TLS to the pinned key per relayed re-attach), so a direct path seals
+// each byte once. RunNF1 starts its moves.
+func (d *DirectClient) StartNF1(raw net.Conn, tc *tlsend.Conn) *DirectSession {
+	return d.start(tc, raw, raw)
+}
+
+func (d *DirectClient) start(first, addrs, raw net.Conn) *DirectSession {
+	s := &DirectSession{d: d, moved: make(chan struct{}, 1), heard: new(atomic.Bool), direct: make(chan struct{}), gaveUp: make(chan struct{})}
+	s.heard.Store(true) // the session's TLS runs on it
+	s.first = pathStream{Conn: first, sent: &d.relayedSent, recv: &d.relayedRecv}
+	s.raw = raw
+	s.c = pathswitch.Client(s.first, PathRelayed, pathswitch.Config{OnStreamEnd: s.fallback, Detach: d.detach, Window: tcpDataWindow, MaxWindow: directMaxWindow})
+	s.epoch = s.c.Epoch()
+	s.nc = newPSConn(s.c, addrs)
+	s.dg = &sessionDatagrams{c: s.c, recv: &d.directRecv}
+	return s
+}
+
+// Datagrams is the session's direct datagrams, for a datagram service's
+// association (dgram.Client.SetDirect).
+func (s *DirectSession) Datagrams() dgram.Direct { return s.dg }
+
+// Conn is the net.Conn the session's TLS runs on.
+func (s *DirectSession) Conn() net.Conn { return s.nc }
+
+// Done is closed once the session is over.
+func (s *DirectSession) Done() <-chan struct{} { return s.c.Done() }
+
+// Path is the session's current path.
+func (s *DirectSession) Path() string { return s.c.Path() }
+
+// Run takes the session's TLS state (the token's key) and moves the
+// session to a direct path toward agent (its machine name machine, its
+// service service) when one can be punched, back to the relay when it
+// dies, and to a direct one again after the pair's backoff; on gets each
+// change; mode DirectOn sends this machine's public, mapped and interface
+// addresses. It returns at once.
+func (s *DirectSession) Run(cs tls.ConnectionState, agent, machine, service string, mode DirectMode, on func(PathEvent)) error {
+	key, err := sessionKey(cs)
+	if err != nil {
+		return err
+	}
+	pair := s.d.pair(agent, machine) // d.mu not under s.mu: Move's token callback takes s.mu under the path layer's lock (moving)
+	s.mu.Lock()
+	s.key, s.service, s.mode, s.on = key, service, mode, on
+	s.pair = pair
+	s.mu.Unlock()
+	s.d.mu.Lock()
+	s.d.sessions[s] = struct{}{}
+	s.d.mu.Unlock()
+	go s.loop(s.c.Written())
+	return nil
+}
+
+func (s *DirectSession) emit(e PathEvent) {
+	if s.on != nil {
+		s.on(e)
+	}
+}
+
+// loop tries a direct path while the session lasts, the first once the
+// agent acknowledged the bytes below proof (the client's handshake): the
+// agent takes a move only once its own handshake ended (the token's key),
+// and a move leaves the bytes not yet sent to the new stream, so a move
+// before stalled the session until the agent's TLS bound (link spec
+// DirectPath.tla Proof; TestDirectSessionOpenedAfterThePairIsDirect).
+func (s *DirectSession) loop(proof uint64) {
+	defer func() {
+		s.d.mu.Lock()
+		delete(s.d.sessions, s)
+		s.d.mu.Unlock()
+	}()
+	s.c.WaitAcked(proof, e2eeHeaderTimeout) // past it the agent's handshake failed: the session ends
+	for {
+		if reason, n := s.tryDirect(); reason != "" && reason != "backoff" && !s.ended() {
+			s.emit(PathEvent{Path: PathRelayed, Reason: reason, Attempts: n})
+		}
+		s.pair.mu.Lock()
+		wait := max(time.Until(s.pair.next), 0) // a past (or no) backoff: try again, never wait for a move that will not come (a try that found the death before its notice: TestDirectPairDeathBacksOffWhateverItsNoticeOrder)
+		s.pair.mu.Unlock()
+		if s.c.Path() == PathDirect {
+			wait = -1 // until the direct path dies
+		}
+		var timer <-chan time.Time
+		if wait >= 0 {
+			timer = time.After(max(wait, time.Second))
+		}
+		select {
+		case <-s.c.Done():
+			return
+		case <-s.moved:
+		case <-timer:
+		}
+	}
+}
+
+// tryDirect moves the session onto the pair's direct connection, punched
+// first when there is none; "" when it moved, else why not, and the
+// attempts its punch round made (0: none).
+func (s *DirectSession) tryDirect() (string, int) {
+	p := s.pair
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var st peerlink.Session
+	attempts := 0
+	for punched := false; ; {
+		s.noticeDeath(p)
+		if p.q == nil {
+			if punched || time.Now().Before(p.next) {
+				return "backoff", 0
+			}
+			punched = true
+			p.punched = time.Now()
+			var reason string
+			reason, attempts = s.punchRound(p)
+			if reason != "" {
+				p.fails++
+				p.next = time.Now().Add(directBackoff[min(p.fails, len(directBackoff))-1])
+				return reason, attempts
+			}
+			p.fails = 0
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel() // at most two opens
+		var err error
+		if st, err = s.d.node.Open(ctx, p.key, nil); err == nil {
+			break
+		}
+		// The connection died during this try, or just before it: quic-go
+		// ends a dying connection's streams (this session's fallback)
+		// before its context, so the death is noticed once that ends,
+		// within the open's bound; then this try punches, a death being
+		// what the punch is for, not a refusal (no "no_answer": no
+		// candidate was asked; TestDirectOpenOnADyingConnectionRepunches).
+		select {
+		case <-p.q.Context().Done():
+		case <-ctx.Done():
+		case <-s.c.Done():
+		}
+		if s.noticeDeath(p); p.q != nil {
+			return ReasonNoAnswer, attempts
+		}
+	}
+	tc := &tokenCheck{pathStream: pathStream{Conn: st, sent: &s.d.directSent, recv: &s.d.directRecv}, ready: make(chan struct{})}
+	peer, _ := netip.ParseAddrPort(p.q.RemoteAddr().String())
+	heard := new(atomic.Bool)
+	tc.ok = func() {
+		s.dg.traceBind("BindC")
+		heard.Store(true)
+		s.dg.bound(tc) // the agent attached before its token: datagrams go direct from now on
+		s.directOnce.Do(func() { close(s.direct) })
+		s.emit(PathEvent{Path: PathDirect, Peer: peer, Attempts: attempts})
+	}
+	qk := p.qk
+	if q, ok := st.(*quiclink.Session); ok {
+		s.dg.take(tc, q, heard.Load) // its agent's token checked: bound by both
+	}
+	if _, err := s.c.Move(tc, PathDirect, func(e uint64) []byte {
+		tc.want = pathToken(s.key, roleServer, e, qk)
+		close(tc.ready)
+		s.moving(e, heard)
+		return pathToken(s.key, roleClient, e, qk)
+	}); err != nil {
+		return ReasonNoAnswer, attempts
+	}
+	return "", attempts
+}
+
+// noticeDeath drops p's connection once it died; p.mu held. The next
+// punch after a death waits until the last punch is the first backoff
+// old: at once after a connection that lived that long (an agent whose
+// address changed is direct again within the fallback and one exchange:
+// TestDirectAgentRebindDirectAgain), never more often for one that keeps
+// dying; on a try rather than on the death's notice, which a try may
+// outrun, and again after a try's open fails, which the death may outrun
+// (TestDirectPairDeathBacksOffWhateverItsNoticeOrder: a starved machine
+// saw the open fail on a connection not yet dead at the try's start).
+func (s *DirectSession) noticeDeath(p *directPair) {
+	if p.q != nil && s.d.ended(p.q) {
+		p.q, p.fails, p.next = nil, 1, p.punched.Add(s.d.repunch)
+	}
+}
+
+// moving makes the stream of epoch e (heard once its peer answered) the
+// session's, from Move's token callback: before the stream runs, so its
+// end, however soon, is judged by it (fallback), never by the stream
+// before it.
+func (s *DirectSession) moving(e uint64, heard *atomic.Bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e > s.epoch {
+		s.epoch, s.heard = e, heard
+	}
+}
+
+// punch runs one control exchange and the punch it starts, attempt n of
+// its round; p.mu held. The request to the offer is the relay's round
+// trip; the client dials half of it after its sync (its candidates).
+func (s *DirectSession) punch(p *directPair, n int, tr roundTrace) (reason string) {
+	acct := punchAttempt{n: n}
+	defer func() {
+		tr.result(reason)
+		if f := s.d.attempted; f != nil {
+			acct.reason = reason
+			f(acct)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), directControlBound)
+	defer cancel()
+	tc, err := s.d.control(ctx, p)
+	if err != nil {
+		return ReasonWithheld
+	}
+	defer tc.Close() //nolint:errcheck
+	stop := context.AfterFunc(ctx, func() { _ = tc.NetConn().Close() })
+	defer stop()
+	enc, r := json.NewEncoder(tc), bufio.NewReader(io.LimitReader(tc, 8<<10))
+	var offer directOffer
+	sent := time.Now()
+	if enc.Encode(directRequest{Service: s.service}) != nil || readJSONLine(r, &offer) != nil {
+		return ReasonWithheld
+	}
+	acct.rtt = time.Since(sent)
+	if offer.Error != "" {
+		return offer.Error
+	}
+	if p.routeOf() == "" && agentservices.ValidLabel(offer.Agent) {
+		r := p.machine + "." + offer.Agent // the session's machine (the control TLS checked it) and its agent
+		p.route.Store(&r)
+	}
+	theirs, err := s.d.ep.candidates(offer.Candidates)
+	if err != nil {
+		return ReasonNoQAD
+	}
+	// Trickle: the candidates known now go at once, the slow ones (this
+	// end's address check, its port mapping) follow as they come; the
+	// agent's later ones join the punch as learned candidates.
+	mine, late := s.d.ep.gather(func() []netip.AddrPort { return s.d.reflexive(ctx, offer.QAD) }, s.d.ep.mappedSource)
+	if len(mine) == 0 {
+		return ReasonNoQAD
+	}
+	out := directCandidates{}
+	for _, a := range mine {
+		out.Candidates = append(out.Candidates, a.String())
+	}
+	// Listening before the client's candidates go: the agent probes them
+	// as soon as it reads them.
+	learned, stopLearn := s.d.ep.listen(probeTag(tc))
+	defer stopLearn()
+	if enc.Encode(out) != nil {
+		return ReasonWithheld
+	}
+	synced := time.Now()
+	tr.sync(acct.rtt)
+	go sendLate(tc, mine, late)
+	go s.d.ep.readLate(r, func(a netip.AddrPort) {
+		select {
+		case learned <- a:
+		default:
+		}
+	})
+	p.cands = theirs
+	p.refused.Store(false)
+	if p.nf1 != nil {
+		p.sni = nf1SNI(s.key)
+	}
+	acct.wait = syncWait(ctx, acct.rtt)
+	acct.sinceSync = time.Since(synced)
+	tr.dial(acct.rtt, acct.wait, acct.sinceSync)
+	q, err := s.d.dialPair(ctx, p, learned)
+	if err != nil {
+		if p.refused.Load() {
+			return ReasonRefusedCert
+		}
+		return ReasonNoAnswer
+	}
+	p.q = q
+	return ""
+}
+
+// dial is the Node's: the pair's last punch's connection (dialPair made
+// it), or none.
+func (d *DirectClient) dial(_ context.Context, peer string, _ *quic.Config) (*quic.Conn, error) {
+	d.mu.Lock()
+	p := d.pairs[peer]
+	d.mu.Unlock()
+	if p == nil || p.q == nil || connEnded(p.q) {
+		return nil, errors.New("direct path: no punched connection")
+	}
+	return p.q, nil
+}
+
+func connEnded(q *quic.Conn) bool { return q.Context().Err() != nil }
+
+// dialPair punches p's candidates and the agent's probes' sources on the
+// endpoint (punch, 5 s) and keeps the connection's exporter for the
+// tokens.
+func (d *DirectClient) dialPair(ctx context.Context, p *directPair, learned <-chan netip.AddrPort) (*quic.Conn, error) {
+	ctx, cancel := context.WithTimeout(ctx, d.punchBound)
+	defer cancel()
+	q, err := d.ep.punch(ctx, p.cands, learned, d.punchTLS(p), d.node.QUICConfig())
+	if err != nil {
+		return nil, err
+	}
+	qk, err := quicKey(q)
+	if err != nil {
+		_ = q.CloseWithError(quiclink.CodeDone, "no exporter")
+		return nil, err
+	}
+	p.qk = qk
+	return q, nil
+}
+
+// punchTLS is a direct connection's TLS at the client: this machine's
+// certificate, and the answer's checked as the organisation's machine the
+// session named (BIND:direct.cert, BIND:direct.name) whatever the address
+// it came from (the relay chose it).
+func (d *DirectClient) punchTLS(p *directPair) *tls.Config {
+	if p.nf1 != nil {
+		return d.nf1PunchTLS(p)
+	}
+	return &tls.Config{
+		MinVersion:           tls.VersionTLS13,
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return d.cfg.Machine.Certificate() },
+		InsecureSkipVerify:   true, // #nosec G402 -- VerifyConnection checks the organisation's chain and the name
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if _, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, p.machine, time.Now()); err != nil {
+				p.refused.Store(true)
+				return errors.Join(errDirectRefused, err)
+			}
+			return nil
+		},
+	}
+}
+
+// controlTLS is the control session's TLS: organisation mode, as any
+// session to machine, bound to agent's reserved service (service_alpn.go).
+func (d *DirectClient) controlTLS(agent, machine string) *tls.Config {
+	cfg := d.punchTLS(&directPair{machine: machine})
+	BindServiceTLS(cfg, MachineALPN(agent, DirectServiceName))
+	return cfg
+}
+
+// groupControlTries bounds a group dial's first exchange's opens: one per
+// instance exclude can name, and a few more for instances that end the
+// stream without a certificate (their service takes no direct path).
+// ponytail: past MaxExclude+1 instances later picks are random (bounded
+// by directControlBound); an instance-pinned open would end that.
+const groupControlTries = dataplane.MaxExclude + 4
+
+// control opens p's control exchange, its TLS up: to the reserved service
+// of p's route, or, for a group dial's pair that knows none yet, on the
+// group dial's own route (directControlMark first), each certificate of
+// another machine than the session's refused and excluded from the next
+// open (BIND:direct.name: the relay picks, it never chooses who answers).
+func (d *DirectClient) control(ctx context.Context, p *directPair) (*tls.Conn, error) {
+	if p.nf1 != nil {
+		return d.nf1Control(ctx, p)
+	}
+	if r := p.routeOf(); r != "" {
+		return d.handshake(ctx, func() (net.Conn, error) { return d.cfg.Relayed(ctx, r) }, d.controlTLS(r, p.machine))
+	}
+	svc, group, ok := groupName(p.group)
+	if !ok || d.cfg.RelayedGroup == nil {
+		return nil, errors.New("direct path: no route to the session's agent")
+	}
+	var exclude []string
+	err := errors.New("direct path: no instance answered as the session's machine")
+	for range groupControlTries {
+		var other string
+		cfg := &tls.Config{
+			MinVersion:           tls.VersionTLS13,
+			GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return d.cfg.Machine.Certificate() },
+			InsecureSkipVerify:   true, // #nosec G402 -- VerifyConnection checks the organisation's chain and the session's machine
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				_, err := d.cfg.Machine.CheckServer(cs.PeerCertificates, p.machine, time.Now())
+				if err != nil && len(cs.PeerCertificates) > 0 {
+					other = cs.PeerCertificates[0].Subject.CommonName
+				}
+				return err
+			},
+		}
+		BindServiceTLS(cfg, GroupALPN(svc, group))
+		tc, herr := d.handshake(ctx, func() (net.Conn, error) {
+			raw, err := d.cfg.RelayedGroup(ctx, p.group, exclude)
+			if err == nil {
+				if _, err = raw.Write([]byte{directControlMark}); err != nil {
+					_ = raw.Close()
+				}
+			}
+			return raw, err
+		}, cfg)
+		if herr == nil {
+			return tc, nil
+		}
+		if errors.Is(herr, errNoOpen) || ctx.Err() != nil {
+			return nil, herr
+		}
+		if other != "" && !slices.Contains(exclude, other) && len(exclude) < dataplane.MaxExclude {
+			exclude = append(exclude, other)
+		}
+	}
+	return nil, err
+}
+
+// errNoOpen: the relay did not open the exchange's session.
+var errNoOpen = errors.New("direct path: the relay opened no control session")
+
+// handshake opens a session with open and runs cfg's TLS on it within ctx.
+func (d *DirectClient) handshake(ctx context.Context, open func() (net.Conn, error), cfg *tls.Config) (*tls.Conn, error) {
+	raw, err := open()
+	if err != nil {
+		return nil, errors.Join(errNoOpen, err)
+	}
+	tc := tls.Client(raw, cfg)
+	stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
+	defer stop()
+	if err := tc.HandshakeContext(ctx); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	return tc, nil
+}
+
+// fallback is the path layer's OnStreamEnd: the current stream died; a
+// relayed one takes the session (tokR) until the detach bound.
+func (s *DirectSession) fallback(epoch uint64, _ error) {
+	s.falling.Lock()
+	defer s.falling.Unlock()
+	if s.movedSince(epoch) {
+		return
+	}
+	s.mu.Lock()
+	key, pair, last, heard := s.key, s.pair, s.moveAt, s.heard.Load()
+	// a loss starts here unless the ended stream was refused unanswered
+	// (however late its reset came: TestDirectSessionSlowRefusalsEnd)
+	if s.lostAt.IsZero() || epoch == s.epoch && s.heard.Load() {
+		s.lostAt = time.Now()
+	}
+	lost := s.lostAt
+	s.mu.Unlock()
+	if key == nil {
+		// before Run: no token to re-attach with, so the session ends with
+		// its stream now, not at the detach bound
+		// (TestDirectSessionStreamEndBeforeRunEnds)
+		s.c.Abort()
+		return
+	}
+	if s.anon { // direct only: never re-attached relayed (nf1-anon section 2; the relay cuts one anyway)
+		s.directRequired()
+		return
+	}
+	// A stream reset again at once (an agent that no longer holds the
+	// session resets its re-attach) gets at most one re-attach a second,
+	// and none once no stream was answered for the detach bound: the
+	// session ends, as an agent's would with no stream.
+	if time.Since(lost) >= s.d.detach {
+		s.c.Abort()
+		return
+	}
+	if wait := time.Second - time.Since(last); wait > 0 {
+		select {
+		case <-s.c.Done():
+			return
+		case <-time.After(wait):
+		}
+	}
+	if s.movedSince(epoch) {
+		return
+	}
+	reason := ReasonRelayLost
+	if s.c.Path() == PathDirect {
+		reason = ReasonDirectLost
+		if !heard {
+			// never announced (no agent's token): a refused move, not a
+			// lost path (TestDirectUnprovedMoveIsRefusedNotLost)
+			reason = ReasonRefusedToken
+		}
+	}
+	for {
+		select {
+		case <-s.c.Done():
+			return
+		default:
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		heard := new(atomic.Bool)
+		var st pathswitch.Stream
+		var tok func(uint64) []byte
+		err := errNoOpen // no route: a group dial before its first exchange; the detach bound ends the session
+		if pair.nf1 != nil {
+			st, tok, err = s.d.nf1Reattach(ctx, pair, key, heard)
+		} else if r := pair.routeOf(); r != "" {
+			var rs net.Conn
+			if rs, err = s.d.cfg.Relayed(ctx, r); err == nil {
+				st = pathStream{Conn: rs, sent: &s.d.relayedSent, recv: &s.d.relayedRecv, heard: heard}
+				tok = func(e uint64) []byte { return pathToken(key, roleClient, e, nil) }
+			}
+		}
+		cancel()
+		if err == nil {
+			_, err = s.c.Move(st, PathRelayed, func(e uint64) []byte { s.moving(e, heard); return tok(e) })
+			if err == nil {
+				s.mu.Lock()
+				s.moveAt = time.Now()
+				s.mu.Unlock()
+				s.emit(PathEvent{Path: PathRelayed, Reason: reason})
+				select {
+				case s.moved <- struct{}{}:
+				default:
+				}
+			}
+			return
+		}
+		select {
+		case <-s.c.Done():
+			return
+		case <-time.After(time.Second):
+		}
+	}
+}
+
+// movedSince: the session moved past the stream of epoch, which ended (a
+// fallback before, or a direct move while it waited): that stream's own
+// end falls back, if it ends (TestDirectSessionStaleStreamEndMovesNothing).
+func (s *DirectSession) movedSince(epoch uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return epoch < s.epoch
+}
+
+// tokenCheck is a direct stream at the client: its first bytes must be
+// the agent's token for the epoch (BIND:direct.role: the server's, never
+// the client's own reflected), else the stream is reset and the session
+// falls back.
+type tokenCheck struct {
+	pathStream
+	ready   chan struct{}
+	want    []byte
+	checked bool
+	ok      func()
+}
+
+func (t *tokenCheck) Read(p []byte) (int, error) {
+	if !t.checked {
+		<-t.ready
+		got := make([]byte, len(t.want))
+		if _, err := io.ReadFull(t.pathStream, got); err != nil {
+			return 0, err
+		}
+		if !hmac.Equal(got, t.want) {
+			_ = t.Reset() // the fallback reports it: refused_token
+			return 0, errDirectRefused
+		}
+		t.checked = true
+		t.ok()
+	}
+	return t.pathStream.Read(p)
+}
+
+// Close ends the client's direct connections and its socket; sessions
+// still on a direct path fall back to the relay or end. Its owner closes
+// it once it opens no more sessions.
+func (d *DirectClient) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = d.node.Drain(ctx)
+	return d.ep.Close()
+}

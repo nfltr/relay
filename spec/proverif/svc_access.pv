@@ -1,0 +1,179 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   svc_access.pv: service-level access (nfltr
+   docs/decisions/service-access-2026-11-25.md; identity to the app is code
+   since lane SA2, client/agent/org_identity.go; rules and grants are a
+   design; their state machine is spec/grant/Grant.tla). spec/proverif/README.md.
+
+   The attacker owns the relay and is a member of the organisation
+   (mallory: an organisation certificate in group dev and its key). It
+   carries every request, approval, grant, policy document and session
+   message, and makes its own. Honest: the root, the issuer, the approver
+   alice (approves on a prompt naming the requester, service and duration:
+   the prompt is the authentic channel), the requester bob, the serving
+   machine h (its agent and its apps).
+
+   - Signed policy: the root signs who approves access to a service
+     (lApprover, s, approver key) and which group may use a service
+     (lRule, g, s). The relay carries both and can forge neither.
+   - Grants: bob asks for (s, d) with a fresh request id r; alice signs the
+     whole request; the issuer checks the approver's authority in the
+     root-signed policy and signs (lGrant, p, s, d, r).
+   - Admission: inside the session's TLS (the client proves its
+     certificate key over the agent's challenge and the service name, as
+     the ALPN binding of e2ee_tcp.pv), the agent admits p to s by a grant
+     naming p and s, or by a root-signed rule for p's certified group.
+   - Identity to the app: the agent tells the app who called, the
+     certified name and group, never a value the client sent: on the
+     loopback hop (a private channel), or as an assertion the agent signs
+     with its machine key, the audience being the service (for an app
+     beyond loopback; the app pins its own agent's key).
+   Replays of approvals (one grant per request) and the expiry and revoke
+   bounds are Grant.tla's: they need the issuer's and agent's state.
+
+   Bindings (make spec-bindings, rows the code lane adds):
+     BIND:svc.grantsig   the agent takes a grant only under the issuer key (checksign(g, pk(kiss)))
+     BIND:svc.grantwho   ... naming the session's certified principal (=p)
+     BIND:svc.grantsvc   ... and the service the session opened (=s)
+     BIND:svc.apprall    the issuer takes an approval only over the whole request (lAppr, req)
+     BIND:svc.apprpol    ... by a key the root's policy names for that service
+     BIND:svc.rulesig    the agent admits by a rule only under the root key, for the certified group
+     BIND:svc.hdrwho     the identity the app gets is the certificate's name and group
+     BIND:svc.aud        an app takes an assertion only for its own service *)
+
+free c: channel.
+free local: channel [private].        (* agent -> app on loopback *)
+
+type skey.
+fun pk(skey): bitstring.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, s: skey; checksign(sign(m, s), pk(s)) = m.
+reduc forall m: bitstring, s: skey; getmsg(sign(m, s)) = m.
+
+const lCert, lReq, lAppr, lApprover, lRule, lGrant, lSess, lId, lJwt: bitstring.
+const bob, alice, mallory, h: bitstring.
+const sv1, sv2: bitstring.            (* two services on h *)
+const gOps, gDev: bitstring.
+
+free kroot, kiss, kA, kB, kH: skey [private].
+free kM: skey.                        (* mallory's key: the attacker's *)
+
+event Certified(bitstring, bitstring).                          (* name, group *)
+event RuleSigned(bitstring, bitstring).                         (* group, service *)
+event Requested(bitstring, bitstring, bitstring, bitstring).    (* p, s, d, r *)
+event Approved(bitstring, bitstring, bitstring, bitstring, bitstring). (* approver, p, s, d, r *)
+event Granted(bitstring, bitstring, bitstring, bitstring).      (* p, s, d, r *)
+event Opened(bitstring, bitstring).                             (* p opened s *)
+event Admitted(bitstring, bitstring, bitstring, bitstring).     (* p, s, d, r *)
+event AdmittedByRule(bitstring, bitstring, bitstring).          (* p, g, s *)
+event AppAccepted(bitstring, bitstring, bitstring).             (* p, g, s *)
+event AppAcceptedJwt(bitstring, bitstring, bitstring).          (* p, g, s *)
+
+(* bob asks for a service and a duration (his choice: the attacker's
+   input stands for it). *)
+let Requester =
+  !(in(c, (s: bitstring, d: bitstring));
+    new r: bitstring;
+    event Requested(bob, s, d, r);
+    out(c, (lReq, r, bob, s, d))).
+
+(* alice approves what her prompt shows: the whole request. *)
+let Approver =
+  !(in(c, req: bitstring);
+    let (=lReq, r: bitstring, p: bitstring, s: bitstring, d: bitstring) = req in
+    event Approved(alice, p, s, d, r);
+    out(c, sign((lAppr, req), kA))                                    (* NOT:approval-unbound *)
+    (* ONLY:approval-unbound *) out(c, sign((lAppr, r), kA))
+    ).
+
+let Issuer =
+  !(in(c, (req: bitstring, ap: bitstring, pol: bitstring));
+    let (=lReq, r: bitstring, p: bitstring, s: bitstring, d: bitstring) = req in
+    let (=lApprover, =s, ak: bitstring) = checksign(pol, pk(kroot)) in  (* NOT:policy-unsigned *)
+    (* ONLY:policy-unsigned *) let (=lApprover, =s, ak: bitstring) = getmsg(pol) in
+    if checksign(ap, ak) = (lAppr, req) then                          (* NOT:approval-unbound *)
+    (* ONLY:approval-unbound *) if checksign(ap, ak) = (lAppr, r) then
+    event Granted(p, s, d, r);
+    out(c, sign((lGrant, p, s, d, r), kiss))).
+
+(* A member opens s on h with a grant or rule the relay hands it. *)
+let Client(n: bitstring, k: skey, grp: bitstring) =
+  !(in(c, (ch: bitstring, s: bitstring, g: bitstring));
+    event Opened(n, s);
+    out(c, (s, sign((lCert, n, pk(k), grp), kiss), sign((lSess, ch, s), k), g, n))).
+
+(* h's agent: admission by a grant. claimed: the name the client says it
+   has (a header it sent); only a mutant uses it. *)
+let AgentGrant =
+  !(new ch: bitstring; out(c, ch);
+    in(c, (s: bitstring, cert: bitstring, pf: bitstring, g: bitstring, claimed: bitstring));
+    let (=lCert, p: bitstring, pkp: bitstring, grp: bitstring) = checksign(cert, pk(kiss)) in
+    if checksign(pf, pkp) = (lSess, ch, s) then
+    let (=lGrant, gp: bitstring, gs: bitstring, d: bitstring, r: bitstring) = checksign(g, pk(kiss)) in  (* NOT:grant-unsigned *)
+    (* ONLY:grant-unsigned *) let (=lGrant, gp: bitstring, gs: bitstring, d: bitstring, r: bitstring) = getmsg(g) in
+    if gp = p then                                                     (* NOT:agent-any-principal *)
+    if gs = s then                                                     (* NOT:agent-any-service *)
+    event Admitted(p, s, d, r);
+    (
+      out(local, (lId, p, grp, s))                                     (* NOT:header-from-client *)
+      (* ONLY:header-from-client *) out(local, (lId, claimed, grp, s))
+    |
+      out(c, sign((lJwt, p, grp, s), kH))                              (* NOT:jwt-no-aud *)
+      (* ONLY:jwt-no-aud *) out(c, sign((lJwt, p, grp), kH))
+    )).
+
+(* h's agent: admission by a root-signed rule for the certified group. *)
+let AgentRule =
+  !(new ch: bitstring; out(c, ch);
+    in(c, (s: bitstring, cert: bitstring, pf: bitstring, rule: bitstring, cgrp: bitstring));
+    let (=lCert, p: bitstring, pkp: bitstring, grp: bitstring) = checksign(cert, pk(kiss)) in
+    if checksign(pf, pkp) = (lSess, ch, s) then
+    let (=lRule, rg: bitstring, =s) = checksign(rule, pk(kroot)) in    (* NOT:rule-unsigned *)
+    (* ONLY:rule-unsigned *) let (=lRule, rg: bitstring, =s) = getmsg(rule) in
+    if rg = grp then                                                   (* NOT:group-from-client *)
+    (* ONLY:group-from-client *) if rg = cgrp then
+    event AdmittedByRule(p, rg, s);
+    out(local, (lId, p, rg, s))).
+
+(* The apps on h: on loopback they take what the agent wrote; beyond
+   loopback they take an assertion under their agent's key for their own
+   service. *)
+let App =
+  !(in(local, (=lId, p: bitstring, g: bitstring, s: bitstring)); event AppAccepted(p, g, s))
+  (* ONLY:app-on-network *) | !(in(c, (=lId, p: bitstring, g: bitstring, s: bitstring)); event AppAccepted(p, g, s))
+  .
+
+let AppJwt(sv: bitstring) =
+  !(in(c, jwt: bitstring);
+    let (=lJwt, p: bitstring, g: bitstring, =sv) = checksign(jwt, pk(kH)) in  (* NOT:jwt-no-aud *)
+    (* ONLY:jwt-no-aud *) let (=lJwt, p: bitstring, g: bitstring) = checksign(jwt, pk(kH)) in
+    event AppAcceptedJwt(p, g, sv)).
+
+(* 1. the agent admits by a grant only one the issuer signed, for that principal and service *)
+query p: bitstring, s: bitstring, d: bitstring, r: bitstring; event(Admitted(p, s, d, r)) ==> event(Granted(p, s, d, r)).
+(* 2. the issuer grants only what the authorised approver approved: no widening *)
+query p: bitstring, s: bitstring, d: bitstring, r: bitstring; event(Granted(p, s, d, r)) ==> event(Approved(alice, p, s, d, r)).
+(* 3. a session admitted as bob is bob's *)
+query s: bitstring, d: bitstring, r: bitstring; event(Admitted(bob, s, d, r)) ==> event(Opened(bob, s)).
+(* 4. the agent admits by a rule only one the root signed, for the principal's certified group *)
+query p: bitstring, g: bitstring, s: bitstring; event(AdmittedByRule(p, g, s)) ==> event(RuleSigned(g, s)) && event(Certified(p, g)).
+(* 5. the identity an app takes on loopback is an admitted session's certified name and group *)
+query p: bitstring, g: bitstring, s: bitstring, d: bitstring, r: bitstring; event(AppAccepted(p, g, s)) ==> (event(Admitted(p, s, d, r)) || event(AdmittedByRule(p, g, s))) && event(Certified(p, g)).
+(* 6. the same for an assertion beyond loopback, for that app's own service *)
+query p: bitstring, g: bitstring, s: bitstring, d: bitstring, r: bitstring; event(AppAcceptedJwt(p, g, s)) ==> event(Admitted(p, s, d, r)) && event(Certified(p, g)).
+(* 7-10. witnesses: each is reachable (reads false) *)
+query d: bitstring, r: bitstring; event(Admitted(bob, sv1, d, r)).
+query p: bitstring; event(AdmittedByRule(p, gOps, sv2)).
+query g: bitstring; event(AppAccepted(bob, g, sv1)).
+query g: bitstring; event(AppAcceptedJwt(bob, g, sv1)).
+
+process
+  out(c, pk(kroot)); out(c, pk(kiss)); out(c, pk(kH));
+  event Certified(bob, gDev); event Certified(alice, gOps); event Certified(mallory, gDev);
+  out(c, sign((lCert, alice, pk(kA), gOps), kiss));
+  out(c, sign((lCert, mallory, pk(kM), gDev), kiss));
+  out(c, sign((lApprover, sv1, pk(kA)), kroot));
+  event RuleSigned(gOps, sv2);
+  out(c, sign((lRule, gOps, sv2), kroot));
+  (Requester | Approver | Issuer | Client(bob, kB, gDev) | Client(alice, kA, gOps) | AgentGrant | AgentRule | App | AppJwt(sv1) | AppJwt(sv2))

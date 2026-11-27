@@ -1,0 +1,14 @@
+{"ev":"Send","d":"req","c":"ccb-early","n":0,"s":10}
+{"ev":"Deliver","d":"req","c":"ccb-early","n":0,"s":20}
+{"ev":"Send","d":"req","c":"ccb-early","n":0,"s":10}
+{"ev":"Deliver","d":"req","c":"ccb-early","n":0,"s":20}
+{"ev":"Send","d":"req","c":"ccb-early","n":0,"s":10}
+{"ev":"Deliver","d":"req","c":"ccb-early","n":0,"s":20}
+{"ev":"Send","d":"req","c":"ccb-early","n":0,"s":10}
+{"ev":"Deliver","d":"req","c":"ccb-early","n":0,"s":20}
+{"ev":"Read","d":"req","c":"ccb-early","n":0,"s":30}
+{"ev":"Read","d":"req","c":"ccb-early","n":0,"s":30}
+{"ev":"Read","d":"req","c":"ccb-early","n":0,"s":30}
+{"ev":"Start","d":"resp","c":"ccb-early","n":0,"s":30}
+{"ev":"Send","d":"resp","c":"ccb-early","n":0,"s":30}
+{"ev":"Grant","d":"req","c":"ccb-early","n":4,"s":11}

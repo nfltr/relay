@@ -1,0 +1,149 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   orgdash.pv: the organisation in the dashboard (nfltr
+   docs/decisions/org-dashboard-2026-11-21.md; the state machine is
+   spec/orgmove/OrgDash.tla). spec/proverif/README.md.
+
+   The attacker owns the relay and the dashboard: it carries the issuer's
+   status, the owner's wishes, the root's orders and answers, and makes
+   wishes, statuses and orders of its own. The root (the owner's Mac) signs
+   only after the owner's approval on a prompt naming the act; the owner
+   approves only what they asked for (a table the owner's own clicks fill:
+   the prompt is the authentic channel, the owner's eyes). The issuer's
+   machine and the root's machine are honest.
+
+   - Status: the issuer signs (status, its certificate, the member list);
+     a pinned reader (the root it was told) shows the NotAfter of the
+     certificate the root signed and the list the issuer signed.
+   - Revoke: the root signs an order naming a member's enrolment (name,
+     serial); the issuer revokes only that enrolment.
+   - Renew: the root answers the issuer's signed request (from the status)
+     with the certificate and the checkpoint under one approval (one Touch
+     ID, the helper's batch: two signatures, one approval event); the
+     issuer installs only the root's answer for its own key and head.
+
+   Bindings (make spec-bindings, rows in org/orgpki's
+   TestOrgDashModelBindings, each changing that field of the honest
+   message, as a relay can, and requiring a refusal):
+     BIND:dash.statussig  the reader takes a status only under the issuer key in its root-signed certificate (checksign(s, p))
+     BIND:dash.notafter   ... and shows the NotAfter of that certificate, no other field (na)
+     BIND:dash.ordersig   the issuer applies only an order the root signed (checksign(o, pk(kroot)))
+     BIND:dash.serial     ... to the enrolment it names (x = s)
+     BIND:dash.org        ... of its own organisation (lOrder carries the organisation id in the code) *)
+
+free c: channel.
+
+type skey.
+fun pk(skey): bitstring.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, s: skey; checksign(sign(m, s), pk(s)) = m.
+const lIssuer, lStatus, lOrder, lRequest, lCheckpoint: bitstring.
+
+free kroot: skey [private].
+free kiss: skey [private].
+
+table members(bitstring, bitstring).     (* the issuer's enrolments: name, serial *)
+table intents(bitstring, bitstring).     (* the owner asked to revoke (name, serial) *)
+table renewIntents(bitstring).           (* the owner pressed Renew (wish id) *)
+
+event Published(bitstring, bitstring).   (* the issuer signed a status: its certificate's NotAfter, the list *)
+event Shown(bitstring, bitstring).       (* a reader showed (NotAfter, list) *)
+event Asked(bitstring, bitstring).       (* the owner asked to revoke (name, serial) *)
+event Revoked(bitstring, bitstring).     (* the issuer revoked (name, serial) *)
+event AskedRenew(bitstring).             (* the owner pressed Renew *)
+event ApprovedRenew(bitstring).          (* the root's machine approved a renewal for that wish *)
+event Requested(bitstring, bitstring).   (* the issuer key pk signed a renewal request at head h *)
+event Signed(bitstring, bitstring).      (* the root answered (pk, h) *)
+event Installed(bitstring, bitstring).   (* the issuer installed a renewal (pk, h) *)
+
+(* The issuer: statuses under its certificate (NotAfter na0), renewal
+   requests at fresh heads, enrolments, and the orders it applies. *)
+let Status(cert: bitstring, na: bitstring) =
+  !(new m: bitstring;
+    event Published(na, m);
+    out(c, (cert, m, sign((lStatus, cert, m), kiss)))).
+
+let Enrol =
+  !(in(c, n: bitstring); new s: bitstring; insert members(n, s); out(c, (n, s))).
+
+(* An enrolment the owner chose to revoke from the dashboard. *)
+let EnrolAsked =
+  !(in(c, n: bitstring); new s: bitstring; insert members(n, s); out(c, (n, s));
+    event Asked(n, s); insert intents(n, s)).
+
+let Apply =
+  !(in(c, o: bitstring);
+    let (=lOrder, n: bitstring, s: bitstring) = checksign(o, pk(kroot)) in   (* NOT:relay-only-revoke *)
+    (* ONLY:relay-only-revoke *) let (=lOrder, n: bitstring, s: bitstring) = o in
+    get members(=n, x) in
+    if x = s then                                                           (* NOT:order-by-name *)
+    event Revoked(n, x)).
+
+let Request =
+  !(new h: bitstring;
+    let req = (lRequest, pk(kiss), h) in
+    event Requested(pk(kiss), h);
+    out(c, (req, sign(req, kiss)));
+    in(c, (cert: bitstring, cp: bitstring));
+    let (=lIssuer, =pk(kiss), na: bitstring) = checksign(cert, pk(kroot)) in       (* NOT:renew-without-root *)
+    (* ONLY:renew-without-root *) let (=lIssuer, =pk(kiss), na: bitstring) = cert in
+    let (=lCheckpoint, =h) = checksign(cp, pk(kroot)) in                          (* NOT:renew-without-root *)
+    event Installed(pk(kiss), h)).
+
+(* A pinned reader: `nfltr org status --relay`, the page's check. *)
+let Reader =
+  !(in(c, (cert: bitstring, m: bitstring, s: bitstring, naw: bitstring));
+    let (=lIssuer, p: bitstring, na: bitstring) = checksign(cert, pk(kroot)) in
+    if checksign(s, p) = (lStatus, cert, m) then      (* NOT:forged-status-accepted *)
+    event Shown(na, m)                               (* NOT:notafter-unsigned *)
+    (* ONLY:notafter-unsigned *) event Shown(naw, m)
+    ).
+
+(* The owner presses Renew in the dashboard: a wish the relay carries. *)
+let AskRenew =
+  !(new u: bitstring; event AskedRenew(u); insert renewIntents(u); out(c, u)).
+
+(* The root's machine (`nfltr org approve`): a revoke wish becomes an order
+   only when the owner asked for it; a renew wish becomes an answer to the
+   issuer's signed request only when the owner pressed Renew, both
+   signatures under one approval. *)
+let RootRevoke =
+  !(in(c, (n: bitstring, s: bitstring));
+    get intents(=n, =s) in                           (* NOT:no-owner-gate *)
+    out(c, sign((lOrder, n, s), kroot))).
+
+let RootRenew =
+  !(in(c, (u: bitstring, req: bitstring, rs: bitstring));
+    get renewIntents(=u) in                          (* NOT:no-owner-gate *)
+    let (=lRequest, p: bitstring, h: bitstring) = req in
+    if p = pk(kiss) then
+    if checksign(rs, p) = req then
+    event ApprovedRenew(u);
+    event Signed(p, h);
+    new na: bitstring;
+    out(c, (sign((lIssuer, p, na), kroot), sign((lCheckpoint, h), kroot)))).
+
+(* 1. a reader shows only a list the issuer signed, with its certificate's NotAfter *)
+query na: bitstring, m: bitstring; event(Shown(na, m)) ==> event(Published(na, m)).
+(* 2. witness: a status is shown *)
+query na: bitstring, m: bitstring; event(Shown(na, m)).
+(* 3. a member's enrolment is revoked only when the owner asked for that enrolment *)
+query n: bitstring, s: bitstring; event(Revoked(n, s)) ==> event(Asked(n, s)).
+(* 4. witness: a revoke from the dashboard takes effect *)
+query n: bitstring, s: bitstring; event(Revoked(n, s)).
+(* 5. the issuer installs only the root's answer to its own request *)
+query p: bitstring, h: bitstring; event(Installed(p, h)) ==> event(Signed(p, h)).
+(* 6. the root approves a renewal only for a Renew the owner pressed *)
+query u: bitstring; event(ApprovedRenew(u)) ==> event(AskedRenew(u)).
+(* 7. witness: a renewal is installed *)
+query p: bitstring, h: bitstring; event(Installed(p, h)).
+(* 8, 9. neither key leaves its machine *)
+query attacker(kroot).
+query attacker(kiss).
+
+process
+  new na0: bitstring;
+  let cert0 = sign((lIssuer, pk(kiss), na0), kroot) in
+  out(c, pk(kroot)); out(c, pk(kiss)); out(c, cert0);
+  (Status(cert0, na0) | Enrol | EnrolAsked | Apply | Request | Reader | AskRenew | RootRevoke | RootRenew)

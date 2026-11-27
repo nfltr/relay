@@ -1,0 +1,6 @@
+{"ev":"Init","offered":["127.0.0.1:1"]}
+{"ev":"Learn","out":"dial","s":"127.0.0.1:9","tagged":false}
+{"a":"127.0.0.1:9","ev":"DialUp"}
+{"a":"127.0.0.1:9","ev":"Win"}
+{"a":"127.0.0.1:1","ev":"DialFail"}
+{"ev":"Return","won":"127.0.0.1:9"}

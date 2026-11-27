@@ -1,0 +1,14 @@
+# <mutant> <property>: TLC on People.cfg with that Mutant must report
+# <property> violated (scripts/spec-people.sh mutants).
+admin-invites-admin AuthorizedActs
+admin-changes-role AuthorizedActs
+admin-offboards-admin AuthorizedActs
+role-from-request AdminsByOwner
+role-unlogged AdminsByOwner
+idp-alone-enrols JoinNeedsInvite
+code-outlives-offboard NoOrphan
+offboard-misses-machine NoOrphan
+relay-not-filed ReachBound
+no-fail-closed ReachBound
+offboard-unlogged AuditComplete
+rejoin-old-invite RemovedStaysOut
