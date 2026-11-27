@@ -5,8 +5,10 @@ package orgenrol
 
 import (
 	"bytes"
+	"context"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	"github.com/nfltr/relay/client/orgaudit"
+	"github.com/nfltr/relay/org/orgissuer"
 	"github.com/nfltr/relay/org/orgmachine"
 	"github.com/nfltr/relay/org/orgpki"
 )
@@ -179,5 +182,71 @@ func TestAuditSinkTakesEveryLineOnce(t *testing.T) {
 	}
 	if bytes.Count(got, []byte("\n")) != 2 {
 		t.Fatalf("the URL sink took %q", got)
+	}
+}
+
+// TestAuditFollowsTheMove: the lines the old issuer took (the machine's
+// cursor past them) are the new issuer's after nfltr org move
+// (spec/MoveAudit.tla AckedHeld, mutant bundle-no-sessions, the code
+// before): a session after the move reaches the new issuer with no gap.
+func TestAuditFollowsTheMove(t *testing.T) {
+	f := newFleet(t)
+	f.session(t, "pg", true)
+	keep(t, f.ctx, f.keeper())
+	eventually(t, "the machine's cursor past the session", func() bool {
+		var at shipped
+		return readJSON(filepath.Join(f.dir, shipFile), &at) == nil && at.Offset > 0
+	})
+	dir := moveTo(t, f.relay, f.org.id, f.org.dir, f.org.pins.Root, f.clk.Now())
+	ctx, cancel := context.WithCancel(f.ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = Service{Mailbox: f.mailbox(), Dir: dir, Logger: quiet(), Now: f.clk.Now, Wait: 50 * time.Millisecond}.Run(ctx)
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	f.session(t, "ssh", true)
+	read := func() AuditView {
+		v, err := ReadAudit(dir, f.clk.Now())
+		check(t, err)
+		return v
+	}
+	eventually(t, "both sessions at the new issuer", func() bool {
+		v := read()
+		return len(v.Sessions) == 2 && v.Sessions[1].Close != nil
+	})
+	if v := read(); v.Findings != nil || v.Sessions[0].Open.Service != "pg" {
+		t.Fatalf("the new issuer's view: %+v, findings %q", v.Sessions, findings(v))
+	}
+}
+
+// MoveAudit.tla take-after-fence: an audit post the old issuer reads after
+// its fence is not answered (the machine's cursor stays; the new issuer
+// answers it), for a line it took then would not be in the bundle. The
+// store's Open refuses a fenced log (ErrMoved), so decide never reaches
+// takeAudit.
+func TestAuditNotTakenAfterTheFence(t *testing.T) {
+	f := newFleet(t)
+	f.session(t, "pg", true)
+	line, err := orgmachine.LastAudit(f.dir)
+	check(t, err)
+	lr, err := orgaudit.Parse(line)
+	check(t, err)
+	cert, key := f.m.Current()
+	head, err := orgaudit.SignHead(orgaudit.Signing{Log: lr.Log, Seq: lr.Seq, Prev: orgaudit.Hash(line), Machine: lr.Machine, Cert: cert, Key: key, At: f.clk.Now()})
+	check(t, err)
+	sealed, err := orgpki.SealAudit(f.m.Issuer(), orgpki.AuditBatch{Lines: [][]byte{line}, Head: head})
+	check(t, err)
+	k, err := orgissuer.LoadReceiveKey(filepath.Join(t.TempDir(), orgissuer.ReceiveKeyFile))
+	check(t, err)
+	_, err = orgissuer.Send(filepath.Dir(f.org.dir), orgissuer.ReceiveKey{Pub: k.PublicKey()}, f.clk.Now())
+	check(t, err)
+	s := &service{Service: Service{Dir: f.org.dir, Logger: quiet()}}
+	a, err := s.decide(f.ctx, orgpki.Request{ID: "audit-x", Audit: &orgpki.AuditRequest{Sealed: sealed}}, "", f.clk.Now())
+	if !errors.Is(err, orgpki.ErrMoved) {
+		t.Fatalf("an audit post after the fence: answered %s, %v; want ErrMoved", a, err)
+	}
+	if _, err := os.Stat(filepath.Join(f.org.dir, SessionsFile)); !os.IsNotExist(err) {
+		t.Fatalf("the fenced issuer took lines: %v", err)
 	}
 }

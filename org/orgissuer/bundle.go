@@ -23,6 +23,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -113,7 +114,8 @@ func moveInfo(fp string) []byte { return []byte("nfltr-org-move-v1\x00" + fp) }
 func hpkeSuite() (hpke.KDF, hpke.AEAD) { return hpke.HKDFSHA256(), hpke.ChaCha20Poly1305() }
 
 // The bundle's members, by their path under nfltr's config directory: the
-// issuer directory's log, key, CRL and answers spool. Nothing else is
+// issuer directory's log, key, CRL and answers spool, and its session
+// audit (auditFiles). Nothing else is
 // taken from it or written by an import:
 //   - not the root primary (a file root's root-<label>.key; a Secure
 //     Enclave root never leaves its Mac anyway): the root stays with its
@@ -130,6 +132,9 @@ func hpkeSuite() (hpke.KDF, hpke.AEAD) { return hpke.HKDFSHA256(), hpke.ChaCha20
 func bundleMember(name string) bool {
 	switch name {
 	case "org/" + LogFile, "org/" + IssuerKeyFile, "org/" + CRLFile:
+		return true
+	}
+	if dir, base := path.Split(name); dir == "org/" && slices.Contains(auditFiles, base) {
 		return true
 	}
 	dir, base := path.Split(name)
@@ -426,7 +431,15 @@ func placeMembers(configDir string, members map[string][]byte, fp string) error 
 // the sealed bundle are gone by then (finish, or the move back above).
 // "answers" and "publish-failing.json" are orgenrol's spool and publish
 // state (its spoolDir, publishFailingFile).
-var tombstoneFiles = []string{"answers", CRLFile, KRLFile, SealedFile, "publish-failing.json", LogFile}
+var tombstoneFiles = append(append([]string{"answers", CRLFile, KRLFile, SealedFile, "publish-failing.json"}, auditFiles...), LogFile)
+
+// auditFiles are orgenrol's session audit files (SessionsFile, HeadsFile,
+// SinkCursorFile, ConfigFile: the lines the machines were answered for,
+// where the issuer stands per machine, the sink's cursor and setting).
+// They are the issuer's state, so they move with it (spec/MoveAudit.tla
+// AckedHeld; mutant bundle-no-sessions): a machine sends a line once its
+// answer came, and the new issuer would report the lines before as a gap.
+var auditFiles = []string{"sessions.jsonl", "sessions-heads.json", "sessions.sink", "config.json"}
 
 // extendsLog reports whether log begins with every line of prefix: the
 // bundle's log (verified by Import) continues this machine's tombstone.
