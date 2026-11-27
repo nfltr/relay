@@ -33,7 +33,11 @@ take-crl-unchecked | identity.go | 	if err := m.ver.TakeCRL(crl, issuer, now); e
 push-only | follow.go | 		if time.Since(fresh) >= every { | 		if fresh.IsZero() { | TestFollowTakesTheRevokePushAndBackstop
 crl-no-wake-on-rotation | follow.go | 			again = retry() // before apply: a rotation taken meanwhile closes it | 			_ = retry | TestFollowTakesTheNewIssuersCRLAtTheRotation
 until-leaf-only | verify.go | 	for _, c := range chains[0] { // the leaf, its issuer, the root: a stolen issuer key signs a leaf past its own NotAfter (OrgHosted.tla DelegationBound) | 	for _, c := range chains[0][:1] { | TestOrgHostedModelBindings
-ignore-root-crl | verify.go | 	if ch := chains[0]; len(ch) >= 3 && v.issuers != nil && v.issuers.revoked[ch[len(ch)-2].SerialNumber.String()] { | 	if false { | TestOrgHostedModelBindings
+ignore-root-crl | verify.go | 	if ch := chains[0]; len(ch) >= 2 && v.issuers != nil && v.issuers.revoked[ch[len(ch)-2].SerialNumber.String()] { | 	if false { | TestOrgHostedModelBindings
+# A root-revoked issuer at every chain position, and an issuer's certificate
+# as a leaf (lane SECFIX, review S4): its own CRL taken, itself admitted.
+revoked-issuer-crl-taken | verify.go | 	if ch := chains[0]; len(ch) >= 2 && v.issuers != nil && v.issuers.revoked[ch[len(ch)-2].SerialNumber.String()] { | 	if ch := chains[0]; len(ch) >= 3 && v.issuers != nil && v.issuers.revoked[ch[len(ch)-2].SerialNumber.String()] { | TestOrgHostedModelBindings
+ca-as-leaf | verify.go | 	if len(chain) != 3 || chain[0].IsCA { | 	if true { return chain[len(chain)-2], nil }; if len(chain) != 3 || chain[0].IsCA { | TestOrgHostedModelBindings
 root-crl-unsigned | verify.go | 	err = crl.CheckSignatureFrom(v.root) | 	err = nil | TestOrgHostedModelBindings
 reload-skips-issuers | identity.go | 	newIssuers := issuers != nil && !bytes.Equal(issuers, m.issuers) && m.ver.TakeIssuerCRL(issuers) == nil | 	newIssuers := false && issuers != nil | TestRootRevocationOfTheIssuerCutsHeldSessions
 keep-sessions | identity.go | 	if newCRL || newCert || newIssuers { | 	if newCRL || newCert { | TestRootRevocationOfTheIssuerCutsHeldSessions

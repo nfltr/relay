@@ -36,10 +36,21 @@ var hostedBindings = map[string]func(t *testing.T){
 		if _, err := o.ver.Check(web, o.iss, Peer{Name: "web-1"}, at); err != nil {
 			t.Fatalf("web-1 under an issuer the root did not revoke: %v", err)
 		}
+		// The issuer's own certificate presented as a client's is no
+		// machine's: it would be its own issuer and find its own CRL
+		// (review S4, mutant ca-as-leaf).
+		_, err := o.ver.Check(o.iss, nil, Peer{}, at)
+		refused(t, "the issuer's certificate as a leaf", err)
 		other, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		check(t, err)
 		refused(t, "a CRL of issuers the root did not sign", o.ver.TakeIssuerCRL(o.issuersCRL(t, 3, t0, other, o.iss)))
 		check(t, o.ver.TakeIssuerCRL(o.issuersCRL(t, 2, t0, nil, o.iss)))
+		// A revoked issuer's CRL is not taken (it would keep its machines
+		// admitted under a list it signs), and its certificate as a leaf
+		// is refused at every chain position (mutant revoked-issuer-crl-taken).
+		refused(t, "a CRL the revoked issuer signed", o.ver.TakeCRL(o.crl(t, at), o.iss, at))
+		_, err = o.ver.Check(o.iss, nil, Peer{}, at)
+		refused(t, "the revoked issuer's certificate as a leaf", err)
 		if _, err := o.ver.Check(web, o.iss, Peer{Name: "web-1"}, at); err == nil || !strings.Contains(err.Error(), "revoked this issuer") {
 			t.Fatalf("web-1 under a revoked issuer: %v, want refused", err)
 		}
