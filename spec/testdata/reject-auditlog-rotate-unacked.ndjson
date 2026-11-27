@@ -1,0 +1,6 @@
+{"ev":"intent","p":"a","s":"s1"}
+{"ev":"open","p":"a","s":"s1","seq":1}
+{"ev":"close","p":"a","s":"s1","seq":2}
+{"ev":"forget","p":"a","s":"s1"}
+{"ev":"ship","seq":1}
+{"ev":"rotate","seq":3}

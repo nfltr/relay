@@ -101,14 +101,17 @@ func TestKilledProcessSessionClosedLost(t *testing.T) {
 // (W_IntentOnly), gets no close from recovery: the log says what happened
 // (mutant recover-no-log-check).
 func TestKilledBetweenStepsClosedOnce(t *testing.T) {
-	ms := logs(t, 2)
-	killed, next := ms[0], ms[1]
+	ms := logs(t, 3)
+	killed, killedEarly, next := ms[0], ms[1], ms[2]
 	opened(t, killed, "pg")
 	rs := records(t, killed.Dir)
 	s := Session{ID: rs[0].Session, Service: rs[0].Service, Who: rs[0].Who, By: rs[0].By, Opened: rs[0].Opened}
-	killed.line(s.Close(End{Closed: time.Now(), Reason: ReasonClosed})) // the close line, not the prune
-	killed.add("intent-only")                                           // the owner file, not the open line
+	killed.line(s.Close(End{Closed: time.Now(), Reason: ReasonClosed}), nil, nil) // the close line, not the prune
 	killed.release()
+	if err := withLog(killedEarly.Dir, func(*os.File) error { killedEarly.add("intent-only"); return nil }); err != nil {
+		t.Fatal(err) // the owner file, not the open line
+	}
+	killedEarly.release()
 	if n, err := next.CloseLost(time.Now()); err != nil || n != 0 {
 		t.Fatalf("CloseLost: %d closes, %v; want none", n, err)
 	}

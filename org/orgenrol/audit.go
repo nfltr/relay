@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/nfltr/relay/client/orgaudit"
+	"github.com/nfltr/relay/org/internal/audittrace"
 	"github.com/nfltr/relay/org/internal/orgfiles"
 	"github.com/nfltr/relay/org/orgissuer"
 	"github.com/nfltr/relay/org/orgpki"
@@ -99,8 +100,22 @@ func takeAudit(dir string, iss *orgpki.Issuer, req orgpki.AuditRequest, now time
 		n    int
 	}
 	refused := map[string]*refusal{}
+	var pre, post uint64 // the machine's held seq before and after (MoveAudit.tla Take; traced)
+	gap := false
+	if len(b.Lines) > 0 {
+		if r, err := orgaudit.Parse(b.Lines[0]); err == nil {
+			pre, _ = c.Held(r.Machine, r.Log)
+			defer func() {
+				post, _ = c.Held(r.Machine, r.Log)
+				audittrace.Line(map[string]any{"ev": "take", "h": dir, "pre": pre, "n": post, "gap": gap})
+			}()
+		}
+	}
 	for _, line := range b.Lines {
 		r, ok, fs := c.Add(line)
+		for _, f := range fs {
+			gap = gap || strings.HasPrefix(f.What, "gap:")
+		}
 		if ok {
 			took = append(append(took, line...), '\n')
 			continue

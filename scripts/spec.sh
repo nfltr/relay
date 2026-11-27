@@ -57,6 +57,12 @@
 #            process with -tags relaytrace; each caller and callee pair of
 #            each trace checked against spec/TraceA2ASession.tla; each
 #            spec/testdata/reject-a2asession-* fixture rejected (in make ci).
+#   audittraces  client/orgaudit's and org/orgenrol's audit tests, each in
+#            its own process with -tags audittrace; each machine
+#            directory's log trace checked against spec/TraceAuditLog.tla,
+#            each process's move trace against spec/TraceMoveAudit.tla;
+#            each spec/testdata/{accept,reject}-{auditlog,moveaudit}-*
+#            fixture accepted or rejected (nightly: traces runs it).
 #   stoptraces  client/agent's SENDCUT stop tests (STOP_TRACE_TESTS) in one
 #            process with -tags relaytrace; each directServer's trace
 #            checked against spec/TraceAgentStop.tla (in make ci; traces
@@ -874,6 +880,112 @@ CFG
 	grep -q '^Error: Invariant TraceUnfinished is violated' "$1.out"
 }
 
+# altrace FILE / mvtrace FILE: TLC on one recorded AuditLog trace (a
+# machine directory's, spec/TraceAuditLog.tla) or MoveAudit trace (a test
+# process's, spec/TraceMoveAudit.tla); 0 when accepted. Its TLC output:
+# FILE.out.
+altrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    Procs <- TraceProcs
+    MayCrash <- TraceProcs
+    Sess <- TraceSess
+    MaxRot <- TraceMaxRot
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    AtMostOneClose
+    CloseHasOpen
+    LiveOpenNotClosed
+    NothingLost
+    OneLog
+    TraceUnfinished
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceAuditLog.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceUnfinished is violated' "$1.out"
+}
+mvtrace() {
+	cfg=$work/$(basename "$1").cfg
+	cat >"$cfg" <<CFG
+CONSTANTS
+    TraceFile = "$1"
+    NH <- TraceNH
+    MaxLines <- TraceMaxLines
+    Mutant = "none"
+INIT TraceInit
+NEXT TraceNext
+INVARIANTS
+    TypeOK
+    AckedHeld
+    NoGap
+    TraceUnfinished
+CFG
+	META=$work/states-$(basename "$1") tlc "$cfg" TraceMoveAudit.tla >"$1.out" 2>&1 || true
+	grep -q '^Error: Invariant TraceUnfinished is violated' "$1.out"
+}
+
+# auditrun: every event TraceAuditLog.tla and TraceMoveAudit.tla map is
+# one the code records; the fixtures (accept-auditlog-*, reject-auditlog-*,
+# accept-moveaudit-*, reject-moveaudit-*: each mutant's step) are
+# accepted and rejected; then the audit tests (AUDIT_CLIENT_TESTS in
+# client/orgaudit, AUDIT_ORG_TESTS in org/orgenrol), each in its own
+# process with -tags audittrace (org: 'enroltrace audittrace'), every
+# machine directory's trace and every process's move trace accepted.
+# Not traced: tests that plant lines or owner files the recorder never
+# saw (a crafted log, an edited line).
+AUDIT_CLIENT_TESTS='TestKilledProcessSessionClosedLost TestKilledBetweenStepsClosedOnce TestAuditRotationKeepsTheLog'
+AUDIT_ORG_TESTS='TestAuditReachesTheIssuer TestAuditFollowsTheMove TestAuditNotTakenAfterTheFence TestSDKOnlyMachineShipsItsAudit'
+auditrun() {
+	for m in AuditLog MoveAudit; do
+		for e in $(grep -oE 'E\.ev = "[a-z]+"' "spec/Trace$m.tla" | grep -ohE '"[a-z]+"' | sort -u); do
+			grep -rqF -- "$e" --include='*.go' client/orgaudit org/internal/audittrace org/orgenrol org/orgissuer || { echo "spec/Trace$m.tla: event $e is recorded nowhere"; return 1; }
+		done
+	done
+	for f in spec/testdata/accept-auditlog-*.ndjson spec/testdata/reject-auditlog-*.ndjson spec/testdata/accept-moveaudit-*.ndjson spec/testdata/reject-moveaudit-*.ndjson; do
+		cp "$f" "$work/"
+		chk=altrace
+		case $f in *moveaudit*) chk=mvtrace ;; esac
+		want=accepted
+		case $f in *reject-*) want=rejected ;; esac
+		got=rejected
+		! $chk "$work/$(basename "$f")" || got=accepted
+		grep -q 'distinct states found' "$work/$(basename "$f").out" || { echo "$f: TLC failed:"; tail -20 "$work/$(basename "$f").out"; return 1; }
+		[ $got = $want ] || { echo "$f: $got, want $want"; return 1; }
+		echo "$f: $got"
+	done
+	nt=0 fail=0
+	for mt in $(for t in $AUDIT_CLIENT_TESTS; do echo "client:$t"; done) $(for t in $AUDIT_ORG_TESTS; do echo "org:$t"; done); do
+		mod=${mt%%:*} t=${mt#*:} d=$work/audittraces/$t
+		mkdir -p "$d"
+		pkg=./orgaudit/ tags=audittrace
+		[ "$mod" = client ] || pkg=./orgenrol/ tags='enroltrace audittrace'
+		(cd "$mod" && AUDITTRACE=$d go test -tags "$tags" -count=1 -run "^$t\$" "$pkg") >"$work/audittest.out" 2>&1 || {
+			cat "$work/audittest.out"
+			return 1
+		}
+		for f in "$d"/auditlog-*.ndjson "$d"/*.moveaudit; do
+			[ -s "$f" ] || continue
+			nt=$((nt + 1))
+			chk=altrace
+			case $f in *.moveaudit) chk=mvtrace ;; esac
+			if $chk "$f"; then
+				echo "trace $t/$(basename "$f"): $(wc -l <"$f" | tr -d ' ') lines: accepted"
+			else
+				echo "trace $t/$(basename "$f"): REJECTED"
+				grep -E 'Error|unknown event' "$f.out" | head -5
+				fail=1
+			fi
+		done
+	done
+	echo "$nt traces"
+	[ "$nt" -gt 0 ] || fail=1
+	return $fail
+}
+
 # terun TESTS: every event TraceTLSEnd.tla maps is one client/tlsend
 # records; the fixtures (accept-tlsend-*, reject-tlsend-*: each mutant's
 # order) are accepted and rejected; then client/tlsend's TESTS under
@@ -1366,6 +1478,13 @@ traces)
 	stoprun "${STOP_TRACE_TESTS:-$STOPTESTS}" fixtures || exit 1
 	bprun "${BP_TRACE_TESTS:-^(TestBrowserDirect|TestBrowserPeerModelBindings)}" || exit 1
 	terun "${TE_TRACE_TESTS:-^TestEndOverALinkSession\$}" || exit 1
+	auditrun || exit 1
+	;;
+audittraces)
+	# A machine's session audit log and the audit across a move (lane
+	# SA5TRACE): their fixtures and the audit tests' traces (traces runs it).
+	auditrun || fail=1
+	exit $fail
 	;;
 *)
 	echo "usage: spec.sh check|mutants|traces|cltraces|astraces|dgtraces|ptraces|stoptraces|bptraces|ccruns|cctraces FILE..." >&2

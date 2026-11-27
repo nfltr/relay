@@ -1562,7 +1562,8 @@ to close), `W_Rotated`.
 |---|---|
 | `Intent`, `OpenLine`, `CloseLine`, `Forget`, `Start` | client/orgaudit/log.go (`Log.Audit`, `Append`, the owner file), its writers org/orgmachine/audit.go and client/orgid/identity.go (`Audit`) |
 | `Recover`, `RecoverDone` | client/orgaudit/log.go (`Log.CloseLost`), org/orgenrol/auditship.go (the keeper's round) |
-| `Ship`, `Rotate` | org/orgenrol/auditship.go (`shipOnce`), client/orgaudit/log.go (`Rotate`) |
+| `Ship`, `Rotate` | org/orgenrol/auditship.go (`shipAudit`, `shipOnce`, `unshipped`), client/orgaudit/log.go (`Rotate`) |
+| (traces) | client/orgaudit/trace_on.go, trace_off.go |
 
 ## MoveAudit.tla: the session audit across an organisation move
 
@@ -1600,3 +1601,42 @@ Witnesses: `W_TakenAfterMove`, `W_AckedBeforeMove`.
 |---|---|
 | `Take` | org/orgenrol/audit.go (`takeAudit`), org/orgenrol/issuer.go (`decide`) |
 | `Fence`, `Send`, `Import` | org/orgissuer/bundle.go (`bundleMember`, `tombstoneFiles`) |
+| (traces) | org/internal/audittrace/on.go, org/orgenrol/audit.go (`take`), client/orgaudit/trace_on.go (`write`) |
+
+### AuditLog and MoveAudit traces (lane SA5TRACE)
+
+`scripts/spec.sh audittraces` (nightly in `make spec-traces`): the audit
+tests of client/orgaudit (the kills between steps, the rotation) and
+org/orgenrol (the path to the issuer, the move, the fence, an SDK-only
+machine), each in its own process with `-tags audittrace`
+(`AUDITTRACE=<dir>`; org: `-tags 'enroltrace audittrace'`). A machine
+directory's log writes `auditlog-<hash>.ndjson`, each line under the
+log's lock (so the file's order is the log's, across processes too),
+checked against `TraceAuditLog.tla`: `intent`, `open`, `close`, `forget`,
+`lost`, `recovered`, `crash` (a test's kill: the owner lock released),
+`ship` (Rotate's acknowledged offset, as the seq of its line) and
+`rotate`; a process's start is TLC's. Each test process's
+`<pid>.moveaudit` (the machine's `write` lines, the issuer's `take` with
+its held seq before and after and whether the checker found a gap,
+`fence`, `send`, `import`) is checked against `TraceMoveAudit.tla` (the
+directories as hosts in the order the trace names them; whether an
+answer arrived is TLC's). Not traced: tests that plant what the recorder
+never saw (a crafted log, an edited line, a planted owner file).
+
+For the traces the code takes the spec's atomicity: the owner file's
+listing and the open line, and the close line and the prune, are each one
+hold of the log's lock (`Log.line`), and a recovery deletes the owner file
+under it (`closeOwner`). `Ship(n)` and `Take(h, n, answered)` acknowledge
+the lines the keeper read, not every line written.
+
+Fixtures (`spec/testdata/`): `accept-auditlog-lost`,
+`accept-auditlog-rotate`, `accept-moveaudit-follows`;
+`reject-auditlog-recover-live` (LiveOpenNotClosed),
+`reject-auditlog-close-twice` (AtMostOneClose, recover-no-log-check),
+`reject-auditlog-close-no-open` (CloseHasOpen),
+`reject-auditlog-open-before-intent`, `reject-auditlog-rotate-unacked`
+(NothingLost), `reject-auditlog-rotate-all` (OneLog),
+`reject-auditlog-rotate-drops-open`, `reject-auditlog-unknown-step`;
+`reject-moveaudit-bundle-no-sessions` (AckedHeld, the code before),
+`reject-moveaudit-take-after-fence`, `reject-moveaudit-gap` (NoGap),
+`reject-moveaudit-unknown-step`.

@@ -1,0 +1,8 @@
+{"ev":"write","n":1}
+{"ev":"write","n":2}
+{"ev":"take","gap":false,"h":"/o1/org","n":2,"pre":0}
+{"ev":"fence","h":"/o1/org"}
+{"ev":"send","h":"/o1/org"}
+{"ev":"import","h":"/o2/org"}
+{"ev":"write","n":3}
+{"ev":"take","gap":true,"h":"/o2/org","n":3,"pre":0}

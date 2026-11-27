@@ -1,0 +1,5 @@
+{"ev":"intent","p":"a","s":"s1"}
+{"ev":"open","p":"a","s":"s1","seq":1}
+{"ev":"crash","p":"a"}
+{"ev":"lost","p":"k","q":"a","s":"s1","seq":2}
+{"ev":"recovered","p":"k","q":"a"}

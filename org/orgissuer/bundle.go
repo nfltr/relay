@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/nfltr/relay/client/orgid"
+	"github.com/nfltr/relay/org/internal/audittrace"
 	"github.com/nfltr/relay/org/internal/orgfiles"
 	"github.com/nfltr/relay/org/orgpki"
 )
@@ -169,11 +170,13 @@ func Send(configDir string, to ReceiveKey, now time.Time) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		audittrace.Line(map[string]any{"ev": "fence", "h": Dir(configDir)}) // MoveAudit.tla Fence
 		_ = os.Remove(s.Path(SealedFile))
 	case moved != fp:
 		return nil, fmt.Errorf("%w: the fence names receive key %s, not this one (%s); a move goes to the one key it was fenced for", orgpki.ErrMoved, moved, fp)
 	default:
 		if sealed, err := os.ReadFile(s.Path(SealedFile)); err == nil { // #nosec G304 -- the issuer's own file
+			audittrace.Line(map[string]any{"ev": "send", "h": Dir(configDir)})
 			return sealed, nil
 		}
 	}
@@ -194,6 +197,7 @@ func Send(configDir string, to ReceiveKey, now time.Time) ([]byte, error) {
 		return nil, err
 	}
 	orgpki.TraceSend(iss.OrgID(), fp, iss.Head())
+	audittrace.Line(map[string]any{"ev": "send", "h": Dir(configDir)}) // Send: the bundle holds the sessions files
 	return sealed, nil
 }
 
@@ -302,6 +306,7 @@ func Import(configDir, keyPath string, sealed []byte, rootPin string, now time.T
 		return Imported{}, err
 	}
 	orgpki.TraceImport(iss.OrgID(), fp, prev, iss.Head())
+	audittrace.Line(map[string]any{"ev": "import", "h": Dir(configDir)}) // Import
 	if err := os.Remove(keyPath); err != nil {
 		return Imported{}, fmt.Errorf("imported, but the receive key is not deleted (delete %s): %w", keyPath, err)
 	}
