@@ -202,3 +202,33 @@ func TestIssuerRenewalModelBindings(t *testing.T) {
 		t.Fatalf("the honest round: %v", err)
 	}
 }
+
+// ReadPins replays every act a log may hold: a log with a sign-in rule (and
+// its removal) and the people's acts reads its pins, as Open does (lane
+// PEOPLE4: ReadPins built an issuer without the rules map and panicked on
+// a rule line, so every root command on such a log did).
+func TestReadPinsReplaysSignInRules(t *testing.T) {
+	o := newOrg(t)
+	r := SignInRule{ID: "idp", Issuer: "https://idp.example", ClientIDs: []string{"c1"}, App: "nfltr", Groups: []string{"web"}}
+	if err := o.iss.AddSignInRule(r, t0); err != nil {
+		t.Fatal(err)
+	}
+	_, key, err := NewInvite(o.iss.OrgID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := SignPeople(PeopleAct{OrgID: o.iss.OrgID(), Act: PeopleInvite, Person: "ana@example.com", Role: RoleMember, InviteKey: key}, o.root, nil, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.iss.ApplyPeople(inv, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := o.iss.RemoveSignInRule("idp", t0); err != nil {
+		t.Fatal(err)
+	}
+	pins, err := ReadPins(slices.Clone(o.lines))
+	if err != nil || pins.OrgID != o.iss.OrgID() {
+		t.Fatalf("pins %+v, %v", pins, err)
+	}
+}

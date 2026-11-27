@@ -174,6 +174,12 @@ func Genesis(root, recovery *x509.Certificate, rootLabel, rootKind string, issue
 	return [][]byte{l1, l2}, nil
 }
 
+// emptyIssuer is an issuer with no log replayed yet: what Open and
+// ReadPins replay a log into.
+func emptyIssuer(sink Sink) *Issuer {
+	return &Issuer{tokens: map[string]*tokenRec{}, names: map[string]*nameRec{}, certs: map[string]*certRec{}, heads: map[string]bool{}, rules: map[string]SignInRule{}, sink: sink}
+}
+
 // Open replays a verified log into an issuer holding key, the private key
 // of the log's current issuer certificate.
 func Open(lines [][]byte, key ed25519.PrivateKey, sink Sink) (*Issuer, error) {
@@ -181,7 +187,7 @@ func Open(lines [][]byte, key ed25519.PrivateKey, sink Sink) (*Issuer, error) {
 	if err != nil {
 		return nil, err
 	}
-	i := &Issuer{tokens: map[string]*tokenRec{}, names: map[string]*nameRec{}, certs: map[string]*certRec{}, heads: map[string]bool{}, rules: map[string]SignInRule{}, sink: sink}
+	i := emptyIssuer(sink)
 	for _, l := range lines {
 		i.heads[lineHash(l)] = true
 	}

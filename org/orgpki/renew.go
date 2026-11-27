@@ -82,7 +82,7 @@ func ReadPins(lines [][]byte) (Pins, error) {
 	if err != nil {
 		return Pins{}, err
 	}
-	i := &Issuer{tokens: map[string]*tokenRec{}, names: map[string]*nameRec{}, certs: map[string]*certRec{}}
+	i := emptyIssuer(nil)
 	for _, e := range entries {
 		if err := i.apply(e); err != nil {
 			return Pins{}, err

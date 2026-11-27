@@ -169,3 +169,4 @@ removal-keeps-grants | issuer.go | 			i.grants.revokeOf(orgid.KindPerson + ":" +
 revoke-by-anyone | grant.go | 	case !owner && !pol.Approves(person, g.Where, g.Service) && g.Who != orgid.KindPerson+":"+person: | 	case pol.Number < 0: | TestGrantRevokedAndRemoved
 host-check-any-life | hostcert.go | 	case c.ValidBefore-c.ValidAfter > uint64((issueBackdate+HostLife)/time.Second): | 	case false: | TestHostCertLifeIsItsOwn
 host-no-backdate | hostcert.go | 	until := leaf.NotBefore.Add(issueBackdate + HostLife) // mutant host-life-equal | 	until := leaf.NotBefore.Add(HostLife) | TestStepAHostCertPassesTheOldCheck
+readpins-no-rules | renew.go | 	i := emptyIssuer(nil) | 	i := &Issuer{tokens: map[string]*tokenRec{}, names: map[string]*nameRec{}, certs: map[string]*certRec{}} | TestReadPinsReplaysSignInRules
