@@ -192,3 +192,7 @@ restore-older-crl | restore.go | 	for n, der := range append([][]byte{crlDER}, f
 # too; a lost tail is seen against the published status's head.
 checkpoint-root-optional | audit.go | 			if !verifyRootSig(root, msg, e.RootSig) { | 			if e.RootSig != nil && !verifyRootSig(root, msg, e.RootSig) { | TestVerifyLogRefusesACheckpointWithoutTheRoot
 truncation-unseen | status.go | 	if _, ok := i.heads[st.Head]; ok || (!i.restoredAt.IsZero() && st.At.Before(i.restoredAt)) { | 	if true { | TestCheckPublishedHeadSeesALostTail
+# relay-server GroupMirror.tla Rotate (lane ROTATERULES): the rotation signs
+# the held policy again under the new root, only the old root's.
+rotate-drops-rules | issuer.go | 	if pol != nil { | 	if false { | TestRotationCarriesTheRootsPolicy
+rotate-carries-unsigned | policy.go | 	p, err := orgid.VerifyPolicy(*i.policy, i.root, i.orgID) | 	var p orgid.Policy; err := json.Unmarshal(i.policy.Body, &p) | TestRotationCarriesTheRootsPolicy

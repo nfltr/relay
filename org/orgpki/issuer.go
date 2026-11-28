@@ -1061,10 +1061,22 @@ func (i *Issuer) RenewIssuer(root crypto.Signer, groups []string, now time.Time)
 // recovery key's certificate of it (CrossSign), newRoot its signer and
 // newKey the new issuer's key, which the new root certifies for groups.
 // Machines then renew into the new issuer (Renew, by serials of this log).
+// The new root signs again, in the same act, the access policy the old
+// root signed (its rules and approvers, the same number): the members'
+// agents take only their pinned root's rules (client/orgid Rules), so
+// they admit after the rotation as before it. A held policy the old root
+// did not sign is refused, never signed again (relay-server
+// spec/GroupMirror.tla Rotate, ResignOnlySigned, RulesUnderRoot; lane
+// ROTATERULES). The old root's key is not needed: its signature is
+// checked against its certificate.
 func (i *Issuer) Rotate(cross *x509.Certificate, label string, newRoot crypto.Signer, newKey ed25519.PrivateKey, groups []string, now time.Time) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	if err := checkRotation(cross, i.recovery, i.root); err != nil {
+		return err
+	}
+	pol, err := i.resignPolicy(newRoot)
+	if err != nil {
 		return err
 	}
 	c, err := CertifyIssuer(cross, newRoot, newKey.Public().(ed25519.PublicKey), groups, now)
@@ -1073,6 +1085,12 @@ func (i *Issuer) Rotate(cross *x509.Certificate, label string, newRoot crypto.Si
 	}
 	if err := i.commit(Entry{Time: now, Act: ActRotated, Cert: cross.Raw, KeyLabel: label}); err != nil {
 		return err
+	}
+	// Before the new issuer: no status of it carries the old root's rules.
+	if pol != nil {
+		if err := i.commit(Entry{Time: now, Act: ActPolicy, Number: i.policyNum, Policy: pol.Body, RootSig: pol.Sig}); err != nil {
+			return err
+		}
 	}
 	if err := i.commit(Entry{Time: now, Act: ActIssuer, Cert: c.Raw}); err != nil {
 		return err

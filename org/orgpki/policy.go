@@ -74,3 +74,24 @@ func (i *Issuer) Policy() (orgid.Policy, error) {
 	}
 	return orgid.VerifyPolicy(*sp, i.root, i.orgID)
 }
+
+// resignPolicy is newRoot's signature of the policy the issuer holds (nil:
+// none), for a rotation to newRoot: only once the current root's
+// signature of it verifies, so a rotation never signs rules the old root
+// did not (relay-server spec/GroupMirror.tla Rotate, ResignOnlySigned).
+// The body is the same policy: its rules, approvers and number. Callers
+// hold mu.
+func (i *Issuer) resignPolicy(newRoot crypto.Signer) (*orgid.SignedPolicy, error) {
+	if i.policy == nil {
+		return nil, nil
+	}
+	p, err := orgid.VerifyPolicy(*i.policy, i.root, i.orgID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: the access policy held is not the old root's: %v", ErrRefused, err)
+	}
+	sp, err := SignPolicy(newRoot, p)
+	if err != nil {
+		return nil, err
+	}
+	return &sp, nil
+}
