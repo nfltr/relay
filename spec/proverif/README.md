@@ -1201,6 +1201,44 @@ and machine from the issuer's log, `org/orgpki/sessionaudit.go`
 `client/orgaudit/svc_access_bindings_test.go`
 (`TestSvcAccessModelBindingsAudit`).
 
+### rootheld.pv: the root-held member log (`org/`, design)
+
+Every fact that admits is a log entry signed by the root or by an admin
+key the root delegated: a member entry binds a machine key to a person,
+a machine name and a group; the root names a service's approvers and signs
+the rules. The serving agent admits a key by a rule only through a member
+entry for exactly the session's key under a delegated signer and a root
+rule for that entry's group, and by a grant only through the approval
+itself, signed by a key a member entry binds to an approver the root named
+for that service. The issuer's freshness statement is required and is the
+attacker's to sign, so it can withhold or deny and never admit. The
+attacker owns the relay **and the issuer** (`kiss` is public) and holds a
+machine key of its own; the honest parties are the root, one admin device,
+the approver alice, carol (who approves on the same prompt but whom the
+root named for nothing), the members bob and carol and the serving
+machine. The log's order, forks and undelegation are state:
+`spec/rootheld/MemberLog.tla`. The design is nfltr's
+`docs/decisions/root-held-membership-2026-11-28.md`.
+
+| # | query | result |
+|---|---|---|
+| 1 | admission by a rule only for a key a delegated signer enrolled under that person, machine and group, by a rule the root signed | holds |
+| 2 | admission by a grant only for what an approver the root named for that service approved | holds |
+| 3 | a session admitted by a rule is its key holder's (that key opened that service) | holds |
+| 4 | the same for a grant | holds |
+| 5 | a session secret sent to an admitted key is never the attacker's | holds |
+| 6-8 | witnesses: a root-enrolled member by a rule, an admin-enrolled member by a rule, a member by a grant | reachable |
+
+| mutant | puts back | fails |
+|---|---|---|
+| `issuer-member` | the issuer names who may sign membership (today's model: the issuer is the membership authority) | 1, 3, 5 |
+| `delegate-unchecked` | a membership signer taken without the root's delegation | 1, 3, 5 |
+| `approver-issuer` | the approvers list taken under the issuer key | 2 |
+| `grant-issuer` | an issuer-signed grant admits (today's `orgid.checkGrant`) | 2 |
+
+Bindings `BIND:rh.*` are listed in the model; lane RH2 adds their rows
+with the code.
+
 ## Code map
 
 | model | code |

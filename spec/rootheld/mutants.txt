@@ -1,0 +1,8 @@
+# <mutant> <property> [cfg]: TLC on MemberLog.cfg (or cfg) with that Mutant must report
+# <property> violated (scripts/spec-rootheld.sh mutants).
+issuer-member AdmitOnlyLogged
+undelegate-ignored RevokedDelegateRefused
+revoke-not-retroactive RevokedDelegateRefused
+admit-from-seen NoForkAccepted
+first-seen Converge MemberLogTwo.cfg
+rm-in-copy-only RemovalTakesEffect
