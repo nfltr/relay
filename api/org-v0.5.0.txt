@@ -1,0 +1,9 @@
+Incompatible changes:
+- ./orgpki.(*Issuer).Restore: changed from func([]byte, time.Time) error to func([]byte, time.Time, ...[]byte) error
+- ./orgissuer.Restore: changed from func(string, []byte, time.Time) error to func(string, []byte, time.Time, ...[]byte) (int64, error)
+Compatible changes:
+- ./orgpki.(*Issuer).AnswerMAC: added
+- ./orgpki.(*Issuer).CheckPublishedHead: added
+- ./orgpki.Answer.TokenMAC: added
+- ./orgpki.CheckAnswerMAC: added
+- ./orgpki.ErrTruncated: added
