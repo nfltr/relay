@@ -1,0 +1,9 @@
+Incompatible changes:
+- ./agent.OrgAuditor.AuditRefused: added
+Compatible changes:
+- ./orgid.(*Identity).AuditRefused: added
+- ./orgid.AuditRefused: added
+- ./orgaudit.(*Log).Refused: added
+- ./orgaudit.KindRefused: added
+- ./orgaudit.Record.Repeats: added
+- ./orgaudit.RefusedEvery: added
