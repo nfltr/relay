@@ -286,6 +286,9 @@ type Filed struct {
 type Removal struct {
 	Person string  `json:"person"`
 	Filed  []Filed `json:"filed"`
+	// Grants: the serials of the grants the removal revoked, those the
+	// person held and those they approved (People.tla NoGrantOfRemoved).
+	Grants []string `json:"grants,omitempty"`
 }
 
 // ApplyPeople applies a signed PeopleAct: the signer's role in the log
@@ -433,11 +436,13 @@ func (i *Issuer) removePerson(by, actorRole, person string, now time.Time) (Remo
 		}
 	}
 	slices.SortFunc(e.Filed, func(a, b Filed) int { return strings.Compare(a.Name, b.Name) })
+	i.grants.cut = nil
 	if err := i.commit(e); err != nil {
 		return Removal{}, err
 	}
+	grants := slices.Sorted(slices.Values(i.grants.cut)) // the replay's revokes, before the trace clears them
 	i.traceRevoked(Device{Person: person}, now)
-	return Removal{Person: person, Filed: e.Filed}, nil
+	return Removal{Person: person, Filed: e.Filed, Grants: grants}, nil
 }
 
 // RevokePerson is the owner's removal of person on the issuer's machine

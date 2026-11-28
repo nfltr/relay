@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -314,8 +315,9 @@ func TestGrantApprovalsEndWithTheApprover(t *testing.T) {
 		t.Fatal(err)
 	}
 	g := o.grantCert(t, a.Serial, at)
-	if _, err := o.iss.RevokePerson("alice@acme.com", at.Add(time.Minute)); err != nil {
-		t.Fatal(err)
+	rm, err := o.iss.RevokePerson("alice@acme.com", at.Add(time.Minute))
+	if err != nil || !slices.Equal(rm.Grants, []string{a.Serial}) {
+		t.Fatalf("the removal lists grants %v (%v), want %s", rm.Grants, err, a.Serial)
 	}
 	o.takeCRL(t, at.Add(2*time.Minute))
 	if _, err := o.admit(t, o.bob, g, "web", at.Add(2*time.Minute)); err == nil {
