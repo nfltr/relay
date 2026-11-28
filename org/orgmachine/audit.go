@@ -29,6 +29,13 @@ func (m *Machine) Audit(certs []*x509.Certificate, service string, services []st
 		By: orgid.AdmittedBy(m.ver, &m.rules, certs, self, services, opened)})
 }
 
+// AuditRefused records that certs were refused service at at, why
+// (agent.OrgAuditor): a refused line of the log for a client the
+// organisation issued (orgid.AuditRefused).
+func (m *Machine) AuditRefused(certs []*x509.Certificate, service string, why error, at time.Time) {
+	orgid.AuditRefused(m.log, m.ver, certs, service, why, at)
+}
+
 // CloseLost closes the sessions of the machine's other processes that
 // ended without closing them (orgaudit.Log.CloseLost).
 func (m *Machine) CloseLost(now time.Time) (int, error) { return m.log.CloseLost(now) }

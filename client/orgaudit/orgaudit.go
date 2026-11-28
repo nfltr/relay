@@ -8,7 +8,8 @@
 //
 // A record is metadata only: who (the client certificate's name, person,
 // groups), which service, what admitted it, when it opened and closed, the
-// bytes each way, why it ended. Never a byte of content. Each line of a
+// bytes each way, why it ended; or who was refused which service, when
+// and why. Never a byte of content. Each line of a
 // machine's log is {"rec":{...},"sig":"..."}: the record, numbered (seq),
 // chained to the line before (prev, its SHA-256) and signed by the
 // machine's certified Ed25519 key over "nfltr-audit-v1\x00" and the exact
@@ -30,10 +31,12 @@ import (
 	"time"
 )
 
-// The kinds of record: a session's admission and its end.
+// The kinds of record: a session's admission and its end, and a client
+// refused (no session: nothing closes it; Log.Refused).
 const (
-	KindOpen  = "open"
-	KindClose = "close"
+	KindOpen    = "open"
+	KindClose   = "close"
+	KindRefused = "refused"
 )
 
 // Why a session ended (Record.Reason).
@@ -58,7 +61,9 @@ type Who struct {
 
 // Record is one line's rec. Log, Seq, Prev, Machine, Signer, Key and At
 // are the log's (Line sets them from its arguments); the rest the
-// session's.
+// session's. A refused record has no Session or By: Opened is when the
+// client was refused, Reason the refusal's words, Repeats its refusals
+// to the service since the last refused record that were not written.
 type Record struct {
 	V       int       `json:"v"`
 	Log     string    `json:"log"`
@@ -80,6 +85,7 @@ type Record struct {
 	Out     int64     `json:"out,omitempty"`
 	Reason  string    `json:"reason,omitempty"`
 	Path    string    `json:"path,omitempty"`
+	Repeats int64     `json:"repeats,omitempty"`
 }
 
 // Session is what the serving agent knows of a session at its admission.

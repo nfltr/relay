@@ -328,7 +328,8 @@ func post(ctx context.Context, client *http.Client, u string, body []byte) error
 }
 
 // AuditSession is one session of the organisation's audit: its open
-// line and, once it ended, its close.
+// line and, once it ended, its close; or a client refused (Open's Kind
+// orgaudit.KindRefused, no Close: it opened nothing).
 type AuditSession struct {
 	Machine string           `json:"machine"`
 	Open    orgaudit.Record  `json:"open"`
@@ -375,6 +376,8 @@ func ReadAudit(dir string, now time.Time) (AuditView, error) {
 		key := r.Machine + "/" + r.Session
 		i, seen := byID[key]
 		switch {
+		case r.Kind == orgaudit.KindRefused:
+			v.Sessions = append(v.Sessions, AuditSession{Machine: r.Machine, Open: r})
 		case r.Kind == orgaudit.KindOpen && !seen:
 			byID[key] = len(v.Sessions)
 			v.Sessions = append(v.Sessions, AuditSession{Machine: r.Machine, Open: r})
@@ -403,7 +406,7 @@ func ReadAudit(dir string, now time.Time) (AuditView, error) {
 		}
 		open := 0
 		for _, s := range v.Sessions {
-			if s.Machine == m && s.Close == nil {
+			if s.Machine == m && s.Close == nil && s.Open.Kind == orgaudit.KindOpen { // a refusal opened none
 				open++
 			}
 		}

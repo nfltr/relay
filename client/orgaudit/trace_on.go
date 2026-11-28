@@ -28,6 +28,7 @@ import (
 //	intent     the owner file lists s (Intent)
 //	open       s's open line (OpenLine)
 //	close      s's close line (CloseLine)
+//	refused    a refused client's line (Refuse)
 //	forget     the owner file forgets s (Forget)
 //	lost       p wrote q's session s's lost close (Recover)
 //	recovered  p deleted q's owner file (RecoverDone)
@@ -58,7 +59,7 @@ func (l *Log) traceAs(p, ev, s, q string, seq uint64) {
 	if q != "" {
 		m["q"] = q
 	}
-	if ev == "open" || ev == "close" || ev == "lost" {
+	if ev == "open" || ev == "close" || ev == "lost" || ev == "refused" {
 		m["seq"] = seq
 	}
 	traceTo(dirTrace(l.Dir), m)

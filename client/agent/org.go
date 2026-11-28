@@ -48,11 +48,14 @@ type Org interface {
 // OrgAuditor is an Org that keeps an audit record of each session it
 // admits (relay org orgmachine.Machine: a signed, numbered line of the
 // machine's log at the session's open and at its end; nfltr
-// docs/decisions/service-access-2026-11-25.md "4. Audit per service").
-// Audit is called once the handshake admitted certs to service (one of
-// services), and the end it returns once the session ended.
+// docs/decisions/service-access-2026-11-25.md "4. Audit per service"),
+// and of each client it refuses. Audit is called once the handshake
+// admitted certs to service (one of services), and the end it returns
+// once the session ended; AuditRefused once CheckClient refused certs
+// service, why.
 type OrgAuditor interface {
 	Audit(certs []*x509.Certificate, service string, services []string, opened time.Time) (end func(orgaudit.End))
+	AuditRefused(certs []*x509.Certificate, service string, why error, at time.Time)
 }
 
 // auditOpen is o's audit of a session (OrgAuditor), or none.
@@ -103,9 +106,13 @@ func orgServerConfig(o Org, services []string, bind serviceBind, adm *orgAdmissi
 				logger.Warn("e2ee tcp: client refused", "error", errNoServiceProtocol)
 				return errNoServiceProtocol
 			}
-			until, err := o.CheckClient(cs.PeerCertificates, services, time.Now())
+			now := time.Now()
+			until, err := o.CheckClient(cs.PeerCertificates, services, now)
 			if err != nil {
 				logger.Warn("e2ee tcp: organisation client refused", "error", err)
+				if a, ok := o.(OrgAuditor); ok {
+					a.AuditRefused(cs.PeerCertificates, bind.service, err, now)
+				}
 				return fmt.Errorf("%w: %v", ErrOrgClientRefused, err)
 			}
 			adm.certs, adm.until = cs.PeerCertificates, until

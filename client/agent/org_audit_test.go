@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,8 +19,13 @@ import (
 // auditOrg is a fakeOrg that keeps an audit record (OrgAuditor).
 type auditOrg struct {
 	*fakeOrg
-	opened chan string
-	ended  chan orgaudit.End
+	opened  chan string
+	ended   chan orgaudit.End
+	refused chan string
+}
+
+func (a *auditOrg) AuditRefused(certs []*x509.Certificate, service string, why error, _ time.Time) {
+	a.refused <- certs[0].Subject.CommonName + "/" + service + ": " + why.Error()
 }
 
 func (a *auditOrg) Audit(certs []*x509.Certificate, service string, _ []string, _ time.Time) func(orgaudit.End) {
@@ -86,5 +92,39 @@ func TestOrgSessionAudited(t *testing.T) {
 			t.Fatalf("revoke %v: no audit end", revoke)
 		}
 		_ = tc.Close()
+	}
+}
+
+// TestOrgRefusalAudited: a client the organisation refuses is audited
+// refused (its certificate, the service and why), and no session opens.
+func TestOrgRefusalAudited(t *testing.T) {
+	l, o, cli := orgTunnel(t, echoTarget(t))
+	a := &auditOrg{fakeOrg: l.targets.org.(*fakeOrg), opened: make(chan string, 1), ended: make(chan orgaudit.End, 1), refused: make(chan string, 1)}
+	a.allow = []string{"ops"} // cli is in db
+	l.targets.org = a
+	s, c := sessionPair(t)
+	h, err := dataplane.OpenHeader(&pb.TCPData{TargetAddr: "localhost:1", E2Ee: true, Answer: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	go l.accept("", h, s)
+	if a, err := dataplane.ReadAnswer(c); err != nil || a.GetReason() != 0 {
+		t.Fatalf("answer %v, %v", a, err)
+	}
+	tc := orgClient(c, o, cli, "localhost:1")
+	defer tc.Close()                   //nolint:errcheck
+	_, _ = io.WriteString(tc, "hello") // the handshake: refused
+	select {
+	case got := <-a.refused:
+		if !strings.HasPrefix(got, "cli/localhost:1: no rule lets it use") {
+			t.Fatalf("refused %q", got)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no refusal audited")
+	}
+	select {
+	case got := <-a.opened:
+		t.Fatalf("a refused client's session opened: %q", got)
+	default:
 	}
 }

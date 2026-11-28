@@ -164,3 +164,36 @@ func TestAuditRotationKeepsTheLog(t *testing.T) {
 		t.Fatalf("after rotation: %d lines, seq %d.., log kept %v", len(rs), rs[0].Seq, rs[1].Log == before[0].Log)
 	}
 }
+
+// A refused client is one line, no session's (spec/AuditLog.tla Refuse,
+// OpenIsAdmitted; mutant refused-as-open): its retries within
+// RefusedEvery are counted in its next line, not written; recovery closes
+// nothing for it and rotation passes it; the line chains and verifies.
+func TestRefusedClientOneLineAMinute(t *testing.T) {
+	ms := logs(t, 2)
+	m, next := ms[0], ms[1]
+	bob := Who{Name: "bob-1", Person: "bob@example.com", Groups: []string{"staff"}}
+	at := time.Now()
+	for i := range 5 {
+		m.Refused(bob, "pg", "no access rule lets bob-1 use db-1/pg", at.Add(time.Duration(i)*time.Second))
+	}
+	m.Refused(Who{Name: "eve-1"}, "pg", "eve-1 is revoked", at)
+	m.Refused(bob, "pg", "no access rule lets bob-1 use db-1/pg", at.Add(RefusedEvery))
+	rs := records(t, m.Dir)
+	if len(rs) != 3 {
+		t.Fatalf("%d lines, want 3 (bob's first, eve's, bob's after a minute)", len(rs))
+	}
+	if r := rs[0]; r.Kind != KindRefused || r.Who.Person != "bob@example.com" || r.Service != "pg" || r.Reason == "" || r.Repeats != 0 || !r.Opened.Equal(at.UTC()) {
+		t.Fatalf("bob's first refusal: %+v", r)
+	}
+	if r := rs[2]; r.Kind != KindRefused || r.Who.Name != "bob-1" || r.Repeats != 4 {
+		t.Fatalf("bob's refusal after a minute: %+v, want the 4 between counted", r)
+	}
+	if n, err := next.CloseLost(time.Now()); err != nil || n != 0 {
+		t.Fatalf("CloseLost: %d closes, %v; want none (a refusal opens nothing)", n, err)
+	}
+	data, _ := os.ReadFile(filepath.Join(m.Dir, LogFile))
+	if cut, err := Rotate(m.Dir, int64(len(data)), 1, func(int64) error { return nil }); err != nil || cut == 0 {
+		t.Fatalf("rotation stopped at a refusal: cut %d, %v", cut, err)
+	}
+}

@@ -59,6 +59,50 @@ type Log struct {
 	id      string
 	open    map[string]bool
 	release func() // the owner lock's
+	refused map[string]refusal
+}
+
+// refusal is when a client was last written refused a service, and its
+// refusals since.
+type refusal struct {
+	at time.Time
+	n  int64
+}
+
+// RefusedEvery bounds a client's refused lines: at most one per client
+// name and service in it, so a client retrying in a loop does not grow
+// the log; the refusals between are the next line's Repeats.
+const RefusedEvery = time.Minute
+
+// Refused writes that who was refused service at at, why (a refused
+// line: no session, nothing closes it; spec/AuditLog.tla Refuse), or
+// only counts it within RefusedEvery of who's last refused line for
+// service. Its caller names only a client the organisation certified
+// (relay org orgmachine Machine.AuditRefused): forged names would fill
+// the log past the bound.
+func (l *Log) Refused(who Who, service, why string, at time.Time) {
+	key := who.Name + "\x00" + service
+	l.mu.Lock()
+	if l.refused == nil {
+		l.refused = map[string]refusal{}
+	}
+	last, seen := l.refused[key]
+	if seen && at.Sub(last.at) < RefusedEvery {
+		last.n++
+		l.refused[key] = last
+		l.mu.Unlock()
+		return
+	}
+	for k, r := range l.refused {
+		// ponytail: a client that stops retrying keeps its count until
+		// its next refusal; dropped only when there is none.
+		if r.n == 0 && at.Sub(r.at) >= RefusedEvery {
+			delete(l.refused, k)
+		}
+	}
+	l.refused[key] = refusal{at: at}
+	l.mu.Unlock()
+	l.line(Record{Kind: KindRefused, Service: service, Who: who, Opened: at.UTC(), Reason: why, Repeats: last.n}, nil, nil)
 }
 
 // Audit writes s's open line now (its ID made when empty) and returns the

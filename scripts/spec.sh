@@ -939,7 +939,7 @@ CFG
 # machine directory's trace and every process's move trace accepted.
 # Not traced: tests that plant lines or owner files the recorder never
 # saw (a crafted log, an edited line).
-AUDIT_CLIENT_TESTS='TestKilledProcessSessionClosedLost TestKilledBetweenStepsClosedOnce TestAuditRotationKeepsTheLog'
+AUDIT_CLIENT_TESTS='TestKilledProcessSessionClosedLost TestKilledBetweenStepsClosedOnce TestAuditRotationKeepsTheLog TestRefusedClientOneLineAMinute'
 AUDIT_ORG_TESTS='TestAuditReachesTheIssuer TestAuditFollowsTheMove TestAuditNotTakenAfterTheFence TestSDKOnlyMachineShipsItsAudit'
 auditrun() {
 	for m in AuditLog MoveAudit; do

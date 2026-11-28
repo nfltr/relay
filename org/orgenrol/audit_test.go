@@ -103,6 +103,23 @@ func TestAuditReachesTheIssuer(t *testing.T) {
 	}
 }
 
+// TestAuditRefusalReachesTheIssuer: a client the machine refused is a
+// refused entry of the issuer's view, with its person, service and
+// reason; it opens no session, so the machine silent after it is not
+// reported (Silent counts open sessions only).
+func TestAuditRefusalReachesTheIssuer(t *testing.T) {
+	f := newFleet(t)
+	leaf, _ := f.m.Current()
+	f.m.AuditRefused([]*x509.Certificate{leaf, f.m.Issuer()}, "pg", errors.New("no access rule lets it use web-1/pg"), f.clk.Now())
+	keep(t, f.ctx, f.keeper())
+	eventually(t, "the refusal at the issuer", func() bool { return len(f.audit(t, f.clk.Now()).Sessions) == 1 })
+	v := f.audit(t, f.clk.Now().Add(orgaudit.SilentAfter+time.Minute))
+	if s := v.Sessions[0]; s.Machine != "web-1" || s.Open.Kind != orgaudit.KindRefused || s.Open.Service != "pg" || s.Open.Who.Name != leaf.Subject.CommonName ||
+		s.Open.Reason != "no access rule lets it use web-1/pg" || s.Close != nil || v.Findings != nil {
+		t.Fatalf("the issuer's view: %+v, findings %q", v, findings(v))
+	}
+}
+
 // TestAuditAlterationsFound: a line edited on the machine before it
 // shipped is refused and reported (the machine starts a new log after
 // it), and a line edited at rest in the issuer's sessions is reported by

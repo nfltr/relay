@@ -381,6 +381,25 @@ func (m *Identity) Audit(certs []*x509.Certificate, service string, services []s
 		By: AdmittedBy(m.ver, &m.rules, certs, self, services, opened)})
 }
 
+// AuditRefused records that certs were refused service at at, why
+// (agent.OrgAuditor), as nfltr's orgmachine.Machine does (AuditRefused).
+func (m *Identity) AuditRefused(certs []*x509.Certificate, service string, why error, at time.Time) {
+	AuditRefused(m.log, m.ver, certs, service, why, at)
+}
+
+// AuditRefused writes certs' refusal to service at at, why, to log
+// (orgaudit.Log.Refused, at most one line a minute per client and
+// service): only for a client certificate the organisation issued (its
+// chain to the root, Issued; revoked or refused by the rules), so a line
+// names a member, never names a forged certificate chose, and a stranger
+// retrying under new names writes nothing.
+func AuditRefused(log *orgaudit.Log, ver *Verifier, certs []*x509.Certificate, service string, why error, at time.Time) {
+	if len(certs) < 2 || certs[0].IsCA || ver.Issued(certs[0], certs[1], at) != nil {
+		return
+	}
+	log.Refused(orgaudit.WhoOf(certs[0]), service, why.Error(), at)
+}
+
 // Changed is closed at the next change (agent.Org).
 func (m *Identity) Changed() <-chan struct{} {
 	m.mu.Lock()
