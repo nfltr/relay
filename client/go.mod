@@ -5,11 +5,11 @@ go 1.27.2
 require (
 	github.com/flynn/noise v1.1.0
 	github.com/jackpal/gateway v1.2.0
-	github.com/nfltr/link v0.14.1-0.20261127181840-ad520f28ad51
-	github.com/nfltr/link/pathswitch v0.1.6-0.20261127181840-ad520f28ad51
-	github.com/nfltr/link/peerlink/quiclink v0.10.0
+	github.com/nfltr/link v0.14.1
+	github.com/nfltr/link/pathswitch v0.1.6
+	github.com/nfltr/link/peerlink/quiclink v0.10.1
 	github.com/nfltr/quic-go v0.63.1-nfltr.11
-	github.com/nfltr/relay/proto v0.23.0
+	github.com/nfltr/relay/proto v0.23.1
 	github.com/pion/datachannel v1.6.3
 	github.com/pion/logging v0.2.4
 	github.com/pion/webrtc/v4 v4.2.22
