@@ -66,4 +66,4 @@ check (156,906 states, 2 to 4 minutes on the Mac). `scripts/spec-rootheld.sh ci`
 
 | spec | code |
 |---|---|
-| MemberLog.tla | none yet (design; lanes RH1-RH3 of the decision doc: `org/orglog`, `client/orgid`, `org/orgpki`) |
+| MemberLog.tla | none yet (design: build lanes RH1-RH3 of the decision doc add the member log, its verifier in the client and the issuer as sequencer; each adds its package here) |
