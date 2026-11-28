@@ -367,3 +367,16 @@ svc_access jwt-no-aud TTTTTFTFFFFF
 svc_access app-on-network TTTTFTTFFFFF
 svc_access audit-any-key TTTTTTFFFFFF
 svc_access audit-machine-unbound TTTTTTFFFFFF
+#
+# rootheld (nfltr docs/decisions/root-held-membership-2026-11-28.md; a
+# design, no code yet; queries in README "rootheld.pv"): the attacker owns
+# the relay AND the issuer. 1 admission by a rule only for a key a
+# delegated signer enrolled, by a root rule; 2 by a grant only what an
+# approver the root named approved; 3-4 an admitted session is its key
+# holder's; 5 its secret is not the attacker's; 6-8 witnesses. Each mutant
+# fails the queries it targets.
+rootheld - TTTTTFFF
+rootheld issuer-member FTFTFFFF
+rootheld delegate-unchecked FTFTFFFF
+rootheld approver-issuer TFTTTFFF
+rootheld grant-issuer TFTTTFFF

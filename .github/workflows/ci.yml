@@ -114,7 +114,7 @@ jobs:
             proto/go.sum
             client/go.sum
             org/go.sum
-      - run: make spec-appenrol-ci spec-people-ci spec-grant-ci spec-onegroup-ci
+      - run: make spec-appenrol-ci spec-people-ci spec-grant-ci spec-onegroup-ci spec-rootheld-ci
       - run: make spec-pair-ci
   # the TLA+ models of spec/ (scripts/spec.sh): their mutants and
   # witnesses, and beside them their configurations and traces

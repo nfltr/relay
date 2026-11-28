@@ -1,0 +1,164 @@
+(* Copyright 2026 nfltr
+   SPDX-License-Identifier: Apache-2.0
+
+   rootheld.pv: the root-held member log (nfltr
+   docs/decisions/root-held-membership-2026-11-28.md; a design, no code
+   yet; its state machine, forks and undelegation are
+   spec/rootheld/MemberLog.tla). spec/proverif/README.md.
+
+   The attacker owns the relay AND the issuer: the issuer key kiss is
+   public, so it signs any certificate, CRL, status, freshness statement
+   or grant; it carries, drops and replays every log entry, approval and
+   session message, and has a key of its own (kM) it wants admitted.
+   Honest: the root (kroot), one admin device the root delegated (kAd),
+   the approver alice (kA, approves on a prompt naming requester, service
+   and duration; carol approves the same way but the root named her for
+   nothing), the members bob (kB, enrolled by the root) and carol
+   (kC, enrolled by the admin), the serving machine h.
+
+   - The log: the root's genesis names the root as a signer
+     (sign((lDlg, pk(kroot)), kroot)); the root delegates an admin key
+     (lDlg, pk(kAd)); a member entry (lMember, person, machine, key,
+     group) is signed by a key the root delegated (the root included).
+     Approvers (lApprover, service, person) and rules (lRule, group,
+     service) are the root's.
+   - Admission by a rule: inside the session's TLS the client proves its
+     key over the agent's challenge and the service; the agent takes the
+     person, machine and group from a member entry for exactly that key,
+     under a delegated signer, and a root rule for that group. The issuer's
+     freshness statement (lFresh, key) is required too: it can withhold or
+     deny, and since it is the attacker's to sign it can never admit.
+   - Admission by a grant: the approval itself, signed by a key a member
+     entry binds to the approver, the approver named by the root for the
+     service; no issuer signature is needed or taken.
+   - After admission the agent sends the session secret to the admitted
+     key (the TLS session key, abstracted).
+
+   Bindings (make spec-bindings, rows the code lane RH2 adds):
+     BIND:rh.dlgroot     a member entry's signer only under the root's delegation
+     BIND:rh.memberkey   ... for exactly the session's key (=pkp)
+     BIND:rh.notissuer   the issuer key signs no member entry the agent takes
+     BIND:rh.apprmember  an approval only under a key a member entry binds to the approver
+     BIND:rh.apprpol     ... the approver named by the root for that service
+     BIND:rh.nogrant     the agent takes no issuer-signed grant *)
+
+free c: channel.
+
+type skey.
+fun pk(skey): bitstring.
+fun sign(bitstring, skey): bitstring.
+reduc forall m: bitstring, s: skey; checksign(sign(m, s), pk(s)) = m.
+reduc forall m: bitstring, s: skey; getmsg(sign(m, s)) = m.
+fun aenc(bitstring, bitstring): bitstring.
+reduc forall m: bitstring, s: skey; adec(aenc(m, pk(s)), s) = m.
+
+const lDlg, lMember, lApprover, lRule, lFresh, lReq, lAppr, lGrant, lSess: bitstring.
+const bob, carol, alice, h: bitstring.
+const mB, mC, mA: bitstring.          (* machine names *)
+const sv1, sv2: bitstring.            (* sv1 by grant, sv2 by rule *)
+const gOps, gDev: bitstring.
+
+free kroot, kAd, kA, kB, kC: skey [private].
+free kiss: skey.                      (* the issuer's key: the attacker's *)
+free kM: skey.                        (* the attacker's own machine key *)
+
+event Enrolled(bitstring, bitstring, bitstring, bitstring).    (* person, machine, key, group: a delegated signer signed it *)
+event RuleSigned(bitstring, bitstring).                        (* group, service *)
+event Opened(bitstring, bitstring).                            (* key, service: its holder opened *)
+event Approved(bitstring, bitstring, bitstring, bitstring, bitstring). (* approver, p, s, d, r *)
+event ApproverNamed(bitstring, bitstring).                    (* service, person: the root named them *)
+event AdmittedByRule(bitstring, bitstring, bitstring, bitstring, bitstring). (* p, m, key, g, s *)
+event AdmittedByGrant(bitstring, bitstring, bitstring, bitstring, bitstring). (* p, key, s, d, r *)
+event SessKey(bitstring, bitstring, bitstring).                (* p, key, the session secret *)
+
+(* A member's machine opens s: proves its key over the agent's challenge. *)
+let Client(k: skey) =
+  !(in(c, (ch: bitstring, s: bitstring));
+    event Opened(pk(k), s);
+    out(c, sign((lSess, ch, s), k));
+    in(c, x: bitstring); let sk = adec(x, k) in 0).
+
+(* bob asks; alice approves what her prompt shows: the whole request. *)
+let Requester =
+  !(in(c, (s: bitstring, d: bitstring));
+    new r: bitstring;
+    out(c, (lReq, r, bob, s, d))).
+let Approver(a: bitstring, k: skey) =
+  !(in(c, req: bitstring);
+    let (=lReq, r: bitstring, p: bitstring, s: bitstring, d: bitstring) = req in
+    event Approved(a, p, s, d, r);
+    out(c, sign((lAppr, req), k))).
+
+(* The agent's check of a member entry for key pkp: its signer is one the
+   root delegated (dp: the root's lDlg entry for that signer). *)
+let AgentRule =
+  !(new ch: bitstring; out(c, ch);
+    in(c, (s: bitstring, pkp: bitstring, pf: bitstring, mem: bitstring, dp: bitstring, rule: bitstring, fr: bitstring));
+    if checksign(pf, pkp) = (lSess, ch, s) then
+    let dk = pk(kroot) in                                                 (* NOT:issuer-member *)
+    (* ONLY:issuer-member *) let dk = pk(kiss) in
+    let (=lDlg, ak: bitstring) = checksign(dp, dk) in                     (* NOT:delegate-unchecked *)
+    (* ONLY:delegate-unchecked *) let (=lDlg, ak: bitstring) = getmsg(dp) in
+    let (=lMember, p: bitstring, m: bitstring, =pkp, g: bitstring) = checksign(mem, ak) in
+    let (=lRule, =g, =s) = checksign(rule, pk(kroot)) in
+    let (=lFresh, =pkp) = checksign(fr, pk(kiss)) in
+    new sk: bitstring;
+    event AdmittedByRule(p, m, pkp, g, s);
+    event SessKey(p, pkp, sk);
+    out(c, aenc(sk, pkp))).
+
+(* Admission by a grant: the requester's member entry as above; the
+   approval under a key a member entry binds to the approver; the
+   approver named by the root for the service. *)
+let AgentGrant =
+  !(new ch: bitstring; out(c, ch);
+    in(c, (s: bitstring, pkp: bitstring, pf: bitstring, mem: bitstring, dp: bitstring,
+           ap: bitstring, req: bitstring, amem: bitstring, adp: bitstring, pol: bitstring, gr: bitstring));
+    if checksign(pf, pkp) = (lSess, ch, s) then
+    let (=lDlg, ak: bitstring) = checksign(dp, pk(kroot)) in
+    let (=lMember, p: bitstring, m: bitstring, =pkp, g: bitstring) = checksign(mem, ak) in
+    let (=lReq, r: bitstring, =p, =s, d: bitstring) = req in
+    (
+      let (=lDlg, aak: bitstring) = checksign(adp, pk(kroot)) in          (* NOT:grant-issuer *)
+      let (=lMember, ap1: bitstring, am: bitstring, apk: bitstring, ag: bitstring) = checksign(amem, aak) in  (* NOT:grant-issuer *)
+      if checksign(ap, apk) = (lAppr, req) then                           (* NOT:grant-issuer *)
+      let polk = pk(kroot) in                                             (* NOT:approver-issuer *)
+      (* ONLY:approver-issuer *) let polk = pk(kiss) in
+      let (=lApprover, =s, =ap1) = checksign(pol, polk) in                (* NOT:grant-issuer *)
+      (* ONLY:grant-issuer *) let (=lGrant, =p, =s, =d, =r) = checksign(gr, pk(kiss)) in
+      new sk: bitstring;
+      event AdmittedByGrant(p, pkp, s, d, r);
+      event SessKey(p, pkp, sk);
+      out(c, aenc(sk, pkp))
+    )).
+
+(* 1. admission by a rule only for a key a delegated signer enrolled under
+   that person, machine and group, by a rule the root signed *)
+query p: bitstring, m: bitstring, k: bitstring, g: bitstring, s: bitstring;
+  event(AdmittedByRule(p, m, k, g, s)) ==> event(Enrolled(p, m, k, g)) && event(RuleSigned(g, s)).
+(* 2. admission by a grant only for what an approver the root named for
+   that service approved: no widening, no other approver *)
+query a: bitstring, p: bitstring, k: bitstring, s: bitstring, d: bitstring, r: bitstring;
+  event(AdmittedByGrant(p, k, s, d, r)) ==> event(Approved(a, p, s, d, r)) && event(ApproverNamed(s, a)).
+(* 3. an admitted session is its key holder's: the key opened that service *)
+query p: bitstring, m: bitstring, k: bitstring, g: bitstring, s: bitstring;
+  event(AdmittedByRule(p, m, k, g, s)) ==> event(Opened(k, s)).
+query p: bitstring, k: bitstring, s: bitstring, d: bitstring, r: bitstring;
+  event(AdmittedByGrant(p, k, s, d, r)) ==> event(Opened(k, s)).
+(* 5. secrecy: a session secret for an admitted member is never the attacker's *)
+query p: bitstring, k: bitstring, x: bitstring; event(SessKey(p, k, x)) && attacker(x).
+(* 6-8. witnesses: each is reachable (reads false) *)
+query m: bitstring, k: bitstring; event(AdmittedByRule(bob, m, k, gDev, sv2)).
+query m: bitstring, k: bitstring; event(AdmittedByRule(carol, m, k, gDev, sv2)).
+query k: bitstring, d: bitstring, r: bitstring; event(AdmittedByGrant(bob, k, sv1, d, r)).
+
+process
+  out(c, pk(kroot)); out(c, pk(kAd)); out(c, pk(kA)); out(c, pk(kB)); out(c, pk(kC));
+  out(c, sign((lDlg, pk(kroot)), kroot));
+  out(c, sign((lDlg, pk(kAd)), kroot));
+  event Enrolled(alice, mA, pk(kA), gOps); out(c, sign((lMember, alice, mA, pk(kA), gOps), kroot));
+  event Enrolled(bob, mB, pk(kB), gDev);   out(c, sign((lMember, bob, mB, pk(kB), gDev), kroot));
+  event Enrolled(carol, mC, pk(kC), gDev); out(c, sign((lMember, carol, mC, pk(kC), gDev), kAd));
+  event ApproverNamed(sv1, alice); out(c, sign((lApprover, sv1, alice), kroot));
+  event RuleSigned(gDev, sv2); out(c, sign((lRule, gDev, sv2), kroot));
+  (Client(kA) | Client(kB) | Client(kC) | Requester | Approver(alice, kA) | Approver(carol, kC) | AgentRule | AgentGrant)

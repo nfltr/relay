@@ -198,6 +198,7 @@ spec-traces:
 	PROVERIF_FULL=1 ./spec/proverif/run.sh
 	./scripts/spec-grant.sh traces
 	./scripts/spec-onegroup.sh traces
+	./scripts/spec-rootheld.sh full
 spec-cltraces:
 	./scripts/spec.sh cltraces
 spec-astraces:
@@ -361,6 +362,13 @@ spec-appenrol-traces:
 .PHONY: spec-onegroup-ci
 spec-onegroup-ci:
 	./scripts/spec-onegroup.sh ci
+
+# spec-rootheld-ci (in make ci): the root-held member log, a design
+# (spec/rootheld/README.md): every invariant, mutant, witness, coverage and
+# the liveness config.
+.PHONY: spec-rootheld-ci
+spec-rootheld-ci:
+	./scripts/spec-rootheld.sh ci
 
 # spec-grant-ci (in make ci): time-limited, approved access to a service
 # (spec/grant/README.md): the invariants, the liveness config, every

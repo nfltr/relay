@@ -20,7 +20,8 @@ orgmove OrgHolds -
 orgmove OrgHosted -
 appenrol AppEnrol -
 people People -
-onegroup GroupIssuer -'
+onegroup GroupIssuer -
+rootheld MemberLog -'
 
 # steps <tla>: the model's step names.
 steps() {
