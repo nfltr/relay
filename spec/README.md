@@ -1553,10 +1553,20 @@ owner file. The log is the truth, the owner file only says whose sessions
 they were. (a) The file is rotated: a prefix of lines the issuer
 acknowledged is dropped, never the last line (the next line chains to it,
 the log goes on) and never an open whose close is not written.
+Lane ONEREVOKE: a client the machine refused (its certificate the
+organisation issued, refused by the rules, a grant or the CRL) is one
+`refused` line under the log's lock (`Refuse`, `Log.Refused`): no session,
+so no owner file lists it, nothing closes it, recovery and rotation pass
+it, and the issuer's `Silent` counts no refusal open (`ReadAudit`,
+`TestAuditRefusalReachesTheIssuer`). At most one a minute per client name
+and service (`RefusedEvery`; the rest counted in the next line's
+`repeats`).
 
-`AuditLog.cfg` (`make spec`: 3 processes, 2 sessions, 2 rotations, every
-action taken with `COVERAGE=1`), `AuditLogLive.cfg` (one process never
-killed).
+`AuditLog.cfg` (`make spec`: 3 processes, 2 sessions, 2 rotations, no
+refusal, every action but `Refuse` taken with `COVERAGE=1`),
+`AuditLogLive.cfg` (one process never killed), `AuditLogRefused.cfg` (2
+processes, 2 sessions, 1 rotation, 1 refusal: 34,925 states, 9 s; with a
+refusal in `AuditLog.cfg` 1.6M states, 8 times its 194k).
 
 | invariant / property | statement | mutant (`scripts/spec.sh mutants`) |
 |---|---|---|
@@ -1565,12 +1575,13 @@ killed).
 | `LiveOpenNotClosed` | a session its live process serves is not recorded closed | `recover-live` (an owner closed without its lock taken) |
 | `NothingLost` | rotation drops only lines the issuer holds | `rotate-unacked` |
 | `OneLog` | rotation never starts a new log | `rotate-all` (the last line dropped too) |
+| `OpenIsAdmitted` | every open line is an admitted session's | `refused-as-open` (AuditLogRefused: a refusal written as a session's open) |
 | `EveryOpenCloses` (AuditLogLive) | every open is closed, a killed process's too | `no-recovery` (the code before), `open-before-intent`, `rotate-drops-open` |
 
 Witnesses (violated): `W_LostClose`, `W_CloseThenKilled` (killed between
 its close line and its owner file's prune: recovery writes none),
 `W_IntentOnly` (killed between the owner file and the open line: nothing
-to close), `W_Rotated`.
+to close), `W_Rotated`, `W_Refused` (AuditLogRefused).
 
 ### Environment assumptions
 
@@ -1586,6 +1597,7 @@ to close), `W_Rotated`.
 | actions | code |
 |---|---|
 | `Intent`, `OpenLine`, `CloseLine`, `Forget`, `Start` | client/orgaudit/log.go (`Log.Audit`, `Append`, the owner file), its writers org/orgmachine/audit.go and client/orgid/identity.go (`Audit`) |
+| `Refuse` | client/orgaudit/log.go (`Log.Refused`), client/orgid/identity.go and org/orgmachine/audit.go (`AuditRefused`), client/agent/org.go (`orgServerConfig`) |
 | `Recover`, `RecoverDone` | client/orgaudit/log.go (`Log.CloseLost`), org/orgenrol/auditship.go (the keeper's round) |
 | `Ship`, `Rotate` | org/orgenrol/auditship.go (`shipAudit`, `shipOnce`, `unshipped`), client/orgaudit/log.go (`Rotate`) |
 | (traces) | client/orgaudit/trace_on.go, trace_off.go |
@@ -1631,14 +1643,15 @@ Witnesses: `W_TakenAfterMove`, `W_AckedBeforeMove`.
 ### AuditLog and MoveAudit traces (lane SA5TRACE)
 
 `scripts/spec.sh audittraces` (nightly in `make spec-traces`): the audit
-tests of client/orgaudit (the kills between steps, the rotation) and
+tests of client/orgaudit (the kills between steps, the rotation, a
+refused client) and
 org/orgenrol (the path to the issuer, the move, the fence, an SDK-only
 machine), each in its own process with `-tags audittrace`
 (`AUDITTRACE=<dir>`; org: `-tags 'enroltrace audittrace'`). A machine
 directory's log writes `auditlog-<hash>.ndjson`, each line under the
 log's lock (so the file's order is the log's, across processes too),
-checked against `TraceAuditLog.tla`: `intent`, `open`, `close`, `forget`,
-`lost`, `recovered`, `crash` (a test's kill: the owner lock released),
+checked against `TraceAuditLog.tla`: `intent`, `open`, `close`,
+`refused`, `forget`, `lost`, `recovered`, `crash` (a test's kill: the owner lock released),
 `ship` (Rotate's acknowledged offset, as the seq of its line) and
 `rotate`; a process's start is TLC's. Each test process's
 `<pid>.moveaudit` (the machine's `write` lines, the issuer's `take` with
@@ -1655,7 +1668,9 @@ under it (`closeOwner`). `Ship(n)` and `Take(h, n, answered)` acknowledge
 the lines the keeper read, not every line written.
 
 Fixtures (`spec/testdata/`): `accept-auditlog-lost`,
-`accept-auditlog-rotate`, `accept-moveaudit-follows`;
+`accept-auditlog-rotate`, `accept-auditlog-refused` (rotated past a
+refusal), `accept-moveaudit-follows`;
+`reject-auditlog-refused-as-open` (a refusal closed as a session),
 `reject-auditlog-recover-live` (LiveOpenNotClosed),
 `reject-auditlog-close-twice` (AtMostOneClose, recover-no-log-check),
 `reject-auditlog-close-no-open` (CloseHasOpen),

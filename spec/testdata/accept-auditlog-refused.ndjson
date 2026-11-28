@@ -1,0 +1,7 @@
+{"ev":"intent","p":"a","s":"s1"}
+{"ev":"open","p":"a","s":"s1","seq":1}
+{"ev":"refused","p":"a","seq":2}
+{"ev":"close","p":"a","s":"s1","seq":3}
+{"ev":"forget","p":"a","s":"s1"}
+{"ev":"ship","seq":3}
+{"ev":"rotate","seq":3}

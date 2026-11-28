@@ -18,6 +18,10 @@
 \*       (recovery reads it).
 \* A process may crash between any two steps (Crash), also while it holds
 \* the lock (flock is released with the process).
+\* A refusal (an organisation client the machine refused, lane ONEREVOKE)
+\* is one "refused" line under the lock: it opens no session, so nothing
+\* closes it, recovery and rotation pass it (mutant refused-as-open: the
+\* refusal written as a session's open).
 EXTENDS Integers, Sequences, FiniteSets
 
 CONSTANTS
@@ -25,6 +29,7 @@ CONSTANTS
     MayCrash,  \* the ones that may be killed
     Sess,      \* session ids
     MaxRot,    \* rotations (state bound)
+    MaxRef,    \* refused lines (state bound)
     Mutant
 
 None == "none"
@@ -136,6 +141,15 @@ RecoverDone(p, q) ==
     /\ of' = [of EXCEPT ![q] = FALSE] /\ owner' = [owner EXCEPT ![q] = {}]
     /\ UNCHANGED <<log, base, acked, logs, st, ses, who, lock, rots>>
 
+\* A client refused: its line under the lock, no session's (refused-as-open:
+\* a session's open, of a session never admitted).
+Refuse(p) ==
+    /\ st[p] = "up" /\ lock = None /\ Cardinality(Idx("refused", None)) < MaxRef
+    /\ IF Mutant = "refused-as-open"
+       THEN \E s \in Sess : ses[s] = "new" /\ Write([k |-> "open", s |-> s, lost |-> FALSE])
+       ELSE Write([k |-> "refused", s |-> None, lost |-> FALSE])
+    /\ UNCHANGED <<base, acked, st, of, owner, ses, who, lock, rots>>
+
 \* The keeper's post answered: the issuer holds the lines up to n, the
 \* complete ones the keeper read (no lock: lines written since are the
 \* next post's).
@@ -161,7 +175,7 @@ Rotate(p) ==
     /\ UNCHANGED <<log, acked, logs, st, of, owner, ses, who, lock>>
 
 Next ==
-    \/ \E p \in Procs : Start(p) \/ Crash(p) \/ Rotate(p)
+    \/ \E p \in Procs : Start(p) \/ Crash(p) \/ Rotate(p) \/ Refuse(p)
     \/ \E p \in Procs, s \in Sess : Intent(p, s) \/ OpenLine(p, s) \/ CloseLine(p, s) \/ Forget(p, s)
     \/ \E p, q \in Procs, s \in Sess : Recover(p, q, s)
     \/ \E p, q \in Procs : RecoverDone(p, q)
@@ -193,6 +207,9 @@ LiveOpenNotClosed == \A s \in Sess : (ses[s] = "open" /\ st[who[s]] = "up") => C
 \* Rotation drops only what the issuer holds.
 NothingLost == base <= acked + 1
 
+\* Every open line is an admitted session's: a refusal opens none.
+OpenIsAdmitted == \A i \in 1..Len(log) : log[i].k = "open" => ses[log[i].s] # "new"
+
 \* The machine keeps one log: rotation never starts a new one.
 OneLog == logs <= 1
 
@@ -207,4 +224,5 @@ W_CloseThenKilled == ~\E p \in Procs, s \in Sess : st[p] = "dead" /\ s \in owner
 \* ... between its owner file's line and its open line: nothing to close.
 W_IntentOnly == ~\E p \in Procs, s \in Sess : st[p] = "dead" /\ ses[s] = "intent" /\ who[s] = p /\ ~of[p]
 W_Rotated == ~(base > 1 /\ Len(log) >= base + 1)
+W_Refused == ~\E i \in 1..Len(log) : log[i].k = "refused"
 =============================================================================

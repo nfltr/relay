@@ -893,6 +893,7 @@ CONSTANTS
     MayCrash <- TraceProcs
     Sess <- TraceSess
     MaxRot <- TraceMaxRot
+    MaxRef <- TraceMaxRef
     Mutant = "none"
 INIT TraceInit
 NEXT TraceNext
@@ -902,6 +903,7 @@ INVARIANTS
     CloseHasOpen
     LiveOpenNotClosed
     NothingLost
+    OpenIsAdmitted
     OneLog
     TraceUnfinished
 CFG
@@ -1053,7 +1055,7 @@ CCTESTS='^(TestCallCreditBothWaysGrant|TestCallCreditCallerLeavesStuckHandler|Te
 DGDIRECT='^(TestDatagramDirectMovesAndFallsBack|TestDatagramDirectOnlyOnceTheAgentAttached)$'
 case ${1:-} in
 check)
-	cfgs="CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch PunchRound PunchRoundSym PortMap Birthday AgentStop AgentStopNoDrain AgentStopLate AgentStopClose TLSEnd AuditLog AuditLogLive MoveAudit"
+	cfgs="CallCredit CallCreditBoth CallCreditSenders CallLifecycle CallLifecycleRetry A2ASession UDPFlow UDPFlowLive DatagramAssoc DatagramAssocTwo DatagramAssocMove DatagramAssocLive BrowserPeer DirectPunch PunchRound PunchRoundSym PortMap Birthday AgentStop AgentStopNoDrain AgentStopLate AgentStopClose TLSEnd AuditLog AuditLogLive AuditLogRefused MoveAudit"
 	[ -z "${LARGE:-}" ] || cfgs="$cfgs CallCreditLarge CallCreditBothLarge UDPFlowLarge"
 	# check1 CFG MODULE: one configuration, side by side (scripts/pool.sh).
 	check1() {
@@ -1075,6 +1077,7 @@ check)
 		m=${m%Late}
 		m=${m%Close}
 		m=${m%Sym}
+		m=${m%Refused}
 		pool check1 $c $m
 	done
 	pool_end
@@ -1358,6 +1361,11 @@ mutants)
 	for w in W_LostClose W_CloseThenKilled W_IntentOnly W_Rotated; do
 		expect witness:$w -e "s/^    OneLog\$/    $w/"
 	done
+	# Lane ONEREVOKE: a refused client's line written as a session's open.
+	cfg=AuditLogRefused
+	expect AUDIT:refused-as-open -e 's/Mutant = "none"/Mutant = "refused-as-open"/'
+	expect witness:W_Refused -e "s/^    OneLog\$/    W_Refused/"
+	cfg=
 	model=MoveAudit
 	# The session audit across an organisation move (lane SA5GAPS).
 	for m in bundle-no-sessions take-after-fence; do
