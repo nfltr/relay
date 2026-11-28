@@ -281,6 +281,7 @@ func (i *Issuer) apply(e Entry) error {
 		}
 		if e.Person != "" {
 			i.grants.revokeOf(orgid.KindPerson + ":" + e.Person) // a removed person's grants (lead decision 2026-11-26)
+			i.grants.revokeApprovedBy(e.Person)                  // and those they approved (lane ONEREVOKE)
 		}
 		if e.Person != "" || e.App != "" {
 			if i.denied == nil {

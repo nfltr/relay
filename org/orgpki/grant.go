@@ -186,6 +186,19 @@ func (g *grants) revokeOf(who string) {
 	}
 }
 
+// revokeApprovedBy revokes every grant person approved (a removed
+// approver: People.tla NoGrantOfRemoved, mutant removal-keeps-approvals;
+// nfltr docs/decisions/people-layer-2026-11-25.md "Leaver").
+func (g *grants) revokeApprovedBy(person string) {
+	g.init()
+	for sn, r := range g.issued {
+		if r.by == person && !r.revoked {
+			r.revoked = true
+			g.cut = append(g.cut, sn)
+		}
+	}
+}
+
 var grantIDRE = sync.OnceValue(func() *regexp.Regexp { return regexp.MustCompile(`^[A-Za-z0-9_-]{8,64}$`) })
 
 // grantSigner is the member machine that signed r (its name and person)

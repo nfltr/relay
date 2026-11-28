@@ -166,6 +166,7 @@ approval-any-body | grant.go | 	case a.Digest != req.Digest: // BIND:svc.apprall
 dur-from-request | grant.go | 	until := now.Add(time.Duration(req.ForS) * time.Second) // Grant.tla dur-from-request: the request's, never the act's | 	until := now.Add(MaxGrantFor) | TestGrantRequestApproveAdmit
 revoke-not-listed | issuer.go | 	grantSNs := i.grantSerials(now)                                       // Grant.tla Publish: every revoked grant until it ends (RevokeBound) | 	grantSNs := []string(nil) | TestGrantRevokedAndRemoved
 removal-keeps-grants | issuer.go | 			i.grants.revokeOf(orgid.KindPerson + ":" + e.Person) // a removed person's grants (lead decision 2026-11-26) | 			_ = 0 | TestGrantRevokedAndRemoved
+removal-keeps-approvals | issuer.go | 			i.grants.revokeApprovedBy(e.Person)                  // and those they approved (lane ONEREVOKE) | 			_ = 0 | TestGrantApprovalsEndWithTheApprover
 revoke-by-anyone | grant.go | 	case !owner && !pol.Approves(person, g.Where, g.Service) && g.Who != orgid.KindPerson+":"+person: | 	case pol.Number < 0: | TestGrantRevokedAndRemoved
 host-check-any-life | hostcert.go | 	case c.ValidBefore-c.ValidAfter > uint64((issueBackdate+HostLife)/time.Second): | 	case false: | TestHostCertLifeIsItsOwn
 host-no-backdate | hostcert.go | 	until := leaf.NotBefore.Add(issueBackdate + HostLife) // mutant host-life-equal | 	until := leaf.NotBefore.Add(HostLife) | TestStepAHostCertPassesTheOldCheck

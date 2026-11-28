@@ -117,4 +117,4 @@ other by `Conforms`. A rejected fixture per property in `traces/`
 | spec | code |
 |---|---|
 | People.tla, TracePeople.tla | org/orgpki/people.go, org/orgpki/signin.go, org/orgpki/trace_on.go |
-| People.tla Offboard (the grants) | org/orgpki/grant.go (`revokeOf`), org/orgpki/issuer.go (the removal's replay) |
+| People.tla Offboard (the grants) | org/orgpki/grant.go (`revokeOf`, `revokeApprovedBy`), org/orgpki/issuer.go (the removal's replay) |

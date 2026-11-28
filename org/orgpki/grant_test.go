@@ -302,6 +302,30 @@ func TestGrantRevokedAndRemoved(t *testing.T) {
 	}
 }
 
+// A removed approver's approvals end with them (People.tla
+// NoGrantOfRemoved, mutant removal-keeps-approvals): the grant alice
+// approved for bob is on the next CRL once alice is removed; bob stays.
+func TestGrantApprovalsEndWithTheApprover(t *testing.T) {
+	o := newGrantOrg(t)
+	at := t0.Add(time.Minute)
+	r := o.ask(t, "req-00000001", 2*time.Hour, at)
+	a, err := o.act(t, &o.alice, GrantAct{Act: GrantApprove, ID: r.ID, Digest: r.Digest}, at)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := o.grantCert(t, a.Serial, at)
+	if _, err := o.iss.RevokePerson("alice@acme.com", at.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	o.takeCRL(t, at.Add(2*time.Minute))
+	if _, err := o.admit(t, o.bob, g, "web", at.Add(2*time.Minute)); err == nil {
+		t.Error("a grant its removed approver approved still admits")
+	}
+	if st := o.status(t, at.Add(2*time.Minute)); len(st.Grants) != 0 {
+		t.Errorf("the status lists a removed approver's grant: %+v", st.Grants)
+	}
+}
+
 // The holder's key: a grant presented by another machine, or for another
 // person, admits nothing (svc.grantwho, more rows in the bindings test).
 func TestGrantForItsHolderOnly(t *testing.T) {
