@@ -6,9 +6,9 @@
 # use) and spec/enrol/Enrol.tla (no-expiry-timer: NoExpiredSession;
 # no-cut-on-update: RevocationBound). The checks themselves (chain, name,
 # groups, CRL, NotAfter) are client/orgid's, with its own mutants.
-ignore-check | org.go | 			until, err := o.CheckClient(cs.PeerCertificates, services, time.Now()) | 			until, err := time.Now().Add(time.Hour), error(nil) | TestOrgServiceAdmitsGroup
+ignore-check | org.go | 			until, err := o.CheckClient(cs.PeerCertificates, services, now) | 			until, err := now.Add(time.Hour), error(nil) | TestOrgServiceAdmitsGroup
 downgrade-any-client | org.go | 		ClientAuth:             tls.RequireAnyClientCert, | 		ClientAuth:             tls.RequestClientCert, | TestOrgServiceAdmitsGroup
-downgrade-any-client | org.go | 			until, err := o.CheckClient(cs.PeerCertificates, services, time.Now()) | 			if len(cs.PeerCertificates) == 0 { adm.until = time.Now().Add(time.Hour); return nil }; until, err := o.CheckClient(cs.PeerCertificates, services, time.Now()) | TestOrgServiceAdmitsGroup
+downgrade-any-client | org.go | 			until, err := o.CheckClient(cs.PeerCertificates, services, now) | 			if len(cs.PeerCertificates) == 0 { adm.until = time.Now().Add(time.Hour); return nil }; until, err := o.CheckClient(cs.PeerCertificates, services, now) | TestOrgServiceAdmitsGroup
 org-falls-through | session_plan.go | 		if svc.org != nil { | 		if false { | TestOrgServiceAdmitsGroup
 e2ee-without-org | org.go | 	case s.Org == nil && s.NF1 == nil && s.Kind.Sessions() && s.E2EE == agentservices.E2EEOn: | 	case false: | TestOrgServiceOneMode
 e2ee-to-plain-service | services.go | 	case e2ee && e.kind.Sessions() && e.org == nil && e.nf1 == nil: | 	case false: | TestOrgServiceOneMode
