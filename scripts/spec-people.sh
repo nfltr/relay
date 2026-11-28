@@ -34,7 +34,7 @@ spec=People
 temporal=""
 actprops="RemovedStaysOut"
 mfile=mutants.txt
-witnesses="WitnessJoined WitnessAdminActs WitnessSecondMachine WitnessRoleChanged WitnessWindow WitnessOffboardReached"
+witnesses="WitnessJoined WitnessAdminActs WitnessSecondMachine WitnessRoleChanged WitnessWindow WitnessOffboardReached WitnessLostLaptop WitnessGranted"
 tlc() {
 	cfg_=$1
 	shift

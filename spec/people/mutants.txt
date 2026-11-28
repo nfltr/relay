@@ -10,5 +10,11 @@ code-outlives-offboard NoOrphan
 offboard-misses-machine NoOrphan
 relay-not-filed ReachBound
 no-fail-closed ReachBound
+relay-persons-only ReachBound
+relay-ids-only ReachBound
+revoke-no-cut ReachBound
+revoke-relay-only RevokedNoLive
+removal-keeps-grants NoGrantOfRemoved
+removal-keeps-approvals NoGrantOfRemoved
 offboard-unlogged AuditComplete
 rejoin-old-invite RemovedStaysOut
