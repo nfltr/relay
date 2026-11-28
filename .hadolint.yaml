@@ -1,0 +1,12 @@
+# make check-hadolint (scripts/check-hadolint.sh). Triage and reasons:
+# github.com/nfltr/nfltr docs/reports/conformance-round8c-2026-10-08.md.
+failure-threshold: warning
+ignored:
+  # Distro package version pins (apk add pkg=ver, apt-get install pkg=ver):
+  # Alpine and Debian drop superseded versions from their mirrors, so a pin
+  # breaks the build within weeks. Release-relevant images get
+  # reproducibility from digest-pinned base images instead.
+  - DL3018
+  - DL3008
+  # cd inside a RUN: scoped to that RUN's && chain, which is the intent.
+  - DL3003

@@ -3,7 +3,7 @@
 
 MODULES := proto client org
 
-.PHONY: build vet test test-race fuzz-short proto-gen proto-report check-gosec check-semgrep check-no-legacy-name tidy
+.PHONY: build vet test test-race fuzz-short proto-gen proto-report check-gosec check-semgrep check-hadolint check-no-legacy-name tidy
 build:
 	@for m in $(MODULES); do (cd $$m && go build ./...) || exit 1; done
 
@@ -71,6 +71,11 @@ check-gosec:
 
 check-semgrep:
 	./scripts/check-semgrep.sh
+
+# check-hadolint: hadolint (pinned image, docker) on every tracked Dockerfile
+# with .hadolint.yaml, as nfltr's and hosted's make ci (lane SHIFTLEFT).
+check-hadolint:
+	./scripts/check-hadolint.sh
 
 # scripts/check-identity.sh (the pre-push hook's) refuses what it should.
 .PHONY: test-identity
