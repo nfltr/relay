@@ -50,7 +50,7 @@ three, one forged entry): 15,660 states, every invariant, every mutant but
 `Sync` (a `Deliver` of the canonical head, apart only for its fairness);
 `MemberLogLive.cfg`: `RemovalTakesEffect`; `MemberLogTwo.cfg` (two
 verifiers): `first-seen` caught by `Converge`, and nightly the whole
-check (156,906 states, about 2 minutes). `scripts/spec-rootheld.sh ci`
+check (156,906 states, 2 to 4 minutes on the Mac). `scripts/spec-rootheld.sh ci`
 (`make spec-rootheld-ci`, in `make ci`, about 30 s).
 
 ## Environment assumptions
